@@ -10,7 +10,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from src.domain.models import ContextType, WorkStatus
+from src.domain.models import (
+    AgentStatus,
+    ContextType,
+    Persona,
+    Provider,
+    WorkStatus,
+)
 
 
 class ContextSchema(BaseModel):
@@ -46,8 +52,31 @@ class WorkDetail(WorkSummary):
     contexts: list[ContextSchema]
 
 
+class NewAgentRequest(BaseModel):
+    name: str = Field(min_length=1)
+    persona: Persona
+    role: str
+    provider: Provider
+    model: str
+
+
+class AgentSummary(BaseModel):
+    slug: str
+    work_slug: str
+    name: str
+    persona: Persona
+    role: str
+    provider: Provider
+    model: str
+    status: AgentStatus
+    started_at: datetime
+    stopped_at: datetime | None = None
+
+
 __all__ = [
+    "AgentSummary",
     "ContextSchema",
+    "NewAgentRequest",
     "NewWorkRequest",
     "PatchWorkRequest",
     "WorkDetail",

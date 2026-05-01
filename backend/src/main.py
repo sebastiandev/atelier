@@ -3,7 +3,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.application.http.routes import health, works
+from src.application.http.routes import agents, health, works
+from src.application.ws import agents as ws_agents
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore import WorkStoreService, reconcile
 from src.infrastructure.database import (
@@ -59,6 +60,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Atelier", version="0.1.0", lifespan=lifespan)
     app.include_router(health.router, prefix="/api")
     app.include_router(works.router, prefix="/api")
+    app.include_router(agents.router, prefix="/api")
+    app.include_router(ws_agents.router, prefix="/api")
     return app
 
 

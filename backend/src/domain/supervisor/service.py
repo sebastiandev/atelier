@@ -121,6 +121,15 @@ class AgentSupervisorService:
         for slug in slugs:
             await self.stop_agent(slug)
 
+    def get_work_slug_for(self, agent_slug: str) -> str | None:
+        """Return the work slug for a running agent, or None if unknown.
+
+        Used by the WS handler to resolve the transcript path for replay
+        before subscribing.
+        """
+        state = self._states.get(agent_slug)
+        return state.work_slug if state else None
+
     # -- internals --
 
     async def _run_agent(self, state: _AgentState) -> None:
