@@ -1,0 +1,338 @@
+"""Unit tests for AgentSupervisorService against the stub adapter + a fake log.
+
+Async lifecycles use ``asyncio.run`` per test to keep the suite plugin-free.
+The stub adapter's events() iterator is finite, so ``await state.task``
+inside the supervisor is a deterministic synchronisation point.
+"""
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, TypeVar
+
+import pytest
+
+from src.domain.agents import (
+    AgentEvent,
+    AgentStartContext,
+    MessageComplete,
+    MessageDelta,
+    StatusChange,
+)
+from src.domain.supervisor import AgentSupervisorService
+from src.infrastructure.agents import StubAgentAdapter
+from tests.unit.domain.workstore._stubs import StubTranscriptLog
+
+T = TypeVar("T")
+UTC_NOW = datetime(2026, 5, 1, 13, 49, tzinfo=UTC)
+
+
+def _run(coro: Any) -> Any:
+    return asyncio.run(coro)
+
+
+def _start_context() -> AgentStartContext:
+    return AgentStartContext(
+        workdir=Path("/tmp/agent"),
+        context_md="brief",
+        model="m",
+        system_prompt="s",
+    )
+
+
+def _scripted() -> list[AgentEvent]:
+    base = UTC_NOW
+    return [
+        StatusChange(ts=base + timedelta(seconds=0), status="thinking"),
+        MessageDelta(ts=base + timedelta(seconds=1), text="hel"),
+        MessageDelta(ts=base + timedelta(seconds=2), text="lo"),
+        MessageComplete(ts=base + timedelta(seconds=3), text="hello"),
+        StatusChange(ts=base + timedelta(seconds=4), status="idle"),
+    ]
+
+
+async def _await_agent(supervisor: AgentSupervisorService, agent_slug: str) -> None:
+    """Wait for the agent's adapter task to drain (test helper)."""
+    state = supervisor._states[agent_slug]
+    if state.task is not None:
+        await state.task
+
+
+# ---------------------------------------------------------------------------
+# Happy path: events flow with monotonic seq
+# ---------------------------------------------------------------------------
+
+
+def test_start_agent_emits_events_with_monotonic_seq() -> None:
+    async def run() -> list[dict[str, Any]]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log)
+        adapter = StubAgentAdapter(_scripted())
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+
+        async with supervisor.subscribe("agt-1") as (from_seq, queue):
+            assert from_seq == 0
+            events = [await queue.get() for _ in range(5)]
+
+        await supervisor.shutdown()
+        return events
+
+    received = _run(run())
+    assert [e["seq"] for e in received] == [1, 2, 3, 4, 5]
+    assert received[0]["type"] == "status_change"
+    assert received[1]["text"] == "hel"
+    assert received[3]["type"] == "message_complete"
+
+
+def test_events_carry_iso_timestamp_strings() -> None:
+    async def run() -> dict[str, Any]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter([_scripted()[0]])
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        async with supervisor.subscribe("agt-1") as (_, queue):
+            ev = await queue.get()
+        await supervisor.shutdown()
+        return ev
+
+    ev = _run(run())
+    assert isinstance(ev["ts"], str)
+    assert ev["ts"].startswith("2026-05-01")
+
+
+# ---------------------------------------------------------------------------
+# Write-through-before-fanout invariant
+# ---------------------------------------------------------------------------
+
+
+def test_write_through_before_fanout() -> None:
+    """By the time a subscriber receives an event, the transcript log already
+    has it. Verifies the load-bearing ordering invariant."""
+
+    async def run() -> None:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log)
+        adapter = StubAgentAdapter(_scripted())
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+
+        async with supervisor.subscribe("agt-1") as (_, queue):
+            for _ in range(5):
+                ev = await queue.get()
+                logged_seqs = [e["seq"] for e in log.events.get(("WRK-001", "agt-1"), [])]
+                assert ev["seq"] in logged_seqs, (
+                    f"event {ev['seq']} reached subscriber before being logged"
+                )
+
+        await supervisor.shutdown()
+
+    _run(run())
+
+
+def test_log_receives_every_event() -> None:
+    async def run() -> StubTranscriptLog:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log)
+        adapter = StubAgentAdapter(_scripted())
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.shutdown()
+        return log
+
+    log = _run(run())
+    seqs = [e["seq"] for e in log.events[("WRK-001", "agt-1")]]
+    assert seqs == [1, 2, 3, 4, 5]
+
+
+# ---------------------------------------------------------------------------
+# send_input
+# ---------------------------------------------------------------------------
+
+
+def test_send_input_writes_user_input_then_forwards_to_adapter() -> None:
+    async def run() -> tuple[dict[str, Any], list[str]]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter([])  # no scripted events
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+
+        async with supervisor.subscribe("agt-1") as (_, queue):
+            await supervisor.send_input("agt-1", "hello there")
+            ev = await queue.get()
+
+        await supervisor.shutdown()
+        return ev, adapter.received_inputs
+
+    ev, inputs = _run(run())
+    assert ev["type"] == "user_input"
+    assert ev["text"] == "hello there"
+    assert ev["seq"] == 1
+    assert inputs == ["hello there"]
+
+
+def test_send_input_to_unknown_agent_raises() -> None:
+    async def run() -> None:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        with pytest.raises(ValueError, match="not running"):
+            await supervisor.send_input("agt-404", "x")
+
+    _run(run())
+
+
+# ---------------------------------------------------------------------------
+# Multiple subscribers
+# ---------------------------------------------------------------------------
+
+
+def test_multiple_subscribers_each_see_all_events() -> None:
+    async def run() -> tuple[list[int], list[int]]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter(_scripted())
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+
+        async with (
+            supervisor.subscribe("agt-1") as (_, q1),
+            supervisor.subscribe("agt-1") as (_, q2),
+        ):
+            events1 = [await q1.get() for _ in range(5)]
+            events2 = [await q2.get() for _ in range(5)]
+
+        await supervisor.shutdown()
+        return [e["seq"] for e in events1], [e["seq"] for e in events2]
+
+    seqs1, seqs2 = _run(run())
+    assert seqs1 == [1, 2, 3, 4, 5]
+    assert seqs2 == [1, 2, 3, 4, 5]
+
+
+# ---------------------------------------------------------------------------
+# Late subscriber sees only new events
+# ---------------------------------------------------------------------------
+
+
+def test_late_subscriber_sees_only_post_subscription_events() -> None:
+    async def run() -> tuple[int, bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter(_scripted())
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+
+        # Wait for all five scripted events to be published + flushed.
+        await _await_agent(supervisor, "agt-1")
+
+        async with supervisor.subscribe("agt-1") as (from_seq, queue):
+            try:
+                await asyncio.wait_for(queue.get(), timeout=0.05)
+                got_event = True
+            except TimeoutError:
+                got_event = False
+
+        await supervisor.shutdown()
+        return from_seq, got_event
+
+    from_seq, got_event = _run(run())
+    assert from_seq == 5
+    assert got_event is False
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+
+
+def test_double_start_raises() -> None:
+    async def run() -> None:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        await supervisor.start_agent("WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        with pytest.raises(RuntimeError, match="already running"):
+            await supervisor.start_agent("WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        await supervisor.shutdown()
+
+    _run(run())
+
+
+def test_shutdown_closes_all_adapters() -> None:
+    async def run() -> tuple[bool, bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        a1 = StubAgentAdapter([])
+        a2 = StubAgentAdapter([])
+        await supervisor.start_agent("WRK-001", "agt-1", a1, _start_context())
+        await supervisor.start_agent("WRK-001", "agt-2", a2, _start_context())
+        await supervisor.shutdown()
+        return a1.closed, a2.closed
+
+    closed1, closed2 = _run(run())
+    assert closed1 is True
+    assert closed2 is True
+
+
+def test_stop_agent_removes_state_and_closes_adapter() -> None:
+    async def run() -> tuple[bool, bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter(_scripted())
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.stop_agent("agt-1")
+        return adapter.closed, "agt-1" in supervisor._states
+
+    closed, still_registered = _run(run())
+    assert closed is True
+    assert still_registered is False
+
+
+def test_stop_agent_unknown_is_noop() -> None:
+    async def run() -> None:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        await supervisor.stop_agent("agt-404")  # does not raise
+
+    _run(run())
+
+
+def test_subscribe_unknown_agent_raises() -> None:
+    async def run() -> None:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        with pytest.raises(ValueError, match="not running"):
+            async with supervisor.subscribe("agt-404"):
+                pass
+
+    _run(run())
+
+
+# ---------------------------------------------------------------------------
+# Adapter task crash
+# ---------------------------------------------------------------------------
+
+
+class _CrashingAdapter:
+    """Yields one event then raises — simulates an upstream SDK crash."""
+
+    def __init__(self) -> None:
+        self.start_calls = 0
+        self.closed = False
+
+    async def start(self, context: AgentStartContext) -> None:
+        self.start_calls += 1
+
+    async def send_input(self, text: str) -> None: ...
+
+    async def events(self):  # type: ignore[no-untyped-def]
+        yield StatusChange(ts=UTC_NOW, status="thinking")
+        raise RuntimeError("upstream SDK exploded")
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_adapter_task_error_emits_error_event() -> None:
+    async def run() -> list[dict[str, Any]]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = _CrashingAdapter()
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+
+        async with supervisor.subscribe("agt-1") as (_, queue):
+            first = await queue.get()
+            second = await queue.get()
+
+        await supervisor.shutdown()
+        return [first, second]
+
+    events = _run(run())
+    assert events[0]["type"] == "status_change"
+    assert events[1]["type"] == "error"
+    assert "exploded" in events[1]["message"]

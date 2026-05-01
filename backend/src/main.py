@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from src.application.http.routes import health, works
+from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore import WorkStoreService, reconcile
 from src.infrastructure.database import (
     SqlWorkRepository,
@@ -42,13 +43,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         transcript_log = FsTranscriptLog(paths)
         reconcile(repo, files)
 
+        supervisor = AgentSupervisorService(transcript_log)
+
         app.state.settings = resolved
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.workstore = WorkStoreService(repo, files, transcript_log)
+        app.state.supervisor = supervisor
         try:
             yield
         finally:
+            await supervisor.shutdown()
             engine.dispose()
 
     app = FastAPI(title="Atelier", version="0.1.0", lifespan=lifespan)
