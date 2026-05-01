@@ -30,10 +30,12 @@ from src.infrastructure.database.tables import (
     transcript_cursor_table,
     works_table,
 )
+from src.infrastructure.database.work_repository import SqlWorkRepository
 
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "SchemaMismatchError",
+    "SqlWorkRepository",
     "agents_table",
     "artifacts_table",
     "begin",

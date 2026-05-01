@@ -4,11 +4,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from src.application.http.routes import health
+from src.domain.workstore import WorkStoreService, reconcile
 from src.infrastructure.database import (
+    SqlWorkRepository,
     configure_mappings,
     create_database_engine,
     create_session_factory,
     initialize_database,
+)
+from src.infrastructure.filesystem import (
+    FsTranscriptLog,
+    FsWorkspaceFiles,
+    WorkspacePaths,
 )
 from src.settings import Settings, get_settings
 
@@ -27,9 +34,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = create_database_engine(resolved)
         configure_mappings()
         initialize_database(engine)
+        session_factory = create_session_factory(engine)
+
+        paths = WorkspacePaths(workspace_root=resolved.workspace_root)
+        repo = SqlWorkRepository(session_factory)
+        files = FsWorkspaceFiles(paths)
+        transcript_log = FsTranscriptLog(paths)
+        reconcile(repo, files)
+
         app.state.settings = resolved
         app.state.engine = engine
-        app.state.session_factory = create_session_factory(engine)
+        app.state.session_factory = session_factory
+        app.state.workstore = WorkStoreService(repo, files, transcript_log)
         try:
             yield
         finally:

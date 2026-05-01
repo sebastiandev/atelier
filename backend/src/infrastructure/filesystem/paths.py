@@ -19,7 +19,7 @@ def _validate_slug(slug: str) -> None:
         raise ValueError(f"invalid slug: {slug!r} (must be non-empty string)")
     if len(slug) > _MAX_SLUG_LEN:
         raise ValueError(f"invalid slug: {slug!r} (max {_MAX_SLUG_LEN} chars)")
-    if slug.startswith("."): 
+    if slug.startswith("."):
         raise ValueError(f"invalid slug: {slug!r} (leading dot)")
     if not _SLUG_RE.fullmatch(slug):
         raise ValueError(f"invalid slug: {slug!r} (allowed: A-Z, a-z, 0-9, '-', '_')")

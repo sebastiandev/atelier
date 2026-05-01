@@ -11,10 +11,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.infrastructure.database import (
     configure_mappings,
     create_database_engine,
+    create_session_factory,
     initialize_database,
 )
 from src.main import create_app
@@ -37,6 +39,12 @@ def isolated_engine(test_settings: Settings) -> Iterator[Engine]:
         yield engine
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def session_factory(isolated_engine: Engine) -> sessionmaker[Session]:
+    """Sessionmaker bound to the isolated engine (mirrors production wiring)."""
+    return create_session_factory(isolated_engine)
 
 
 @pytest.fixture
