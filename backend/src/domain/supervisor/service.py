@@ -1,24 +1,87 @@
-"""AgentSupervisorService — owns one asyncio.Task per running agent.
+"""AgentSupervisor — runs one agent, ferries events between SDK, disk, and browser.
 
-The task drains the adapter's event stream. Each event is:
-  1. stamped with a per-agent monotonic ``seq`` (starting at 1)
-  2. converted to a flat dict ``{seq, ts, type, ...payload}``
-  3. appended + fsynced to the transcript via ``TranscriptLog``
-  4. fanned out to subscriber queues
+═══════════════════════════════════════════════════════════════════════
+What this does (plain English)
+═══════════════════════════════════════════════════════════════════════
 
-The "before fan-out" ordering is the load-bearing invariant: a subscriber
-can never receive an event that isn't already on disk.
+An "agent" is a Claude/Amp/Codex AI session. It produces a stream of
+events: streaming text, tool calls, status changes. The supervisor is
+the traffic cop sitting between three things:
 
-User input takes the same path. ``send_input`` writes a ``user_input``
-line to the transcript with a stamped seq before forwarding to
-``adapter.send_input``, so the transcript is the single ordered source
-of truth for both sides of the conversation.
+    ┌─────────────┐   WebSocket    ┌──────────────┐  AgentAdapter   ┌────────────┐
+    │   Browser   │ ◄────────────► │  Supervisor  │ ◄─────────────► │ Claude SDK │
+    │ (AgentTile) │                │              │                 │  (or stub) │
+    └─────────────┘                └───────┬──────┘                 └────────────┘
+                                           │
+                                           │ append + fsync
+                                           ▼
+                                   ┌───────────────┐
+                                   │ transcript.   │  ← canonical, on disk
+                                   │   ndjson      │
+                                   └───────────────┘
 
-Subscribers receive only events stamped after they registered. The
-``subscribe`` context manager returns ``(from_seq, queue)`` so callers
-(typically the WS handler) can read ``transcript.ndjson`` for events
-``cursor < seq <= from_seq`` and then drain ``queue`` for the rest with
-``seq > from_seq`` — no duplicates, no gaps.
+For each event the SDK emits, the supervisor — under a per-agent lock —
+does three things, in this order:
+
+    1. stamp a per-agent monotonic ``seq`` (1, 2, 3, ...)
+    2. append the event to ``transcript.ndjson`` and fsync
+    3. fan out to every subscribed WebSocket queue
+
+The lock keeps these three steps atomic. The ORDER is the load-bearing
+invariant:
+
+    "No event reaches a subscriber before it's already on disk."
+
+If the process crashes between step 2 and step 3, the event is durable;
+the browser just hasn't seen it yet. It picks it up on the next
+reconnect via the replay path below.
+
+User input takes the same path: ``send_input`` writes a ``user_input``
+line (under the same lock, with its own stamped seq) BEFORE forwarding
+to the SDK. Result: the transcript is one ordered conversation, both
+sides interleaved by ``seq``.
+
+═══════════════════════════════════════════════════════════════════════
+Replay on reconnect — how the cursor works
+═══════════════════════════════════════════════════════════════════════
+
+A browser disconnects mid-stream. It reconnects with ``?cursor=N``
+(the ``seq`` of the last event it saw). The WS handler:
+
+    1. ``supervisor.subscribe(slug)`` → ``(from_seq, queue)``.
+       ``from_seq`` is the supervisor's current seq AT subscription time,
+       captured atomically with queue registration under the lock.
+    2. Read ``transcript.ndjson`` for events with ``cursor < seq <= from_seq``
+       and send them to the browser. (These are the events it missed.)
+    3. Drain ``queue`` for events with ``seq > from_seq``. (Live ones.)
+
+Step 1's atomicity is the trick: any event published BEFORE subscription
+landed on disk only (and is picked up by step 2). Any event published
+AFTER subscription lands on both disk AND the queue (and is delivered
+by step 3). No overlap, no gap, exactly-once delivery.
+
+═══════════════════════════════════════════════════════════════════════
+Concurrency cheat sheet
+═══════════════════════════════════════════════════════════════════════
+
+Per running agent there are three concurrent things going on:
+
+    ┌─ Agent task (one asyncio.Task) ─────────────────────────────────┐
+    │   async for event in adapter.events():                          │
+    │       stamp seq → write+fsync → fan out                         │
+    └─────────────────────────────────────────────────────────────────┘
+    ┌─ WS subscribers (zero or more) ─────────────────────────────────┐
+    │   each connection registers a queue via subscribe();            │
+    │   publish puts events into every registered queue               │
+    └─────────────────────────────────────────────────────────────────┘
+    ┌─ User input ────────────────────────────────────────────────────┐
+    │   send_input() writes user_input transcript line + forwards     │
+    │   the text to adapter.send_input()                              │
+    └─────────────────────────────────────────────────────────────────┘
+
+A per-agent ``publish_lock`` serializes the three steps of publishing,
+so the agent task and ``send_input`` from any number of WS handlers
+never interleave a partial publish.
 """
 
 from __future__ import annotations
