@@ -16,6 +16,7 @@ from src.domain.models import (
     Persona,
     Provider,
     Work,
+    WorkStatus,
 )
 
 
@@ -25,6 +26,17 @@ class CreateWorkRequest:
     description: str
     folder: Path
     contexts: list[Context] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class UpdateWorkRequest:
+    """Partial update — fields left as ``None`` are not changed."""
+
+    work_slug: str
+    name: str | None = None
+    description: str | None = None
+    status: WorkStatus | None = None
+    contexts: list[Context] | None = None
 
 
 @dataclass(frozen=True)
@@ -70,5 +82,6 @@ __all__ = [
     "CreateWorkRequest",
     "RecordArtifactRequest",
     "RecordHandoffRequest",
+    "UpdateWorkRequest",
     "WorkRecord",
 ]

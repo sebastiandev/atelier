@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.application.http.routes import health
+from src.application.http.routes import health, works
 from src.domain.workstore import WorkStoreService, reconcile
 from src.infrastructure.database import (
     SqlWorkRepository,
@@ -53,6 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Atelier", version="0.1.0", lifespan=lifespan)
     app.include_router(health.router, prefix="/api")
+    app.include_router(works.router, prefix="/api")
     return app
 
 

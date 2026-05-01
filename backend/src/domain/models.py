@@ -26,7 +26,7 @@ from typing import Literal
 # Literal types (enums)
 # ---------------------------------------------------------------------------
 
-WorkStatus = Literal["active", "completed"]
+WorkStatus = Literal["active", "completed", "deleted"]
 ContextType = Literal["sentry", "honeycomb", "jira", "url", "text", "file", "agentout"]
 Persona = Literal["architect", "developer", "product", "ux", "writer", "custom"]
 Provider = Literal["claude-code", "amp", "codex"]

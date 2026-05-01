@@ -18,6 +18,7 @@ from src.domain.workstore import (
     CreateWorkRequest,
     RecordArtifactRequest,
     RecordHandoffRequest,
+    UpdateWorkRequest,
     WorkStoreService,
 )
 from tests.unit.domain.workstore._stubs import (
@@ -392,3 +393,89 @@ def test_injected_clock_drives_created_at() -> None:
     service, _, _, _ = _make_service(clock_value=moment)
     record = service.create_work(_new_work_request())
     assert record.work.created_at == moment
+
+
+# ---------------------------------------------------------------------------
+# update_work / soft_delete_work / list_works filtering
+# ---------------------------------------------------------------------------
+
+
+def test_update_work_changes_individual_fields() -> None:
+    service, _, files, _ = _make_service()
+    service.create_work(_new_work_request(name="Old"))
+    record = service.update_work(UpdateWorkRequest(work_slug="WRK-001", name="New"))
+
+    assert record.work.name == "New"
+    assert files.work_jsons["WRK-001"]["name"] == "New"
+
+
+def test_update_work_rewrites_brief_md_when_description_changes() -> None:
+    service, _, files, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.update_work(UpdateWorkRequest(work_slug="WRK-001", description="brand new brief"))
+    assert files.briefs["WRK-001"] == "brand new brief"
+
+
+def test_update_work_replaces_contexts_when_provided() -> None:
+    service, _, files, _ = _make_service()
+    service.create_work(_new_work_request(contexts=[Context(type="text", value="old")]))
+    new_contexts = [Context(type="url", value="https://x.test/new")]
+    record = service.update_work(UpdateWorkRequest(work_slug="WRK-001", contexts=new_contexts))
+    assert record.contexts == new_contexts
+    assert files.work_jsons["WRK-001"]["contexts"] == [
+        {"type": "url", "value": "https://x.test/new"}
+    ]
+
+
+def test_update_work_leaves_contexts_alone_when_not_provided() -> None:
+    service, _, _, _ = _make_service()
+    original = [Context(type="text", value="keep")]
+    service.create_work(_new_work_request(contexts=original))
+    record = service.update_work(UpdateWorkRequest(work_slug="WRK-001", name="New"))
+    assert record.contexts == original
+
+
+def test_update_work_raises_for_unknown_slug() -> None:
+    service, _, _, _ = _make_service()
+    with pytest.raises(ValueError, match="work not found"):
+        service.update_work(UpdateWorkRequest(work_slug="WRK-404", name="x"))
+
+
+def test_soft_delete_work_marks_status_in_repo_and_files() -> None:
+    service, repo, files, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.soft_delete_work("WRK-001")
+
+    assert repo.works["WRK-001"].status == "deleted"
+    assert files.work_jsons["WRK-001"]["status"] == "deleted"
+
+
+def test_soft_delete_then_list_excludes_work() -> None:
+    service, _, _, _ = _make_service()
+    service.create_work(_new_work_request(name="A"))
+    service.create_work(_new_work_request(name="B"))
+    service.soft_delete_work("WRK-001")
+
+    works = service.list_works()
+    assert {w.slug for w in works} == {"WRK-002"}
+
+
+def test_soft_delete_then_get_returns_none() -> None:
+    service, _, _, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.soft_delete_work("WRK-001")
+    assert service.get_work("WRK-001") is None
+
+
+def test_soft_delete_makes_subsequent_update_404() -> None:
+    service, _, _, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.soft_delete_work("WRK-001")
+    with pytest.raises(ValueError, match="work not found"):
+        service.update_work(UpdateWorkRequest(work_slug="WRK-001", name="x"))
+
+
+def test_soft_delete_unknown_raises() -> None:
+    service, _, _, _ = _make_service()
+    with pytest.raises(ValueError, match="work not found"):
+        service.soft_delete_work("WRK-404")

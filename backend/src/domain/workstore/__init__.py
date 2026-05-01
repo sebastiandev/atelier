@@ -5,6 +5,7 @@ from src.domain.workstore.dtos import (
     CreateWorkRequest,
     RecordArtifactRequest,
     RecordHandoffRequest,
+    UpdateWorkRequest,
     WorkRecord,
 )
 from src.domain.workstore.ports import (
@@ -23,6 +24,7 @@ __all__ = [
     "RecordArtifactRequest",
     "RecordHandoffRequest",
     "TranscriptLog",
+    "UpdateWorkRequest",
     "WorkRecord",
     "WorkRepository",
     "WorkStore",

@@ -24,6 +24,7 @@ from src.domain.workstore.dtos import (
     CreateWorkRequest,
     RecordArtifactRequest,
     RecordHandoffRequest,
+    UpdateWorkRequest,
     WorkRecord,
 )
 
@@ -36,6 +37,10 @@ class WorkStore(Protocol):
     def get_work(self, work_slug: str) -> WorkRecord | None: ...
 
     def list_works(self) -> list[Work]: ...
+
+    def update_work(self, req: UpdateWorkRequest) -> WorkRecord: ...
+
+    def soft_delete_work(self, work_slug: str) -> None: ...
 
     def add_agent_to_work(self, req: AddAgentRequest) -> Agent: ...
 

@@ -30,6 +30,7 @@ from src.domain.workstore.dtos import (
     CreateWorkRequest,
     RecordArtifactRequest,
     RecordHandoffRequest,
+    UpdateWorkRequest,
     WorkRecord,
 )
 from src.domain.workstore.ports import TranscriptLog, WorkRepository, WorkspaceFiles
@@ -76,7 +77,7 @@ class WorkStoreService:
     def get_work(self, work_slug: str) -> WorkRecord | None:
         with self._lock:
             work = self._repo.get_work_by_slug(work_slug)
-            if work is None:
+            if work is None or work.status == "deleted":
                 return None
             data = self._files.read_work_json(work_slug)
             contexts = deserialize_contexts(data) if data is not None else []
@@ -84,7 +85,38 @@ class WorkStoreService:
 
     def list_works(self) -> list[Work]:
         with self._lock:
-            return self._repo.list_works()
+            return [w for w in self._repo.list_works() if w.status != "deleted"]
+
+    def update_work(self, req: UpdateWorkRequest) -> WorkRecord:
+        with self._lock:
+            existing = self._require_work(req.work_slug)
+            data = self._files.read_work_json(req.work_slug)
+            existing_contexts = deserialize_contexts(data) if data is not None else []
+
+            if req.name is not None:
+                existing.name = req.name
+            if req.description is not None:
+                existing.description = req.description
+            if req.status is not None:
+                existing.status = req.status
+            new_contexts = list(req.contexts) if req.contexts is not None else existing_contexts
+
+            self._repo.upsert_work(existing)
+            self._files.write_work_json(
+                req.work_slug, serialize_work_record(existing, new_contexts)
+            )
+            if req.description is not None:
+                self._files.write_brief(req.work_slug, req.description)
+        return WorkRecord(work=existing, contexts=new_contexts)
+
+    def soft_delete_work(self, work_slug: str) -> None:
+        with self._lock:
+            existing = self._require_work(work_slug)
+            data = self._files.read_work_json(work_slug)
+            contexts = deserialize_contexts(data) if data is not None else []
+            existing.status = "deleted"
+            self._repo.upsert_work(existing)
+            self._files.write_work_json(work_slug, serialize_work_record(existing, contexts))
 
     def add_agent_to_work(self, req: AddAgentRequest) -> Agent:
         with self._lock:
@@ -165,7 +197,7 @@ class WorkStoreService:
 
     def _require_work(self, work_slug: str) -> Work:
         work = self._repo.get_work_by_slug(work_slug)
-        if work is None:
+        if work is None or work.status == "deleted":
             raise ValueError(f"work not found: {work_slug}")
         return work
 
