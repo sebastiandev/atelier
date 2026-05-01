@@ -177,29 +177,71 @@ def test_send_input_to_unknown_agent_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Multiple subscribers
+# Single-subscriber model: resubscribe replaces
 # ---------------------------------------------------------------------------
 
 
-def test_multiple_subscribers_each_see_all_events() -> None:
-    async def run() -> tuple[list[int], list[int]]:
-        supervisor = AgentSupervisorService(StubTranscriptLog())
-        adapter = StubAgentAdapter(_scripted())
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+def test_resubscribe_replaces_previous_subscriber() -> None:
+    """Atelier is single-user single-browser: at most one subscriber per
+    agent. A second subscribe (reconnect race) replaces the slot; the
+    previous queue stops receiving events."""
 
-        async with (
-            supervisor.subscribe("agt-1") as (_, q1),
-            supervisor.subscribe("agt-1") as (_, q2),
-        ):
-            events1 = [await q1.get() for _ in range(5)]
-            events2 = [await q2.get() for _ in range(5)]
+    async def run() -> tuple[bool, str]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter([])
+        await supervisor.start_agent(
+            "WRK-001", "agt-1", adapter, _start_context()
+        )
+
+        async with supervisor.subscribe("agt-1") as (_, q1):
+            async with supervisor.subscribe("agt-1") as (_, q2):
+                # The slot now points at q2; q1 is abandoned.
+                await supervisor.send_input("agt-1", "after replace")
+                ev = await q2.get()
+                # q1 was not put into.
+                q1_empty = q1.empty()
 
         await supervisor.shutdown()
-        return [e["seq"] for e in events1], [e["seq"] for e in events2]
+        return q1_empty, ev["text"]
 
-    seqs1, seqs2 = _run(run())
-    assert seqs1 == [1, 2, 3, 4, 5]
-    assert seqs2 == [1, 2, 3, 4, 5]
+    q1_empty, text = _run(run())
+    assert q1_empty is True
+    assert text == "after replace"
+
+
+def test_outer_subscribe_finally_does_not_clear_inner_slot() -> None:
+    """When two subscribes overlap (LIFO unwind), the outer's cleanup must
+    only clear the slot if it still points at the outer's queue. Stale
+    cleanup must not disturb a fresh inner subscriber."""
+
+    async def run() -> bool:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter([])
+        await supervisor.start_agent(
+            "WRK-001", "agt-1", adapter, _start_context()
+        )
+
+        # Manually drive the cm protocol to force a non-LIFO order.
+        outer = supervisor.subscribe("agt-1")
+        _, _q_outer = await outer.__aenter__()
+
+        inner = supervisor.subscribe("agt-1")
+        _, q_inner = await inner.__aenter__()
+
+        # Now exit OUTER first (the older one). Its finally should not
+        # clear the slot, because the slot points at q_inner.
+        await outer.__aexit__(None, None, None)
+
+        # The slot should still be q_inner — verify by publishing.
+        await supervisor.send_input("agt-1", "still flowing")
+        ev = await q_inner.get()
+        ok = ev["text"] == "still flowing"
+
+        await inner.__aexit__(None, None, None)
+        await supervisor.shutdown()
+        return ok
+
+    assert _run(run()) is True
 
 
 # ---------------------------------------------------------------------------

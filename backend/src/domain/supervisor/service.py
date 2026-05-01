@@ -70,9 +70,10 @@ Per running agent there are three concurrent things going on:
     │   async for event in adapter.events():                          │
     │       stamp seq → write+fsync → fan out                         │
     └─────────────────────────────────────────────────────────────────┘
-    ┌─ WS subscribers (zero or more) ─────────────────────────────────┐
-    │   each connection registers a queue via subscribe();            │
-    │   publish puts events into every registered queue               │
+    ┌─ WS subscriber (zero or one) ───────────────────────────────────┐
+    │   the WS handler registers a queue via subscribe(); a second    │
+    │   subscribe (e.g., reconnect race) replaces the slot. publish   │
+    │   puts events into the current queue if one is registered.      │
     └─────────────────────────────────────────────────────────────────┘
     ┌─ User input ────────────────────────────────────────────────────┐
     │   send_input() writes user_input transcript line + forwards     │
@@ -108,7 +109,11 @@ class _AgentState:
     seq: int = 0
     task: asyncio.Task[None] | None = None
     publish_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
-    subscribers: list[asyncio.Queue[dict[str, Any]]] = dataclasses.field(default_factory=list)
+    # Atelier is single-user single-browser: at most one WS subscriber per
+    # agent. A second subscribe (e.g., reconnect-before-cleanup) replaces
+    # the slot; the previous queue is silently abandoned because its WS is
+    # presumed dead.
+    subscriber: asyncio.Queue[dict[str, Any]] | None = None
 
 
 class AgentSupervisorService:
@@ -154,18 +159,23 @@ class AgentSupervisorService:
         with ``seq > from_seq`` lands in ``queue``. The caller is
         responsible for replaying disk-side events between its cursor and
         ``from_seq`` before draining the queue.
+
+        A second subscribe to the same agent replaces the slot; the
+        previous queue is abandoned (its WS is presumed dead). Cleanup
+        only clears the slot if it still points at our queue, so a stale
+        ``finally`` can't disturb a fresh subscriber.
         """
         state = self._require_state(agent_slug)
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         async with state.publish_lock:
             from_seq = state.seq
-            state.subscribers.append(queue)
+            state.subscriber = queue
         try:
             yield from_seq, queue
         finally:
             async with state.publish_lock:
-                with suppress(ValueError):
-                    state.subscribers.remove(queue)
+                if state.subscriber is queue:
+                    state.subscriber = None
 
     async def stop_agent(self, agent_slug: str) -> None:
         async with self._registry_lock:
@@ -223,8 +233,8 @@ class AgentSupervisorService:
                 state.agent_slug,
                 stamped,
             )
-            for queue in list(state.subscribers):
-                queue.put_nowait(stamped)
+            if state.subscriber is not None:
+                state.subscriber.put_nowait(stamped)
 
     def _require_state(self, agent_slug: str) -> _AgentState:
         state = self._states.get(agent_slug)
