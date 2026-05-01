@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# uv / virtualenv
+.venv/
+backend/.venv/
+
+# Env files (contain secrets)
+.env
+.env.local
+.env.*.local
+backend/.env
+backend/.env.local
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# Work-local artifacts (not version-controlled)
+_bmad-output/
+design_handoff_atelier/
+.claude/
