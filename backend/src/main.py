@@ -1,9 +1,10 @@
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.application.http.routes import agents, health, works
+from src.application.http.routes import agents, health, providers, works
 from src.application.ws import agents as ws_agents
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore import WorkStoreService, reconcile
@@ -30,6 +31,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     and falls back to env-derived defaults.
     """
     resolved = settings or get_settings()
+
+    # Forward provider credentials from Settings into the process env so
+    # SDKs that read os.environ directly (e.g. claude-agent-sdk) pick
+    # them up. Done at app build, not lifespan, so test fixtures that
+    # construct the app see the same view.
+    if resolved.anthropic_api_key and not os.environ.get("ANTHROPIC_API_KEY"):
+        os.environ["ANTHROPIC_API_KEY"] = resolved.anthropic_api_key
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -61,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router, prefix="/api")
     app.include_router(works.router, prefix="/api")
     app.include_router(agents.router, prefix="/api")
+    app.include_router(providers.router, prefix="/api")
     app.include_router(ws_agents.router, prefix="/api")
     return app
 

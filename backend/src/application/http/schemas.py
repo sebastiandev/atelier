@@ -7,6 +7,7 @@ side has to do filesystem-existence validation.
 """
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +59,9 @@ class NewAgentRequest(BaseModel):
     role: str
     provider: Provider
     model: str
+    # Provider-specific knobs (e.g. Claude's thinking_effort). The Spec
+    # for ``provider`` validates the contents; unknown keys are rejected.
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentSummary(BaseModel):

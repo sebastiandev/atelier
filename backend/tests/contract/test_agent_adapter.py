@@ -40,7 +40,8 @@ from src.domain.agents import (
     ToolCall,
     ToolResult,
 )
-from src.infrastructure.agents import StubAgentAdapter
+from src.domain.agents import AmpAgentConfig, AmpMode, CommonAgentConfig
+from src.infrastructure.agents import AmpAdapter, StubAgentAdapter
 
 T = TypeVar("T")
 UTC_NOW = datetime(2026, 5, 1, 13, 49, tzinfo=UTC)
@@ -59,11 +60,22 @@ EXPECTED_VARIANTS: tuple[type, ...] = (
 AdapterFactory = Callable[[list[AgentEvent]], AgentAdapter]
 
 
+def _amp_adapter_factory(events: list[AgentEvent]) -> AgentAdapter:
+    """AmpAdapter is stub-backed today; override its inner scripted events."""
+    config = AmpAgentConfig(
+        common=CommonAgentConfig(workdir=Path("/tmp/contract-amp"), system_prompt="p"),
+        mode=AmpMode.SMART,
+    )
+    adapter = AmpAdapter(config)
+    adapter._inner = StubAgentAdapter(events)  # noqa: SLF001 — tightly coupled, intentional
+    return adapter
+
+
 @pytest.fixture(
     params=[
         pytest.param(lambda events: StubAgentAdapter(events), id="stub"),
-        # Sprints 2/3 add real adapters here, e.g.:
-        #   pytest.param(lambda events: ClaudeCodeAdapter(...), id="claude"),
+        pytest.param(_amp_adapter_factory, id="amp"),
+        # Claude adapter validated via _convert unit tests + manual smoke.
     ]
 )
 def adapter_factory(request: pytest.FixtureRequest) -> AdapterFactory:

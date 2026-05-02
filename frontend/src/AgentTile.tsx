@@ -73,6 +73,7 @@ export function AgentTile({ agentSlug }: { agentSlug: string }) {
 
 type RenderUnit =
   | { kind: "assistant"; key: number; text: string; complete: boolean }
+  | { kind: "thinking"; key: number; text: string; complete: boolean }
   | { kind: "user"; key: number; text: string }
   | { kind: "tool_call"; key: number; name: string; args: string }
   | { kind: "tool_result"; key: number; content: string; isError: boolean }
@@ -82,30 +83,55 @@ type RenderUnit =
 
 function groupEvents(events: AgentEvent[]): RenderUnit[] {
   const out: RenderUnit[] = [];
-  let pending:
+  let pendingAssistant:
     | { kind: "assistant"; key: number; text: string; complete: boolean }
+    | null = null;
+  let pendingThinking:
+    | { kind: "thinking"; key: number; text: string; complete: boolean }
     | null = null;
 
   for (const ev of events) {
     if (ev.type === "message_delta") {
       const text = stringField(ev, "text");
-      if (pending) {
-        pending.text += text;
+      pendingThinking = null;
+      if (pendingAssistant) {
+        pendingAssistant.text += text;
       } else {
-        pending = { kind: "assistant", key: ev.seq, text, complete: false };
-        out.push(pending);
+        pendingAssistant = { kind: "assistant", key: ev.seq, text, complete: false };
+        out.push(pendingAssistant);
       }
     } else if (ev.type === "message_complete") {
       const text = stringField(ev, "text");
-      if (pending) {
-        pending.text = text;
-        pending.complete = true;
-        pending = null;
+      pendingThinking = null;
+      if (pendingAssistant) {
+        pendingAssistant.text = text;
+        pendingAssistant.complete = true;
+        pendingAssistant = null;
       } else {
         out.push({ kind: "assistant", key: ev.seq, text, complete: true });
       }
+    } else if (ev.type === "thinking_delta") {
+      const text = stringField(ev, "text");
+      pendingAssistant = null;
+      if (pendingThinking) {
+        pendingThinking.text += text;
+      } else {
+        pendingThinking = { kind: "thinking", key: ev.seq, text, complete: false };
+        out.push(pendingThinking);
+      }
+    } else if (ev.type === "thinking_complete") {
+      const text = stringField(ev, "text");
+      pendingAssistant = null;
+      if (pendingThinking) {
+        pendingThinking.text = text;
+        pendingThinking.complete = true;
+        pendingThinking = null;
+      } else {
+        out.push({ kind: "thinking", key: ev.seq, text, complete: true });
+      }
     } else {
-      pending = null;
+      pendingAssistant = null;
+      pendingThinking = null;
       const unit = renderUnitFor(ev);
       if (unit) out.push(unit);
     }
@@ -168,7 +194,7 @@ function latestStatus(events: AgentEvent[]): string {
 function lastUnitText(units: RenderUnit[]): string {
   const last = units[units.length - 1];
   if (!last) return "";
-  if (last.kind === "assistant") return last.text;
+  if (last.kind === "assistant" || last.kind === "thinking") return last.text;
   return String(last.key);
 }
 
@@ -181,6 +207,13 @@ function Unit({ unit }: { unit: RenderUnit }) {
     case "assistant":
       return (
         <div className="msg msg-assistant">
+          {unit.text}
+          {!unit.complete && <span className="cursor">▍</span>}
+        </div>
+      );
+    case "thinking":
+      return (
+        <div className="msg msg-thinking">
           {unit.text}
           {!unit.complete && <span className="cursor">▍</span>}
         </div>

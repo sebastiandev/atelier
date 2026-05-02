@@ -34,6 +34,29 @@ class MessageComplete:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ThinkingDelta:
+    """Streaming chunk of an assistant reasoning/thinking block.
+
+    Emitted by adapters whose underlying SDK exposes thinking content as
+    a distinct stream (currently Claude). Adapters whose SDK does not
+    surface thinking simply never emit this variant.
+    """
+
+    type: Literal["thinking_delta"] = "thinking_delta"
+    ts: datetime
+    text: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class ThinkingComplete:
+    """Final, fully-assembled assistant thinking block."""
+
+    type: Literal["thinking_complete"] = "thinking_complete"
+    ts: datetime
+    text: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class ToolCall:
     """The assistant invoked a tool."""
 
@@ -84,7 +107,15 @@ class Error:
 
 
 AgentEvent = (
-    MessageDelta | MessageComplete | ToolCall | ToolResult | StatusChange | ArtifactMarker | Error
+    MessageDelta
+    | MessageComplete
+    | ThinkingDelta
+    | ThinkingComplete
+    | ToolCall
+    | ToolResult
+    | StatusChange
+    | ArtifactMarker
+    | Error
 )
 
 
@@ -95,6 +126,8 @@ __all__ = [
     "MessageComplete",
     "MessageDelta",
     "StatusChange",
+    "ThinkingComplete",
+    "ThinkingDelta",
     "ToolCall",
     "ToolResult",
 ]

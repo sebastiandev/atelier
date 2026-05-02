@@ -38,8 +38,8 @@ def _create_agent(client: TestClient, work_slug: str, name: str = "Architect") -
             "name": name,
             "persona": "architect",
             "role": "architect",
-            "provider": "claude-code",
-            "model": "claude-opus-4-7",
+            "provider": "amp",
+            "model": "smart",
         },
     )
     response.raise_for_status()
@@ -59,8 +59,8 @@ def test_create_agent_returns_summary(app_client: TestClient) -> None:
             "name": "Architect",
             "persona": "architect",
             "role": "architect",
-            "provider": "claude-code",
-            "model": "claude-opus-4-7",
+            "provider": "amp",
+            "model": "smart",
         },
     )
     assert response.status_code == 201
@@ -71,6 +71,38 @@ def test_create_agent_returns_summary(app_client: TestClient) -> None:
     assert body["status"] == "idle"
 
 
+def test_create_agent_422_for_unknown_option(app_client: TestClient) -> None:
+    work = _create_work(app_client)
+    response = app_client.post(
+        f"/api/works/{work['slug']}/agents",
+        json={
+            "name": "X",
+            "persona": "architect",
+            "role": "x",
+            "provider": "amp",
+            "model": "smart",
+            "options": {"bogus_key": "value"},
+        },
+    )
+    assert response.status_code == 422
+    assert "unknown options" in response.json()["detail"]
+
+
+def test_create_agent_422_for_bad_model(app_client: TestClient) -> None:
+    work = _create_work(app_client)
+    response = app_client.post(
+        f"/api/works/{work['slug']}/agents",
+        json={
+            "name": "X",
+            "persona": "architect",
+            "role": "x",
+            "provider": "amp",
+            "model": "turbo",  # not a valid AmpMode
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_create_agent_404_for_unknown_work(app_client: TestClient) -> None:
     response = app_client.post(
         "/api/works/WRK-404/agents",
@@ -78,8 +110,8 @@ def test_create_agent_404_for_unknown_work(app_client: TestClient) -> None:
             "name": "X",
             "persona": "architect",
             "role": "x",
-            "provider": "claude-code",
-            "model": "m",
+            "provider": "amp",
+            "model": "smart",
         },
     )
     assert response.status_code == 404

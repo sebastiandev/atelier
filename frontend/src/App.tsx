@@ -36,9 +36,17 @@ function Home() {
   -H 'Content-Type: application/json' \\
   -d '{"name":"Demo","description":"d","folder":"/tmp/demo"}'
 
+# Stub-backed Amp agent (no API key required):
 curl -s -X POST /api/works/WRK-001/agents \\
   -H 'Content-Type: application/json' \\
-  -d '{"name":"Architect","persona":"architect","role":"r","provider":"claude-code","model":"m"}'`}</pre>
+  -d '{"name":"Builder","persona":"developer","role":"build","provider":"amp","model":"smart"}'
+
+# Real Claude agent (requires ANTHROPIC_API_KEY in .env.local + Claude Code CLI):
+# Haiku is the cheapest option — use it for smoke-testing.
+curl -s -X POST /api/works/WRK-001/agents \\
+  -H 'Content-Type: application/json' \\
+  -d '{"name":"Architect","persona":"architect","role":"design",
+       "provider":"claude-code","model":"claude-haiku-4-5"}'`}</pre>
       <p>
         Set <code>STUB_EVENT_DELAY=0.4</code> on the backend to see events
         stream visibly rather than landing all at once.

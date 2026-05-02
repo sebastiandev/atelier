@@ -29,7 +29,7 @@ from typing import Literal
 WorkStatus = Literal["active", "completed", "deleted"]
 ContextType = Literal["sentry", "honeycomb", "jira", "url", "text", "file", "agentout"]
 Persona = Literal["architect", "developer", "product", "ux", "writer", "custom"]
-Provider = Literal["claude-code", "amp", "codex"]
+Provider = Literal["claude-code", "amp"]
 AgentStatus = Literal["live", "thinking", "idle"]
 ConnectionType = Literal["sentry", "honeycomb", "jira"]
 ArtifactType = Literal["pr", "jira", "doc"]

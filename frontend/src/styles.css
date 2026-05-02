@@ -151,6 +151,15 @@ body {
   margin-left: -0.7rem;
 }
 
+.msg-thinking {
+  color: var(--muted);
+  font-style: italic;
+  opacity: 0.75;
+  border-left: 2px solid var(--muted);
+  padding-left: 0.7rem;
+  margin-left: -0.7rem;
+}
+
 .msg-tool {
   color: var(--muted);
   font-size: 12px;
