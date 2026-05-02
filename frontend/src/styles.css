@@ -10,7 +10,6 @@
   --muted: #909090;
   --border: #2a2a2c;
   --accent: #4a9eff;
-  --user-bubble: #1f3349;
   --status-live: #4ade80;
   --status-thinking: #fbbf24;
   --status-idle: #909090;
@@ -142,12 +141,14 @@ body {
   }
 }
 
+/* User messages stack left-aligned like a CLI transcript, not a chat
+   bubble. A subtle left accent bar marks them so they're scannable
+   without breaking the single-column reading flow. */
 .msg-user {
-  background: var(--user-bubble);
-  padding: 0.45rem 0.7rem;
-  border-radius: 6px;
-  align-self: flex-end;
-  max-width: 70%;
+  color: var(--fg);
+  border-left: 2px solid var(--accent);
+  padding-left: 0.7rem;
+  margin-left: -0.7rem;
 }
 
 .msg-tool {
