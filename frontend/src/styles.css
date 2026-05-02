@@ -154,14 +154,121 @@ body {
 .msg-thinking {
   color: var(--muted);
   font-style: italic;
-  opacity: 0.75;
+  opacity: 0.85;
+}
+.msg-thinking > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+.msg-thinking > summary::-webkit-details-marker {
+  display: none;
+}
+.msg-thinking[open] > summary {
+  margin-bottom: 0.4rem;
+}
+.thinking-body {
   border-left: 2px solid var(--muted);
   padding-left: 0.7rem;
-  margin-left: -0.7rem;
+  margin-left: 0.2rem;
+  font-size: 12px;
 }
 
 .msg-tool {
   color: var(--muted);
+  font-size: 12px;
+}
+.msg-tool > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.msg-tool > summary::-webkit-details-marker {
+  display: none;
+}
+.msg-tool .tool-name {
+  color: var(--fg);
+}
+.msg-tool[open] > summary {
+  margin-bottom: 0.3rem;
+}
+.tool-result-body {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* Markdown rendering ----------------------------------------------------- */
+
+/* Tighten paragraph margins so consecutive assistant chunks read as
+   one stream rather than a stack of cards. */
+.msg-assistant p,
+.msg-thinking p {
+  margin: 0 0 0.5rem 0;
+}
+.msg-assistant p:last-child,
+.msg-thinking p:last-child {
+  margin-bottom: 0;
+}
+.msg-assistant ul,
+.msg-assistant ol,
+.msg-thinking ul,
+.msg-thinking ol {
+  margin: 0.3rem 0 0.5rem 1.2rem;
+  padding: 0;
+}
+.msg-assistant blockquote,
+.msg-thinking blockquote {
+  margin: 0.4rem 0;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--muted);
+  color: var(--muted);
+}
+.md-h {
+  margin: 0.6rem 0 0.3rem;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.md-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-inline-code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+  font-size: 12px;
+}
+.md-code,
+.md-code-fallback {
+  margin: 0.4rem 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  font-size: 12px;
+}
+.md-code pre,
+.md-code-fallback {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg) !important;
+  overflow-x: auto;
+  white-space: pre;
+}
+.md-code code,
+.md-code-fallback code {
+  background: transparent;
+  padding: 0;
   font-size: 12px;
 }
 

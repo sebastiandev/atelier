@@ -1,5 +1,6 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { MarkdownText } from "./MarkdownText";
 import {
   type AgentEvent,
   useAgentStream,
@@ -177,6 +178,14 @@ function renderUnitFor(ev: AgentEvent): RenderUnit | null {
   }
 }
 
+function prettyJson(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
 function stringField(ev: AgentEvent, key: string): string {
   const value = ev[key];
   return typeof value === "string" ? value : "";
@@ -207,31 +216,38 @@ function Unit({ unit }: { unit: RenderUnit }) {
     case "assistant":
       return (
         <div className="msg msg-assistant">
-          {unit.text}
+          <MarkdownText text={unit.text} />
           {!unit.complete && <span className="cursor">▍</span>}
         </div>
       );
     case "thinking":
       return (
-        <div className="msg msg-thinking">
-          {unit.text}
-          {!unit.complete && <span className="cursor">▍</span>}
-        </div>
+        <details className="msg msg-thinking">
+          <summary>
+            💭 thinking{!unit.complete && <span className="cursor">▍</span>}
+          </summary>
+          <div className="thinking-body">
+            <MarkdownText text={unit.text} />
+          </div>
+        </details>
       );
     case "user":
       return <div className="msg msg-user">{unit.text}</div>;
     case "tool_call":
       return (
-        <div className="msg msg-tool">
-          ▸ {unit.name}({unit.args})
-        </div>
+        <details className="msg msg-tool">
+          <summary>
+            ▸ <span className="tool-name">{unit.name}</span>
+          </summary>
+          <MarkdownText text={"```json\n" + prettyJson(unit.args) + "\n```"} />
+        </details>
       );
     case "tool_result":
       return (
-        <div className={`msg msg-tool${unit.isError ? " msg-error" : ""}`}>
-          {"  → "}
-          {unit.content}
-        </div>
+        <details className={`msg msg-tool${unit.isError ? " msg-error" : ""}`}>
+          <summary>{unit.isError ? "  ⚠ result" : "  → result"}</summary>
+          <pre className="tool-result-body">{unit.content}</pre>
+        </details>
       );
     case "status":
       return <div className="msg msg-status">[{unit.status}]</div>;
