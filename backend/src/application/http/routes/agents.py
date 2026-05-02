@@ -21,6 +21,7 @@ from src.domain.agents import (
     CommonAgentConfig,
     render_system_prompt,
 )
+from src.domain.commands.agents import list_for_work
 from src.domain.models import Agent
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.dtos import AddAgentRequest
@@ -46,6 +47,17 @@ def get_settings_dep(request: Request) -> Settings:
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
+
+
+@router.get("/works/{work_slug}/agents", response_model=list[AgentSummary])
+def list_agents_for_work_endpoint(
+    work_slug: str, workstore: WorkStoreDep
+) -> list[AgentSummary]:
+    try:
+        agents = list_for_work.execute(workstore, work_slug)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return [_to_summary(work_slug, a) for a in agents]
 
 
 @router.post(

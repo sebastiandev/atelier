@@ -137,6 +137,11 @@ class WorkStoreService:
             self._files.write_agent_json(req.work_slug, slug, serialize_agent(agent))
         return agent
 
+    def list_agents_for_work(self, work_slug: str) -> list[Agent]:
+        with self._lock:
+            self._require_work(work_slug)
+            return self._repo.list_agents_for_work(work_slug)
+
     def append_transcript_event(
         self, work_slug: str, agent_slug: str, event: dict[str, Any]
     ) -> None:

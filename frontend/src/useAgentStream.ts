@@ -11,7 +11,13 @@ export type ConnectionStatus =
   | "connecting"
   | "connected"
   | "closed"
+  | "stopped"
   | "error";
+
+// Backend WS close code when the supervisor has no live adapter for the
+// requested agent slug (e.g. backend was restarted after the agent ran).
+// Treat as terminal — don't retry, let the UI surface "stopped".
+const CLOSE_CODE_AGENT_NOT_RUNNING = 4404;
 
 /**
  * Subscribe to an agent's WS stream. Reconnects automatically on close
@@ -64,8 +70,12 @@ export function useAgentStream(agentSlug: string) {
         }
       };
 
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         if (cancelled) return;
+        if (ev.code === CLOSE_CODE_AGENT_NOT_RUNNING) {
+          setStatus("stopped");
+          return;
+        }
         setStatus("closed");
         retryHandle = window.setTimeout(connect, 1000);
       };

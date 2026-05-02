@@ -117,6 +117,23 @@ def test_create_agent_404_for_unknown_work(app_client: TestClient) -> None:
     assert response.status_code == 404
 
 
+def test_list_agents_for_work_returns_summaries(app_client: TestClient) -> None:
+    work = _create_work(app_client)
+    _create_agent(app_client, work["slug"], name="Architect")
+    _create_agent(app_client, work["slug"], name="Developer")
+
+    response = app_client.get(f"/api/works/{work['slug']}/agents")
+    assert response.status_code == 200
+    payload = response.json()
+    assert [a["name"] for a in payload] == ["Architect", "Developer"]
+    assert all(a["work_slug"] == work["slug"] for a in payload)
+
+
+def test_list_agents_for_work_404_for_unknown_work(app_client: TestClient) -> None:
+    response = app_client.get("/api/works/WRK-404/agents")
+    assert response.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # WS: replay + live
 # ---------------------------------------------------------------------------

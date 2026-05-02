@@ -1,10 +1,27 @@
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
+import { PERSONA_GLYPH, type Persona } from "./api";
 import { MarkdownText } from "./MarkdownText";
 import {
   type AgentEvent,
   useAgentStream,
 } from "./useAgentStream";
+
+const COMPOSER_MAX_HEIGHT = 200;
+
+type AgentTileProps = {
+  agentSlug: string;
+  mode?: "page" | "tile";
+  persona?: Persona;
+  agentName?: string;
+};
 
 /**
  * Streaming agent view (walking-skeleton scope).
@@ -18,10 +35,19 @@ import {
  * Phase B will layer markdown rendering, persona theming, and transcript
  * virtualization on top of this.
  */
-export function AgentTile({ agentSlug }: { agentSlug: string }) {
+export function AgentTile({
+  agentSlug,
+  mode = "page",
+  persona,
+  agentName,
+}: AgentTileProps) {
   const { events, status, sendInput } = useAgentStream(agentSlug);
   const [draft, setDraft] = useState("");
+  // Optimistic "thinking" between Send and the first status_change event
+  // back from the adapter, so the dot reacts instantly.
+  const [optimisticThinking, setOptimisticThinking] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const units = useMemo(() => groupEvents(events), [events]);
   const agentStatus = useMemo(() => latestStatus(events), [events]);
@@ -32,39 +58,199 @@ export function AgentTile({ agentSlug }: { agentSlug: string }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [units.length, lastUnitText(units)]);
 
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  // Auto-grow textarea up to COMPOSER_MAX_HEIGHT.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT) + "px";
+  }, [draft]);
+
+  // Clear optimistic thinking once a real status_change lands.
+  useEffect(() => {
+    if (!optimisticThinking) return;
+    const last = events[events.length - 1];
+    if (last && last.type === "status_change") setOptimisticThinking(false);
+  }, [events, optimisticThinking]);
+
+  function submit() {
     const text = draft.trim();
     if (!text) return;
     sendInput(text);
     setDraft("");
+    setOptimisticThinking(true);
   }
 
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    submit();
+  }
+
+  function handleKeyDown(e: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      submit();
+    }
+  }
+
+  const [maximized, setMaximized] = useState(false);
+
+  const dotStatus = optimisticThinking ? "thinking" : agentStatus;
+  const isStopped = status === "stopped";
+  const composerDisabled = isStopped || status === "error";
+  const tileClass = `agent-tile mode-${mode}` + (maximized ? " maximized" : "");
+  const title = agentName || agentSlug;
+
   return (
-    <div className="agent-tile">
+    <div className={tileClass} data-persona={persona}>
       <header>
-        <span className="status-dot" data-status={agentStatus} />
-        <h2>{agentSlug}</h2>
-        <span className="conn-status">{status}</span>
+        {persona && <span className="persona-pip">{PERSONA_GLYPH[persona]}</span>}
+        <span className="status-dot" data-status={dotStatus} />
+        <h2>{title}</h2>
+        {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}
+        <span className="conn-status" data-conn-status={status}>{status}</span>
+        <div className="tile-controls">
+          <button
+            type="button"
+            className="tile-ctl"
+            title="Hand off to new agent — coming in Sprint 3"
+            disabled
+          >
+            <HandoffIcon />
+          </button>
+          <button
+            type="button"
+            className="tile-ctl"
+            title="Minimize to sidebar — coming with persistence"
+            disabled
+          >
+            <MinusIcon />
+          </button>
+          <button
+            type="button"
+            className="tile-ctl"
+            title={maximized ? "Restore" : "Maximize"}
+            onClick={() => setMaximized((m) => !m)}
+          >
+            {maximized ? <RestoreIcon /> : <MaxIcon />}
+          </button>
+          <button
+            type="button"
+            className="tile-ctl"
+            title="Close — coming with persistence"
+            disabled
+          >
+            <CloseIcon />
+          </button>
+        </div>
       </header>
+      {isStopped && (
+        <div className="tile-banner">
+          Agent isn't running. The supervisor lost its session — launch a new agent or restart the backend.
+        </div>
+      )}
       <div className="transcript" ref={transcriptRef}>
         {units.map((unit) => (
           <Unit key={unit.key} unit={unit} />
         ))}
       </div>
       <form className="composer" onSubmit={handleSubmit}>
-        <input
-          type="text"
+        <textarea
+          ref={textareaRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Type a message…"
-          autoFocus
+          onKeyDown={handleKeyDown}
+          placeholder={
+            isStopped
+              ? "Agent stopped — launch a new one to continue"
+              : "Message the agent — Enter sends, Shift+Enter for newline"
+          }
+          rows={1}
+          disabled={composerDisabled}
+          autoFocus={mode === "page"}
         />
-        <button type="submit" disabled={!draft.trim()}>
-          Send
-        </button>
+        <div className="composer-actions">
+          <button
+            type="button"
+            className="composer-tool"
+            disabled
+            title="Add context — coming in Sprint 3"
+          >
+            + Add context
+          </button>
+          <span className="spacer" />
+          <button
+            type="submit"
+            className="composer-send"
+            disabled={composerDisabled || !draft.trim()}
+          >
+            Send
+          </button>
+        </div>
       </form>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tile control icons (inline SVG — no icon system yet)
+// ---------------------------------------------------------------------------
+
+function HandoffIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path
+        d="M3 5h7m0 0L7 2m3 3L7 8M13 11H6m0 0l3-3m-3 3l3 3"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+function MinusIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path d="M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+function MaxIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <rect
+        x="3"
+        y="3"
+        width="10"
+        height="10"
+        rx="1"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        fill="none"
+      />
+    </svg>
+  );
+}
+function RestoreIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <rect x="3" y="5" width="8" height="8" rx="1" stroke="currentColor" strokeWidth="1.4" fill="none" />
+      <path d="M5 5V3h8v8h-2" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path
+        d="M4 4l8 8M12 4l-8 8"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 

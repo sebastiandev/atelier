@@ -192,6 +192,40 @@ def test_add_agent_raises_when_work_not_found() -> None:
         )
 
 
+def test_list_agents_for_work_returns_added_agents() -> None:
+    service, _, _, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(
+        AddAgentRequest(
+            work_slug="WRK-001",
+            name="Architect",
+            persona="architect",
+            role="architect",
+            provider="claude-code",
+            model="claude-opus-4-7",
+        )
+    )
+    service.add_agent_to_work(
+        AddAgentRequest(
+            work_slug="WRK-001",
+            name="Developer",
+            persona="developer",
+            role="developer",
+            provider="amp",
+            model="smart",
+        )
+    )
+
+    agents = service.list_agents_for_work("WRK-001")
+    assert [a.slug for a in agents] == ["agt-1", "agt-2"]
+
+
+def test_list_agents_for_work_raises_when_work_not_found() -> None:
+    service, _, _, _ = _make_service()
+    with pytest.raises(ValueError, match="work not found"):
+        service.list_agents_for_work("WRK-999")
+
+
 # ---------------------------------------------------------------------------
 # transcript
 # ---------------------------------------------------------------------------
