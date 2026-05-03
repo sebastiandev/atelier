@@ -19,7 +19,7 @@ from src.domain.agents import (
     MessageDelta,
     StatusChange,
 )
-from src.domain.supervisor import AgentSupervisorService
+from src.domain.supervisor import SUBSCRIBER_QUEUE_MAX, AgentSupervisorService
 from src.infrastructure.agents import StubAgentAdapter
 from tests.unit.domain.workstore._stubs import StubTranscriptLog
 
@@ -70,7 +70,8 @@ def test_start_agent_emits_events_with_monotonic_seq() -> None:
         adapter = StubAgentAdapter(_scripted())
         await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (from_seq, queue):
+        async with supervisor.subscribe("agt-1") as (from_seq, sub):
+            queue = sub.queue
             assert from_seq == 0
             events = [await queue.get() for _ in range(5)]
 
@@ -89,7 +90,8 @@ def test_events_carry_iso_timestamp_strings() -> None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter([_scripted()[0]])
         await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
-        async with supervisor.subscribe("agt-1") as (_, queue):
+        async with supervisor.subscribe("agt-1") as (_, sub):
+            queue = sub.queue
             ev = await queue.get()
         await supervisor.shutdown()
         return ev
@@ -114,7 +116,8 @@ def test_write_through_before_fanout() -> None:
         adapter = StubAgentAdapter(_scripted())
         await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (_, queue):
+        async with supervisor.subscribe("agt-1") as (_, sub):
+            queue = sub.queue
             for _ in range(5):
                 ev = await queue.get()
                 logged_seqs = [e["seq"] for e in log.events.get(("WRK-001", "agt-1"), [])]
@@ -153,7 +156,8 @@ def test_send_input_writes_user_input_then_forwards_to_adapter() -> None:
         adapter = StubAgentAdapter([])  # no scripted events
         await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (_, queue):
+        async with supervisor.subscribe("agt-1") as (_, sub):
+            queue = sub.queue
             await supervisor.send_input("agt-1", "hello there")
             ev = await queue.get()
 
@@ -193,13 +197,13 @@ def test_resubscribe_replaces_previous_subscriber() -> None:
             "WRK-001", "agt-1", adapter, _start_context()
         )
 
-        async with supervisor.subscribe("agt-1") as (_, q1):
-            async with supervisor.subscribe("agt-1") as (_, q2):
-                # The slot now points at q2; q1 is abandoned.
+        async with supervisor.subscribe("agt-1") as (_, sub1):
+            async with supervisor.subscribe("agt-1") as (_, sub2):
+                # The slot now points at sub2; sub1 is abandoned.
                 await supervisor.send_input("agt-1", "after replace")
-                ev = await q2.get()
-                # q1 was not put into.
-                q1_empty = q1.empty()
+                ev = await sub2.queue.get()
+                # sub1 was not put into.
+                q1_empty = sub1.queue.empty()
 
         await supervisor.shutdown()
         return q1_empty, ev["text"]
@@ -223,18 +227,18 @@ def test_outer_subscribe_finally_does_not_clear_inner_slot() -> None:
 
         # Manually drive the cm protocol to force a non-LIFO order.
         outer = supervisor.subscribe("agt-1")
-        _, _q_outer = await outer.__aenter__()
+        _, _outer_sub = await outer.__aenter__()
 
         inner = supervisor.subscribe("agt-1")
-        _, q_inner = await inner.__aenter__()
+        _, inner_sub = await inner.__aenter__()
 
         # Now exit OUTER first (the older one). Its finally should not
-        # clear the slot, because the slot points at q_inner.
+        # clear the slot, because the slot points at inner_sub.
         await outer.__aexit__(None, None, None)
 
-        # The slot should still be q_inner — verify by publishing.
+        # The slot should still be inner_sub — verify by publishing.
         await supervisor.send_input("agt-1", "still flowing")
-        ev = await q_inner.get()
+        ev = await inner_sub.queue.get()
         ok = ev["text"] == "still flowing"
 
         await inner.__aexit__(None, None, None)
@@ -258,7 +262,8 @@ def test_late_subscriber_sees_only_post_subscription_events() -> None:
         # Wait for all five scripted events to be published + flushed.
         await _await_agent(supervisor, "agt-1")
 
-        async with supervisor.subscribe("agt-1") as (from_seq, queue):
+        async with supervisor.subscribe("agt-1") as (from_seq, sub):
+            queue = sub.queue
             try:
                 await asyncio.wait_for(queue.get(), timeout=0.05)
                 got_event = True
@@ -367,7 +372,8 @@ def test_adapter_task_error_emits_error_event() -> None:
         adapter = _CrashingAdapter()
         await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (_, queue):
+        async with supervisor.subscribe("agt-1") as (_, sub):
+            queue = sub.queue
             first = await queue.get()
             second = await queue.get()
 
@@ -378,3 +384,73 @@ def test_adapter_task_error_emits_error_event() -> None:
     assert events[0]["type"] == "status_change"
     assert events[1]["type"] == "error"
     assert "exploded" in events[1]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Slow-subscriber drop policy
+# ---------------------------------------------------------------------------
+
+
+def test_subscription_queue_is_bounded() -> None:
+    """The per-subscription queue caps at SUBSCRIBER_QUEUE_MAX so a slow
+    subscriber can't grow memory unbounded."""
+
+    async def run() -> int:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        await supervisor.start_agent("WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        async with supervisor.subscribe("agt-1") as (_, sub):
+            maxsize = sub.queue.maxsize
+        await supervisor.shutdown()
+        return maxsize
+
+    assert _run(run()) == SUBSCRIBER_QUEUE_MAX
+
+
+def test_slow_subscriber_is_kicked_and_slot_cleared() -> None:
+    """A subscriber whose queue overflows fires its kicked event and the
+    supervisor drops it from the slot, so subsequent events neither fan
+    to the abandoned queue nor block publishing."""
+
+    async def run() -> tuple[bool, bool, bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter([])  # publish via send_input only
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+
+        async with supervisor.subscribe("agt-1") as (_, sub):
+            # Don't drain the queue; fill past the cap to trigger overflow.
+            for i in range(SUBSCRIBER_QUEUE_MAX + 5):
+                await supervisor.send_input("agt-1", f"msg-{i}")
+            kicked_fired = sub.kicked.is_set()
+            slot_cleared = supervisor._states["agt-1"].subscriber is None
+            queue_at_cap = sub.queue.qsize() == SUBSCRIBER_QUEUE_MAX
+
+        await supervisor.shutdown()
+        return kicked_fired, slot_cleared, queue_at_cap
+
+    fired, cleared, capped = _run(run())
+    assert fired is True
+    assert cleared is True
+    assert capped is True
+
+
+def test_kicked_subscriber_does_not_block_further_publishing() -> None:
+    """After a subscriber is dropped, publishing keeps working — events
+    continue to land on disk for later replay via ?cursor=N."""
+
+    async def run() -> int:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log)
+        await supervisor.start_agent("WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+
+        async with supervisor.subscribe("agt-1") as (_, sub):
+            for i in range(SUBSCRIBER_QUEUE_MAX + 1):
+                await supervisor.send_input("agt-1", f"msg-{i}")
+            assert sub.kicked.is_set()
+            # Publish one more after the kick; should still hit the log.
+            await supervisor.send_input("agt-1", "after-kick")
+
+        await supervisor.shutdown()
+        return len(log.events[("WRK-001", "agt-1")])
+
+    # SUBSCRIBER_QUEUE_MAX queued + 1 that triggered overflow + 1 after-kick.
+    assert _run(run()) == SUBSCRIBER_QUEUE_MAX + 2

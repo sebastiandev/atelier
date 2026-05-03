@@ -101,6 +101,29 @@ from src.domain.workstore.ports import TranscriptLog
 _log = logging.getLogger(__name__)
 
 
+# Bound for the per-subscription queue. The supervisor stamps events as
+# fast as the adapter emits them; the WS handler drains them at network
+# speed. If a subscriber falls this far behind we cut it loose rather
+# than grow memory unbounded — disk has every event, so the client can
+# reconnect with ?cursor=N and resume.
+SUBSCRIBER_QUEUE_MAX = 256
+
+
+@dataclasses.dataclass(frozen=True)
+class AgentSubscription:
+    """Handle returned by ``AgentSupervisorService.subscribe``.
+
+    ``queue`` is bounded to ``SUBSCRIBER_QUEUE_MAX``. If publishing
+    overflows it (slow consumer), the supervisor sets ``kicked`` and
+    drops the subscriber slot. Callers should select between
+    ``queue.get()`` and ``kicked.wait()`` and close the upstream
+    connection if ``kicked`` fires.
+    """
+
+    queue: asyncio.Queue[dict[str, Any]]
+    kicked: asyncio.Event
+
+
 @dataclasses.dataclass
 class _AgentState:
     work_slug: str
@@ -111,9 +134,9 @@ class _AgentState:
     publish_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
     # Atelier is single-user single-browser: at most one WS subscriber per
     # agent. A second subscribe (e.g., reconnect-before-cleanup) replaces
-    # the slot; the previous queue is silently abandoned because its WS is
-    # presumed dead.
-    subscriber: asyncio.Queue[dict[str, Any]] | None = None
+    # the slot; the previous subscription is silently abandoned because
+    # its WS is presumed dead.
+    subscriber: AgentSubscription | None = None
 
 
 class AgentSupervisorService:
@@ -152,29 +175,37 @@ class AgentSupervisorService:
     @asynccontextmanager
     async def subscribe(
         self, agent_slug: str
-    ) -> AsyncIterator[tuple[int, asyncio.Queue[dict[str, Any]]]]:
-        """Yield ``(from_seq, queue)`` registered atomically against publish.
+    ) -> AsyncIterator[tuple[int, AgentSubscription]]:
+        """Yield ``(from_seq, subscription)`` registered atomically against publish.
 
         Any event with ``seq <= from_seq`` is already on disk; any event
-        with ``seq > from_seq`` lands in ``queue``. The caller is
-        responsible for replaying disk-side events between its cursor and
-        ``from_seq`` before draining the queue.
+        with ``seq > from_seq`` lands in ``subscription.queue``. The caller
+        is responsible for replaying disk-side events between its cursor
+        and ``from_seq`` before draining the queue.
+
+        The queue is bounded; on overflow ``subscription.kicked`` fires and
+        the slot is cleared. Callers must monitor ``kicked`` alongside
+        the queue and close the upstream connection if it fires.
 
         A second subscribe to the same agent replaces the slot; the
-        previous queue is abandoned (its WS is presumed dead). Cleanup
-        only clears the slot if it still points at our queue, so a stale
-        ``finally`` can't disturb a fresh subscriber.
+        previous subscription is abandoned (its WS is presumed dead).
+        Cleanup only clears the slot if it still points at our
+        subscription, so a stale ``finally`` can't disturb a fresh
+        subscriber.
         """
         state = self._require_state(agent_slug)
-        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        subscription = AgentSubscription(
+            queue=asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_MAX),
+            kicked=asyncio.Event(),
+        )
         async with state.publish_lock:
             from_seq = state.seq
-            state.subscriber = queue
+            state.subscriber = subscription
         try:
-            yield from_seq, queue
+            yield from_seq, subscription
         finally:
             async with state.publish_lock:
-                if state.subscriber is queue:
+                if state.subscriber is subscription:
                     state.subscriber = None
 
     async def stop_agent(self, agent_slug: str) -> None:
@@ -233,8 +264,21 @@ class AgentSupervisorService:
                 state.agent_slug,
                 stamped,
             )
-            if state.subscriber is not None:
-                state.subscriber.put_nowait(stamped)
+            sub = state.subscriber
+            if sub is None:
+                return
+            try:
+                sub.queue.put_nowait(stamped)
+            except asyncio.QueueFull:
+                # Slow consumer — drop the subscriber. The disk has the
+                # event; reconnect with ?cursor=N picks it up.
+                _log.warning(
+                    "dropping slow WS subscriber for agent=%s at seq=%d",
+                    state.agent_slug,
+                    state.seq,
+                )
+                sub.kicked.set()
+                state.subscriber = None
 
     def _require_state(self, agent_slug: str) -> _AgentState:
         state = self._states.get(agent_slug)
@@ -250,4 +294,4 @@ def _event_to_dict(event: AgentEvent) -> dict[str, Any]:
     return d
 
 
-__all__ = ["AgentSupervisorService"]
+__all__ = ["AgentSubscription", "AgentSupervisorService", "SUBSCRIBER_QUEUE_MAX"]

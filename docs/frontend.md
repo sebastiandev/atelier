@@ -138,7 +138,7 @@ The build emits per-language Shiki chunks loaded on demand (only languages Claud
 Items still on the Phase B / future-sprint list (kept here as a quick checklist; the source of truth is `_bmad-output/sprint-plan-atelier-2026-04-30.md`):
 
 - [x] Cursor persistence (Zustand + `localStorage`)
-- [ ] Slow-subscriber drop policy in supervisor (backend)
+- [x] Slow-subscriber drop policy in supervisor (backend)
 - [ ] Transcript virtualization (only when a transcript actually gets long)
 - [ ] Light-theme tokens + theme toggle
 - [ ] `NewAgentDialog`: collapsible Advanced section for provider `options`

@@ -1,6 +1,5 @@
 """Agent stream WebSocket — replay-from-cursor + live fan-out + input.
 
-Walking-skeleton scope:
   - Connect with optional ``?cursor=N``; default 0 replays everything.
   - Replay disk events with ``cursor < seq <= from_seq`` (snapshot at
     subscribe time), then drain the supervisor's per-subscription queue
@@ -8,9 +7,9 @@ Walking-skeleton scope:
   - Concurrent receive of ``{"type":"input","text":"..."}`` text frames
     forwards to ``supervisor.send_input``, which writes a ``user_input``
     transcript line and forwards to the adapter.
-
-Phase B (deferred): slow-subscriber close-on-overrun, malformed-frame
-hardening, reconnect-with-backoff at the client (frontend's job).
+  - The subscription queue is bounded; if we fall behind, the supervisor
+    sets ``kicked`` and we close with code 4408 ("slow subscriber"). The
+    client retries with backoff and resumes from ``?cursor=N``.
 """
 
 import asyncio
@@ -24,6 +23,10 @@ from src.domain.supervisor import AgentSupervisorService
 
 router = APIRouter()
 
+# WS close codes — see docs/backend.md → WS protocol.
+_CLOSE_AGENT_NOT_RUNNING = 4404
+_CLOSE_SLOW_SUBSCRIBER = 4408
+
 
 @router.websocket("/agents/{agent_slug}/stream")
 async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
@@ -33,35 +36,40 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
     work_slug = supervisor.get_work_slug_for(agent_slug)
     if work_slug is None:
         # Reject before accepting — the FastAPI helper that closes pre-accept.
-        await websocket.close(code=4404)
+        await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
         return
 
     cursor = _parse_cursor(websocket.query_params.get("cursor"))
     await websocket.accept()
 
     try:
-        async with supervisor.subscribe(agent_slug) as (from_seq, queue):
+        async with supervisor.subscribe(agent_slug) as (from_seq, sub):
             # Replay disk-side window: (cursor, from_seq].
             for event in workstore.read_transcript_from_cursor(work_slug, agent_slug, cursor):
                 if event["seq"] > from_seq:
                     break
                 await websocket.send_json(event)
 
-            # Live: concurrently send queued events and receive input frames.
-            send_task = asyncio.create_task(_drain_queue(queue, websocket))
+            # Live: concurrently send queued events, receive input frames,
+            # and watch for the supervisor kicking us off the slot.
+            send_task = asyncio.create_task(_drain_queue(sub.queue, websocket))
             recv_task = asyncio.create_task(_receive_inputs(websocket, supervisor, agent_slug))
+            kick_task = asyncio.create_task(sub.kicked.wait())
             try:
                 done, _pending = await asyncio.wait(
-                    {send_task, recv_task},
+                    {send_task, recv_task, kick_task},
                     return_when=asyncio.FIRST_COMPLETED,
                 )
+                if kick_task in done:
+                    await websocket.close(code=_CLOSE_SLOW_SUBSCRIBER)
+                    return
                 # Surface any task exception (other than disconnect/cancel).
                 for task in done:
                     exc = task.exception()
                     if exc is not None and not isinstance(exc, WebSocketDisconnect):
                         raise exc
             finally:
-                for task in (send_task, recv_task):
+                for task in (send_task, recv_task, kick_task):
                     task.cancel()
                     with suppress(asyncio.CancelledError, WebSocketDisconnect):
                         await task

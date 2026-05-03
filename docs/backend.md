@@ -59,9 +59,11 @@ Pipeline per event from the adapter:
 
 1. Stamp `seq`.
 2. Append to `transcript.ndjson` (with fsync — see [Transcript log](#transcript-log) below).
-3. Fan out to the (at most one) live subscriber via an `asyncio.Queue`.
+3. Fan out to the (at most one) live subscriber via a bounded `asyncio.Queue`.
 
 The fsync-before-fanout ordering means a crash never leaves a subscriber having seen an event that isn't on disk.
+
+**Slow-subscriber drop.** `subscribe()` returns an `AgentSubscription { queue, kicked }`. The queue caps at `SUBSCRIBER_QUEUE_MAX` (256). If the consumer falls that far behind, the supervisor catches `QueueFull`, sets `kicked`, and drops the subscriber from the slot — bounding memory growth without blocking the publish path. The WS handler watches `kicked` alongside the queue and closes with code 4408 when it fires; the client retries with backoff and resumes from `?cursor=N`. Events published after the drop still hit disk, so nothing is lost.
 
 Input flow: the WS handler forwards `{"type":"input","text":"..."}` to `supervisor.send_input(slug, text)`, which writes a `UserInput` transcript line and forwards to the adapter's input channel.
 
@@ -115,6 +117,7 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 | Code | Meaning |
 | --- | --- |
 | 4404 | Supervisor has no live adapter for this slug. Terminal — frontend stops retrying and surfaces "stopped". |
+| 4408 | Slow subscriber — the per-subscription queue overflowed. Frontend retries with backoff and resumes from `?cursor=N`. |
 | 1000/1001/etc. | Transient (network, server restart). Frontend retries with exponential backoff. |
 
 ## Settings
