@@ -1,9 +1,18 @@
-import { useThemeStore } from "./state/theme";
+import { type Theme, useThemeStore } from "./state/theme";
+
+// Cycle order matches state/theme.ts → light → dark → ansi → light.
+// The toggle icon previews the *next* theme so the affordance reads
+// like "press to go there".
+const NEXT_LABEL: Record<Theme, Theme> = {
+  light: "dark",
+  dark: "ansi",
+  ansi: "light",
+};
 
 export function ThemeToggle() {
   const theme = useThemeStore((s) => s.theme);
   const toggle = useThemeStore((s) => s.toggleTheme);
-  const next = theme === "dark" ? "light" : "dark";
+  const next = NEXT_LABEL[theme];
   return (
     <button
       type="button"
@@ -12,9 +21,20 @@ export function ThemeToggle() {
       aria-label={`Switch to ${next} theme`}
       onClick={toggle}
     >
-      {theme === "dark" ? <SunIcon /> : <MoonIcon />}
+      <PreviewIcon theme={next} />
     </button>
   );
+}
+
+function PreviewIcon({ theme }: { theme: Theme }) {
+  switch (theme) {
+    case "light":
+      return <SunIcon />;
+    case "dark":
+      return <MoonIcon />;
+    case "ansi":
+      return <TerminalIcon />;
+  }
 }
 
 function SunIcon() {
@@ -39,6 +59,31 @@ function MoonIcon() {
         fill="none"
         stroke="currentColor"
         strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function TerminalIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+      <rect
+        x="1.5"
+        y="3"
+        width="13"
+        height="10"
+        rx="1.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+      />
+      <path
+        d="M4 7l2 1.5L4 10M7.5 10.5h4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
         strokeLinejoin="round"
       />
     </svg>

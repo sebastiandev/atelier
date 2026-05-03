@@ -1842,3 +1842,111 @@ body {
 .add-context-row .hint {
   margin-right: 0.2rem;
 }
+
+/* =========================================================================
+   ANSI Terminal Dark Theme — drop-in addition for Atelier
+   -------------------------------------------------------------------------
+   Activate by setting `data-theme="ansi"` on <html> (or any ancestor).
+   Purely additive: re-skins via CSS custom properties, no component changes
+   required as long as components consume the existing token set
+   (--bg, --fg, --accent, --p-color, --s-color, etc.).
+   ========================================================================= */
+
+[data-theme="ansi"] {
+  /* Lifted, slightly-warmer slate — easier on the eyes than full dark */
+  --bg:    oklch(0.235 0.012 255);
+  --bg-1:  oklch(0.265 0.014 255);
+  --bg-2:  oklch(0.295 0.015 255);
+  --bg-3:  oklch(0.34  0.016 255);
+  --panel: oklch(0.275 0.014 255);
+  --line:        oklch(0.40 0.018 255);
+  --line-soft:   oklch(0.34 0.016 255);
+
+  /* Foreground: warm off-white like classic xterm */
+  --fg:   oklch(0.965 0.012 90);
+  --fg-2: oklch(0.84  0.014 90);
+  --fg-3: oklch(0.66  0.014 90);
+  --fg-4: oklch(0.50  0.014 90);
+
+  /* ANSI 16-color palette — bright variants */
+  --ansi-red:     oklch(0.74 0.17  25);
+  --ansi-green:   oklch(0.82 0.18 145);
+  --ansi-yellow:  oklch(0.88 0.16  95);
+  --ansi-blue:    oklch(0.74 0.16 245);
+  --ansi-magenta: oklch(0.74 0.18 330);
+  --ansi-cyan:    oklch(0.82 0.13 200);
+  --ansi-white:   oklch(0.96 0.01  90);
+  --ansi-gray:    oklch(0.62 0.012 90);
+
+  /* Accent stays on the indigo hue var (--accent-h) so the existing
+     accent-hue slider keeps working. */
+  --accent:      oklch(0.62 0.18 var(--accent-h));
+  --accent-soft: oklch(0.62 0.18 var(--accent-h) / 0.18);
+  --accent-line: oklch(0.62 0.18 var(--accent-h) / 0.45);
+  --accent-fg:   oklch(0.98 0.01 var(--accent-h));
+
+  /* Status colors → ANSI brights */
+  --good:   var(--ansi-green);
+  --warn:   var(--ansi-yellow);
+  --danger: var(--ansi-red);
+  --info:   var(--ansi-blue);
+}
+
+/* Persona color tokens — remap the warm hue ramp to ANSI brights */
+[data-theme="ansi"] [data-persona="architect"]  { --p-color: var(--ansi-red);     --p-soft: oklch(0.74 0.17  25 / 0.16); }
+[data-theme="ansi"] [data-persona="developer"]  { --p-color: var(--ansi-yellow);  --p-soft: oklch(0.88 0.16  95 / 0.16); }
+[data-theme="ansi"] [data-persona="product"]    { --p-color: var(--ansi-green);   --p-soft: oklch(0.82 0.18 145 / 0.16); }
+[data-theme="ansi"] [data-persona="ux"]         { --p-color: var(--ansi-magenta); --p-soft: oklch(0.74 0.18 330 / 0.16); }
+[data-theme="ansi"] [data-persona="writer"]     { --p-color: var(--ansi-cyan);    --p-soft: oklch(0.82 0.13 200 / 0.16); }
+
+/* Source/connection family colors — same palette, different mapping */
+[data-theme="ansi"] [data-source="sentry"]    { --s-color: var(--ansi-red);     --s-soft: oklch(0.74 0.17  25 / 0.14); }
+[data-theme="ansi"] [data-source="honeycomb"] { --s-color: var(--ansi-yellow);  --s-soft: oklch(0.88 0.16  95 / 0.14); }
+[data-theme="ansi"] [data-source="jira"]      { --s-color: var(--ansi-blue);    --s-soft: oklch(0.74 0.16 245 / 0.14); }
+[data-theme="ansi"] [data-source="url"]       { --s-color: var(--ansi-cyan);    --s-soft: oklch(0.82 0.13 200 / 0.14); }
+[data-theme="ansi"] [data-source="text"]      { --s-color: var(--ansi-magenta); --s-soft: oklch(0.74 0.18 330 / 0.14); }
+[data-theme="ansi"] [data-source="file"]      { --s-color: var(--ansi-green);   --s-soft: oklch(0.82 0.18 145 / 0.14); }
+
+/* Transcript typography — lean into mono and ANSI syntax colors */
+[data-theme="ansi"] .msg-body { font-family: var(--font-mono); font-size: 12px; line-height: 1.6; }
+[data-theme="ansi"] .msg-role { color: var(--ansi-gray); }
+[data-theme="ansi"] .msg-role.user { color: var(--accent); }
+[data-theme="ansi"] .msg-tool {
+  font-family: var(--font-mono);
+  background: oklch(0.82 0.13 200 / 0.08);
+  border-left-color: var(--ansi-cyan);
+  color: var(--fg-2);
+}
+[data-theme="ansi"] .msg-body code {
+  background: oklch(0.88 0.16 95 / 0.12);
+  color: var(--ansi-yellow);
+  border: 1px solid oklch(0.88 0.16 95 / 0.25);
+}
+[data-theme="ansi"] .msg-body .codeblock {
+  background: oklch(0.165 0.006 255);
+  border-color: var(--line);
+  color: var(--ansi-green);
+}
+
+/* Surface tweaks */
+[data-theme="ansi"] .agent-tile { background: var(--panel); border-color: var(--line); }
+[data-theme="ansi"] .composer   { background: oklch(0.215 0.012 255); }
+[data-theme="ansi"] .canvas {
+  /* Soften the dot-grid — too noisy on a lifted bg */
+  background:
+    radial-gradient(circle at 1px 1px, oklch(1 0 0 / 0.04) 1px, transparent 0),
+    var(--bg);
+  background-size: 18px 18px;
+}
+
+/* Status bits → ANSI brights */
+[data-theme="ansi"] .chip.good { color: var(--ansi-green); }
+[data-theme="ansi"] .chip.warn { color: var(--ansi-yellow); }
+[data-theme="ansi"] .chip.info { color: var(--ansi-blue); }
+[data-theme="ansi"] .dot.live     { background: var(--ansi-green);  color: var(--ansi-green); }
+[data-theme="ansi"] .dot.thinking { background: var(--ansi-yellow); color: var(--ansi-yellow); }
+[data-theme="ansi"] .dot.done     { background: var(--ansi-blue);   color: var(--ansi-blue); }
+[data-theme="ansi"] .verify-pill.ok  { color: var(--ansi-green); background: oklch(0.82 0.18 145 / 0.12); border-color: oklch(0.82 0.18 145 / 0.35); }
+[data-theme="ansi"] .verify-pill.err { color: var(--ansi-red);   background: oklch(0.74 0.17  25 / 0.12); border-color: oklch(0.74 0.17  25 / 0.35); }
+
+[data-theme="ansi"] .brand-mark { background: var(--accent); }
