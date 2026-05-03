@@ -123,3 +123,87 @@ export function createAgent(
     body: JSON.stringify(payload),
   }).then((r) => jsonOrThrow<AgentSummary>(r));
 }
+
+// ---------------------------------------------------------------------------
+// Connections
+// ---------------------------------------------------------------------------
+
+export type ConnectionType = "jira" | "sentry" | "honeycomb";
+
+export type Connection = {
+  slug: string;
+  type: ConnectionType;
+  name: string;
+  created_at: string;
+  url: string | null;
+  org: string | null;
+  region: string | null;
+  env: string | null;
+  team: string | null;
+  email: string | null;
+  verified: boolean;
+  last_used: string | null;
+};
+
+export type NewConnectionPayload = {
+  type: ConnectionType;
+  name: string;
+  token: string;
+  url?: string;
+  org?: string;
+  region?: string;
+  env?: string;
+  team?: string;
+  email?: string;
+};
+
+export type PatchConnectionPayload = {
+  name?: string;
+  token?: string;
+  url?: string;
+  org?: string;
+  region?: string;
+  env?: string;
+  team?: string;
+  email?: string;
+};
+
+export type VerifyResponse = {
+  verified: boolean;
+  error: string | null;
+};
+
+export function listConnections(): Promise<Connection[]> {
+  return fetch("/api/connections").then((r) => jsonOrThrow<Connection[]>(r));
+}
+
+export function createConnection(payload: NewConnectionPayload): Promise<Connection> {
+  return fetch("/api/connections", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<Connection>(r));
+}
+
+export function patchConnection(
+  slug: string,
+  payload: PatchConnectionPayload,
+): Promise<Connection> {
+  return fetch(`/api/connections/${slug}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<Connection>(r));
+}
+
+export function deleteConnection(slug: string): Promise<void> {
+  return fetch(`/api/connections/${slug}`, { method: "DELETE" }).then((res) => {
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  });
+}
+
+export function verifyConnection(slug: string): Promise<VerifyResponse> {
+  return fetch(`/api/connections/${slug}/verify`, { method: "POST" }).then((r) =>
+    jsonOrThrow<VerifyResponse>(r),
+  );
+}

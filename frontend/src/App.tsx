@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { AgentView } from "./AgentView";
+import { Connections } from "./Connections";
 import { Home } from "./Home";
 import { useThemeStore } from "./state/theme";
 import { WorkView } from "./WorkView";
@@ -17,6 +18,10 @@ export function App() {
   if (path.startsWith("/works/")) {
     const slug = path.slice("/works/".length).split("/")[0];
     if (slug) return <WorkView workSlug={slug} />;
+  }
+
+  if (path === "/connections") {
+    return <Connections />;
   }
 
   return <Home />;

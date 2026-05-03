@@ -58,6 +58,9 @@ export function Home() {
           Atelier
         </div>
         <div className="spacer" />
+        <a className="btn-ghost-sm" href="/connections">
+          Connections
+        </a>
         <span className="hint mono">
           {activeCount} active
         </span>

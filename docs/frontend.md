@@ -12,6 +12,7 @@ frontend/src/
 ├── Home.tsx             # /
 ├── WorkView.tsx         # /works/<slug>
 ├── AgentView.tsx        # /agents/<slug> — wraps AgentTile in page mode
+├── Connections.tsx      # /connections — CRUD UI for ConnectionStore
 ├── AgentTile.tsx        # the unit; "page" or "tile" mode
 ├── NewWorkDialog.tsx    # POST /api/works
 ├── NewAgentDialog.tsx   # POST /api/works/<slug>/agents
@@ -21,6 +22,7 @@ frontend/src/
 │   ├── cursors.ts       # per-agent WS resume cursor, persisted
 │   └── theme.ts         # dark/light toggle, persisted
 ├── ThemeToggle.tsx      # sun/moon button driving useThemeStore
+├── connectionFields.ts  # per-source form schema (CONNECTION_FIELDS)
 ├── api.ts               # typed fetch wrappers + types + persona constants
 └── styles.css           # tokens + every component style (one file, by design)
 ```
@@ -57,6 +59,16 @@ The mode is a structural switch, not a theming switch. Splitting into two compon
 **Terminal close on 4404.** When the backend closes with code 4404 (supervisor has no live adapter — typically after a backend restart), the hook sets `status: "stopped"` and exits the retry loop. The `AgentTile` shows a banner and disables the composer.
 
 **Cursor persistence.** The hook seeds `lastSeqRef` from `useCursorStore.getState().getCursor(slug)` at mount and writes back on every event with a numeric `seq`. The store persists to `localStorage` under the key `atelier:cursors`, so a page refresh resumes the stream from the saved seq — the transcript starts empty, but no replay storm.
+
+## Connections page
+
+`Connections.tsx` at `/connections`. One section per `ConnectionType` (`jira`, `sentry`, `honeycomb`), source-tinted via `data-source` (the same token system that drives context rows / connection chips). Each section lists existing connections as expandable cards with a Disconnect/Re-verify/Save footer, plus a "+ New" inline form.
+
+**Form schema is declarative.** `connectionFields.ts` maps each source type to a `ConnectionSchema` of `{ id, label, placeholder?, required?, secret?, options? }` entries — same shape as the design source's `CONNECTION_FIELDS`. The grid renders selects for fields with `options`, password inputs (with reveal toggle) for `secret: true`, plain inputs otherwise.
+
+**Verify flow.** New-connection Verify is the only network action that hits the server: first click POSTs the row + verifies; subsequent clicks PATCH the same `con-N` slug + re-verify. The Save button is just "close the form" — the primary action only enables once `verifyState === "ok"`, so the form can't close around an unverified row, and Save never re-POSTs. Re-verify on an existing card writes any pending token rotation via PATCH before calling `/verify` so the keychain has the latest.
+
+**No token round-trip.** The `Connection` type returned by the API has no `token` field; the UI tracks token edits in form-local state only and sends them via POST/PATCH. The reveal toggle on the secret input shows whatever the user just typed, never anything fetched from the server.
 
 ## Composer
 
