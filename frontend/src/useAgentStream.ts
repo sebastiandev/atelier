@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useCursorStore } from "./state/cursors";
+
 export type AgentEvent = {
   seq: number;
   type: string;
@@ -46,10 +48,12 @@ export function useAgentStream(agentSlug: string) {
     let cancelled = false;
     let retryHandle: number | null = null;
 
-    // Reset on agent change.
+    // Reset on agent change. Seed the cursor from the persisted store so a
+    // page refresh resumes from the last seen seq instead of replaying the
+    // full transcript.
     setEvents([]);
     setStatus("connecting");
-    lastSeqRef.current = 0;
+    lastSeqRef.current = useCursorStore.getState().getCursor(agentSlug);
     retryAttemptRef.current = 0;
 
     function scheduleReconnect() {
@@ -80,6 +84,7 @@ export function useAgentStream(agentSlug: string) {
           const event = JSON.parse(msg.data) as AgentEvent;
           if (typeof event.seq === "number") {
             lastSeqRef.current = event.seq;
+            useCursorStore.getState().setCursor(agentSlug, event.seq);
           }
           setEvents((prev) => [...prev, event]);
         } catch {

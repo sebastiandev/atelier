@@ -17,11 +17,13 @@ frontend/src/
 ├── NewAgentDialog.tsx   # POST /api/works/<slug>/agents
 ├── MarkdownText.tsx     # react-markdown + remark-gfm + shiki wrapper
 ├── useAgentStream.ts    # WS hook with replay + reconnect backoff
+├── state/               # narrow Zustand stores (frontend-local concerns)
+│   └── cursors.ts       # per-agent WS resume cursor, persisted
 ├── api.ts               # typed fetch wrappers + types + persona constants
 └── styles.css           # tokens + every component style (one file, by design)
 ```
 
-No state library yet (see [State](#state)).
+State: Zustand for frontend-local presentation concerns (see [State](#state)).
 
 ## Routing
 
@@ -46,13 +48,13 @@ The mode is a structural switch, not a theming switch. Splitting into two compon
 
 `useAgentStream(agentSlug)` is the single point of contact with the WS at `/api/agents/<slug>/stream`. It returns `{ events, status, sendInput }` and handles:
 
-**Cursor-based resume.** On reconnect it appends `?cursor=<lastSeq>` so the server replays the window we missed before going live. The server's replay-then-live semantics guarantee no duplicates and no gaps (see `backend.md` → WS protocol).
+**Cursor-based resume.** On reconnect it appends `?cursor=<lastSeq>` so the server replays the window we missed before going live. The server's replay-then-live semantics guarantee no duplicates and no gaps (see `backend.md` → WS protocol). The cursor is persisted to `localStorage` (via the Zustand `cursors` store), so a page refresh also resumes from the last seen seq instead of replaying from 0.
 
 **Exponential reconnect backoff.** Schedule: `1s → 2s → 4s → 8s → 16s → 30s` (cap). Resets on a successful `onopen`, so a single transient blip costs one 1s retry — only consecutive failures walk the ladder.
 
 **Terminal close on 4404.** When the backend closes with code 4404 (supervisor has no live adapter — typically after a backend restart), the hook sets `status: "stopped"` and exits the retry loop. The `AgentTile` shows a banner and disables the composer.
 
-The cursor lives in a `useRef`. It does **not** persist across page reload — that's the [cursor persistence story](#deferred) in Phase B.
+**Cursor persistence.** The hook seeds `lastSeqRef` from `useCursorStore.getState().getCursor(slug)` at mount and writes back on every event with a numeric `seq`. The store persists to `localStorage` under the key `atelier:cursors`, so a page refresh resumes the stream from the saved seq — the transcript starts empty, but no replay storm.
 
 ## Composer
 
@@ -112,7 +114,13 @@ Advanced per-provider options (Claude's `thinking_effort`, `permission_mode`) ar
 
 ## State
 
-No Zustand yet. The codebase prefers component-local `useState` + the WS hook. The first Zustand store will be the **persisted cursor** for `useAgentStream` (so a page refresh doesn't replay the full transcript) — that's a Phase B item with its own follow-up. When you add it: keep the store narrow, put it in `frontend/src/state/`, and persist via `localStorage` keyed by agent slug.
+Component-local `useState` + the WS hook is the default. Cross-component, frontend-only state lives in narrow Zustand stores under `frontend/src/state/`, persisted to `localStorage` via the `persist` middleware where it should survive reload.
+
+Current stores:
+
+- `cursors.ts` — `{ cursors: Record<agentSlug, number> }`, persisted under `atelier:cursors`. Used by `useAgentStream` for refresh-resume.
+
+When adding a new store: keep it narrow (one concern per file), put presentation-only state here (per CLAUDE.md → "UI state is frontend-local"), and don't reach into it from outside React-tree code unless you have a reason — `useStore.getState()` is a synchronous read, fine inside a `useEffect`.
 
 ## Build / typecheck
 
@@ -129,7 +137,7 @@ The build emits per-language Shiki chunks loaded on demand (only languages Claud
 
 Items still on the Phase B / future-sprint list (kept here as a quick checklist; the source of truth is `_bmad-output/sprint-plan-atelier-2026-04-30.md`):
 
-- [ ] Cursor persistence (Zustand + `localStorage`)
+- [x] Cursor persistence (Zustand + `localStorage`)
 - [ ] Slow-subscriber drop policy in supervisor (backend)
 - [ ] Transcript virtualization (only when a transcript actually gets long)
 - [ ] Light-theme tokens + theme toggle
