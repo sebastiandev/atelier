@@ -483,6 +483,44 @@ body {
   color: var(--muted);
   letter-spacing: 0.02em;
 }
+
+.advanced-section {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 0.8rem;
+}
+.advanced-section > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  color: var(--fg-3);
+  letter-spacing: 0.02em;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.advanced-section > summary::-webkit-details-marker {
+  display: none;
+}
+.advanced-section > summary::before {
+  content: "▸";
+  font-size: 10px;
+  transition: transform 80ms ease;
+}
+.advanced-section[open] > summary::before {
+  transform: rotate(90deg);
+}
+.advanced-section > summary:hover {
+  color: var(--fg);
+}
+.advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  margin-top: 0.7rem;
+  padding-left: 0.85rem;
+  border-left: 1px solid var(--line-soft);
+}
 .input,
 .textarea {
   background: var(--bg-1);

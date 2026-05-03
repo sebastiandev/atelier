@@ -112,7 +112,7 @@ This is intentional: it avoids stub UI controls that lie about working, keeps su
 
 The dialog renders its provider/model fields from the descriptors at `GET /api/providers`. If you add a new provider on the backend (`SPECS` registry), the dialog picks it up with **no frontend code changes** — including the primary-field label ("Model" for Claude, "Mode" for Amp) and the dropdown values.
 
-Advanced per-provider options (Claude's `thinking_effort`, `permission_mode`) aren't rendered yet — the descriptor exposes them under `options`, and a follow-up will add a collapsible "Advanced" section that maps them to selects. Wire format already supports it (`POST /api/works/<slug>/agents` accepts `options: dict`).
+Advanced per-provider options (Claude's `thinking_effort`, `permission_mode`) render in a collapsible "Advanced" `<details>` block when the descriptor's `options` map is non-empty. Each entry becomes a labeled `<select>`; defaults seed from the descriptor and reset on provider change. The dialog includes the `options` dict in the POST body only when it has entries, so providers without options (e.g. Amp today) never send a stray empty object.
 
 ## State
 
@@ -144,5 +144,5 @@ Items still on the Phase B / future-sprint list (kept here as a quick checklist;
 - [x] Slow-subscriber drop policy in supervisor (backend)
 - [ ] Transcript virtualization (only when a transcript actually gets long)
 - [x] Light-theme tokens + theme toggle
-- [ ] `NewAgentDialog`: collapsible Advanced section for provider `options`
+- [x] `NewAgentDialog`: collapsible Advanced section for provider `options`
 - [ ] Inline context attachments in `NewWorkDialog` / `NewAgentDialog` (Sprint 3, depends on `ConnectionStore`)

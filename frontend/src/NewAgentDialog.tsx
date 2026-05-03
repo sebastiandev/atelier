@@ -29,6 +29,7 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
 
   const [providerName, setProviderName] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
+  const [options, setOptions] = useState<Record<string, string>>({});
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +42,7 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
         if (p.length > 0) {
           setProviderName(p[0].name);
           setModel(p[0].primary_field.default);
+          setOptions(defaultsFor(p[0]));
         }
       })
       .catch((e) => setProvidersError(e instanceof Error ? e.message : String(e)));
@@ -66,7 +68,10 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
   function changeProvider(next: string) {
     setProviderName(next);
     const p = providers?.find((x) => x.name === next);
-    if (p) setModel(p.primary_field.default);
+    if (p) {
+      setModel(p.primary_field.default);
+      setOptions(defaultsFor(p));
+    }
   }
 
   function pickPersona(id: Persona) {
@@ -105,6 +110,9 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
       provider: provider.name,
       model,
     };
+    if (Object.keys(options).length > 0) {
+      payload.options = options;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -237,6 +245,32 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
                   </select>
                 </label>
               )}
+
+              {provider && Object.keys(provider.options).length > 0 && (
+                <details className="advanced-section">
+                  <summary>Advanced</summary>
+                  <div className="advanced-body">
+                    {Object.entries(provider.options).map(([key, field]) => (
+                      <label key={key} className="field">
+                        <span className="label">{field.label}</span>
+                        <select
+                          className="input"
+                          value={options[key] ?? field.default}
+                          onChange={(e) =>
+                            setOptions((prev) => ({ ...prev, [key]: e.target.value }))
+                          }
+                        >
+                          {field.values.map((v) => (
+                            <option key={v} value={v}>
+                              {v}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
+                </details>
+              )}
             </>
           )}
 
@@ -258,4 +292,12 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
       </div>
     </div>
   );
+}
+
+function defaultsFor(provider: ProviderDescriptor): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, field] of Object.entries(provider.options)) {
+    out[key] = field.default;
+  }
+  return out;
 }
