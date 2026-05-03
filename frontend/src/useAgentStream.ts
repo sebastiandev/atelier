@@ -19,19 +19,28 @@ export type ConnectionStatus =
 // Treat as terminal — don't retry, let the UI surface "stopped".
 const CLOSE_CODE_AGENT_NOT_RUNNING = 4404;
 
+// Exponential reconnect schedule: 1s → 2s → 4s → 8s → 16s → 30s (cap).
+// Resets to 0 on a successful connect so transient blips don't push us
+// to the cap.
+const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
+
+function delayForAttempt(attempt: number): number {
+  return RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
+}
+
 /**
- * Subscribe to an agent's WS stream. Reconnects automatically on close
- * with a 1s delay; resumes from the last seen seq via `?cursor=N` so the
- * server replays missed events from `transcript.ndjson` before going live.
- *
- * Phase A keeps the retry policy dead-simple. Phase B adds backoff +
- * cursor persistence (Zustand) per the design handoff's reconnection UX.
+ * Subscribe to an agent's WS stream. Reconnects on transient close with
+ * exponential backoff, resuming from the last seen seq via `?cursor=N` so
+ * the server replays missed events from `transcript.ndjson` before going
+ * live. A 4404 close (supervisor doesn't know this agent) is terminal —
+ * the UI surfaces "stopped" instead of retrying.
  */
 export function useAgentStream(agentSlug: string) {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const wsRef = useRef<WebSocket | null>(null);
   const lastSeqRef = useRef(0);
+  const retryAttemptRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +50,13 @@ export function useAgentStream(agentSlug: string) {
     setEvents([]);
     setStatus("connecting");
     lastSeqRef.current = 0;
+    retryAttemptRef.current = 0;
+
+    function scheduleReconnect() {
+      const delay = delayForAttempt(retryAttemptRef.current);
+      retryAttemptRef.current += 1;
+      retryHandle = window.setTimeout(connect, delay);
+    }
 
     function connect() {
       if (cancelled) return;
@@ -54,6 +70,7 @@ export function useAgentStream(agentSlug: string) {
 
       ws.onopen = () => {
         if (cancelled) return;
+        retryAttemptRef.current = 0;
         setStatus("connected");
       };
 
@@ -77,7 +94,7 @@ export function useAgentStream(agentSlug: string) {
           return;
         }
         setStatus("closed");
-        retryHandle = window.setTimeout(connect, 1000);
+        scheduleReconnect();
       };
 
       ws.onerror = () => {

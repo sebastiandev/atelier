@@ -10,6 +10,17 @@
 - When saving or updating continuation context for this repo, write it to `_bmad-output/ATELIER-continuation-prompt.md`.
 - For quick project state, check `_bmad-output/project-status.yaml` right after the continuation prompt.
 
+## Developer docs (`docs/`)
+
+- `docs/README.md` is the index. It points to `architecture.md` (cross-cutting), `backend.md`, and `frontend.md`.
+- These docs capture the *why* — design decisions, conventions, seam definitions. The code captures the *what*.
+- **When you change behavior or design** (not typos / renames), check whether the relevant doc needs an update. Triage:
+  - New port / Protocol or convention shift → `docs/architecture.md`
+  - Provider abstraction change, supervisor behavior, persistence model, WS protocol → `docs/backend.md`
+  - New frontend pattern, route, hook semantics, token, or behavior shift in an existing component → `docs/frontend.md`
+  - Decision that supersedes `_bmad-output/architecture-atelier-2026-04-30.md` → add a one-liner to `_bmad-output/project-status.yaml` → `locked_pivots`
+- Keep updates small: a paragraph plus a code pointer (`backend/src/...py:N`). These are guidebooks, not specs.
+
 ## Frontend
 
 
