@@ -1019,7 +1019,7 @@ body {
   line-height: 1.5;
   outline: none;
   resize: none;
-  overflow-y: auto;
+  overflow-y: hidden;
   font-family: inherit;
 }
 .composer textarea:focus {

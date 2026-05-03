@@ -58,12 +58,17 @@ export function AgentTile({
     if (el) el.scrollTop = el.scrollHeight;
   }, [units.length, lastUnitText(units)]);
 
-  // Auto-grow textarea up to COMPOSER_MAX_HEIGHT.
+  // Auto-grow textarea up to COMPOSER_MAX_HEIGHT. Show the scrollbar
+  // only once content exceeds the cap — the CSS default is `hidden` so
+  // the macOS overlay scrollbar doesn't paint a sliver in the empty
+  // state.
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT) + "px";
+    const natural = el.scrollHeight;
+    el.style.height = Math.min(natural, COMPOSER_MAX_HEIGHT) + "px";
+    el.style.overflowY = natural > COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
   }, [draft]);
 
   // Clear optimistic thinking once a real status_change lands.

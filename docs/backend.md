@@ -17,9 +17,10 @@ backend/src/
 │   ├── commands/       # works/, agents/, connections/ — execute() per use case
 │   ├── connections/    # ConnectionStore + service + ports
 │   ├── supervisor/     # AgentSupervisorService — async, single-subscriber
+│   ├── worktrees/      # WorktreeManager port
 │   ├── workstore/      # WorkStore + reconcile
 │   └── models.py       # plain dataclasses
-└── infrastructure/     # SA mapping, filesystem, agent SDK adapters, keyring, HTTP verifier
+└── infrastructure/     # SA mapping, filesystem, agent SDK adapters, git worktrees, keyring, HTTP verifier
 ```
 
 ## Provider abstraction (Spec / Config / Adapter)
@@ -120,6 +121,20 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 | 4404 | Supervisor has no live adapter for this slug. Terminal — frontend stops retrying and surfaces "stopped". |
 | 4408 | Slow subscriber — the per-subscription queue overflowed. Frontend retries with backoff and resumes from `?cursor=N`. |
 | 1000/1001/etc. | Transient (network, server restart). Frontend retries with exponential backoff. |
+
+## WorktreeManager
+
+`domain/worktrees/`. Provisions a per-agent workdir so each agent gets its own branch + index without stepping on the user's main checkout. Three operations: `ensure`, `remove`, `sweep_orphans`. The implementation (`infrastructure/git/worktree_manager.py`) shells out to `git worktree` — three subprocess calls beat pulling in gitpython.
+
+**Layout** mirrors the architecture: `<workspace_root>/works/<work_slug>/worktrees/<agent_slug>/`. Branch names are `atelier/<work_slug>/<agent_slug>` so multi-agent runs don't collide and the user can spot them in `git branch`.
+
+**Pass-through for non-git folders.** If the work's `folder` is not a git repo, `ensure` returns the folder itself instead of trying (and failing) to create a worktree. The dialog hint already tells the user "If it's a git repo, agents will spawn worktrees here automatically." — non-repo folders keep working without forcing the user to convert them.
+
+**Removal escalates.** `git worktree remove` first; on dirty/locked, retry with `--force`; on still-failing, recursive `rmtree` plus `git worktree prune` to clean up the source repo's registry. A wedged worktree never blocks provisioning a fresh one.
+
+**Orphan sweep on startup.** `main.py` lifespan walks every work, asks the workstore for live agent slugs, and tells the manager to remove worktree directories that don't match. This is the cleanup path for crashed runs and soft-deleted works. It satisfies the AC "deleting a Work removes them" via reconcile-style sweep rather than coupling the soft-delete command to git ops directly.
+
+**Wired into the start_agent command** (`domain/commands/agents/start.py`). The route stays thin: parse the request, call `start.execute(...)`, await `supervisor.start_agent`. The command validates the provider config first (via `Spec.build`) so a bad model can't allocate an agent row + worktree we'd have to roll back. Two domain errors: `WorkNotFound` → 404, `InvalidProviderConfig` → 422.
 
 ## ConnectionStore
 

@@ -23,6 +23,7 @@ from src.infrastructure.filesystem import (
     FsWorkspaceFiles,
     WorkspacePaths,
 )
+from src.infrastructure.git import GitWorktreeManager
 from src.settings import Settings, get_settings
 
 
@@ -62,12 +63,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             connection_repo, KeyringSecretStore(), verify
         )
 
+        worktree_manager = GitWorktreeManager(paths)
+        # Orphan sweep: agents persist their slug in SQLite, so on
+        # startup any worktree dir whose agent_slug isn't in the live
+        # set is left over from a previous run that crashed before
+        # tear-down or a soft-deleted work. Run once per work_slug.
+        workstore = WorkStoreService(repo, files, transcript_log)
+        for work in workstore.list_works():
+            if work.slug is None:
+                continue
+            live = {a.slug for a in workstore.list_agents_for_work(work.slug) if a.slug}
+            worktree_manager.sweep_orphans(work.slug, live)
+
         app.state.settings = resolved
         app.state.engine = engine
         app.state.session_factory = session_factory
-        app.state.workstore = WorkStoreService(repo, files, transcript_log)
+        app.state.workstore = workstore
         app.state.supervisor = supervisor
         app.state.connection_store = connection_store
+        app.state.worktree_manager = worktree_manager
         try:
             yield
         finally:

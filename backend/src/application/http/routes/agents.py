@@ -1,32 +1,24 @@
 """Agents REST router.
 
-POST /api/works/{work_slug}/agents creates an agent row via the workstore
-then starts it on the supervisor with a provider-specific adapter
-selected via the SPECS registry + ``build_adapter`` singledispatch.
+POST /api/works/{work_slug}/agents creates an agent row + provisions a
+git worktree + starts it on the supervisor. The orchestration sits in
+``domain/commands/agents/start.py``; the route stays thin: parse →
+command → format.
 
-The wire format is: provider + model + free ``options`` dict. Each
-provider's Spec validates the ``options`` contents; unknown keys are
-rejected with 422.
+Wire format: provider + model + free ``options`` dict. The provider's
+Spec validates ``options``; unknown keys → 422.
 """
 
-from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import AgentSummary, NewAgentRequest
-from src.domain.agents import (
-    SPECS,
-    AgentStartContext,
-    CommonAgentConfig,
-    render_system_prompt,
-)
-from src.domain.commands.agents import list_for_work
+from src.domain.commands.agents import list_for_work, start as start_cmd
 from src.domain.models import Agent
 from src.domain.supervisor import AgentSupervisorService
-from src.domain.workstore.dtos import AddAgentRequest
+from src.domain.worktrees import WorktreeManager
 from src.domain.workstore.ports import WorkStore
-from src.infrastructure.agents import build_adapter
 from src.settings import Settings
 
 router = APIRouter()
@@ -40,12 +32,17 @@ def get_supervisor(request: Request) -> AgentSupervisorService:
     return request.app.state.supervisor  # type: ignore[no-any-return]
 
 
+def get_worktree_manager(request: Request) -> WorktreeManager:
+    return request.app.state.worktree_manager  # type: ignore[no-any-return]
+
+
 def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
 
 
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
+WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 
 
@@ -70,46 +67,28 @@ async def create_agent(
     payload: NewAgentRequest,
     workstore: WorkStoreDep,
     supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
     settings: SettingsDep,
 ) -> AgentSummary:
-    try:
-        agent = workstore.add_agent_to_work(
-            AddAgentRequest(
-                work_slug=work_slug,
-                name=payload.name,
-                persona=payload.persona,
-                role=payload.role,
-                provider=payload.provider,
-                model=payload.model,
-            )
-        )
-    except ValueError as e:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-
-    if agent.slug is None:  # defensive; repo guarantees this
-        raise RuntimeError("workstore returned agent without slug")
-
-    workdir = Path(f"/tmp/atelier/{work_slug}/{agent.slug}")
-    workdir.mkdir(parents=True, exist_ok=True)
-    common = CommonAgentConfig(
-        workdir=workdir,
-        system_prompt=render_system_prompt(payload.persona, payload.role),
+    req = start_cmd.StartAgentRequest(
+        work_slug=work_slug,
+        name=payload.name,
+        persona=payload.persona,
+        role=payload.role,
+        provider=payload.provider,
+        model=payload.model,
+        options=payload.options,
     )
     try:
-        config = SPECS[payload.provider].build(common, payload.model, payload.options)
-    except ValueError as e:
+        plan = start_cmd.execute(workstore, worktree_manager, settings, req)
+    except start_cmd.WorkNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except start_cmd.InvalidProviderConfig as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
 
-    adapter = build_adapter(config, settings)
-    context = AgentStartContext(
-        workdir=common.workdir,
-        context_md=common.context_md,
-        model=payload.model,
-        system_prompt=common.system_prompt,
-    )
-    await supervisor.start_agent(work_slug, agent.slug, adapter, context)
-
-    return _to_summary(work_slug, agent)
+    assert plan.agent.slug is not None
+    await supervisor.start_agent(work_slug, plan.agent.slug, plan.adapter, plan.context)
+    return _to_summary(work_slug, plan.agent)
 
 
 def _to_summary(work_slug: str, agent: Agent) -> AgentSummary:
