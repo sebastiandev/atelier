@@ -1,5 +1,6 @@
 /* Design tokens — lifted from design_handoff_atelier/design_files/styles.css.
-   Dark-only for now; light theme + theme toggle deferred to a future story. */
+   Dark is the default at :root; [data-theme="light"] overrides for the
+   light theme. App.tsx sets data-theme on <html> from useThemeStore. */
 
 :root {
   color-scheme: dark;
@@ -56,6 +57,42 @@
   --status-thinking: var(--warn);
   --status-idle: var(--fg-4);
   --status-error: var(--danger);
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Background ramp (lightest → most lifted) */
+  --bg:    oklch(0.985 0.002 250);
+  --bg-1:  oklch(0.975 0.003 250);
+  --bg-2:  oklch(0.96  0.004 250);
+  --bg-3:  oklch(0.93  0.005 250);
+  --panel: #ffffff;
+
+  /* Foreground ramp (darkest → faintest) */
+  --fg:   oklch(0.22 0.010 250);
+  --fg-2: oklch(0.42 0.010 250);
+  --fg-3: oklch(0.62 0.008 250);
+  --fg-4: oklch(0.78 0.005 250);
+
+  /* Lines */
+  --line:      oklch(0.90 0.005 250);
+  --line-soft: oklch(0.93 0.004 250);
+
+  /* Status hues — slightly cooler in light to keep contrast */
+  --good:   oklch(0.70 0.14 150);
+  --warn:   oklch(0.75 0.15  75);
+  --danger: oklch(0.65 0.20  25);
+  --info:   oklch(0.70 0.13 230);
+
+  /* Accent overrides for higher-contrast soft tints on light bg */
+  --accent-soft: oklch(0.62 0.18 var(--accent-h) / 0.12);
+  --accent-line: oklch(0.62 0.18 var(--accent-h) / 0.35);
+
+  /* Lighter shadows */
+  --shadow-1: 0 1px 0 oklch(1 0 0 / 0.04), 0 1px 2px oklch(0 0 0 / 0.06);
+  --shadow-2: 0 1px 0 oklch(1 0 0 / 0.04), 0 4px 12px oklch(0 0 0 / 0.10);
+  --shadow-pop: 0 12px 40px oklch(0 0 0 / 0.18), 0 1px 0 oklch(1 0 0 / 0.04);
 }
 
 * {
@@ -1033,6 +1070,26 @@ body {
 .btn-ghost-sm:hover {
   color: var(--fg);
   border-color: var(--muted);
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--fg-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 80ms, border-color 80ms, background 80ms;
+}
+.theme-toggle:hover {
+  color: var(--fg);
+  background: var(--bg-2);
+  border-color: var(--fg-3);
 }
 .crumbs {
   color: var(--muted);

@@ -18,7 +18,9 @@ frontend/src/
 ├── MarkdownText.tsx     # react-markdown + remark-gfm + shiki wrapper
 ├── useAgentStream.ts    # WS hook with replay + reconnect backoff
 ├── state/               # narrow Zustand stores (frontend-local concerns)
-│   └── cursors.ts       # per-agent WS resume cursor, persisted
+│   ├── cursors.ts       # per-agent WS resume cursor, persisted
+│   └── theme.ts         # dark/light toggle, persisted
+├── ThemeToggle.tsx      # sun/moon button driving useThemeStore
 ├── api.ts               # typed fetch wrappers + types + persona constants
 └── styles.css           # tokens + every component style (one file, by design)
 ```
@@ -72,7 +74,7 @@ A non-delta event (`tool_call`, `status_change`, `user_input`, …) closes any p
 
 Lifted from `design_handoff_atelier/design_files/styles.css` (gitignored — keep it in sync if it changes upstream).
 
-**Currently dark-only.** Light theme + `[data-theme="dark"]` toggle deferred — the nested `[data-theme="dark"] [data-persona="..."]` rule pattern is in the design source for when we need it.
+**Dark is the default at `:root`; light is opt-in via `[data-theme="light"]`.** `App.tsx` mirrors `useThemeStore.theme` onto `<html data-theme=...>`, and the override block in `styles.css` swaps the background ramp, foreground ramp, lines, status hues, and shadow stack to light values. Persona tints are intentionally untouched — the same hue reads on both themes. The `<ThemeToggle>` component sits in the Home + WorkView topbars and flips the store; the choice persists under `atelier:theme` in `localStorage`.
 
 **Token families** (all in `frontend/src/styles.css` `:root`):
 
@@ -119,6 +121,7 @@ Component-local `useState` + the WS hook is the default. Cross-component, fronte
 Current stores:
 
 - `cursors.ts` — `{ cursors: Record<agentSlug, number> }`, persisted under `atelier:cursors`. Used by `useAgentStream` for refresh-resume.
+- `theme.ts` — `{ theme: "dark" | "light" }`, persisted under `atelier:theme`. `App.tsx` mirrors it onto `<html data-theme=...>`.
 
 When adding a new store: keep it narrow (one concern per file), put presentation-only state here (per CLAUDE.md → "UI state is frontend-local"), and don't reach into it from outside React-tree code unless you have a reason — `useStore.getState()` is a synchronous read, fine inside a `useEffect`.
 
@@ -140,6 +143,6 @@ Items still on the Phase B / future-sprint list (kept here as a quick checklist;
 - [x] Cursor persistence (Zustand + `localStorage`)
 - [x] Slow-subscriber drop policy in supervisor (backend)
 - [ ] Transcript virtualization (only when a transcript actually gets long)
-- [ ] Light-theme tokens + theme toggle
+- [x] Light-theme tokens + theme toggle
 - [ ] `NewAgentDialog`: collapsible Advanced section for provider `options`
 - [ ] Inline context attachments in `NewWorkDialog` / `NewAgentDialog` (Sprint 3, depends on `ConnectionStore`)

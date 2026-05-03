@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 
 import { AgentView } from "./AgentView";
 import { Home } from "./Home";
+import { useThemeStore } from "./state/theme";
 import { WorkView } from "./WorkView";
 
 export function App() {
   const path = useRoute();
+  useThemeAttribute();
 
   if (path.startsWith("/agents/")) {
     const slug = path.slice("/agents/".length).split("/")[0];
@@ -28,4 +30,11 @@ function useRoute(): string {
     return () => window.removeEventListener("popstate", handler);
   }, []);
   return path;
+}
+
+function useThemeAttribute(): void {
+  const theme = useThemeStore((s) => s.theme);
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
 }

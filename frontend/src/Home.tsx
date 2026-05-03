@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { type CreateWorkPayload, type WorkSummary, createWork, listWorks } from "./api";
 import { NewWorkDialog } from "./NewWorkDialog";
+import { ThemeToggle } from "./ThemeToggle";
 
 type Tab = "active" | "completed";
 
@@ -60,6 +61,7 @@ export function Home() {
         <span className="hint mono">
           {activeCount} active
         </span>
+        <ThemeToggle />
       </header>
 
       <div className="home-hd">

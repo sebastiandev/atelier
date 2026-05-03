@@ -11,6 +11,7 @@ import {
   listAgents,
 } from "./api";
 import { NewAgentDialog } from "./NewAgentDialog";
+import { ThemeToggle } from "./ThemeToggle";
 
 export function WorkView({ workSlug }: { workSlug: string }) {
   const [work, setWork] = useState<WorkDetail | null>(null);
@@ -96,6 +97,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         <span className="folder-pill mono" title={work.folder}>
           {shortenPath(work.folder)}
         </span>
+        <ThemeToggle />
       </header>
 
       <div className="work-body">
