@@ -1650,3 +1650,117 @@ body {
     transform: rotate(360deg);
   }
 }
+
+/* Context cards (inside dialogs) ---------------------------------------- */
+
+.context-card {
+  position: relative;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-bottom: 0.4rem;
+}
+.context-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--s-color, transparent);
+  opacity: 0.85;
+}
+.context-card-hd {
+  display: flex;
+  align-items: center;
+  padding: 0.3rem 0.3rem 0.3rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in oklch, var(--s-soft, transparent) 60%, var(--bg-2));
+}
+.context-card-hd .ctx-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--s-color, var(--fg-2));
+}
+.context-card-hd .rm {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+.context-card-hd .rm:hover {
+  color: var(--danger);
+  background: var(--bg-2);
+}
+.context-card-bd {
+  padding: 0.55rem 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.conn-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.conn-pick-lbl {
+  font-size: 11px;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+/* Inline new-connection form (inside a context card) ------------------- */
+
+.conn-new {
+  padding: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.conn-new-hd {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.conn-new-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.conn-new-ft {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+/* "+ Add context" row in dialogs --------------------------------------- */
+
+.add-context-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.3rem;
+}
+.add-context-row .hint {
+  margin-right: 0.2rem;
+}

@@ -116,9 +116,20 @@ This is what powers: the `AgentTile` tile-mode top border, the `WorkView` rail r
 
 ## Dialogs — minimal-first pattern
 
-Both dialogs (`NewWorkDialog`, `NewAgentDialog`) ship the **minimum** that wires the button to the API; advanced surfaces (context attachments, worktree base-branch picker) are deferred to the Sprint 3 stories that own connections + git worktrees. The dialogs render a hint inline pointing forward.
+Both dialogs (`NewWorkDialog`, `NewAgentDialog`) keep the surface small. Advanced controls land as the stories that own them ship; the dialogs grow rather than carrying stub UI ahead of time.
 
-This is intentional: it avoids stub UI controls that lie about working, keeps surface area small, and lets each later story add a focused chunk without touching unrelated layout.
+`NewWorkDialog` accepts an optional `contexts` array of `ContextEntry`. The body renders a `Context` field with one `ContextRow` per entry plus a "+ Add context" row exposing one button per `ConnectionType`. `ContextRow` is the headline interaction from STORY-019 — see [ContextRow](#contextrow) below.
+
+The worktree base-branch picker lives with STORY-016. Per-agent contexts in `NewAgentDialog` need a backend extension (Agent has no contexts column today) and are out of scope for STORY-019.
+
+## ContextRow
+
+`ContextRow.tsx` — the inline connection picker / creator used inside dialogs. Two modes:
+
+- **pick**: dropdown of existing connections of the row's type + per-context value input (ticket key, event ID, etc). Sentinel `+ New <type> connection…` flips into "new".
+- **new**: inline form with the same field schema as the Connections page (`connectionFields.ts`). Verify is the only network action; first click POSTs the row + verifies, subsequent clicks PATCH the same `con-N` slug + re-verify. Save commits the row to the parent dialog's connections list and the context's `conn_id`. Cancel from "new" with no fallback connections **and** nothing yet committed removes the row entirely — the headline cancel-removes-half-state interaction.
+
+Parents own the connections array and pass it down. `ContextRow` calls `onConnectionSaved(connection)` once on save, so the dialog can dedupe and show the new connection in subsequent picker dropdowns. Verified state is reflected on the dropdown (`name · ✓`) so the user can tell at a glance which creds are confirmed.
 
 ## Provider-driven `NewAgentDialog`
 

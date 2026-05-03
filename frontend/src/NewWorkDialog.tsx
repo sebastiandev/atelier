@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { CreateWorkPayload } from "./api";
+import {
+  type Connection,
+  type ConnectionType,
+  type ContextEntry,
+  type CreateWorkPayload,
+  listConnections,
+} from "./api";
+import { CONNECTION_FIELDS, CONNECTION_TYPES } from "./connectionFields";
+import { ContextRow } from "./ContextRow";
 
 type Props = {
   onClose: () => void;
@@ -11,6 +19,8 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [folder, setFolder] = useState("");
+  const [contexts, setContexts] = useState<ContextEntry[]>([]);
+  const [connections, setConnections] = useState<Connection[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -24,6 +34,31 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  useEffect(() => {
+    listConnections()
+      .then(setConnections)
+      .catch(() => setConnections([]));
+  }, []);
+
+  function addContext(type: ConnectionType) {
+    setContexts((prev) => [...prev, { type, value: "", conn_id: null }]);
+  }
+
+  function patchContext(index: number, next: ContextEntry) {
+    setContexts((prev) => prev.map((c, i) => (i === index ? next : c)));
+  }
+
+  function removeContext(index: number) {
+    setContexts((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function upsertConnection(connection: Connection) {
+    setConnections((prev) => {
+      const without = prev.filter((c) => c.slug !== connection.slug);
+      return [...without, connection];
+    });
+  }
+
   const canSubmit = name.trim() && desc.trim() && !submitting;
 
   async function submit() {
@@ -34,6 +69,7 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
       name: trimmedName,
       description: desc.trim(),
       folder: folder.trim() || `~/work/${slug}`,
+      contexts: contexts.filter((c) => c.value.trim() || c.conn_id),
     };
     setSubmitting(true);
     setError(null);
@@ -97,6 +133,34 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
               If it's a git repo, agents will spawn worktrees here automatically.
             </span>
           </label>
+
+          <div className="field">
+            <span className="label">Context</span>
+            {contexts.map((c, i) => (
+              <ContextRow
+                key={i}
+                context={c}
+                connections={connections}
+                onChange={(next) => patchContext(i, next)}
+                onRemove={() => removeContext(i)}
+                onConnectionSaved={upsertConnection}
+              />
+            ))}
+            <div className="add-context-row">
+              <span className="hint">+ Add context</span>
+              {CONNECTION_TYPES.map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  className="btn sm"
+                  data-source={type}
+                  onClick={() => addContext(type)}
+                >
+                  {CONNECTION_FIELDS[type].label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           {error && <div className="form-error">{error}</div>}
         </div>

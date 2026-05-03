@@ -23,6 +23,7 @@ export type CreateWorkPayload = {
   name: string;
   description: string;
   folder: string;
+  contexts?: ContextEntry[];
 };
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -45,7 +46,7 @@ export function createWork(payload: CreateWorkPayload): Promise<WorkDetail> {
   return fetch("/api/works", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, contexts: [] }),
+    body: JSON.stringify({ ...payload, contexts: payload.contexts ?? [] }),
   }).then((r) => jsonOrThrow<WorkDetail>(r));
 }
 
