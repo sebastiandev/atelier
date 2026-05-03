@@ -13,10 +13,6 @@ class Settings(BaseSettings):
     # reads ``ANTHROPIC_API_KEY`` from os.environ directly, so the
     # lifespan forwards this into the environment at startup.
     anthropic_api_key: str | None = None
-    # Walking-skeleton: dev demo can space stub events out so streaming
-    # is visible in the browser. Tests leave at 0 for determinism. Only
-    # the stub-backed Amp adapter consults this; real adapters ignore it.
-    stub_event_delay: float = 0.0
 
 
 def get_settings() -> Settings:

@@ -43,7 +43,7 @@ Three roles, one unifying registry:
 2. Write a `<P>Spec` implementing `describe()` + `build()`. Register it in `SPECS`.
 3. Write a `<P>Adapter` implementing `AgentAdapter`. Register a `@build_adapter.register` handler.
 4. Add the literal value to `Provider` in `domain/models.py`.
-5. Extend the contract test suite (`tests/contract/test_agent_adapter.py`) to parametrise on it.
+5. Add `_convert` unit tests covering the SDK → AgentEvent mapping, plus a manual smoke against the live SDK. (Adapters wrapping external SDKs — Claude, Amp — are exempt from the parametrised contract suite; the `StubAgentAdapter` keeps that suite hermetic. Integration tests that need a deterministic adapter for `provider="amp"` rely on the autouse fixture in `tests/integration/conftest.py`.)
 
 ## AgentEvent union
 

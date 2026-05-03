@@ -51,6 +51,7 @@ export function AgentTile({
 
   const units = useMemo(() => groupEvents(events), [events]);
   const agentStatus = useMemo(() => latestStatus(events), [events]);
+  const lastMetrics = useMemo(() => latestMetrics(events), [events]);
 
   // Auto-scroll to bottom on new content.
   useEffect(() => {
@@ -159,6 +160,7 @@ export function AgentTile({
           <Unit key={unit.key} unit={unit} />
         ))}
       </div>
+      {lastMetrics && <TurnMetricsBar metrics={lastMetrics} />}
       <form className="composer" onSubmit={handleSubmit}>
         <textarea
           ref={textareaRef}
@@ -263,12 +265,19 @@ function CloseIcon() {
 // Event grouping
 // ---------------------------------------------------------------------------
 
+type TodoItem = {
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm?: string;
+};
+
 type RenderUnit =
   | { kind: "assistant"; key: number; text: string; complete: boolean }
   | { kind: "thinking"; key: number; text: string; complete: boolean }
   | { kind: "user"; key: number; text: string }
   | { kind: "tool_call"; key: number; name: string; args: string }
   | { kind: "tool_result"; key: number; content: string; isError: boolean }
+  | { kind: "todo_list"; key: number; todos: TodoItem[] }
   | { kind: "status"; key: number; status: string }
   | { kind: "artifact"; key: number; payload: unknown }
   | { kind: "error"; key: number; message: string };
@@ -281,6 +290,10 @@ function groupEvents(events: AgentEvent[]): RenderUnit[] {
   let pendingThinking:
     | { kind: "thinking"; key: number; text: string; complete: boolean }
     | null = null;
+  // tool_use_ids whose matching tool_result we want to drop, because we
+  // already rendered the call in a richer form (e.g. TodoWrite as a
+  // checklist) — the generic "→ result ok" line would just be noise.
+  const suppressedToolResults = new Set<string>();
 
   for (const ev of events) {
     if (ev.type === "message_delta") {
@@ -321,6 +334,26 @@ function groupEvents(events: AgentEvent[]): RenderUnit[] {
       } else {
         out.push({ kind: "thinking", key: ev.seq, text, complete: true });
       }
+    } else if (ev.type === "tool_call" && stringField(ev, "name") === "TodoWrite") {
+      pendingAssistant = null;
+      pendingThinking = null;
+      const todos = parseTodos(ev.arguments);
+      if (todos) {
+        const toolId = stringField(ev, "tool_id");
+        if (toolId) suppressedToolResults.add(toolId);
+        out.push({ kind: "todo_list", key: ev.seq, todos });
+      } else {
+        // Malformed arguments — fall back to the generic tool_call view.
+        const unit = renderUnitFor(ev);
+        if (unit) out.push(unit);
+      }
+    } else if (
+      ev.type === "tool_result" &&
+      suppressedToolResults.has(stringField(ev, "tool_id"))
+    ) {
+      // Drop: we already showed the rich render of the corresponding call.
+      pendingAssistant = null;
+      pendingThinking = null;
     } else {
       pendingAssistant = null;
       pendingThinking = null;
@@ -329,6 +362,29 @@ function groupEvents(events: AgentEvent[]): RenderUnit[] {
     }
   }
 
+  return out;
+}
+
+function parseTodos(raw: unknown): TodoItem[] | null {
+  if (!raw || typeof raw !== "object") return null;
+  const todos = (raw as { todos?: unknown }).todos;
+  if (!Array.isArray(todos)) return null;
+  const out: TodoItem[] = [];
+  for (const t of todos) {
+    if (!t || typeof t !== "object") return null;
+    const content = (t as { content?: unknown }).content;
+    const status = (t as { status?: unknown }).status;
+    const activeForm = (t as { activeForm?: unknown }).activeForm;
+    if (typeof content !== "string") return null;
+    if (status !== "pending" && status !== "in_progress" && status !== "completed") {
+      return null;
+    }
+    out.push({
+      content,
+      status,
+      activeForm: typeof activeForm === "string" ? activeForm : undefined,
+    });
+  }
   return out;
 }
 
@@ -391,6 +447,84 @@ function latestStatus(events: AgentEvent[]): string {
   return "idle";
 }
 
+type TurnRollup = {
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  model: string | null;
+};
+
+function latestMetrics(events: AgentEvent[]): TurnRollup | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type !== "turn_metrics") continue;
+    return {
+      durationMs: numberField(ev, "duration_ms"),
+      inputTokens: numberField(ev, "input_tokens"),
+      outputTokens: numberField(ev, "output_tokens"),
+      cacheReadTokens: numberField(ev, "cache_read_input_tokens"),
+      cacheCreationTokens: numberField(ev, "cache_creation_input_tokens"),
+      model: typeof ev.model === "string" ? ev.model : null,
+    };
+  }
+  return null;
+}
+
+function numberField(ev: AgentEvent, key: string): number {
+  const value = ev[key];
+  return typeof value === "number" ? value : 0;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+}
+
+function formatTokens(n: number): string {
+  if (n < 1000) return `${n}`;
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+function TurnMetricsBar({ metrics }: { metrics: TurnRollup }) {
+  // Total tokens charged on the response side: input + cached lookups
+  // count toward the prompt; output is what the model wrote. We surface
+  // their sum because that's the "cost-shaped" number users care about
+  // at a glance, mirroring Claude Code's "↓ N tokens" rollup.
+  const totalTokens =
+    metrics.inputTokens +
+    metrics.outputTokens +
+    metrics.cacheReadTokens +
+    metrics.cacheCreationTokens;
+  const tooltip =
+    `Duration: ${formatDuration(metrics.durationMs)}\n` +
+    `Input: ${metrics.inputTokens.toLocaleString()}\n` +
+    `Output: ${metrics.outputTokens.toLocaleString()}\n` +
+    `Cache read: ${metrics.cacheReadTokens.toLocaleString()}\n` +
+    `Cache write: ${metrics.cacheCreationTokens.toLocaleString()}` +
+    (metrics.model ? `\nModel: ${metrics.model}` : "");
+  return (
+    <div className="turn-metrics" title={tooltip}>
+      <span className="turn-metrics-item">{formatDuration(metrics.durationMs)}</span>
+      <span className="turn-metrics-sep">·</span>
+      <span className="turn-metrics-item">↓ {formatTokens(totalTokens)} tokens</span>
+      {metrics.model && (
+        <>
+          <span className="turn-metrics-sep">·</span>
+          <span className="turn-metrics-item turn-metrics-model">{metrics.model}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function lastUnitText(units: RenderUnit[]): string {
   const last = units[units.length - 1];
   if (!last) return "";
@@ -440,6 +574,8 @@ function Unit({ unit }: { unit: RenderUnit }) {
           <pre className="tool-result-body">{unit.content}</pre>
         </details>
       );
+    case "todo_list":
+      return <TodoList todos={unit.todos} />;
     case "status":
       return <div className="msg msg-status">[{unit.status}]</div>;
     case "artifact":
@@ -449,4 +585,27 @@ function Unit({ unit }: { unit: RenderUnit }) {
     case "error":
       return <div className="msg msg-error">{unit.message}</div>;
   }
+}
+
+function TodoList({ todos }: { todos: TodoItem[] }) {
+  const completed = todos.filter((t) => t.status === "completed").length;
+  return (
+    <div className="msg msg-todos" role="group" aria-label="Plan checklist">
+      <div className="todo-summary">
+        ✓ Plan · {completed}/{todos.length} done
+      </div>
+      <ul className="todo-list">
+        {todos.map((t, i) => (
+          <li key={i} className={`todo todo-${t.status}`}>
+            <span className="todo-marker" aria-hidden="true">
+              {t.status === "completed" ? "✓" : t.status === "in_progress" ? "▸" : "○"}
+            </span>
+            <span className="todo-text">
+              {t.status === "in_progress" && t.activeForm ? t.activeForm : t.content}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }

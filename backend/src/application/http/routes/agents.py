@@ -83,7 +83,7 @@ async def create_agent(
         plan = start_cmd.execute(workstore, worktree_manager, settings, req)
     except start_cmd.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    except start_cmd.InvalidProviderConfig as e:
+    except (start_cmd.InvalidProviderConfig, start_cmd.WorkFolderMissing) as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
 
     assert plan.agent.slug is not None

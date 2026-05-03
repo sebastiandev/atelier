@@ -11,8 +11,11 @@ implementation and asserts the invariants the supervisor depends on:
   - The supervisor-required lifecycle (start before events before close)
     completes without error.
 
-Sprint 1 parametrises over the stub adapter only. Sprints 2 and 3 add
-the Claude / Amp / Codex adapters as additional ``params`` entries.
+Sprint 1 parametrises over the stub adapter only. The Claude and Amp
+adapters wrap external SDKs with their own translation layers and are
+exempt: each ships dedicated ``_convert`` unit tests plus a manual
+smoke test from a developer machine. Codex (STORY-021) will follow the
+same pattern.
 
 The interpretation note: STORY-007's spec mentions a monotonic ``seq``,
 but ``seq`` is owned by the supervisor (STORY-009), not the adapter — at
@@ -40,8 +43,7 @@ from src.domain.agents import (
     ToolCall,
     ToolResult,
 )
-from src.domain.agents import AmpAgentConfig, AmpMode, CommonAgentConfig
-from src.infrastructure.agents import AmpAdapter, StubAgentAdapter
+from src.infrastructure.agents import StubAgentAdapter
 
 T = TypeVar("T")
 UTC_NOW = datetime(2026, 5, 1, 13, 49, tzinfo=UTC)
@@ -60,22 +62,9 @@ EXPECTED_VARIANTS: tuple[type, ...] = (
 AdapterFactory = Callable[[list[AgentEvent]], AgentAdapter]
 
 
-def _amp_adapter_factory(events: list[AgentEvent]) -> AgentAdapter:
-    """AmpAdapter is stub-backed today; override its inner scripted events."""
-    config = AmpAgentConfig(
-        common=CommonAgentConfig(workdir=Path("/tmp/contract-amp"), system_prompt="p"),
-        mode=AmpMode.SMART,
-    )
-    adapter = AmpAdapter(config)
-    adapter._inner = StubAgentAdapter(events)  # noqa: SLF001 — tightly coupled, intentional
-    return adapter
-
-
 @pytest.fixture(
     params=[
         pytest.param(lambda events: StubAgentAdapter(events), id="stub"),
-        pytest.param(_amp_adapter_factory, id="amp"),
-        # Claude adapter validated via _convert unit tests + manual smoke.
     ]
 )
 def adapter_factory(request: pytest.FixtureRequest) -> AdapterFactory:

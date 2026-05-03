@@ -50,6 +50,7 @@ class AmpMode(str, Enum):
     SMART = "smart"
     RUSH = "rush"
     DEEP = "deep"
+    LARGE = "large"
 
 
 @dataclass(frozen=True, kw_only=True)

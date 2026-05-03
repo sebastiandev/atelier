@@ -7,6 +7,19 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "amp-sdk"
+version = "0.1.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a7/11/fa9daac67cc91347c7aa387ee4fb1d4d297c14d9e7127206493e7e3eb686/amp_sdk-0.1.5.tar.gz", hash = "sha256:e05a4881268e22ce28da21355a00821ba7b7ce8e295b05eac0807e5c06f1c48a", size = 27854, upload-time = "2026-02-10T20:18:45.983Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/bc/d21b65e32dfdf930c383472f7ce5ff9bebca9cdcbc880d4823afb2381865/amp_sdk-0.1.5-py3-none-any.whl", hash = "sha256:42b7e112afeccc082b96ad9bb59e0c55e152b27ef5941b8157f5b24d03b4ccaf", size = 22816, upload-time = "2026-02-10T20:18:43.097Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -42,6 +55,7 @@ name = "atelier-backend"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "amp-sdk" },
     { name = "claude-agent-sdk" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -61,6 +75,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "amp-sdk", specifier = ">=0.1.5" },
     { name = "claude-agent-sdk", specifier = ">=0.1.72" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },

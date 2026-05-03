@@ -106,6 +106,24 @@ class Error:
     message: str
 
 
+@dataclass(frozen=True, kw_only=True)
+class TurnMetrics:
+    """Per-turn rollup: duration + token usage. Adapters emit one of
+    these immediately before the trailing ``StatusChange("idle")`` so
+    consumers can render "8m 42s · ↓ 32.9k tokens" the way the Claude
+    Code CLI does. Adapters whose SDK doesn't expose a field leave it
+    at its default (zero / None)."""
+
+    type: Literal["turn_metrics"] = "turn_metrics"
+    ts: datetime
+    duration_ms: int
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    model: str | None = None
+
+
 AgentEvent = (
     MessageDelta
     | MessageComplete
@@ -116,6 +134,7 @@ AgentEvent = (
     | StatusChange
     | ArtifactMarker
     | Error
+    | TurnMetrics
 )
 
 
@@ -130,4 +149,5 @@ __all__ = [
     "ThinkingDelta",
     "ToolCall",
     "ToolResult",
+    "TurnMetrics",
 ]

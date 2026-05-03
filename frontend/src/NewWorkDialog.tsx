@@ -19,11 +19,16 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [folder, setFolder] = useState("");
+  const [folderEdited, setFolderEdited] = useState(false);
   const [contexts, setContexts] = useState<ContextEntry[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+
+  const slug = name.trim().toLowerCase().replace(/\s+/g, "-") || "new-work";
+  const suggestedFolder = `~/work/${slug}`;
+  const displayedFolder = folderEdited ? folder : suggestedFolder;
 
   useEffect(() => {
     nameRef.current?.focus();
@@ -59,16 +64,14 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
     });
   }
 
-  const canSubmit = name.trim() && desc.trim() && !submitting;
+  const canSubmit = name.trim() && !submitting;
 
   async function submit() {
     if (!canSubmit) return;
-    const trimmedName = name.trim();
-    const slug = trimmedName.toLowerCase().replace(/\s+/g, "-");
     const payload: CreateWorkPayload = {
-      name: trimmedName,
+      name: name.trim(),
       description: desc.trim(),
-      folder: folder.trim() || `~/work/${slug}`,
+      folder: displayedFolder.trim() || suggestedFolder,
       contexts: contexts.filter((c) => c.value.trim() || c.conn_id),
     };
     setSubmitting(true);
@@ -109,7 +112,9 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
           </label>
 
           <label className="field">
-            <span className="label">Brief description</span>
+            <span className="label">
+              Brief description <span className="hint">· optional</span>
+            </span>
             <textarea
               className="textarea"
               rows={3}
@@ -120,17 +125,18 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
           </label>
 
           <label className="field">
-            <span className="label">
-              Working folder <span className="hint">· optional</span>
-            </span>
+            <span className="label">Working folder</span>
             <input
               className="input"
-              placeholder={`~/work/${(name || "new-work").toLowerCase().replace(/\s+/g, "-")}`}
-              value={folder}
-              onChange={(e) => setFolder(e.target.value)}
+              value={displayedFolder}
+              onChange={(e) => {
+                setFolder(e.target.value);
+                setFolderEdited(true);
+              }}
             />
             <span className="hint">
-              If it's a git repo, agents will spawn worktrees here automatically.
+              Created on first agent start if missing. If it's a git repo, agents will spawn
+              worktrees here automatically.
             </span>
           </label>
 

@@ -82,10 +82,13 @@ def delete_work_endpoint(work_slug: str, workstore: WorkStoreDep) -> None:
 
 
 def _to_create_request(payload: NewWorkRequest) -> CreateWorkRequest:
+    # Expand ~ here so the persisted folder is canonical — the rest of
+    # the stack (worktree manager, adapter cwd, mkdir-on-start) sees a
+    # real absolute path instead of a tilde-relative string.
     return CreateWorkRequest(
         name=payload.name,
         description=payload.description,
-        folder=Path(payload.folder),
+        folder=Path(payload.folder).expanduser(),
         contexts=[_to_domain_context(c) for c in payload.contexts],
     )
 

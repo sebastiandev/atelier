@@ -21,6 +21,7 @@ from src.domain.agents.events import (
     ThinkingDelta,
     ToolCall,
     ToolResult,
+    TurnMetrics,
 )
 from src.domain.agents.ports import AgentAdapter, AgentStartContext
 from src.domain.agents.specs import (
@@ -60,5 +61,6 @@ __all__ = [
     "ThinkingDelta",
     "ToolCall",
     "ToolResult",
+    "TurnMetrics",
     "render_system_prompt",
 ]

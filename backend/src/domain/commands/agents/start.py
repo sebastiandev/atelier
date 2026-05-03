@@ -61,6 +61,13 @@ class InvalidProviderConfig(ValueError):
     resource."""
 
 
+class WorkFolderMissing(ValueError):
+    """The work's folder doesn't resolve to an existing directory on
+    disk. Adapters spawn their underlying process in this directory; if
+    it's missing, the spawn surfaces as a cryptic ENOENT from the SDK.
+    The route maps this to 422 so the user can fix the path."""
+
+
 def execute(
     workstore: WorkStore,
     worktree_manager: WorktreeManager,
@@ -70,6 +77,21 @@ def execute(
     record = workstore.get_work(req.work_slug)
     if record is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
+
+    # The work's folder is the eventual subprocess cwd for in-process
+    # SDK adapters (Amp, Claude). asyncio.create_subprocess_exec raises
+    # FileNotFoundError when cwd doesn't exist — which the SDK then
+    # reports as a CLI-not-found error, masking the real issue.
+    # mkdir(parents=True, exist_ok=True) is idempotent for the common
+    # case (folder already exists, often a user repo) and creates the
+    # tree on demand for new works the user spelled out without first
+    # making the directory. OSError → 422 with the OS message.
+    try:
+        record.work.folder.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise WorkFolderMissing(
+            f"cannot use work folder {record.work.folder}: {exc}"
+        ) from exc
 
     # Build the provider config first — it validates model + options
     # and we want to fail fast on bad input before we allocate an agent

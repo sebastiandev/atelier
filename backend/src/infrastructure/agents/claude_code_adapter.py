@@ -49,6 +49,7 @@ from src.domain.agents import (
     ThinkingComplete,
     ToolCall,
     ToolResult,
+    TurnMetrics,
 )
 from src.infrastructure.agents.factory import build_adapter
 from src.settings import Settings
@@ -90,7 +91,7 @@ class ClaudeCodeAdapter:
             try:
                 await self._client.query(text)
                 async for msg in self._client.receive_response():
-                    for ev in _convert(msg):
+                    for ev in _convert(msg, model=self._config.model.value):
                         yield ev
             except Exception as e:  # noqa: BLE001
                 yield Error(ts=datetime.now(UTC), message=str(e))
@@ -117,8 +118,12 @@ class ClaudeCodeAdapter:
         return ClaudeAgentOptions(**kwargs)
 
 
-def _convert(msg: object) -> Iterable[AgentEvent]:
-    """Map a Claude SDK Message onto our AgentEvent union."""
+def _convert(msg: object, *, model: str | None = None) -> Iterable[AgentEvent]:
+    """Map a Claude SDK Message onto our AgentEvent union.
+
+    ``model`` lets the adapter stamp the per-turn metrics with its own
+    configured model id; the SDK doesn't echo it on ResultMessage.
+    """
     now = datetime.now(UTC)
     if isinstance(msg, AssistantMessage):
         for block in msg.content:
@@ -146,6 +151,18 @@ def _convert(msg: object) -> Iterable[AgentEvent]:
         if msg.is_error:
             err = msg.result or (msg.errors[0] if msg.errors else None) or "(unknown error)"
             yield Error(ts=now, message=err)
+        usage = msg.usage or {}
+        yield TurnMetrics(
+            ts=now,
+            duration_ms=msg.duration_ms,
+            input_tokens=int(usage.get("input_tokens", 0) or 0),
+            output_tokens=int(usage.get("output_tokens", 0) or 0),
+            cache_read_input_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
+            cache_creation_input_tokens=int(
+                usage.get("cache_creation_input_tokens", 0) or 0
+            ),
+            model=model,
+        )
         yield StatusChange(ts=now, status="idle")
 
 

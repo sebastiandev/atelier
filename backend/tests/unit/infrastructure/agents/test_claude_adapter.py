@@ -21,6 +21,7 @@ from src.domain.agents import (
     ThinkingComplete,
     ToolCall,
     ToolResult,
+    TurnMetrics,
 )
 from src.infrastructure.agents.claude_code_adapter import _convert
 
@@ -124,15 +125,51 @@ def test_multi_block_message_yields_in_order() -> None:
     assert isinstance(events[1], MessageComplete)
 
 
-def test_result_message_success_yields_idle_status() -> None:
-    [event] = list(_convert(_result()))
-    assert isinstance(event, StatusChange)
-    assert event.status == "idle"
+def test_result_message_success_yields_metrics_then_idle() -> None:
+    events = list(_convert(_result()))
+    assert isinstance(events[0], TurnMetrics)
+    assert events[0].duration_ms == 10
+    assert isinstance(events[1], StatusChange)
+    assert events[1].status == "idle"
 
 
-def test_result_message_error_yields_error_then_idle() -> None:
+def test_result_message_error_yields_error_then_metrics_then_idle() -> None:
     events = list(_convert(_result(is_error=True, errors=["boom"])))
     assert isinstance(events[0], Error)
     assert "boom" in events[0].message
-    assert isinstance(events[1], StatusChange)
-    assert events[1].status == "idle"
+    assert isinstance(events[1], TurnMetrics)
+    assert isinstance(events[2], StatusChange)
+    assert events[2].status == "idle"
+
+
+def test_result_message_metrics_carry_usage_and_model() -> None:
+    msg = ResultMessage(
+        subtype="success",
+        duration_ms=1234,
+        duration_api_ms=200,
+        is_error=False,
+        num_turns=1,
+        session_id="s-1",
+        stop_reason="end_turn",
+        total_cost_usd=0.0,
+        usage={
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 20,
+            "cache_creation_input_tokens": 5,
+        },
+        result=None,
+        structured_output=None,
+        model_usage=None,
+        permission_denials=None,
+        errors=None,
+        uuid="u-x",
+    )
+    [metrics, _idle] = list(_convert(msg, model="claude-opus-4-7"))
+    assert isinstance(metrics, TurnMetrics)
+    assert metrics.duration_ms == 1234
+    assert metrics.input_tokens == 100
+    assert metrics.output_tokens == 50
+    assert metrics.cache_read_input_tokens == 20
+    assert metrics.cache_creation_input_tokens == 5
+    assert metrics.model == "claude-opus-4-7"
