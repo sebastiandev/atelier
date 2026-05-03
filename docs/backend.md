@@ -9,16 +9,17 @@ Python 3.11, `uv`-managed venv at `backend/.venv`, FastAPI on `127.0.0.1:8001`.
 ```
 backend/src/
 ├── application/        # FastAPI: routes, ws, lifespan
-│   ├── http/routes/    # works, agents, providers, health
+│   ├── http/routes/    # works, agents, connections, providers, health
 │   ├── http/schemas.py # Pydantic wire types
 │   └── ws/agents.py    # /api/agents/{slug}/stream
 ├── domain/             # framework-free
 │   ├── agents/         # configs, specs, ports, events, system_prompt
-│   ├── commands/       # works/, agents/, ... — execute() per use case
+│   ├── commands/       # works/, agents/, connections/ — execute() per use case
+│   ├── connections/    # ConnectionStore + service + ports
 │   ├── supervisor/     # AgentSupervisorService — async, single-subscriber
 │   ├── workstore/      # WorkStore + reconcile
 │   └── models.py       # plain dataclasses
-└── infrastructure/     # SA mapping, filesystem, agent SDK adapters, keyring
+└── infrastructure/     # SA mapping, filesystem, agent SDK adapters, keyring, HTTP verifier
 ```
 
 ## Provider abstraction (Spec / Config / Adapter)
@@ -119,6 +120,30 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 | 4404 | Supervisor has no live adapter for this slug. Terminal — frontend stops retrying and surfaces "stopped". |
 | 4408 | Slow subscriber — the per-subscription queue overflowed. Frontend retries with backoff and resumes from `?cursor=N`. |
 | 1000/1001/etc. | Transient (network, server restart). Frontend retries with exponential backoff. |
+
+## ConnectionStore
+
+`domain/connections/`. Source-system credentials (Jira, Sentry, Honeycomb) split across two stores by design:
+
+- **SQLite** holds the metadata row only — `id`, `slug`, `type`, `name`, `created_at`, optional `url`/`org`/`region`/`env`/`team`/`email`, plus `verified` + `last_used`. **No token, no keyring reference**: the keychain key is the slug (`atelier:con-3`), so storing the reference would just duplicate state.
+- **OS keychain** (via the Python `keyring` package) holds the token under `(service="atelier", username=<slug>)`.
+
+`ConnectionStoreService` (the public port `ConnectionStore`) composes three narrower ports — `ConnectionRepository` for the SQL row, `SecretStore` for the keychain, `ConnectionVerifier` for the source's auth endpoint — same pattern as `WorkStoreService`. The verifier is a simple type-keyed dispatch (`infrastructure/connections/verifier.py`): Jira hits `/rest/api/3/myself` with Basic auth, Sentry hits `/api/0/` with a Bearer token, Honeycomb hits `/1/auth` with `X-Honeycomb-Team`. Network errors map to `VerifyResult(verified=False, error=...)`; the verifier never raises.
+
+**Token never crosses the API surface.** `NewConnectionRequest` and `PatchConnectionRequest` accept `token`; `ConnectionRead` (the response model) has no `token` field at all. Tests assert this on every read path. On `verify` success the supervisor materialises the token in-memory, presents it to the verifier, then discards it — the `Connection` entity never carries it.
+
+REST endpoints (`application/http/routes/connections.py`):
+
+```
+GET    /api/connections                   -> ConnectionRead[]
+POST   /api/connections                   -> ConnectionRead   (writes keychain)
+GET    /api/connections/{slug}            -> ConnectionRead
+PATCH  /api/connections/{slug}            -> ConnectionRead   (token rotates keychain)
+DELETE /api/connections/{slug}            -> 204              (removes row + keychain entry)
+POST   /api/connections/{slug}/verify     -> VerifyResponse   (persists verified + last_used)
+```
+
+Integration tests swap `app.state.connection_store` after lifespan with a `ConnectionStoreService` backed by stub secrets + stub verifier, so the suite never prompts the real OS keychain or hits real Jira/Sentry/Honeycomb. The unit tests exercise the service directly with in-memory stubs.
 
 ## Settings
 

@@ -4,10 +4,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.application.http.routes import agents, health, providers, works
+from src.application.http.routes import agents, connections, health, providers, works
 from src.application.ws import agents as ws_agents
+from src.domain.connections import ConnectionStoreService
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore import WorkStoreService, reconcile
+from src.infrastructure.connections import KeyringSecretStore, verify
 from src.infrastructure.database import (
     SqlWorkRepository,
     configure_mappings,
@@ -15,6 +17,7 @@ from src.infrastructure.database import (
     create_session_factory,
     initialize_database,
 )
+from src.infrastructure.database.connection_repository import SqlConnectionRepository
 from src.infrastructure.filesystem import (
     FsTranscriptLog,
     FsWorkspaceFiles,
@@ -54,11 +57,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         supervisor = AgentSupervisorService(transcript_log)
 
+        connection_repo = SqlConnectionRepository(session_factory)
+        connection_store = ConnectionStoreService(
+            connection_repo, KeyringSecretStore(), verify
+        )
+
         app.state.settings = resolved
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.workstore = WorkStoreService(repo, files, transcript_log)
         app.state.supervisor = supervisor
+        app.state.connection_store = connection_store
         try:
             yield
         finally:
@@ -70,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(works.router, prefix="/api")
     app.include_router(agents.router, prefix="/api")
     app.include_router(providers.router, prefix="/api")
+    app.include_router(connections.router, prefix="/api")
     app.include_router(ws_agents.router, prefix="/api")
     return app
 

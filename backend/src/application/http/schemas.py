@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.domain.models import (
     AgentStatus,
+    ConnectionType,
     ContextType,
     Persona,
     Provider,
@@ -77,12 +78,65 @@ class AgentSummary(BaseModel):
     stopped_at: datetime | None = None
 
 
+class NewConnectionRequest(BaseModel):
+    type: ConnectionType
+    name: str = Field(min_length=1)
+    token: str = Field(min_length=1)
+    url: str | None = None
+    org: str | None = None
+    region: str | None = None
+    env: str | None = None
+    team: str | None = None
+    email: str | None = None
+
+
+class PatchConnectionRequest(BaseModel):
+    """Partial update — every field is optional. Pass ``token`` to rotate
+    the keychain entry."""
+
+    name: str | None = Field(default=None, min_length=1)
+    token: str | None = Field(default=None, min_length=1)
+    url: str | None = None
+    org: str | None = None
+    region: str | None = None
+    env: str | None = None
+    team: str | None = None
+    email: str | None = None
+
+
+class ConnectionRead(BaseModel):
+    """Response shape for connection metadata. **No token field exists**
+    — the token never leaves the keychain over the API."""
+
+    slug: str
+    type: ConnectionType
+    name: str
+    created_at: datetime
+    url: str | None = None
+    org: str | None = None
+    region: str | None = None
+    env: str | None = None
+    team: str | None = None
+    email: str | None = None
+    verified: bool
+    last_used: datetime | None = None
+
+
+class VerifyResponse(BaseModel):
+    verified: bool
+    error: str | None = None
+
+
 __all__ = [
     "AgentSummary",
+    "ConnectionRead",
     "ContextSchema",
     "NewAgentRequest",
+    "NewConnectionRequest",
     "NewWorkRequest",
+    "PatchConnectionRequest",
     "PatchWorkRequest",
+    "VerifyResponse",
     "WorkDetail",
     "WorkSummary",
 ]
