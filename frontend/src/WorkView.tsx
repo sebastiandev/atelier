@@ -12,7 +12,9 @@ import {
 } from "./api";
 import { NewAgentDialog } from "./NewAgentDialog";
 import { useClosedStore } from "./state/closed";
+import { useTweaksStore } from "./state/tweaks";
 import { ThemeToggle } from "./ThemeToggle";
+import { TweaksToggle } from "./TweaksPanel";
 
 // Stable singleton so the selector below doesn't return a fresh ref on
 // every render — Zustand's default Object.is snapshot check would
@@ -29,6 +31,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const closedSlugs = useClosedStore((s) => s.byWork[workSlug] ?? NO_CLOSED);
   const closeAgent = useClosedStore((s) => s.close);
   const restoreAgent = useClosedStore((s) => s.restore);
+  const layout = useTweaksStore((s) => s.layout);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,6 +96,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }
 
   const canvasAgents = agents.filter((a) => !closedSlugs.includes(a.slug));
+  // STORY-024 implements the actual freeform drag for "windows"; until
+  // then we render windows-mode as tiles so the layout choice persists
+  // and the radio thumb sits correctly.
+  const effectiveLayout = layout === "windows" ? "tiles" : layout;
   const cols =
     canvasAgents.length <= 1
       ? 1
@@ -122,6 +129,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         <span className="folder-pill mono" title={work.folder}>
           {shortenPath(work.folder)}
         </span>
+        <TweaksToggle />
         <ThemeToggle />
       </header>
 
@@ -171,7 +179,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             </button>
           </div>
 
-          <div className="canvas" data-cols={cols}>
+          <div className="canvas" data-cols={cols} data-layout={effectiveLayout}>
             {agents.length === 0 && (
               <div className="canvas-empty">
                 <div className="em-title">No agents on the canvas</div>

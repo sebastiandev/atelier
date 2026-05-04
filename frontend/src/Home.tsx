@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { type CreateWorkPayload, type WorkSummary, createWork, listWorks } from "./api";
 import { NewWorkDialog } from "./NewWorkDialog";
 import { ThemeToggle } from "./ThemeToggle";
+import { TweaksToggle } from "./TweaksPanel";
 
 type Tab = "active" | "completed";
 
@@ -66,6 +67,7 @@ export function Home() {
         <span className="hint mono">
           {activeCount} active
         </span>
+        <TweaksToggle />
         <ThemeToggle />
       </header>
 

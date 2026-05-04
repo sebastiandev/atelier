@@ -147,6 +147,7 @@ Current stores:
 
 - `theme.ts` — `{ theme: "dark" | "light" | "ansi" }`, persisted under `atelier:theme` (v2). `App.tsx` mirrors it onto `<html data-theme=...>`. `toggleTheme` cycles light → dark → ansi → light; `ansi` is the default for fresh users.
 - `closed.ts` — `{ byWork: Record<workSlug, agentSlug[]> }`, persisted under `atelier:closed`. `WorkView` filters closed agents out of the canvas; clicking a closed rail entry restores the tile (which reopens its WS and resumes the provider session). Replaces the prior "minimized" model — there is no "delete".
+- `tweaks.ts` — `{ accentHue: number; layout: "tiles" | "columns" | "windows"; panelOpen: bool }`, persisted under `atelier:tweaks` (panelOpen is excluded). Drives the floating `TweaksPanel`; `App.tsx` mirrors `accentHue` onto `--accent-h` on `<html>` so the rest of the accent ramp (`oklch()`-derived) follows. The "windows" layout falls back to "tiles" until STORY-024 wires the freeform drag.
 
 When adding a new store: keep it narrow (one concern per file), put presentation-only state here (per CLAUDE.md → "UI state is frontend-local"), and don't reach into it from outside React-tree code unless you have a reason — `useStore.getState()` is a synchronous read, fine inside a `useEffect`.
 

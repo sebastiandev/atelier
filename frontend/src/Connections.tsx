@@ -17,6 +17,7 @@ import {
   type ConnectionSchema,
 } from "./connectionFields";
 import { ThemeToggle } from "./ThemeToggle";
+import { TweaksToggle } from "./TweaksPanel";
 
 type Draft = Record<string, string>;
 type VerifyState = "idle" | "verifying" | "ok" | "err";
@@ -185,6 +186,7 @@ export function Connections() {
           <span className="now">Connections</span>
         </span>
         <div className="spacer" />
+        <TweaksToggle />
         <ThemeToggle />
       </header>
 
