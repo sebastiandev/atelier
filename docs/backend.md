@@ -47,7 +47,7 @@ Three roles, one unifying registry:
 
 ## AgentEvent union
 
-Seven frozen variants in `domain/agents/events.py`: `MessageDelta`, `MessageComplete`, `ThinkingDelta`, `ThinkingComplete`, `ToolCall`, `ToolResult`, `StatusChange`, `ArtifactMarker`, `Error`, plus `UserInput` (originating from the WS input channel, not the adapter).
+Frozen variants in `domain/agents/events.py`: `MessageDelta`, `MessageComplete`, `ThinkingDelta`, `ThinkingComplete`, `ToolCall`, `ToolResult`, `StatusChange`, `ArtifactMarker`, `Error`, `TurnMetrics`, `SessionEstablished`, plus `UserInput` (originating from the WS input channel, not the adapter).
 
 Each has a `Literal` `type` discriminator; the frontend pattern-matches on it.
 
@@ -69,7 +69,11 @@ The fsync-before-fanout ordering means a crash never leaves a subscriber having 
 
 Input flow: the WS handler forwards `{"type":"input","text":"..."}` to `supervisor.send_input(slug, text)`, which writes a `UserInput` transcript line and forwards to the adapter's input channel.
 
-`get_work_slug_for(agent_slug)` is the supervisor's in-memory map. Returning `None` means "no live adapter for this slug" — typically because the backend was restarted after the agent ran. The WS handler closes with code **4404** in that case (see [WS protocol](#ws-protocol)).
+`get_work_slug_for(agent_slug)` is the supervisor's in-memory map. Returning `None` means "no live adapter for this slug" — typically because the backend was restarted, or the user closed the agent to the rail. The WS handler resumes the provider session via the `resume_agent` command in that case (see [WS protocol](#ws-protocol)); 4404 is reserved for slugs that don't exist on disk at all.
+
+**Provider session resume.** Each adapter captures the SDK's session/thread ID on its first message and emits a `SessionEstablished` event; the supervisor calls a `set_session_id` callback (wired to `WorkStore.set_agent_session_id`) so the ID is persisted on the agent row. On reconnect after the supervisor lost its in-memory state, `resume_agent` reads the row, builds a fresh adapter, and passes the stored ID back to the SDK as `resume` (Claude) or `continue_thread` (Amp). The conversation continues exactly where it left off — no transcript replay needed on the SDK side.
+
+**Seq seeding on resume.** Because each `_AgentState` starts at `seq=0`, a naive resume would let new events collide with existing on-disk seqs. `start_agent` calls `transcript_log.last_seq(work, agent)` (a tail-read of the NDJSON) and seeds `state.seq` from that, so seqs continue monotonically across the resume boundary.
 
 ## Persistence model
 
@@ -118,9 +122,11 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 
 | Code | Meaning |
 | --- | --- |
-| 4404 | Supervisor has no live adapter for this slug. Terminal — frontend stops retrying and surfaces "stopped". |
+| 4404 | Agent slug isn't in the supervisor *and* doesn't exist on disk. Terminal — frontend surfaces "stopped" (typically a stale localStorage reference). |
 | 4408 | Slow subscriber — the per-subscription queue overflowed. Frontend retries with backoff and resumes from `?cursor=N`. |
 | 1000/1001/etc. | Transient (network, server restart). Frontend retries with exponential backoff. |
+
+**Resume on reconnect.** When the slug is in SQLite but the supervisor has no live state, the handler calls `resume_agent.execute(...)` to rebuild the adapter (passing through the persisted `session_id`) and `supervisor.start_agent` to attach. A normal replay-then-live then proceeds — the client doesn't need to know whether it's connecting to a fresh adapter, an in-flight one, or a freshly-resumed one.
 
 ## WorktreeManager
 

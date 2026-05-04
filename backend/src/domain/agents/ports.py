@@ -19,12 +19,19 @@ from src.domain.agents.events import AgentEvent
 
 @dataclass(frozen=True)
 class AgentStartContext:
-    """Bundle the adapter needs to launch its underlying SDK session."""
+    """Bundle the adapter needs to launch its underlying SDK session.
+
+    ``session_id`` resumes an existing provider session if set: passed as
+    ``resume`` to the Claude SDK or ``continue_thread`` to Amp. ``None``
+    means start fresh; the adapter emits a ``SessionEstablished`` once
+    the provider assigns one.
+    """
 
     workdir: Path
     context_md: str
     model: str
     system_prompt: str
+    session_id: str | None = None
 
 
 class AgentAdapter(Protocol):

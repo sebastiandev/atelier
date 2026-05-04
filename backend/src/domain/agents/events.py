@@ -107,6 +107,21 @@ class Error:
 
 
 @dataclass(frozen=True, kw_only=True)
+class SessionEstablished:
+    """Adapter has assigned (or resumed) a provider session/thread.
+
+    The supervisor catches this and persists ``session_id`` on the agent
+    row so the same conversation can be resumed on a future reconnect.
+    Adapters emit one as soon as the SDK surfaces an ID — Claude on the
+    first ``ResultMessage``, Amp on the init ``SystemMessage``.
+    """
+
+    type: Literal["session_established"] = "session_established"
+    ts: datetime
+    session_id: str
+
+
+@dataclass(frozen=True, kw_only=True)
 class TurnMetrics:
     """Per-turn rollup: duration + token usage. Adapters emit one of
     these immediately before the trailing ``StatusChange("idle")`` so
@@ -134,6 +149,7 @@ AgentEvent = (
     | StatusChange
     | ArtifactMarker
     | Error
+    | SessionEstablished
     | TurnMetrics
 )
 
@@ -144,6 +160,7 @@ __all__ = [
     "Error",
     "MessageComplete",
     "MessageDelta",
+    "SessionEstablished",
     "StatusChange",
     "ThinkingComplete",
     "ThinkingDelta",

@@ -154,6 +154,14 @@ class StubTranscriptLog:
             if isinstance(seq, int) and not isinstance(seq, bool) and seq > cursor:
                 yield ev
 
+    def last_seq(self, work_slug: str, agent_slug: str) -> int:
+        seqs = [
+            ev.get("seq")
+            for ev in self.events.get((work_slug, agent_slug), [])
+            if isinstance(ev.get("seq"), int) and not isinstance(ev.get("seq"), bool)
+        ]
+        return max(seqs, default=0)  # type: ignore[type-var]
+
 
 def _resolve_work_slug(repo: StubRepository, work_id: int) -> str | None:
     for slug, w in repo.works.items():

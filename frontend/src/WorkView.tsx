@@ -11,7 +11,13 @@ import {
   listAgents,
 } from "./api";
 import { NewAgentDialog } from "./NewAgentDialog";
+import { useClosedStore } from "./state/closed";
 import { ThemeToggle } from "./ThemeToggle";
+
+// Stable singleton so the selector below doesn't return a fresh ref on
+// every render — Zustand's default Object.is snapshot check would
+// otherwise treat each `[]` as a change and re-render in a loop.
+const NO_CLOSED: readonly string[] = [];
 
 export function WorkView({ workSlug }: { workSlug: string }) {
   const [work, setWork] = useState<WorkDetail | null>(null);
@@ -20,6 +26,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const tileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const closedSlugs = useClosedStore((s) => s.byWork[workSlug] ?? NO_CLOSED);
+  const closeAgent = useClosedStore((s) => s.close);
+  const restoreAgent = useClosedStore((s) => s.restore);
 
   useEffect(() => {
     let cancelled = false;
@@ -45,9 +54,17 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }
 
   function focusAgent(slug: string) {
+    // Click on a closed rail entry restores the tile (mounts AgentTile,
+    // which reopens the WS — the supervisor resumes the provider session
+    // by ID so the conversation continues from where it left off).
+    if (closedSlugs.includes(slug)) {
+      restoreAgent(workSlug, slug);
+    }
     setFocusedSlug(slug);
-    const el = tileRefs.current.get(slug);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    requestAnimationFrame(() => {
+      const el = tileRefs.current.get(slug);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   async function handleCreateAgent(payload: CreateAgentPayload) {
@@ -75,7 +92,15 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     return <div className="work-loading hint">Loading…</div>;
   }
 
-  const cols = agents.length <= 1 ? 1 : agents.length === 2 ? 2 : agents.length <= 4 ? 2 : 3;
+  const canvasAgents = agents.filter((a) => !closedSlugs.includes(a.slug));
+  const cols =
+    canvasAgents.length <= 1
+      ? 1
+      : canvasAgents.length === 2
+        ? 2
+        : canvasAgents.length <= 4
+          ? 2
+          : 3;
 
   return (
     <div className="work-view">
@@ -108,21 +133,29 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                 None on the canvas. Launch one via the API.
               </div>
             )}
-            {agents.map((a) => (
-              <button
-                key={a.slug}
-                className={"rail-agent" + (focusedSlug === a.slug ? " focused" : "")}
-                data-persona={a.persona}
-                onClick={() => focusAgent(a.slug)}
-              >
-                <span className="pip">{PERSONA_GLYPH[a.persona] ?? "AG"}</span>
-                <span className="meta">
-                  <span className="name mono">{a.name}</span>
-                  <span className="role">{a.role}</span>
-                </span>
-                <span className="status-dot" data-status={a.status} />
-              </button>
-            ))}
+            {agents.map((a) => {
+              const isClosed = closedSlugs.includes(a.slug);
+              return (
+                <button
+                  key={a.slug}
+                  className={
+                    "rail-agent" +
+                    (focusedSlug === a.slug ? " focused" : "") +
+                    (isClosed ? " minimized" : "")
+                  }
+                  data-persona={a.persona}
+                  onClick={() => focusAgent(a.slug)}
+                  title={isClosed ? "Closed — click to reopen" : undefined}
+                >
+                  <span className="pip">{PERSONA_GLYPH[a.persona] ?? "AG"}</span>
+                  <span className="meta">
+                    <span className="name mono">{a.name}</span>
+                    <span className="role">{a.role}</span>
+                  </span>
+                  <span className="status-dot" data-status={a.status} />
+                </button>
+              );
+            })}
           </RailSection>
         </aside>
 
@@ -142,13 +175,16 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             {agents.length === 0 && (
               <div className="canvas-empty">
                 <div className="em-title">No agents on the canvas</div>
-                <div className="em-sub">
-                  Launch one with{" "}
-                  <code>POST /api/works/{work.slug}/agents</code>.
-                </div>
+                <div className="em-sub">Launch one with the “+ New agent” button above.</div>
               </div>
             )}
-            {agents.map((a) => (
+            {agents.length > 0 && canvasAgents.length === 0 && (
+              <div className="canvas-empty">
+                <div className="em-title">All agents closed</div>
+                <div className="em-sub">Click any rail entry to reopen.</div>
+              </div>
+            )}
+            {canvasAgents.map((a) => (
               <div
                 key={a.slug}
                 ref={(el) => {
@@ -164,6 +200,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   mode="tile"
                   persona={a.persona}
                   agentName={a.name}
+                  onClose={() => {
+                    closeAgent(workSlug, a.slug);
+                    if (focusedSlug === a.slug) setFocusedSlug(null);
+                  }}
                 />
               </div>
             ))}

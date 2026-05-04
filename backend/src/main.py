@@ -56,8 +56,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         transcript_log = FsTranscriptLog(paths)
         reconcile(repo, files)
 
-        supervisor = AgentSupervisorService(transcript_log)
-
         connection_repo = SqlConnectionRepository(session_factory)
         connection_store = ConnectionStoreService(
             connection_repo, KeyringSecretStore(), verify
@@ -69,6 +67,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # set is left over from a previous run that crashed before
         # tear-down or a soft-deleted work. Run once per work_slug.
         workstore = WorkStoreService(repo, files, transcript_log)
+        supervisor = AgentSupervisorService(
+            transcript_log, workstore.set_agent_session_id
+        )
         for work in workstore.list_works():
             if work.slug is None:
                 continue

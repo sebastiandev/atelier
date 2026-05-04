@@ -236,6 +236,18 @@ body {
 .btn.primary:hover:not(:disabled) {
   filter: brightness(1.1);
 }
+.btn.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+  font-weight: 500;
+}
+.btn.danger:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.modal.modal-sm {
+  max-width: 440px;
+}
 .btn-icon {
   background: transparent;
   border: none;
@@ -1313,6 +1325,15 @@ body {
 .rail-agent.focused .name {
   color: var(--p-color, var(--fg));
   font-weight: 600;
+}
+.rail-agent.minimized {
+  opacity: 0.62;
+}
+.rail-agent.minimized::after {
+  content: "—";
+  margin-left: 0.35rem;
+  color: var(--fg-3);
+  font-size: 11px;
 }
 .rail-agent .pip {
   display: inline-flex;

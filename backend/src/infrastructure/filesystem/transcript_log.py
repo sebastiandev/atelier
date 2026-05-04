@@ -8,7 +8,11 @@ semantics (fsync per line, partial-line repair on append) live in
 from collections.abc import Iterator
 from typing import Any
 
-from src.infrastructure.filesystem.ndjson import append_event, read_from_cursor
+from src.infrastructure.filesystem.ndjson import (
+    append_event,
+    last_seq,
+    read_from_cursor,
+)
 from src.infrastructure.filesystem.paths import WorkspacePaths
 
 
@@ -23,6 +27,9 @@ class FsTranscriptLog:
         self, work_slug: str, agent_slug: str, cursor: int
     ) -> Iterator[dict[str, Any]]:
         return read_from_cursor(self._paths.transcript(work_slug, agent_slug), cursor)
+
+    def last_seq(self, work_slug: str, agent_slug: str) -> int:
+        return last_seq(self._paths.transcript(work_slug, agent_slug))
 
 
 __all__ = ["FsTranscriptLog"]

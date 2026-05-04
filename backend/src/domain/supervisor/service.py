@@ -90,13 +90,15 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Any
 
-from src.domain.agents import AgentAdapter, AgentEvent, AgentStartContext
+from src.domain.agents import AgentAdapter, AgentEvent, AgentStartContext, SessionEstablished
 from src.domain.workstore.ports import TranscriptLog
+
+SetSessionIdFn = Callable[[str, str], None]
 
 _log = logging.getLogger(__name__)
 
@@ -140,8 +142,17 @@ class _AgentState:
 
 
 class AgentSupervisorService:
-    def __init__(self, transcript_log: TranscriptLog) -> None:
+    def __init__(
+        self,
+        transcript_log: TranscriptLog,
+        set_session_id: SetSessionIdFn = lambda _slug, _sid: None,
+    ) -> None:
         self._transcript_log = transcript_log
+        # Called when an adapter emits SessionEstablished — the supervisor
+        # persists the provider session/thread ID so the same conversation
+        # can be resumed on the next reconnect. Default is a no-op so
+        # tests that only exercise event flow don't need a workstore.
+        self._set_session_id = set_session_id
         self._states: dict[str, _AgentState] = {}
         self._registry_lock = asyncio.Lock()
 
@@ -152,10 +163,21 @@ class AgentSupervisorService:
         adapter: AgentAdapter,
         context: AgentStartContext,
     ) -> None:
+        # Seed seq from any pre-existing transcript so resume continues
+        # monotonically — restarting at 0 would let new events collide
+        # with on-disk history. last_seq is a tail-read; cheap.
+        seed_seq = await asyncio.to_thread(
+            self._transcript_log.last_seq, work_slug, agent_slug
+        )
         async with self._registry_lock:
             if agent_slug in self._states:
                 raise RuntimeError(f"agent already running: {agent_slug}")
-            state = _AgentState(work_slug=work_slug, agent_slug=agent_slug, adapter=adapter)
+            state = _AgentState(
+                work_slug=work_slug,
+                agent_slug=agent_slug,
+                adapter=adapter,
+                seq=seed_seq,
+            )
             self._states[agent_slug] = state
         await adapter.start(context)
         state.task = asyncio.create_task(self._run_agent(state), name=f"agent-{agent_slug}")
@@ -239,6 +261,10 @@ class AgentSupervisorService:
     async def _run_agent(self, state: _AgentState) -> None:
         try:
             async for event in state.adapter.events():
+                if isinstance(event, SessionEstablished):
+                    await asyncio.to_thread(
+                        self._set_session_id, state.agent_slug, event.session_id
+                    )
                 await self._publish(state, _event_to_dict(event))
         except asyncio.CancelledError:
             raise

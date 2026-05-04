@@ -142,5 +142,6 @@ def execute(
         context_md=common.context_md,
         model=req.model,
         system_prompt=common.system_prompt,
+        session_id=agent.session_id,
     )
     return StartAgentPlan(agent=agent, adapter=adapter, context=context)

@@ -19,8 +19,8 @@ frontend/src/
 ├── MarkdownText.tsx     # react-markdown + remark-gfm + shiki wrapper
 ├── useAgentStream.ts    # WS hook with replay + reconnect backoff
 ├── state/               # narrow Zustand stores (frontend-local concerns)
-│   ├── cursors.ts       # per-agent WS resume cursor, persisted
-│   └── theme.ts         # dark/light toggle, persisted
+│   ├── theme.ts         # dark/light/ansi cycle, persisted
+│   └── closed.ts        # per-work set of agents pinned to the rail (closed)
 ├── ThemeToggle.tsx      # sun/moon button driving useThemeStore
 ├── connectionFields.ts  # per-source form schema (CONNECTION_FIELDS)
 ├── api.ts               # typed fetch wrappers + types + persona constants
@@ -52,13 +52,13 @@ The mode is a structural switch, not a theming switch. Splitting into two compon
 
 `useAgentStream(agentSlug)` is the single point of contact with the WS at `/api/agents/<slug>/stream`. It returns `{ events, status, sendInput }` and handles:
 
-**Cursor-based resume.** On reconnect it appends `?cursor=<lastSeq>` so the server replays the window we missed before going live. The server's replay-then-live semantics guarantee no duplicates and no gaps (see `backend.md` → WS protocol). The cursor is persisted to `localStorage` (via the Zustand `cursors` store), so a page refresh also resumes from the last seen seq instead of replaying from 0.
+**Cursor-based resume.** Within a session, on WS close + reconnect it appends `?cursor=<lastSeq>` so the server replays only the window we missed before going live. The server's replay-then-live semantics guarantee no duplicates and no gaps (see `backend.md` → WS protocol). The cursor lives in a closure-scoped `lastSeqRef` and resets to `0` on every fresh mount — the transcript itself isn't persisted client-side, so seeding non-zero on mount would yield an empty tile (the bug that retired the old `atelier:cursors` localStorage key).
 
 **Exponential reconnect backoff.** Schedule: `1s → 2s → 4s → 8s → 16s → 30s` (cap). Resets on a successful `onopen`, so a single transient blip costs one 1s retry — only consecutive failures walk the ladder.
 
-**Terminal close on 4404.** When the backend closes with code 4404 (supervisor has no live adapter — typically after a backend restart), the hook sets `status: "stopped"` and exits the retry loop. The `AgentTile` shows a banner and disables the composer.
+**Terminal close on 4404.** When the backend closes with code 4404 the agent slug is unknown to the server and the hook sets `status: "stopped"` and exits the retry loop. With the supervisor's resume path (see `backend.md` → WS protocol), a backend restart no longer surfaces 4404 — the WS handler rebuilds the adapter with the persisted `session_id` so the conversation resumes mid-stream. 4404 in practice means the slug doesn't exist (e.g. stale localStorage in the closed-rail state).
 
-**Cursor persistence.** The hook seeds `lastSeqRef` from `useCursorStore.getState().getCursor(slug)` at mount and writes back on every event with a numeric `seq`. The store persists to `localStorage` under the key `atelier:cursors`, so a page refresh resumes the stream from the saved seq — the transcript starts empty, but no replay storm.
+**Close = pin to rail.** The X on `AgentTile` is "close" — `WorkView` records the slug in `useClosedStore` and unmounts the tile. The WS connection ends; the agent row + `transcript.ndjson` + provider session ID stay on the server. Clicking the rail entry restores the tile, which mounts a fresh `AgentTile`, which opens a new WS, which resumes the same provider session by ID. There is no "delete" — closing is fully reversible by design.
 
 ## Connections page
 
@@ -143,8 +143,8 @@ Component-local `useState` + the WS hook is the default. Cross-component, fronte
 
 Current stores:
 
-- `cursors.ts` — `{ cursors: Record<agentSlug, number> }`, persisted under `atelier:cursors`. Used by `useAgentStream` for refresh-resume.
-- `theme.ts` — `{ theme: "dark" | "light" }`, persisted under `atelier:theme`. `App.tsx` mirrors it onto `<html data-theme=...>`.
+- `theme.ts` — `{ theme: "dark" | "light" | "ansi" }`, persisted under `atelier:theme` (v2). `App.tsx` mirrors it onto `<html data-theme=...>`. `toggleTheme` cycles light → dark → ansi → light; `ansi` is the default for fresh users.
+- `closed.ts` — `{ byWork: Record<workSlug, agentSlug[]> }`, persisted under `atelier:closed`. `WorkView` filters closed agents out of the canvas; clicking a closed rail entry restores the tile (which reopens its WS and resumes the provider session). Replaces the prior "minimized" model — there is no "delete".
 
 When adding a new store: keep it narrow (one concern per file), put presentation-only state here (per CLAUDE.md → "UI state is frontend-local"), and don't reach into it from outside React-tree code unless you have a reason — `useStore.getState()` is a synchronous read, fine inside a `useEffect`.
 

@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.domain.models import Agent, Artifact, Handoff, Work
@@ -116,7 +116,16 @@ class SqlWorkRepository:
                 existing.status = agent.status
                 existing.started_at = agent.started_at
                 existing.stopped_at = agent.stopped_at
+                existing.session_id = agent.session_id
         return agent
+
+    def set_agent_session_id(self, agent_slug: str, session_id: str) -> None:
+        with self._txn() as session:
+            session.execute(
+                update(agents_table)
+                .where(agents_table.c.slug == agent_slug)
+                .values(session_id=session_id)
+            )
 
     def delete_agent(self, agent_slug: str) -> None:
         with self._txn() as session:
@@ -143,6 +152,14 @@ class SqlWorkRepository:
                 .scalars()
                 .all()
             )
+
+    def get_work_slug_for_agent(self, agent_slug: str) -> str | None:
+        with self._txn() as session:
+            return session.execute(
+                select(works_table.c.slug)
+                .join(agents_table, agents_table.c.work_id == works_table.c.id)
+                .where(agents_table.c.slug == agent_slug)
+            ).scalar_one_or_none()
 
     # -- Artifact / Handoff -------------------------------------------
 

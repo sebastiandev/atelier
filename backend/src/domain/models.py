@@ -30,7 +30,7 @@ WorkStatus = Literal["active", "completed", "deleted"]
 ContextType = Literal["sentry", "honeycomb", "jira", "url", "text", "file", "agentout"]
 Persona = Literal["architect", "developer", "product", "ux", "writer", "custom"]
 Provider = Literal["claude-code", "amp"]
-AgentStatus = Literal["live", "thinking", "idle"]
+AgentStatus = Literal["live", "thinking", "idle", "stopped"]
 ConnectionType = Literal["sentry", "honeycomb", "jira"]
 ArtifactType = Literal["pr", "jira", "doc"]
 HandoffTargetDialog = Literal["new-agent"]
@@ -94,6 +94,10 @@ class Agent:
     status: AgentStatus
     started_at: datetime
     stopped_at: datetime | None = None
+    # Provider session/thread ID once the SDK has assigned one. Used to
+    # resume the same conversation on reconnect: passed as ``resume`` to
+    # the Claude SDK or ``continue_thread`` to the Amp SDK.
+    session_id: str | None = None
 
 
 @dataclass(kw_only=True)

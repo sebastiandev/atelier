@@ -105,4 +105,42 @@ def _repair_partial_trailing_line(path: Path) -> None:
         os.fsync(f.fileno())
 
 
-__all__ = ["append_event", "read_from_cursor"]
+def last_seq(path: Path) -> int:
+    """Return the highest ``seq`` in the file, or 0 if missing/empty.
+
+    Tail-reads in fixed-size chunks from the end of the file so the cost
+    is independent of transcript length. Skips malformed trailing lines
+    the same way ``read_from_cursor`` does.
+    """
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return 0
+    if size == 0:
+        return 0
+    chunk = 4096
+    with path.open("rb") as f:
+        pos = size
+        buf = b""
+        while pos > 0:
+            read_size = min(chunk, pos)
+            pos -= read_size
+            f.seek(pos)
+            buf = f.read(read_size) + buf
+            for line in reversed(buf.splitlines()):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    event = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                seq = event.get("seq")
+                if isinstance(seq, int) and not isinstance(seq, bool):
+                    return seq
+    return 0
+
+
+__all__ = ["append_event", "last_seq", "read_from_cursor"]

@@ -317,3 +317,39 @@ def test_ws_unknown_agent_closes(app_client: TestClient) -> None:
     with pytest.raises(WebSocketDisconnect):
         with app_client.websocket_connect("/api/agents/agt-404/stream") as ws:
             ws.receive_json()
+
+
+def test_ws_resumes_agent_after_supervisor_loses_state(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    """Simulates a backend restart: agent + transcript exist on disk, but
+    the supervisor has no live state. The WS should resume the provider
+    session, replay the original transcript, then deliver fresh events
+    from the rebuilt adapter."""
+    work = _create_work(app_client, tmp_workdir)
+    agent = _create_agent(app_client, work["slug"])
+
+    # Drain the live demo so the transcript is fully written to disk.
+    with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
+        for _ in range(_DEMO_EVENT_COUNT):
+            ws.receive_json()
+
+    # Simulate a backend restart: drop the agent from the supervisor's
+    # in-memory registry but leave the row + transcript on disk. We pop
+    # synchronously rather than awaiting `stop_agent` because TestClient
+    # owns the event loop and re-entering it from sync code wedges the
+    # whole suite. The full lifecycle is exercised by the DELETE tests.
+    supervisor = app_client.app.state.supervisor
+    supervisor._states.pop(agent["slug"], None)  # noqa: SLF001 — test hook
+
+    # Reconnect from cursor=0; expect the original transcript followed by
+    # a freshly-emitted run from the rebuilt stub adapter (the canned
+    # demo replays on every spawn). Seqs are monotonically increasing
+    # across the resume boundary because the rebuilt supervisor state
+    # starts a new agent task that publishes through the same lock.
+    with app_client.websocket_connect(
+        f"/api/agents/{agent['slug']}/stream?cursor=0"
+    ) as ws:
+        events = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT * 2)]
+    seqs = [e["seq"] for e in events]
+    assert seqs == list(range(1, _DEMO_EVENT_COUNT * 2 + 1))

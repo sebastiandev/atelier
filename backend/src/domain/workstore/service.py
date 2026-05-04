@@ -142,6 +142,21 @@ class WorkStoreService:
             self._require_work(work_slug)
             return self._repo.list_agents_for_work(work_slug)
 
+    def get_work_slug_for_agent(self, agent_slug: str) -> str | None:
+        # Used by the WS handler to resolve the transcript path when
+        # the supervisor has no live state for an agent (e.g. after a
+        # backend restart). Single SQL join in the repo layer.
+        with self._lock:
+            return self._repo.get_work_slug_for_agent(agent_slug)
+
+    def set_agent_session_id(self, agent_slug: str, session_id: str) -> None:
+        # Hot path: called by the supervisor on the first SessionEstablished
+        # event (and any subsequent change). Single UPDATE — agent.json
+        # stays stale until the next full upsert; the SQL row is the
+        # canonical resume handle.
+        with self._lock:
+            self._repo.set_agent_session_id(agent_slug, session_id)
+
     def append_transcript_event(
         self, work_slug: str, agent_slug: str, event: dict[str, Any]
     ) -> None:

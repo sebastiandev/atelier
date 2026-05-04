@@ -1,7 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 
-import { useCursorStore } from "./state/cursors";
-
 export type AgentEvent = {
   seq: number;
   type: string;
@@ -36,6 +34,11 @@ function delayForAttempt(attempt: number): number {
  * the server replays missed events from `transcript.ndjson` before going
  * live. A 4404 close (supervisor doesn't know this agent) is terminal —
  * the UI surfaces "stopped" instead of retrying.
+ *
+ * On mount the cursor starts at 0 — the transcript is the source of truth
+ * and the server-side replay is what populates `events`. We don't persist
+ * the cursor across mounts because we don't persist the events either:
+ * starting non-zero on a fresh mount would yield an empty tile.
  */
 export function useAgentStream(agentSlug: string) {
   const [events, setEvents] = useState<AgentEvent[]>([]);
@@ -48,12 +51,12 @@ export function useAgentStream(agentSlug: string) {
     let cancelled = false;
     let retryHandle: number | null = null;
 
-    // Reset on agent change. Seed the cursor from the persisted store so a
-    // page refresh resumes from the last seen seq instead of replaying the
-    // full transcript.
+    // Reset on agent change / fresh mount. Cursor goes to 0 so the server
+    // replays the full transcript; lastSeqRef advances as events arrive
+    // and is what an in-session WS reconnect resumes from (no duplicates).
     setEvents([]);
     setStatus("connecting");
-    lastSeqRef.current = useCursorStore.getState().getCursor(agentSlug);
+    lastSeqRef.current = 0;
     retryAttemptRef.current = 0;
 
     function scheduleReconnect() {
@@ -84,7 +87,6 @@ export function useAgentStream(agentSlug: string) {
           const event = JSON.parse(msg.data) as AgentEvent;
           if (typeof event.seq === "number") {
             lastSeqRef.current = event.seq;
-            useCursorStore.getState().setCursor(agentSlug, event.seq);
           }
           setEvents((prev) => [...prev, event]);
         } catch {

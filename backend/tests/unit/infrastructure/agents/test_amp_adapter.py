@@ -36,6 +36,7 @@ from src.domain.agents import (
     CommonAgentConfig,
     Error,
     MessageComplete,
+    SessionEstablished,
     StatusChange,
     ToolCall,
     ToolResult,
@@ -236,17 +237,19 @@ def test_full_lifecycle_translates_scripted_session() -> None:
         return events
 
     events = asyncio.run(session())
-    # system → 0; user/text → thinking; assistant/text → message_complete; result → idle.
-    # system → 0; user/text → thinking; assistant/text → message_complete;
+    # system → SessionEstablished (first message carries session_id);
+    # user/text → thinking; assistant/text → message_complete;
     # result → turn_metrics + idle.
     assert [type(e) for e in events] == [
+        SessionEstablished,
         StatusChange,
         MessageComplete,
         TurnMetrics,
         StatusChange,
     ]
-    assert events[0].status == "thinking"
-    assert events[3].status == "idle"
+    assert events[0].session_id == "s-1"
+    assert events[1].status == "thinking"
+    assert events[4].status == "idle"
 
 
 def test_close_is_idempotent() -> None:
@@ -315,3 +318,96 @@ def test_executor_exception_yields_error_then_idle() -> None:
     assert "amp blew up" in events[0].message
     assert isinstance(events[1], StatusChange)
     assert events[1].status == "idle"
+
+
+# --- Resume / session_id tests --------------------------------------------
+
+
+def _capturing_executor(scripted: list[StreamMessage], captured: dict[str, AmpOptions]):
+    """Executor that records the AmpOptions it was called with."""
+
+    async def fake(
+        prompt: AsyncIterator[UserInputMessage], options: AmpOptions
+    ) -> AsyncIterator[StreamMessage]:
+        captured["options"] = options
+
+        async def _drain() -> None:
+            async for _ in prompt:
+                pass
+
+        drain_task = asyncio.create_task(_drain())
+        try:
+            for msg in scripted:
+                yield msg
+        finally:
+            drain_task.cancel()
+            try:
+                await drain_task
+            except BaseException:
+                pass
+
+    return fake
+
+
+def test_passes_continue_thread_when_session_id_set() -> None:
+    captured: dict[str, AmpOptions] = {}
+    adapter = AmpAdapter(_config(), executor=_capturing_executor([_result_ok()], captured))
+
+    async def session() -> None:
+        ctx = AgentStartContext(
+            workdir=Path("/tmp/amp-adapter-test"),
+            context_md="",
+            model="smart",
+            system_prompt="prompt",
+            session_id="thread-xyz",
+        )
+        await adapter.start(ctx)
+        await adapter.send_input("hi")
+        async for _ in adapter.events():
+            pass
+        await adapter.close()
+
+    asyncio.run(session())
+    # Pydantic field is camelCase under the hood, but the snake_case
+    # attribute is exposed on the model instance.
+    assert captured["options"].continue_thread == "thread-xyz"
+
+
+def test_omits_continue_thread_when_session_id_unset() -> None:
+    captured: dict[str, AmpOptions] = {}
+    adapter = AmpAdapter(_config(), executor=_capturing_executor([_result_ok()], captured))
+
+    async def session() -> None:
+        await adapter.start(_start_context())  # session_id default None
+        await adapter.send_input("hi")
+        async for _ in adapter.events():
+            pass
+        await adapter.close()
+
+    asyncio.run(session())
+    # Default for unset Union[bool, str, None] is None.
+    assert captured["options"].continue_thread is None
+
+
+def test_session_established_emitted_only_once_for_repeat_id() -> None:
+    # Two messages carrying the same session_id should yield exactly one
+    # SessionEstablished — the supervisor doesn't need to round-trip
+    # the workstore on every turn.
+    scripted: list[StreamMessage] = [
+        _system(),  # session_id="s-1"
+        _assistant(TextContent(text="a")),  # session_id="s-1"
+        _result_ok(),
+    ]
+    adapter = AmpAdapter(_config(), executor=_make_fake_executor(scripted))
+
+    async def session() -> list[AgentEvent]:
+        await adapter.start(_start_context())
+        await adapter.send_input("hi")
+        events = [ev async for ev in adapter.events()]
+        await adapter.close()
+        return events
+
+    events = asyncio.run(session())
+    sess_events = [e for e in events if isinstance(e, SessionEstablished)]
+    assert len(sess_events) == 1
+    assert sess_events[0].session_id == "s-1"

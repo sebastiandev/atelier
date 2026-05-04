@@ -17,6 +17,7 @@ from src.domain.agents import (
     AgentStartContext,
     MessageComplete,
     MessageDelta,
+    SessionEstablished,
     StatusChange,
 )
 from src.domain.supervisor import SUBSCRIBER_QUEUE_MAX, AgentSupervisorService
@@ -364,6 +365,27 @@ class _CrashingAdapter:
 
     async def close(self) -> None:
         self.closed = True
+
+
+def test_session_established_invokes_set_session_id_callback() -> None:
+    captured: list[tuple[str, str]] = []
+
+    async def run() -> None:
+        supervisor = AgentSupervisorService(
+            StubTranscriptLog(),
+            set_session_id=lambda slug, sid: captured.append((slug, sid)),
+        )
+        events: list[AgentEvent] = [
+            SessionEstablished(ts=UTC_NOW, session_id="sess-abc"),
+            StatusChange(ts=UTC_NOW, status="idle"),
+        ]
+        adapter = StubAgentAdapter(events)
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.shutdown()
+
+    _run(run())
+    assert captured == [("agt-1", "sess-abc")]
 
 
 def test_adapter_task_error_emits_error_event() -> None:

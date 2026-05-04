@@ -53,6 +53,7 @@ from src.domain.agents import (
     AmpAgentConfig,
     Error,
     MessageComplete,
+    SessionEstablished,
     StatusChange,
     ToolCall,
     ToolResult,
@@ -86,15 +87,18 @@ class AmpAdapter:
         self._user_inputs: asyncio.Queue[str | object] = asyncio.Queue()
         self._started = False
         self._closed = False
+        # Track the Amp thread: the value passed to ``continue_thread``
+        # (if any) and the value last seen on an incoming message.
+        self._resume_thread_id: str | None = None
+        self._reported_session_id: str | None = None
 
     async def start(self, context: AgentStartContext) -> None:
-        # ``context`` is part of the Protocol contract but the adapter is
-        # already fully configured via ``AmpAgentConfig`` at construction
-        # time, so we ignore it (mirrors the Claude adapter). The SDK
-        # spawns the CLI subprocess lazily — first stdin write happens
-        # when ``events()`` begins draining, so there's no eager connect.
+        # ``context`` carries ``session_id`` so a previously-assigned Amp
+        # thread can be resumed. The CLI subprocess itself spawns lazily
+        # on the first stdin write inside ``events()``.
         if self._started:
             raise RuntimeError("start() called twice")
+        self._resume_thread_id = context.session_id
         self._started = True
 
     async def send_input(self, text: str) -> None:
@@ -115,16 +119,23 @@ class AmpAdapter:
         # would otherwise block on stdin TTY prompts that we can't answer.
         # The Pydantic field uses a camelCase alias, so build via dict to
         # keep mypy happy without forcing the alias name on the call site.
-        options = AmpOptions.model_validate(
-            {
-                "cwd": str(self._config.common.workdir),
-                "mode": self._config.mode.value,
-                "dangerously_allow_all": True,
-            }
-        )
+        opts: dict[str, object] = {
+            "cwd": str(self._config.common.workdir),
+            "mode": self._config.mode.value,
+            "dangerously_allow_all": True,
+        }
+        if self._resume_thread_id is not None:
+            opts["continue_thread"] = self._resume_thread_id
+        options = AmpOptions.model_validate(opts)
         model = self._config.mode.value
         try:
             async for msg in self._executor(self._prompt_iter(), options):
+                sid = getattr(msg, "session_id", None)
+                if sid is not None and sid != self._reported_session_id:
+                    self._reported_session_id = sid
+                    yield SessionEstablished(
+                        ts=datetime.now(UTC), session_id=sid
+                    )
                 for ev in _convert(msg, model=model):
                     yield ev
         except Exception as e:

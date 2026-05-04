@@ -119,6 +119,7 @@ agents_table = Table(
     Column("status", String, nullable=False),
     Column("started_at", UTCDateTime, nullable=False),
     Column("stopped_at", UTCDateTime, nullable=True),
+    Column("session_id", String, nullable=True),
 )
 
 

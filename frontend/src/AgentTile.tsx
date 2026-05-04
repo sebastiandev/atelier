@@ -21,6 +21,7 @@ type AgentTileProps = {
   mode?: "page" | "tile";
   persona?: Persona;
   agentName?: string;
+  onClose?: () => void;
 };
 
 /**
@@ -40,6 +41,7 @@ export function AgentTile({
   mode = "page",
   persona,
   agentName,
+  onClose,
 }: AgentTileProps) {
   const { events, status, sendInput } = useAgentStream(agentSlug);
   const [draft, setDraft] = useState("");
@@ -103,9 +105,22 @@ export function AgentTile({
 
   const dotStatus = optimisticThinking ? "thinking" : agentStatus;
   const isStopped = status === "stopped";
-  const composerDisabled = isStopped || status === "error";
+  // Send only works when the WS is OPEN — otherwise sendInput silently
+  // no-ops. Disable the composer for every non-connected state so the
+  // user never thinks a click landed.
+  const composerDisabled = status !== "connected";
   const tileClass = `agent-tile mode-${mode}` + (maximized ? " maximized" : "");
   const title = agentName || agentSlug;
+  const composerPlaceholder =
+    status === "stopped"
+      ? "Agent unavailable"
+      : status === "connecting"
+        ? "Connecting to agent…"
+        : status === "closed"
+          ? "Reconnecting to agent…"
+          : status === "error"
+            ? "Connection error — retrying…"
+            : "Message the agent — Enter sends, Shift+Enter for newline";
 
   return (
     <div className={tileClass} data-persona={persona}>
@@ -127,14 +142,6 @@ export function AgentTile({
           <button
             type="button"
             className="tile-ctl"
-            title="Minimize to sidebar — coming with persistence"
-            disabled
-          >
-            <MinusIcon />
-          </button>
-          <button
-            type="button"
-            className="tile-ctl"
             title={maximized ? "Restore" : "Maximize"}
             onClick={() => setMaximized((m) => !m)}
           >
@@ -143,8 +150,13 @@ export function AgentTile({
           <button
             type="button"
             className="tile-ctl"
-            title="Close — coming with persistence"
-            disabled
+            title={
+              onClose
+                ? "Close — pins to sidebar; reopen any time to resume"
+                : "Close unavailable in this view"
+            }
+            onClick={onClose}
+            disabled={!onClose}
           >
             <CloseIcon />
           </button>
@@ -152,7 +164,7 @@ export function AgentTile({
       </header>
       {isStopped && (
         <div className="tile-banner">
-          Agent isn't running. The supervisor lost its session — launch a new agent or restart the backend.
+          This agent slug isn't known to the server. Close it to clear from the rail.
         </div>
       )}
       <div className="transcript" ref={transcriptRef}>
@@ -167,11 +179,7 @@ export function AgentTile({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={
-            isStopped
-              ? "Agent stopped — launch a new one to continue"
-              : "Message the agent — Enter sends, Shift+Enter for newline"
-          }
+          placeholder={composerPlaceholder}
           rows={1}
           disabled={composerDisabled}
           autoFocus={mode === "page"}
@@ -214,13 +222,6 @@ function HandoffIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-    </svg>
-  );
-}
-function MinusIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
-      <path d="M3 8h10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   );
 }

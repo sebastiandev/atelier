@@ -16,17 +16,36 @@ export function MarkdownText({ text }: { text: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        code({ className, children, ...rest }) {
+        // react-markdown calls this for both inline code and fenced
+        // blocks. Block fences arrive multi-line (and react-markdown
+        // wraps them in <pre>); inline arrives single-line. Branch on
+        // that — plus the language hint — so a fence with no language
+        // doesn't get stamped with the inline-pill style.
+        code({ className, children, node, ...rest }) {
+          void node; // strip — the AST node prop would otherwise leak
+          // onto the DOM via {...rest} as `node="[object Object]"`.
           const lang = /language-(\w+)/.exec(className || "")?.[1];
-          const code = String(children).replace(/\n$/, "");
-          if (!lang) {
+          const text = String(children).replace(/\n$/, "");
+          const isBlock = text.includes("\n") || Boolean(lang);
+          if (isBlock) {
+            if (lang) return <ShikiCode code={text} lang={lang} />;
             return (
-              <code className="md-inline-code" {...rest}>
-                {children}
-              </code>
+              <pre className="md-code-fallback">
+                <code>{text}</code>
+              </pre>
             );
           }
-          return <ShikiCode code={code} lang={lang} />;
+          return (
+            <code className="md-inline-code" {...rest}>
+              {children}
+            </code>
+          );
+        },
+        // Default <pre> wraps our `code` output, but the block branch
+        // above already returns its own <pre>. Make this transparent
+        // so we don't get nested <pre><pre>.
+        pre({ children }) {
+          return <>{children}</>;
         },
         h1: ({ children }) => <h3 className="md-h">{children}</h3>,
         h2: ({ children }) => <h4 className="md-h">{children}</h4>,

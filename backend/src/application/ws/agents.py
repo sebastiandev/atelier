@@ -1,6 +1,9 @@
 """Agent stream WebSocket — replay-from-cursor + live fan-out + input.
 
   - Connect with optional ``?cursor=N``; default 0 replays everything.
+  - If the supervisor has no live state for the slug, the handler resumes
+    the provider session via the ``resume_agent`` command and attaches a
+    fresh subscription. Truly unknown slugs still 4404.
   - Replay disk events with ``cursor < seq <= from_seq`` (snapshot at
     subscribe time), then drain the supervisor's per-subscription queue
     for ``seq > from_seq`` — no duplicates, no gaps.
@@ -19,6 +22,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from src.domain.commands.agents import resume as resume_cmd
 from src.domain.supervisor import AgentSupervisorService
 
 router = APIRouter()
@@ -32,14 +36,37 @@ _CLOSE_SLOW_SUBSCRIBER = 4408
 async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
     workstore = websocket.app.state.workstore
     supervisor = websocket.app.state.supervisor
+    worktree_manager = websocket.app.state.worktree_manager
+    settings = websocket.app.state.settings
+
+    cursor = _parse_cursor(websocket.query_params.get("cursor"))
 
     work_slug = supervisor.get_work_slug_for(agent_slug)
     if work_slug is None:
-        # Reject before accepting — the FastAPI helper that closes pre-accept.
-        await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
-        return
+        # Supervisor has no live state — backend restart, or the agent
+        # was closed-to-rail. Resume the provider session from the row
+        # if the agent exists; truly unknown slugs still 4404.
+        history_work_slug = workstore.get_work_slug_for_agent(agent_slug)
+        if history_work_slug is None:
+            await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
+            return
+        try:
+            plan = resume_cmd.execute(
+                workstore,
+                worktree_manager,
+                settings,
+                resume_cmd.ResumeAgentRequest(
+                    work_slug=history_work_slug, agent_slug=agent_slug
+                ),
+            )
+        except resume_cmd.AgentNotFound:
+            await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
+            return
+        await supervisor.start_agent(
+            history_work_slug, agent_slug, plan.adapter, plan.context
+        )
+        work_slug = history_work_slug
 
-    cursor = _parse_cursor(websocket.query_params.get("cursor"))
     await websocket.accept()
 
     try:

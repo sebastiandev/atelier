@@ -45,6 +45,7 @@ from src.domain.agents import (
     ClaudeEffort,
     Error,
     MessageComplete,
+    SessionEstablished,
     StatusChange,
     ThinkingComplete,
     ToolCall,
@@ -65,16 +66,36 @@ class ClaudeCodeAdapter:
         self._client: ClaudeSDKClient | None = None
         self._user_inputs: asyncio.Queue[str | object] = asyncio.Queue()
         self._closed = False
+        # Track the SDK session: the value passed to ``resume`` (if any),
+        # the value last seen on a ResultMessage, and a warning to surface
+        # the first time ``events()`` runs if a requested resume failed.
+        self._resume_session_id: str | None = None
+        self._reported_session_id: str | None = None
+        self._pending_warning: str | None = None
 
     async def start(self, context: AgentStartContext) -> None:
-        # ``context`` is part of the Protocol contract but the adapter is
-        # already fully configured via ``ClaudeAgentConfig`` at construction
-        # time, so we ignore it (the route folds the same fields into the
-        # config before calling build_adapter). Phase 6 collapses this seam.
+        # ``context`` is mostly informational (the adapter is configured
+        # via ``ClaudeAgentConfig`` at construction time), but we read
+        # ``session_id`` here so a previously-assigned SDK session can be
+        # resumed across reconnects / backend restarts.
         if self._client is not None:
             raise RuntimeError("start() called twice")
-        self._client = ClaudeSDKClient(options=self._build_options())
-        await self._client.connect()
+        self._resume_session_id = context.session_id
+        try:
+            self._client = ClaudeSDKClient(options=self._build_options())
+            await self._client.connect()
+        except FileNotFoundError as exc:
+            # The on-disk session was wiped (user cleared
+            # ~/.claude/projects/...). Drop the resume hint and start fresh
+            # — the agent's transcript.ndjson is unaffected, but the SDK
+            # has no prior turns to draw on. Surface a warning event on
+            # the next iteration of events() so the user knows.
+            self._pending_warning = (
+                f"Previous session not found ({exc}); started a fresh one."
+            )
+            self._resume_session_id = None
+            self._client = ClaudeSDKClient(options=self._build_options())
+            await self._client.connect()
 
     async def send_input(self, text: str) -> None:
         await self._user_inputs.put(text)
@@ -82,6 +103,9 @@ class ClaudeCodeAdapter:
     async def events(self) -> AsyncIterator[AgentEvent]:
         if self._client is None:
             raise RuntimeError("events() called before start()")
+        if self._pending_warning is not None:
+            yield Error(ts=datetime.now(UTC), message=self._pending_warning)
+            self._pending_warning = None
         while True:
             text = await self._user_inputs.get()
             if text is _SHUTDOWN:
@@ -91,6 +115,10 @@ class ClaudeCodeAdapter:
             try:
                 await self._client.query(text)
                 async for msg in self._client.receive_response():
+                    sid = _session_id_of(msg)
+                    if sid is not None and sid != self._reported_session_id:
+                        self._reported_session_id = sid
+                        yield SessionEstablished(ts=datetime.now(UTC), session_id=sid)
                     for ev in _convert(msg, model=self._config.model.value):
                         yield ev
             except Exception as e:  # noqa: BLE001
@@ -115,6 +143,8 @@ class ClaudeCodeAdapter:
         }
         if self._config.thinking_effort is not ClaudeEffort.OFF:
             kwargs["effort"] = self._config.thinking_effort.value
+        if self._resume_session_id is not None:
+            kwargs["resume"] = self._resume_session_id
         return ClaudeAgentOptions(**kwargs)
 
 
@@ -164,6 +194,17 @@ def _convert(msg: object, *, model: str | None = None) -> Iterable[AgentEvent]:
             model=model,
         )
         yield StatusChange(ts=now, status="idle")
+
+
+def _session_id_of(msg: object) -> str | None:
+    """Pull the session_id off a Claude SDK message if it has one.
+
+    Both ``ResultMessage`` (always) and ``AssistantMessage`` (sometimes)
+    carry a ``session_id`` attribute. Normalised to a single helper so
+    the adapter can capture it once per message without caring which
+    variant exposed it.
+    """
+    return getattr(msg, "session_id", None)
 
 
 def _stringify(content: str | list[dict[str, Any]] | None) -> str:

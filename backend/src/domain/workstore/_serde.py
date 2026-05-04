@@ -58,6 +58,7 @@ def serialize_agent(agent: Agent) -> dict[str, Any]:
         "status": agent.status,
         "started_at": agent.started_at.isoformat(),
         "stopped_at": agent.stopped_at.isoformat() if agent.stopped_at else None,
+        "session_id": agent.session_id,
     }
 
 
@@ -75,6 +76,7 @@ def deserialize_agent(data: dict[str, Any]) -> Agent:
         status=data["status"],
         started_at=datetime.fromisoformat(data["started_at"]),
         stopped_at=datetime.fromisoformat(stopped_raw) if stopped_raw else None,
+        session_id=data.get("session_id"),
     )
 
 

@@ -214,6 +214,17 @@ def test_delete_agent(repo: SqlWorkRepository) -> None:
     assert repo.get_agent_by_slug("agt-1") is None
 
 
+def test_set_agent_session_id_persists(repo: SqlWorkRepository) -> None:
+    work = repo.add_work(_new_work())
+    assert work.id is not None
+    repo.add_agent(_new_agent(work_id=work.id))
+    assert repo.get_agent_by_slug("agt-1").session_id is None  # type: ignore[union-attr]
+    repo.set_agent_session_id("agt-1", "sess-xyz")
+    fetched = repo.get_agent_by_slug("agt-1")
+    assert fetched is not None
+    assert fetched.session_id == "sess-xyz"
+
+
 # ---------------------------------------------------------------------------
 # Artifact / Handoff
 # ---------------------------------------------------------------------------
