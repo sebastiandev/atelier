@@ -21,6 +21,8 @@ type AgentTileProps = {
   mode?: "page" | "tile";
   persona?: Persona;
   agentName?: string;
+  provider?: string;
+  model?: string;
   onClose?: () => void;
 };
 
@@ -41,9 +43,11 @@ export function AgentTile({
   mode = "page",
   persona,
   agentName,
+  provider,
+  model,
   onClose,
 }: AgentTileProps) {
-  const { events, status, sendInput } = useAgentStream(agentSlug);
+  const { events, status, sendInput, sendStop } = useAgentStream(agentSlug);
   const [draft, setDraft] = useState("");
   // Optimistic "thinking" between Send and the first status_change event
   // back from the adapter, so the dot reacts instantly.
@@ -98,10 +102,39 @@ export function AgentTile({
     if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       submit();
+      return;
+    }
+    // Plain Esc while the agent is producing a turn = "stop". Modifier
+    // combinations (Shift/Cmd/Ctrl+Esc) are reserved for the maximize
+    // exit shortcut handled at the window level.
+    if (
+      e.key === "Escape" &&
+      !e.shiftKey &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      dotStatus === "thinking"
+    ) {
+      e.preventDefault();
+      sendStop();
+      setOptimisticThinking(false);
     }
   }
 
   const [maximized, setMaximized] = useState(false);
+
+  // Plain Esc inside the composer means "stop the agent's current turn"
+  // (handled by handleKeyDown below; matches the Claude Code / Amp CLI
+  // conventions). The maximize-exit shortcut therefore needs a modifier:
+  // Shift+Esc on every platform, Cmd+Esc on macOS, Ctrl+Esc on the rest.
+  useEffect(() => {
+    if (!maximized) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (e.shiftKey || e.metaKey || e.ctrlKey) setMaximized(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [maximized]);
 
   const dotStatus = optimisticThinking ? "thinking" : agentStatus;
   const isStopped = status === "stopped";
@@ -120,7 +153,9 @@ export function AgentTile({
           ? "Reconnecting to agent…"
           : status === "error"
             ? "Connection error — retrying…"
-            : "Message the agent — Enter sends, Shift+Enter for newline";
+            : dotStatus === "thinking"
+              ? "Agent is working — Esc to stop"
+              : "Message the agent — Enter sends, Shift+Enter for newline";
 
   return (
     <div className={tileClass} data-persona={persona}>
@@ -129,6 +164,15 @@ export function AgentTile({
         <span className="status-dot" data-status={dotStatus} />
         <h2>{title}</h2>
         {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}
+        {provider && model && (
+          <span
+            className="provider-pill mono"
+            data-provider={shortProvider(provider)}
+            title={`Provider: ${provider} · Model: ${model}`}
+          >
+            {shortProvider(provider)} · {shortModel(model)}
+          </span>
+        )}
         <span className="conn-status" data-conn-status={status}>{status}</span>
         <div className="tile-controls">
           <button
@@ -142,7 +186,7 @@ export function AgentTile({
           <button
             type="button"
             className="tile-ctl"
-            title={maximized ? "Restore" : "Maximize"}
+            title={maximized ? "Restore (Shift+Esc / Cmd+Esc)" : "Maximize"}
             onClick={() => setMaximized((m) => !m)}
           >
             {maximized ? <RestoreIcon /> : <MaxIcon />}
@@ -393,6 +437,8 @@ function renderUnitFor(ev: AgentEvent): RenderUnit | null {
   switch (ev.type) {
     case "user_input":
       return { kind: "user", key: ev.seq, text: stringField(ev, "text") };
+    case "user_stop":
+      return { kind: "status", key: ev.seq, status: "stopped" };
     case "tool_call":
       return {
         kind: "tool_call",
@@ -509,21 +555,26 @@ function TurnMetricsBar({ metrics }: { metrics: TurnRollup }) {
     `Input: ${metrics.inputTokens.toLocaleString()}\n` +
     `Output: ${metrics.outputTokens.toLocaleString()}\n` +
     `Cache read: ${metrics.cacheReadTokens.toLocaleString()}\n` +
-    `Cache write: ${metrics.cacheCreationTokens.toLocaleString()}` +
-    (metrics.model ? `\nModel: ${metrics.model}` : "");
+    `Cache write: ${metrics.cacheCreationTokens.toLocaleString()}`;
   return (
     <div className="turn-metrics" title={tooltip}>
       <span className="turn-metrics-item">{formatDuration(metrics.durationMs)}</span>
       <span className="turn-metrics-sep">·</span>
       <span className="turn-metrics-item">↓ {formatTokens(totalTokens)} tokens</span>
-      {metrics.model && (
-        <>
-          <span className="turn-metrics-sep">·</span>
-          <span className="turn-metrics-item turn-metrics-model">{metrics.model}</span>
-        </>
-      )}
     </div>
   );
+}
+
+function shortProvider(provider: string): string {
+  if (provider === "claude-code") return "claude";
+  return provider;
+}
+
+function shortModel(model: string): string {
+  // Claude model ids are prefixed (claude-opus-4-7, claude-sonnet-4-6);
+  // strip the redundant prefix for display since the provider pill
+  // sits next to it. Amp modes (smart/rush/deep/large) display as-is.
+  return model.startsWith("claude-") ? model.slice("claude-".length) : model;
 }
 
 function lastUnitText(units: RenderUnit[]): string {

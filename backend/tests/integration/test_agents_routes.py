@@ -288,6 +288,21 @@ def test_ws_input_frame_creates_user_input_event(app_client: TestClient, tmp_wor
         assert ev["seq"] == _DEMO_EVENT_COUNT + 1
 
 
+def test_ws_stop_frame_creates_user_stop_event(app_client: TestClient, tmp_workdir: str) -> None:
+    work = _create_work(app_client, tmp_workdir)
+    agent = _create_agent(app_client, work["slug"])
+
+    with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
+        for _ in range(_DEMO_EVENT_COUNT):
+            ws.receive_json()
+
+        ws.send_text(json.dumps({"type": "stop"}))
+
+        ev = ws.receive_json()
+        assert ev["type"] == "user_stop"
+        assert ev["seq"] == _DEMO_EVENT_COUNT + 1
+
+
 def test_ws_malformed_input_frame_is_ignored(app_client: TestClient, tmp_workdir: str) -> None:
     work = _create_work(app_client, tmp_workdir)
     agent = _create_agent(app_client, work["slug"])

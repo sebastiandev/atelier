@@ -164,6 +164,21 @@ def test_send_input_does_not_raise(adapter_factory: AdapterFactory) -> None:
     _run(session())
 
 
+def test_stop_turn_does_not_raise(adapter_factory: AdapterFactory) -> None:
+    """stop_turn is callable any time after start — including when no
+    turn is in flight. Adapters whose SDK can't interrupt mid-turn no-op
+    silently rather than raising; the supervisor relies on this."""
+    adapter = adapter_factory([])
+
+    async def session() -> None:
+        await adapter.start(_start_context())
+        await adapter.stop_turn()  # no in-flight turn
+        await adapter.stop_turn()  # idempotent
+        await adapter.close()
+
+    _run(session())
+
+
 def test_full_lifecycle_completes(adapter_factory: AdapterFactory) -> None:
     """start → consume events → send_input → close, all in order."""
     adapter = adapter_factory(_scripted_events())

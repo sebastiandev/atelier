@@ -200,6 +200,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   mode="tile"
                   persona={a.persona}
                   agentName={a.name}
+                  provider={a.provider}
+                  model={a.model}
                   onClose={() => {
                     closeAgent(workSlug, a.slug);
                     if (focusedSlug === a.slug) setFocusedSlug(null);

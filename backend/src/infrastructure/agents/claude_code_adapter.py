@@ -100,6 +100,22 @@ class ClaudeCodeAdapter:
     async def send_input(self, text: str) -> None:
         await self._user_inputs.put(text)
 
+    async def stop_turn(self) -> None:
+        # ClaudeSDKClient.interrupt sends a control-protocol message to
+        # the CLI; the session stays alive and is ready for the next
+        # query. Safe to call when no turn is in flight (the SDK no-ops
+        # gracefully). We swallow exceptions so a stop frame can never
+        # destabilise the supervisor's stream.
+        if self._client is None or self._closed:
+            return
+        try:
+            await self._client.interrupt()
+        except Exception:  # noqa: BLE001
+            # Underlying transport could be in a transient bad state
+            # (e.g. between turns); the next send_input will fail loudly
+            # if there's a real problem. No need to raise here.
+            pass
+
     async def events(self) -> AsyncIterator[AgentEvent]:
         if self._client is None:
             raise RuntimeError("events() called before start()")

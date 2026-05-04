@@ -720,6 +720,28 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+.agent-tile header .provider-pill {
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--fg-3);
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.agent-tile header .provider-pill[data-provider="claude"] {
+  color: oklch(0.72 0.10 35);
+  border-color: color-mix(in oklch, oklch(0.72 0.10 35) 30%, transparent);
+}
+.agent-tile header .provider-pill[data-provider="amp"] {
+  color: oklch(0.74 0.13 195);
+  border-color: color-mix(in oklch, oklch(0.74 0.13 195) 30%, transparent);
+}
+.agent-tile header .provider-pill[data-provider="codex"] {
+  color: oklch(0.74 0.12 285);
+  border-color: color-mix(in oklch, oklch(0.74 0.12 285) 30%, transparent);
+}
 .persona-pip {
   display: inline-flex;
   align-items: center;
@@ -1080,11 +1102,6 @@ body {
 }
 .turn-metrics-sep {
   opacity: 0.5;
-}
-.turn-metrics-model {
-  margin-left: auto;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  opacity: 0.8;
 }
 
 /* Composer --------------------------------------------------------------- */

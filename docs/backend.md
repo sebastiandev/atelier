@@ -108,7 +108,11 @@ The cursor is a `seq` integer. `read_from_cursor(work_slug, agent_slug, cursor)`
 
 **Server → client**: each frame is one `AgentEvent` serialized as JSON. The supervisor maintains the seq monotonicity, so the client can persist the last seq and resume from there on reconnect.
 
-**Client → server**: `{"type":"input","text":"..."}`. Anything else is ignored.
+**Client → server**:
+- `{"type":"input","text":"..."}` — appends a `user_input` transcript line and forwards to the adapter.
+- `{"type":"stop"}` — appends a `user_stop` transcript line and calls `adapter.stop_turn()`. Claude interrupts mid-turn via the SDK's control protocol; Amp's adapter no-ops for now (the SDK exposes no per-turn cancel — full per-turn cancel for Amp is a tracked follow-up). The user-facing intent is always recorded.
+
+Anything else is ignored.
 
 **Replay-then-live** semantics on connect:
 

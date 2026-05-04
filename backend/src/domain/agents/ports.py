@@ -44,11 +44,19 @@ class AgentAdapter(Protocol):
 
     ``close()`` must be idempotent — the supervisor calls it during
     graceful shutdown and again in error paths.
+
+    ``stop_turn()`` interrupts whatever the model / tools are doing right
+    now without tearing down the session — the adapter should remain
+    ready to accept the next ``send_input``. Adapters whose underlying
+    SDK can't interrupt mid-turn no-op here; callers must not assume the
+    turn was actually cancelled.
     """
 
     async def start(self, context: AgentStartContext) -> None: ...
 
     async def send_input(self, text: str) -> None: ...
+
+    async def stop_turn(self) -> None: ...
 
     def events(self) -> AsyncIterator[AgentEvent]: ...
 

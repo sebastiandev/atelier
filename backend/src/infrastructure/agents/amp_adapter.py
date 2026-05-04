@@ -104,6 +104,17 @@ class AmpAdapter:
     async def send_input(self, text: str) -> None:
         await self._user_inputs.put(text)
 
+    async def stop_turn(self) -> None:
+        # No-op for v1. ``amp_sdk.execute`` exposes no control-protocol
+        # interrupt — the only cancel is ``task.cancel()``, which kills
+        # the CLI subprocess and ends ``events()``, taking the whole
+        # adapter down. A real interrupt for Amp needs ``events()`` to
+        # spawn a fresh executor per turn so the cancel scope is per-turn
+        # rather than per-adapter; tracked as a follow-up. The stop frame
+        # still reaches the transcript via the supervisor's ``user_stop``
+        # line, so the user sees their intent recorded.
+        return
+
     async def _prompt_iter(self) -> AsyncIterator[UserInputMessage]:
         while True:
             text = await self._user_inputs.get()

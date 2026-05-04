@@ -60,6 +60,8 @@ The mode is a structural switch, not a theming switch. Splitting into two compon
 
 **Close = pin to rail.** The X on `AgentTile` is "close" — `WorkView` records the slug in `useClosedStore` and unmounts the tile. The WS connection ends; the agent row + `transcript.ndjson` + provider session ID stay on the server. Clicking the rail entry restores the tile, which mounts a fresh `AgentTile`, which opens a new WS, which resumes the same provider session by ID. There is no "delete" — closing is fully reversible by design.
 
+**Esc = stop the current turn.** Inside the composer, plain Esc while the agent is producing a turn sends `{"type":"stop"}` over the WS. The supervisor records a `user_stop` transcript line and calls `adapter.stop_turn()`. Modifier+Esc combinations (Shift/Cmd/Ctrl+Esc) are reserved for "exit maximize" so they can't fire stop-turn. Esc on Amp agents currently no-ops at the adapter layer, but the user's intent still lands in the transcript.
+
 ## Connections page
 
 `Connections.tsx` at `/connections`. One section per `ConnectionType` (`jira`, `sentry`, `honeycomb`), source-tinted via `data-source` (the same token system that drives context rows / connection chips). Each section lists existing connections as expandable cards with a Disconnect/Re-verify/Save footer, plus a "+ New" inline form.

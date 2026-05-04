@@ -194,6 +194,18 @@ class AgentSupervisorService:
         )
         await state.adapter.send_input(text)
 
+    async def stop_turn(self, agent_slug: str) -> None:
+        # Records the user's intent in the transcript before forwarding
+        # to the adapter, mirroring send_input. Adapters whose SDK can't
+        # interrupt mid-turn (Amp today) no-op the second step; the
+        # transcript line still lands so the user sees they pressed stop.
+        state = self._require_state(agent_slug)
+        await self._publish(
+            state,
+            {"type": "user_stop", "ts": datetime.now(UTC).isoformat()},
+        )
+        await state.adapter.stop_turn()
+
     @asynccontextmanager
     async def subscribe(
         self, agent_slug: str

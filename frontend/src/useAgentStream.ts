@@ -128,5 +128,12 @@ export function useAgentStream(agentSlug: string) {
     }
   }
 
-  return { events, status, sendInput };
+  function sendStop() {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "stop" }));
+    }
+  }
+
+  return { events, status, sendInput, sendStop };
 }

@@ -181,6 +181,34 @@ def test_send_input_to_unknown_agent_raises() -> None:
     _run(run())
 
 
+def test_stop_turn_writes_user_stop_and_forwards_to_adapter() -> None:
+    async def run() -> tuple[dict[str, Any], int]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log)
+        adapter = StubAgentAdapter([])
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+
+        async with supervisor.subscribe("agt-1") as (_, sub):
+            await supervisor.stop_turn("agt-1")
+            ev = await sub.queue.get()
+        await supervisor.shutdown()
+        return ev, adapter.stop_turn_calls
+
+    ev, stop_calls = _run(run())
+    assert ev["type"] == "user_stop"
+    assert ev["seq"] == 1
+    assert stop_calls == 1
+
+
+def test_stop_turn_to_unknown_agent_raises() -> None:
+    async def run() -> None:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        with pytest.raises(ValueError, match="not running"):
+            await supervisor.stop_turn("agt-404")
+
+    _run(run())
+
+
 # ---------------------------------------------------------------------------
 # Single-subscriber model: resubscribe replaces
 # ---------------------------------------------------------------------------

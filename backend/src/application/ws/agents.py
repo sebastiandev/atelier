@@ -121,10 +121,15 @@ async def _receive_inputs(
             parsed = json.loads(msg)
         except json.JSONDecodeError:
             continue
-        if isinstance(parsed, dict) and parsed.get("type") == "input":
+        if not isinstance(parsed, dict):
+            continue
+        kind = parsed.get("type")
+        if kind == "input":
             text = parsed.get("text")
             if isinstance(text, str):
                 await supervisor.send_input(agent_slug, text)
+        elif kind == "stop":
+            await supervisor.stop_turn(agent_slug)
 
 
 def _parse_cursor(value: str | None) -> int:
