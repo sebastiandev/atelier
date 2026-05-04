@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { codeToHtml } from "shiki";
@@ -10,8 +10,13 @@ import { codeToHtml } from "shiki";
  * markdown directly in TextBlock content; the SDK doesn't pre-parse it.
  *
  * Streaming-safe: react-markdown handles partial markdown gracefully.
+ *
+ * Wrapped in `memo` because AgentTile re-renders on every composer
+ * keystroke (`draft` state); without it, every transcript unit's
+ * markdown gets re-parsed and `ShikiCode` re-applies its innerHTML,
+ * which causes a visible flash on highlighted code blocks.
  */
-export function MarkdownText({ text }: { text: string }) {
+export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -60,7 +65,7 @@ export function MarkdownText({ text }: { text: string }) {
       {text}
     </ReactMarkdown>
   );
-}
+});
 
 const SHIKI_THEME = "github-dark";
 
@@ -81,12 +86,17 @@ function ShikiCode({ code, lang }: { code: string; lang: string }) {
     };
   }, [code, lang]);
 
-  if (html === null) {
+  // Stabilise the innerHTML payload on `html` so React doesn't re-apply
+  // identical markup on every parent re-render — that's what made the
+  // highlighted code blocks visibly flash while typing in the composer.
+  const inner = useMemo(() => (html === null ? null : { __html: html }), [html]);
+
+  if (inner === null) {
     return (
       <pre className="md-code-fallback">
         <code>{code}</code>
       </pre>
     );
   }
-  return <div className="md-code" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="md-code" dangerouslySetInnerHTML={inner} />;
 }

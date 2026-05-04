@@ -29,6 +29,8 @@ export function Home() {
     function onKey(e: KeyboardEvent) {
       if (dialogOpen) return;
       if (e.key !== "n" && e.key !== "N") return;
+      // Don't hijack Cmd+N / Ctrl+N (new browser window) or Alt+N.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
