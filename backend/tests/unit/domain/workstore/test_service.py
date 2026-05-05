@@ -41,13 +41,32 @@ def _make_service(
 
 
 def _new_work_request(
-    name: str = "Migration", folder: str = "/code/foo", contexts: list[Context] | None = None
+    name: str = "Migration", contexts: list[Context] | None = None
 ) -> CreateWorkRequest:
     return CreateWorkRequest(
         name=name,
         description=f"Brief for {name}",
-        folder=Path(folder),
         contexts=contexts or [],
+    )
+
+
+def _agent_request(
+    work_slug: str = "WRK-001",
+    name: str = "Architect",
+    persona: str = "architect",
+    role: str = "architect",
+    provider: str = "claude-code",
+    model: str = "claude-opus-4-7",
+    folder: str = "/code/foo",
+) -> AddAgentRequest:
+    return AddAgentRequest(
+        work_slug=work_slug,
+        name=name,
+        persona=persona,
+        role=role,
+        provider=provider,
+        model=model,
+        folder=Path(folder),
     )
 
 
@@ -77,7 +96,7 @@ def test_create_work_writes_to_repo_and_files() -> None:
     work_data = files.work_jsons["WRK-001"]
     assert work_data["slug"] == "WRK-001"
     assert work_data["name"] == "Migration"
-    assert work_data["folder"] == "/code/foo"
+    assert "folder" not in work_data
     assert work_data["contexts"] == []
 
 
@@ -158,16 +177,7 @@ def test_add_agent_persists_row_and_writes_agent_json() -> None:
     service, repo, files, _ = _make_service()
     service.create_work(_new_work_request())
 
-    agent = service.add_agent_to_work(
-        AddAgentRequest(
-            work_slug="WRK-001",
-            name="Architect",
-            persona="architect",
-            role="architect",
-            provider="claude-code",
-            model="claude-opus-4-7",
-        )
-    )
+    agent = service.add_agent_to_work(_agent_request())
 
     assert agent.id == 1
     assert agent.slug == "agt-1"
@@ -175,45 +185,21 @@ def test_add_agent_persists_row_and_writes_agent_json() -> None:
     assert "agt-1" in repo.agents
     assert ("WRK-001", "agt-1") in files.agent_dirs
     assert files.agent_jsons[("WRK-001", "agt-1")]["persona"] == "architect"
+    assert files.agent_jsons[("WRK-001", "agt-1")]["folder"] == "/code/foo"
 
 
 def test_add_agent_raises_when_work_not_found() -> None:
     service, _, _, _ = _make_service()
     with pytest.raises(ValueError, match="work not found"):
-        service.add_agent_to_work(
-            AddAgentRequest(
-                work_slug="WRK-999",
-                name="Architect",
-                persona="architect",
-                role="architect",
-                provider="claude-code",
-                model="claude-opus-4-7",
-            )
-        )
+        service.add_agent_to_work(_agent_request(work_slug="WRK-999"))
 
 
 def test_list_agents_for_work_returns_added_agents() -> None:
     service, _, _, _ = _make_service()
     service.create_work(_new_work_request())
+    service.add_agent_to_work(_agent_request(name="Architect"))
     service.add_agent_to_work(
-        AddAgentRequest(
-            work_slug="WRK-001",
-            name="Architect",
-            persona="architect",
-            role="architect",
-            provider="claude-code",
-            model="claude-opus-4-7",
-        )
-    )
-    service.add_agent_to_work(
-        AddAgentRequest(
-            work_slug="WRK-001",
-            name="Developer",
-            persona="developer",
-            role="developer",
-            provider="amp",
-            model="smart",
-        )
+        _agent_request(name="Developer", persona="developer", role="developer", provider="amp", model="smart")
     )
 
     agents = service.list_agents_for_work("WRK-001")
@@ -257,14 +243,7 @@ def test_record_artifact_with_agent_links_both_ids() -> None:
     service, repo, _, _ = _make_service()
     service.create_work(_new_work_request())
     service.add_agent_to_work(
-        AddAgentRequest(
-            work_slug="WRK-001",
-            name="Dev",
-            persona="developer",
-            role="dev",
-            provider="claude-code",
-            model="x",
-        )
+        _agent_request(name="Dev", persona="developer", role="dev", model="x")
     )
 
     artifact = service.record_artifact(
@@ -335,25 +314,9 @@ def test_record_artifact_raises_when_agent_missing() -> None:
 def test_record_handoff_writes_doc_and_persists_row() -> None:
     service, repo, files, _ = _make_service()
     service.create_work(_new_work_request())
+    service.add_agent_to_work(_agent_request(name="A", role="r", model="x"))
     service.add_agent_to_work(
-        AddAgentRequest(
-            work_slug="WRK-001",
-            name="A",
-            persona="architect",
-            role="r",
-            provider="claude-code",
-            model="x",
-        )
-    )
-    service.add_agent_to_work(
-        AddAgentRequest(
-            work_slug="WRK-001",
-            name="D",
-            persona="developer",
-            role="r",
-            provider="claude-code",
-            model="x",
-        )
+        _agent_request(name="D", persona="developer", role="r", model="x")
     )
 
     handoff = service.record_handoff(
@@ -378,16 +341,7 @@ def test_record_handoff_writes_doc_and_persists_row() -> None:
 def test_record_handoff_with_dialog_target_has_no_target_agent_id() -> None:
     service, _, _, _ = _make_service()
     service.create_work(_new_work_request())
-    service.add_agent_to_work(
-        AddAgentRequest(
-            work_slug="WRK-001",
-            name="A",
-            persona="architect",
-            role="r",
-            provider="claude-code",
-            model="x",
-        )
-    )
+    service.add_agent_to_work(_agent_request(name="A", role="r", model="x"))
 
     handoff = service.record_handoff(
         RecordHandoffRequest(

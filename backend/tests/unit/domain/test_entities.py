@@ -58,6 +58,7 @@ def _agent(**overrides: object) -> Agent:
         role="architect",
         provider="claude-code",
         model="claude-opus-4-7",
+        folder=Path("/code/foo"),
         status="idle",
         started_at=UTC_NOW,
     )
@@ -217,7 +218,6 @@ def test_work_construction() -> None:
     work = Work(
         name="Fix checkout",
         description="500 spike on /checkout",
-        folder=Path("/Users/seba/code/shop"),
         status="active",
         created_at=UTC_NOW,
     )
@@ -251,7 +251,6 @@ def test_work_value_equality() -> None:
         slug="WRK-001",
         name="n",
         description="d",
-        folder=Path("/tmp"),
         status="active",
         created_at=UTC_NOW,
     )
@@ -260,7 +259,6 @@ def test_work_value_equality() -> None:
         slug="WRK-001",
         name="n",
         description="d",
-        folder=Path("/tmp"),
         status="active",
         created_at=UTC_NOW,
     )

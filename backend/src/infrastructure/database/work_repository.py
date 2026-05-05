@@ -63,7 +63,6 @@ class SqlWorkRepository:
             else:
                 existing.name = work.name
                 existing.description = work.description
-                existing.folder = work.folder
                 existing.status = work.status
                 existing.created_at = work.created_at
         return work
@@ -113,6 +112,7 @@ class SqlWorkRepository:
                 existing.role = agent.role
                 existing.provider = agent.provider
                 existing.model = agent.model
+                existing.folder = agent.folder
                 existing.status = agent.status
                 existing.started_at = agent.started_at
                 existing.stopped_at = agent.stopped_at

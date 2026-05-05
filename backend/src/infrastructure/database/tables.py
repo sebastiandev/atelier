@@ -122,7 +122,6 @@ works_table = Table(
     Column("slug", String, unique=True, nullable=False, index=True),
     Column("name", String, nullable=False),
     Column("description", String, nullable=False),
-    Column("folder", PathType, nullable=False),
     Column("status", String, nullable=False),
     Column("created_at", UTCDateTime, nullable=False),
 )
@@ -145,6 +144,12 @@ agents_table = Table(
     Column("role", String, nullable=False),
     Column("provider", String, nullable=False),
     Column("model", String, nullable=False),
+    # Working directory the agent's adapter spawns in. Per-agent (not
+    # per-work) so a single Work can span multiple repos — e.g. a FE
+    # agent in one checkout + a BE agent in another collaborating on
+    # one cross-cutting goal. WorktreeManager.ensure(source=this) is
+    # what turns it into a per-agent git worktree when it's a repo.
+    Column("folder", PathType, nullable=False),
     Column("status", String, nullable=False),
     Column("started_at", UTCDateTime, nullable=False),
     Column("stopped_at", UTCDateTime, nullable=True),

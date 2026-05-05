@@ -47,7 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = create_database_engine(resolved)
         configure_mappings()
-        initialize_database(engine)
+        initialize_database(engine, workspace_root=resolved.workspace_root)
         session_factory = create_session_factory(engine)
 
         paths = WorkspacePaths(workspace_root=resolved.workspace_root)

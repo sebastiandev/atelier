@@ -15,6 +15,7 @@ import {
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
+import { useFolderRecentsStore } from "./state/folderRecents";
 
 type Props = {
   workSlug: string;
@@ -43,6 +44,12 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
   const [providerName, setProviderName] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [options, setOptions] = useState<Record<string, string>>({});
+
+  // Folder + recents (per-work first, then global). Default to the first
+  // candidate so the common "same folder as last time" case is one click.
+  const folderCandidates = useFolderRecentsStore((s) => s.candidates(workSlug));
+  const rememberFolder = useFolderRecentsStore((s) => s.remember);
+  const [folder, setFolder] = useState(() => folderCandidates[0] ?? "");
 
   const [goal, setGoal] = useState("");
   const [contexts, setContexts] = useState<ContextEntry[]>([]);
@@ -145,6 +152,7 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
     !!provider &&
     !!model &&
     !!name.trim() &&
+    !!folder.trim() &&
     (persona !== null || (customMode && customRole.trim())) &&
     !submitting;
 
@@ -155,12 +163,14 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
       persona !== null
         ? PERSONAS.find((p) => p.id === persona)?.role ?? "agent"
         : customRole.trim();
+    const trimmedFolder = folder.trim();
     const payload: CreateAgentPayload = {
       name: name.trim(),
       persona: personaId,
       role,
       provider: provider.name,
       model,
+      folder: trimmedFolder,
     };
     if (Object.keys(options).length > 0) {
       payload.options = options;
@@ -182,6 +192,10 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
     setError(null);
     try {
       await onCreate(payload);
+      // Only remember the folder after the create succeeds — a folder
+      // that 422's at the backend (typo, missing parent) shouldn't end
+      // up in the recents list and re-suggest itself next time.
+      rememberFolder(workSlug, trimmedFolder);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);
@@ -268,6 +282,28 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
+          </label>
+
+          <label className="field">
+            <span className="label">Working folder</span>
+            <input
+              className="input"
+              list={`folder-recents-${workSlug}`}
+              placeholder="/Users/you/code/some-repo"
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+            />
+            {folderCandidates.length > 0 && (
+              <datalist id={`folder-recents-${workSlug}`}>
+                {folderCandidates.map((f) => (
+                  <option key={f} value={f} />
+                ))}
+              </datalist>
+            )}
+            <span className="hint">
+              Created on agent start if missing. If it's a git repo, this
+              agent gets its own worktree under the work folder.
+            </span>
           </label>
 
           {providers && (

@@ -23,9 +23,9 @@ from src.domain.agents import (
     render_system_prompt,
 )
 from src.domain.models import Agent
-from src.domain.worktrees import WorktreeManager
 from src.domain.workstore.dtos import WorkRecord
 from src.domain.workstore.ports import WorkStore
+from src.domain.worktrees import WorktreeManager
 from src.infrastructure.agents import build_adapter
 from src.settings import Settings
 
@@ -71,7 +71,7 @@ def execute(
     workdir = worktree_manager.ensure(
         work_slug=req.work_slug,
         agent_slug=req.agent_slug,
-        source=record.work.folder,
+        source=agent.folder,
     )
 
     common = CommonAgentConfig(

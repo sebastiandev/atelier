@@ -4,9 +4,12 @@ export type WorkSummary = {
   slug: string;
   name: string;
   description: string;
-  folder: string;
   status: WorkStatus;
   created_at: string;
+  // Absolute path to ``~/Atelier/works/<slug>/`` — Atelier's own metadata
+  // tree. Shown in the WorkView header pill; clicking it triggers
+  // ``revealWork`` to open the folder in the OS file browser.
+  atelier_path: string;
 };
 
 export type ContextEntry = {
@@ -22,7 +25,6 @@ export type WorkDetail = WorkSummary & {
 export type CreateWorkPayload = {
   name: string;
   description: string;
-  folder: string;
   contexts?: ContextEntry[];
 };
 
@@ -50,6 +52,19 @@ export function createWork(payload: CreateWorkPayload): Promise<WorkDetail> {
   }).then((r) => jsonOrThrow<WorkDetail>(r));
 }
 
+/**
+ * Open the work's atelier folder in the OS file browser. The backend
+ * shells out to `open` / `xdg-open` / `explorer` depending on platform.
+ */
+export function revealWork(slug: string): Promise<void> {
+  return fetch(`/api/works/${slug}/reveal`, { method: "POST" }).then(async (r) => {
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`${r.status} ${r.statusText}: ${body}`);
+    }
+  });
+}
+
 export type Persona = "architect" | "developer" | "product" | "ux" | "writer";
 export type AgentStatus = "idle" | "live" | "thinking" | "error" | "stopped";
 
@@ -61,6 +76,9 @@ export type AgentSummary = {
   role: string;
   provider: string;
   model: string;
+  // Working directory the adapter spawns in — per-agent so a single Work
+  // can span multiple repos.
+  folder: string;
   status: AgentStatus;
   started_at: string;
   stopped_at: string | null;
@@ -118,6 +136,7 @@ export type CreateAgentPayload = {
   role: string;
   provider: string;
   model: string;
+  folder: string;
   options?: Record<string, string>;
   contexts?: ContextEntry[];
 };

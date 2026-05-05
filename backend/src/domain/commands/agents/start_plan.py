@@ -8,17 +8,19 @@ supervisor call is async.
 
 The command:
 
-  1. Adds the agent row to its work (allocates the slug).
-  2. Provisions a per-agent workdir via the WorktreeManager — a real
-     ``git worktree`` checkout when the work's folder is a repo, the
+  1. Validates the requested folder exists / can be created.
+  2. Adds the agent row (carrying the folder) to its work — slug allocated.
+  3. Provisions a per-agent workdir via the WorktreeManager — a real
+     ``git worktree`` checkout when the agent's folder is a repo, the
      folder itself when it isn't.
-  3. Builds the provider config + adapter via the SPECS registry.
-  4. Returns ``(agent, adapter, context, first_message)``.
+  4. Builds the provider config + adapter via the SPECS registry.
+  5. Returns ``(agent, adapter, context, first_message)``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.domain.agents import (
     SPECS,
@@ -29,9 +31,9 @@ from src.domain.agents import (
 )
 from src.domain.connections import ConnectionStore
 from src.domain.models import Agent, Context, Persona, Provider
-from src.domain.worktrees import WorktreeManager
 from src.domain.workstore.dtos import AddAgentRequest
 from src.domain.workstore.ports import WorkStore
+from src.domain.worktrees import WorktreeManager
 from src.infrastructure.agents import build_adapter
 from src.settings import Settings
 
@@ -48,6 +50,7 @@ class StartAgentRequest:
     role: str
     provider: Provider
     model: str
+    folder: Path
     options: dict[str, object]
     contexts: tuple[Context, ...] = ()
 
@@ -74,11 +77,12 @@ class InvalidProviderConfig(ValueError):
     resource."""
 
 
-class WorkFolderMissing(ValueError):
-    """The work's folder doesn't resolve to an existing directory on
-    disk. Adapters spawn their underlying process in this directory; if
-    it's missing, the spawn surfaces as a cryptic ENOENT from the SDK.
-    The route maps this to 422 so the user can fix the path."""
+class AgentFolderMissing(ValueError):
+    """The agent's requested folder doesn't resolve to an existing
+    directory on disk and can't be created. Adapters spawn their
+    underlying process in this directory; if it's missing, the spawn
+    surfaces as a cryptic ENOENT from the SDK. The route maps this to
+    422 so the user can fix the path."""
 
 
 def execute(
@@ -92,26 +96,26 @@ def execute(
     if record is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
 
-    # The work's folder is the eventual subprocess cwd for in-process
+    # The agent's folder is the eventual subprocess cwd for in-process
     # SDK adapters (Amp, Claude). asyncio.create_subprocess_exec raises
     # FileNotFoundError when cwd doesn't exist — which the SDK then
     # reports as a CLI-not-found error, masking the real issue.
     # mkdir(parents=True, exist_ok=True) is idempotent for the common
     # case (folder already exists, often a user repo) and creates the
-    # tree on demand for new works the user spelled out without first
+    # tree on demand for paths the user spelled out without first
     # making the directory. OSError → 422 with the OS message.
     try:
-        record.work.folder.mkdir(parents=True, exist_ok=True)
+        req.folder.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise WorkFolderMissing(
-            f"cannot use work folder {record.work.folder}: {exc}"
+        raise AgentFolderMissing(
+            f"cannot use agent folder {req.folder}: {exc}"
         ) from exc
 
     # Build the provider config first — it validates model + options
     # and we want to fail fast on bad input before we allocate an agent
     # row + worktree we'd have to roll back.
     common_for_validation = CommonAgentConfig(
-        workdir=record.work.folder,
+        workdir=req.folder,
         system_prompt=render_system_prompt(req.persona, req.role),
     )
     try:
@@ -140,6 +144,7 @@ def execute(
                 role=req.role,
                 provider=req.provider,
                 model=req.model,
+                folder=req.folder,
                 contexts=req.contexts,
             )
         )
@@ -165,7 +170,7 @@ def execute(
     workdir = worktree_manager.ensure(
         work_slug=req.work_slug,
         agent_slug=agent.slug,
-        source=record.work.folder,
+        source=req.folder,
     )
 
     common = CommonAgentConfig(

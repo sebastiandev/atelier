@@ -18,8 +18,6 @@ type Props = {
 export function NewWorkDialog({ onClose, onCreate }: Props) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
-  const [folder, setFolder] = useState("");
-  const [folderEdited, setFolderEdited] = useState(false);
   const [contexts, setContexts] = useState<ContextEntry[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -30,10 +28,6 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
   // non-fetchable type would 422 at agent creation time. ``descriptors``
   // is null while loading; render no buttons until it arrives.
   const fetchableTypes = (descriptors ?? []).filter((d) => d.context_fetchable);
-
-  const slug = name.trim().toLowerCase().replace(/\s+/g, "-") || "new-work";
-  const suggestedFolder = `~/work/${slug}`;
-  const displayedFolder = folderEdited ? folder : suggestedFolder;
 
   useEffect(() => {
     nameRef.current?.focus();
@@ -76,7 +70,6 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
     const payload: CreateWorkPayload = {
       name: name.trim(),
       description: desc.trim(),
-      folder: displayedFolder.trim() || suggestedFolder,
       contexts: contexts.filter((c) => c.value.trim() || c.conn_id),
     };
     setSubmitting(true);
@@ -127,22 +120,6 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
               value={desc}
               onChange={(e) => setDesc(e.target.value)}
             />
-          </label>
-
-          <label className="field">
-            <span className="label">Working folder</span>
-            <input
-              className="input"
-              value={displayedFolder}
-              onChange={(e) => {
-                setFolder(e.target.value);
-                setFolderEdited(true);
-              }}
-            />
-            <span className="hint">
-              Created on first agent start if missing. If it's a git repo, agents will spawn
-              worktrees here automatically.
-            </span>
           </label>
 
           <div className="field">

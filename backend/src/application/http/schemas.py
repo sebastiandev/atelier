@@ -29,7 +29,6 @@ class ContextSchema(BaseModel):
 class NewWorkRequest(BaseModel):
     name: str = Field(min_length=1)
     description: str
-    folder: str
     contexts: list[ContextSchema] = Field(default_factory=list)
 
 
@@ -44,9 +43,14 @@ class WorkSummary(BaseModel):
     slug: str
     name: str
     description: str
-    folder: str
     status: WorkStatus
     created_at: datetime
+    # Absolute path to ``~/Atelier/works/<slug>/`` — where Atelier itself
+    # writes work.json, brief.md, agents/<slug>/, handoffs/, etc. Useful
+    # for the UI's "reveal in Finder" affordance and for power-users
+    # peeking at the canonical filesystem state. Not the agent workdir
+    # (that's per-agent and lives on the Agent entity).
+    atelier_path: str
 
 
 class WorkDetail(WorkSummary):
@@ -59,6 +63,9 @@ class NewAgentRequest(BaseModel):
     role: str
     provider: Provider
     model: str
+    # Working directory the adapter spawns in. Per-agent so a single
+    # Work can span multiple repos.
+    folder: str = Field(min_length=1)
     # Provider-specific knobs (e.g. Claude's thinking_effort). The Spec
     # for ``provider`` validates the contents; unknown keys are rejected.
     options: dict[str, Any] = Field(default_factory=dict)
@@ -73,6 +80,7 @@ class AgentSummary(BaseModel):
     role: str
     provider: Provider
     model: str
+    folder: str
     status: AgentStatus
     started_at: datetime
     stopped_at: datetime | None = None

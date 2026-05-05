@@ -5,10 +5,11 @@ git worktree + starts it on the supervisor. The orchestration sits in
 ``domain/commands/agents/start_plan.py``; the route stays thin: parse →
 command → format.
 
-Wire format: provider + model + free ``options`` dict. The provider's
-Spec validates ``options``; unknown keys → 422.
+Wire format: provider + model + free ``options`` dict + folder. The
+provider's Spec validates ``options``; unknown keys → 422.
 """
 
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -18,8 +19,8 @@ from src.domain.commands.agents import list_for_work, start_plan
 from src.domain.connections import ConnectionStore, ContextFetchError
 from src.domain.models import Agent, Context
 from src.domain.supervisor import AgentSupervisorService
-from src.domain.worktrees import WorktreeManager
 from src.domain.workstore.ports import WorkStore
+from src.domain.worktrees import WorktreeManager
 from src.settings import Settings
 
 router = APIRouter()
@@ -84,6 +85,10 @@ async def create_agent(
         role=payload.role,
         provider=payload.provider,
         model=payload.model,
+        # Expand ~ here so the persisted folder is canonical — the rest
+        # of the stack (worktree manager, adapter cwd, mkdir-on-start)
+        # sees a real absolute path instead of a tilde-relative string.
+        folder=Path(payload.folder).expanduser(),
         options=payload.options,
         contexts=tuple(
             Context(type=c.type, value=c.value, conn_id=c.conn_id)
@@ -96,7 +101,7 @@ async def create_agent(
         )
     except start_plan.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    except (start_plan.InvalidProviderConfig, start_plan.WorkFolderMissing) as e:
+    except (start_plan.InvalidProviderConfig, start_plan.AgentFolderMissing) as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except ContextFetchError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
@@ -123,6 +128,7 @@ def _to_summary(work_slug: str, agent: Agent) -> AgentSummary:
         role=agent.role,
         provider=agent.provider,
         model=agent.model,
+        folder=str(agent.folder),
         status=agent.status,
         started_at=agent.started_at,
         stopped_at=agent.stopped_at,

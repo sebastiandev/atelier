@@ -23,7 +23,6 @@ def _new_work(name: str = "Migration") -> Work:
     return Work(
         name=name,
         description=f"brief for {name}",
-        folder=Path("/code/foo"),
         status="active",
         created_at=UTC_NOW,
     )
@@ -37,6 +36,7 @@ def _new_agent(work_id: int, name: str = "Architect") -> Agent:
         role="architect",
         provider="claude-code",
         model="claude-opus-4-7",
+        folder=Path("/code/foo"),
         status="idle",
         started_at=UTC_NOW,
     )
@@ -84,7 +84,6 @@ def test_upsert_work_inserts_when_absent(repo: SqlWorkRepository) -> None:
         slug="WRK-042",
         name="From FS",
         description="recovered",
-        folder=Path("/code/recovered"),
         status="active",
         created_at=UTC_NOW,
     )
@@ -102,7 +101,6 @@ def test_upsert_work_updates_when_present(repo: SqlWorkRepository) -> None:
         slug="WRK-001",
         name="New",
         description="brief",
-        folder=Path("/code/foo"),
         status="completed",
         created_at=UTC_NOW,
     )
@@ -174,6 +172,7 @@ def test_upsert_agent_inserts_with_explicit_id(repo: SqlWorkRepository) -> None:
         role="developer",
         provider="amp",
         model="x",
+        folder=Path("/code/foo"),
         status="idle",
         started_at=UTC_NOW,
     )
@@ -196,6 +195,7 @@ def test_upsert_agent_updates_when_present(repo: SqlWorkRepository) -> None:
         role="dev",
         provider="claude-code",
         model="claude-opus-4-7",
+        folder=Path("/code/foo"),
         status="live",
         started_at=UTC_NOW,
     )

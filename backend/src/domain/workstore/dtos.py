@@ -24,7 +24,6 @@ from src.domain.models import (
 class CreateWorkRequest:
     name: str
     description: str
-    folder: Path
     contexts: list[Context] = field(default_factory=list)
 
 
@@ -53,6 +52,7 @@ class AddAgentRequest:
     role: str
     provider: Provider
     model: str
+    folder: Path
     contexts: tuple[Context, ...] = ()
 
 

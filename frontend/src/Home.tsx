@@ -75,7 +75,7 @@ export function Home() {
         <div>
           <h1>Your work</h1>
           <p className="tagline">
-            Each work unit is a goal, a folder, and the agents working on it.
+            Each work unit is a goal and the agents working on it.
           </p>
         </div>
         <button className="btn primary" onClick={() => setDialogOpen(true)}>
@@ -98,7 +98,7 @@ export function Home() {
         <button className="work-card create" onClick={() => setDialogOpen(true)}>
           <span className="plus">+</span>
           <span className="create-title">Start new work</span>
-          <span className="hint">Brief, name, optional folder.</span>
+          <span className="hint">Brief and name.</span>
         </button>
         {filtered.map((w) => (
           <WorkCard key={w.slug} work={w} />
@@ -151,7 +151,6 @@ function WorkCard({ work }: { work: WorkSummary }) {
         </span>
       </div>
       <div className="wc-desc">{work.description}</div>
-      <div className="wc-folder mono">{work.folder}</div>
     </a>
   );
 }

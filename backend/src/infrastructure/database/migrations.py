@@ -8,28 +8,40 @@ data transforms), each version step has a hand-rolled migration below.
 Idempotent: running this on an already-initialized database is a no-op.
 """
 
+import shutil
+from pathlib import Path
+
 from sqlalchemy import Engine, select, text
 
 from src.infrastructure.database.tables import (
+    agents_table,
+    artifacts_table,
     connections_table,
+    handoffs_table,
     metadata,
     schema_version_table,
+    transcript_cursor_table,
+    works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 
 class SchemaMismatchError(RuntimeError):
     """Raised when the on-disk schema version is unrecognised."""
 
 
-def initialize_database(engine: Engine) -> None:
+def initialize_database(engine: Engine, workspace_root: Path | None = None) -> None:
     """Ensure the schema and the version stamp exist.
 
     On first run: creates all tables, writes ``schema_version=CURRENT``.
     On subsequent runs at the current version: no-op.
     On older versions: applies the forward migrations in order, then bumps
     the stamp.
+
+    ``workspace_root`` lets a migration that wipes filesystem-canonical
+    state (``v4 → v5``) clear ``<workspace_root>/works/`` alongside the
+    SQL-side wipe. Tests pass ``None`` to skip the FS step.
     """
     metadata.create_all(engine)
     with engine.begin() as conn:
@@ -62,6 +74,33 @@ def initialize_database(engine: Engine) -> None:
             # only those — jira/honeycomb rows stay intact.
             conn.execute(text("DELETE FROM connections WHERE type = 'sentry'"))
             existing = 4
+        if existing == 4:
+            # v4 → v5: ``folder`` moved from Work to Agent so a single
+            # work can span multiple repos. The wide impact (works,
+            # agents, contexts in JSON, worktrees on disk) plus the
+            # cheapness of starting fresh (pre-launch) means we wipe
+            # everything work-shaped — connections + schema_version
+            # are preserved. ``works.json`` files on disk also stop
+            # carrying ``folder``, so the canonical FS state needs
+            # the same wipe.
+            for table_name in (
+                "handoffs",
+                "artifacts",
+                "transcript_cursor",
+                "agents",
+                "works",
+            ):
+                conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
+            works_table.create(conn)
+            agents_table.create(conn)
+            artifacts_table.create(conn)
+            handoffs_table.create(conn)
+            transcript_cursor_table.create(conn)
+            if workspace_root is not None:
+                works_dir = workspace_root / "works"
+                if works_dir.exists():
+                    shutil.rmtree(works_dir)
+            existing = 5
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

@@ -56,7 +56,6 @@ def test_create_work_writes_db_and_filesystem(
         CreateWorkRequest(
             name="Migration",
             description="brief\nbody",
-            folder=Path("/code/foo"),
             contexts=[Context(type="text", value="see deck")],
         )
     )
@@ -80,7 +79,6 @@ def test_get_work_returns_combined_record(
         CreateWorkRequest(
             name="X",
             description="d",
-            folder=Path("/code/x"),
             contexts=contexts,
         )
     )
@@ -95,7 +93,7 @@ def test_add_agent_creates_dir_and_db_row(
     test_settings: Settings, session_factory: sessionmaker[Session]
 ) -> None:
     service, repo, _ = _build_service(test_settings, session_factory)
-    service.create_work(CreateWorkRequest(name="X", description="d", folder=Path("/x")))
+    service.create_work(CreateWorkRequest(name="X", description="d"))
     agent = service.add_agent_to_work(
         AddAgentRequest(
             work_slug="WRK-001",
@@ -104,6 +102,7 @@ def test_add_agent_creates_dir_and_db_row(
             role="architect",
             provider="claude-code",
             model="claude-opus-4-7",
+            folder=Path("/code/foo"),
         )
     )
     assert agent.slug == "agt-1"
@@ -129,7 +128,6 @@ def test_ac_deleting_db_row_then_reconcile_restores_from_filesystem(
         CreateWorkRequest(
             name="Migration",
             description="b",
-            folder=Path("/code/foo"),
             contexts=[Context(type="text", value="ctx")],
         )
     )
@@ -147,7 +145,6 @@ def test_ac_deleting_db_row_then_reconcile_restores_from_filesystem(
     assert restored is not None
     assert restored.id == 1
     assert restored.name == "Migration"
-    assert restored.folder == Path("/code/foo")
 
 
 def test_ac_filesystem_wins_on_conflict(
@@ -156,9 +153,7 @@ def test_ac_filesystem_wins_on_conflict(
 ) -> None:
     """STORY-005 AC: when DB and FS disagree, reconcile updates DB to match FS."""
     service, repo, files = _build_service(test_settings, session_factory)
-    service.create_work(
-        CreateWorkRequest(name="Original", description="b", folder=Path("/code/foo"))
-    )
+    service.create_work(CreateWorkRequest(name="Original", description="b"))
 
     # Edit the FS-side work.json to a new name.
     fs_data = files.read_work_json("WRK-001")
@@ -180,7 +175,7 @@ def test_reconcile_deletes_orphan_db_work(
 ) -> None:
     """A Work in DB without a corresponding work.json on disk is deleted."""
     service, repo, files = _build_service(test_settings, session_factory)
-    service.create_work(CreateWorkRequest(name="X", description="d", folder=Path("/x")))
+    service.create_work(CreateWorkRequest(name="X", description="d"))
 
     # Remove the FS dir entirely (simulating manual delete or restore from
     # an older backup). Then reconcile.
@@ -209,7 +204,6 @@ def test_reconcile_runs_at_app_startup(
         CreateWorkRequest(
             name="Persisted",
             description="x",
-            folder=Path("/code/p"),
             contexts=[Context(type="url", value="https://x.test")],
         )
     )
@@ -234,9 +228,7 @@ def test_creating_many_works_assigns_distinct_slugs(
 ) -> None:
     service, _, _ = _build_service(test_settings, session_factory)
     slugs = [
-        service.create_work(
-            CreateWorkRequest(name=f"W{i}", description="d", folder=Path("/x"))
-        ).work.slug
+        service.create_work(CreateWorkRequest(name=f"W{i}", description="d")).work.slug
         for i in range(count)
     ]
     assert len(slugs) == len(set(slugs))

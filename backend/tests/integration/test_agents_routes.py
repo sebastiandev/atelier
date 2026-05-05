@@ -20,7 +20,6 @@ from starlette.websockets import WebSocketDisconnect
 
 def _create_work(
     client: TestClient,
-    folder: str,
     name: str = "Skeleton demo",
 ) -> dict:
     response = client.post(
@@ -28,7 +27,6 @@ def _create_work(
         json={
             "name": name,
             "description": "for the walking skeleton",
-            "folder": folder,
             "contexts": [],
         },
     )
@@ -36,7 +34,9 @@ def _create_work(
     return response.json()
 
 
-def _create_agent(client: TestClient, work_slug: str, name: str = "Architect") -> dict:
+def _create_agent(
+    client: TestClient, work_slug: str, folder: str, name: str = "Architect"
+) -> dict:
     response = client.post(
         f"/api/works/{work_slug}/agents",
         json={
@@ -45,6 +45,7 @@ def _create_agent(client: TestClient, work_slug: str, name: str = "Architect") -
             "role": "architect",
             "provider": "amp",
             "model": "smart",
+            "folder": folder,
         },
     )
     response.raise_for_status()
@@ -57,7 +58,7 @@ def _create_agent(client: TestClient, work_slug: str, name: str = "Architect") -
 
 
 def test_create_agent_returns_summary(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
+    work = _create_work(app_client)
     response = app_client.post(
         f"/api/works/{work['slug']}/agents",
         json={
@@ -66,6 +67,7 @@ def test_create_agent_returns_summary(app_client: TestClient, tmp_workdir: str) 
             "role": "architect",
             "provider": "amp",
             "model": "smart",
+            "folder": tmp_workdir,
         },
     )
     assert response.status_code == 201
@@ -74,10 +76,11 @@ def test_create_agent_returns_summary(app_client: TestClient, tmp_workdir: str) 
     assert body["work_slug"] == work["slug"]
     assert body["persona"] == "architect"
     assert body["status"] == "idle"
+    assert body["folder"] == tmp_workdir
 
 
 def test_create_agent_422_for_unknown_option(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
+    work = _create_work(app_client)
     response = app_client.post(
         f"/api/works/{work['slug']}/agents",
         json={
@@ -86,6 +89,7 @@ def test_create_agent_422_for_unknown_option(app_client: TestClient, tmp_workdir
             "role": "x",
             "provider": "amp",
             "model": "smart",
+            "folder": tmp_workdir,
             "options": {"bogus_key": "value"},
         },
     )
@@ -94,7 +98,7 @@ def test_create_agent_422_for_unknown_option(app_client: TestClient, tmp_workdir
 
 
 def test_create_agent_422_for_bad_model(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
+    work = _create_work(app_client)
     response = app_client.post(
         f"/api/works/{work['slug']}/agents",
         json={
@@ -103,18 +107,19 @@ def test_create_agent_422_for_bad_model(app_client: TestClient, tmp_workdir: str
             "role": "x",
             "provider": "amp",
             "model": "turbo",  # not a valid AmpMode
+            "folder": tmp_workdir,
         },
     )
     assert response.status_code == 422
 
 
-def test_create_agent_creates_missing_work_folder(
+def test_create_agent_creates_missing_agent_folder(
     app_client: TestClient, tmp_workdir: str
 ) -> None:
     """A folder that doesn't exist yet is auto-created at agent-start —
-    typing a fresh path in the new-work dialog shouldn't be a footgun."""
+    typing a fresh path in the new-agent dialog shouldn't be a footgun."""
     fresh = f"{tmp_workdir}/created-on-demand"
-    work = _create_work(app_client, fresh)
+    work = _create_work(app_client)
     response = app_client.post(
         f"/api/works/{work['slug']}/agents",
         json={
@@ -123,6 +128,7 @@ def test_create_agent_creates_missing_work_folder(
             "role": "x",
             "provider": "amp",
             "model": "smart",
+            "folder": fresh,
         },
     )
     assert response.status_code == 201
@@ -131,12 +137,14 @@ def test_create_agent_creates_missing_work_folder(
     assert Path(fresh).is_dir()
 
 
-def test_create_agent_422_for_unmkdirable_work_folder(app_client: TestClient) -> None:
+def test_create_agent_422_for_unmkdirable_agent_folder(
+    app_client: TestClient,
+) -> None:
     """If mkdir fails (e.g. parent is a regular file), surface a 422 so
     the user can fix the path instead of seeing a cryptic SDK error."""
     # /etc/hosts is a file on every macOS/Linux box; mkdir under it
     # always fails with ENOTDIR.
-    work = _create_work(app_client, "/etc/hosts/cannot-create-under-a-file")
+    work = _create_work(app_client)
     response = app_client.post(
         f"/api/works/{work['slug']}/agents",
         json={
@@ -145,13 +153,14 @@ def test_create_agent_422_for_unmkdirable_work_folder(app_client: TestClient) ->
             "role": "x",
             "provider": "amp",
             "model": "smart",
+            "folder": "/etc/hosts/cannot-create-under-a-file",
         },
     )
     assert response.status_code == 422
-    assert "cannot use work folder" in response.json()["detail"]
+    assert "cannot use agent folder" in response.json()["detail"]
 
 
-def test_create_agent_404_for_unknown_work(app_client: TestClient) -> None:
+def test_create_agent_404_for_unknown_work(app_client: TestClient, tmp_workdir: str) -> None:
     response = app_client.post(
         "/api/works/WRK-404/agents",
         json={
@@ -160,15 +169,16 @@ def test_create_agent_404_for_unknown_work(app_client: TestClient) -> None:
             "role": "x",
             "provider": "amp",
             "model": "smart",
+            "folder": tmp_workdir,
         },
     )
     assert response.status_code == 404
 
 
 def test_list_agents_for_work_returns_summaries(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
-    _create_agent(app_client, work["slug"], name="Architect")
-    _create_agent(app_client, work["slug"], name="Developer")
+    work = _create_work(app_client)
+    _create_agent(app_client, work["slug"], tmp_workdir, name="Architect")
+    _create_agent(app_client, work["slug"], tmp_workdir, name="Developer")
 
     response = app_client.get(f"/api/works/{work['slug']}/agents")
     assert response.status_code == 200
@@ -192,8 +202,8 @@ _DEMO_EVENT_COUNT = 15
 
 
 def test_ws_streams_full_demo_sequence(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
 
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
         events = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT)]
@@ -209,8 +219,8 @@ def test_ws_streams_full_demo_sequence(app_client: TestClient, tmp_workdir: str)
 
 
 def test_ws_reconnect_with_cursor_no_duplicates(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
 
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
         first_batch = [ws.receive_json() for _ in range(5)]
@@ -231,8 +241,8 @@ def test_ws_reconnect_with_cursor_no_duplicates(app_client: TestClient, tmp_work
 
 
 def test_ws_cursor_zero_replays_everything(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
     # Allow the first WS to drain so all events are persisted.
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
         for _ in range(_DEMO_EVENT_COUNT):
@@ -250,8 +260,8 @@ def test_ws_cursor_past_end_yields_nothing_in_replay(
     receive new events that arrive afterwards. Here no new events come
     after the demo finishes so the connection just sits idle — we test
     the replay-empty case only."""
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
     # Drain first.
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
         for _ in range(_DEMO_EVENT_COUNT):
@@ -272,8 +282,8 @@ def test_ws_cursor_past_end_yields_nothing_in_replay(
 
 
 def test_ws_input_frame_creates_user_input_event(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
 
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
         # Drain the demo events first.
@@ -290,8 +300,8 @@ def test_ws_input_frame_creates_user_input_event(app_client: TestClient, tmp_wor
 
 
 def test_ws_stop_frame_creates_user_stop_event(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
 
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
         for _ in range(_DEMO_EVENT_COUNT):
@@ -310,8 +320,8 @@ def test_ws_permission_frame_forwards_to_adapter(
     """The WS handler accepts ``{type:"permission", request_id, decision}`` and
     routes it to ``supervisor.resolve_permission``, which delegates to the
     adapter. The stub adapter records each call so we can assert."""
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
 
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
         for _ in range(_DEMO_EVENT_COUNT):
@@ -352,8 +362,8 @@ def test_ws_permission_frame_forwards_to_adapter(
 
 
 def test_ws_malformed_input_frame_is_ignored(app_client: TestClient, tmp_workdir: str) -> None:
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
 
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
         for _ in range(_DEMO_EVENT_COUNT):
@@ -390,7 +400,7 @@ def test_ws_unknown_agent_closes(app_client: TestClient) -> None:
 def test_create_agent_with_contexts_writes_files_and_index(
     app_client: TestClient, tmp_workdir: str
 ) -> None:
-    work = _create_work(app_client, tmp_workdir)
+    work = _create_work(app_client)
     response = app_client.post(
         f"/api/works/{work['slug']}/agents",
         json={
@@ -399,6 +409,7 @@ def test_create_agent_with_contexts_writes_files_and_index(
             "role": "architect",
             "provider": "amp",
             "model": "smart",
+            "folder": tmp_workdir,
             "contexts": [
                 {"type": "text", "value": "the bug only repros under load"},
                 {"type": "url", "value": "https://example.com/runbook"},
@@ -432,7 +443,7 @@ def test_create_agent_with_contexts_writes_files_and_index(
 def test_create_agent_with_contexts_emits_first_user_input(
     app_client: TestClient, tmp_workdir: str
 ) -> None:
-    work = _create_work(app_client, tmp_workdir)
+    work = _create_work(app_client)
     response = app_client.post(
         f"/api/works/{work['slug']}/agents",
         json={
@@ -441,6 +452,7 @@ def test_create_agent_with_contexts_emits_first_user_input(
             "role": "architect",
             "provider": "amp",
             "model": "smart",
+            "folder": tmp_workdir,
             "contexts": [{"type": "text", "value": "hello"}],
         },
     )
@@ -472,7 +484,7 @@ def test_create_agent_422_when_connection_context_unfetchable(
     (here: a non-existent connection) halts the whole start. No agent
     row, no worktree, no context dir — the user retries cleanly after
     fixing the connection."""
-    work = _create_work(app_client, tmp_workdir)
+    work = _create_work(app_client)
     response = app_client.post(
         f"/api/works/{work['slug']}/agents",
         json={
@@ -481,6 +493,7 @@ def test_create_agent_422_when_connection_context_unfetchable(
             "role": "architect",
             "provider": "amp",
             "model": "smart",
+            "folder": tmp_workdir,
             "contexts": [
                 {"type": "jira", "value": "ENG-3421", "conn_id": "con-999"},
             ],
@@ -502,8 +515,8 @@ def test_create_agent_422_when_connection_context_unfetchable(
 def test_create_agent_without_contexts_does_not_inject_first_message(
     app_client: TestClient, tmp_workdir: str
 ) -> None:
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
 
     workspace_root: Path = app_client.app.state.settings.workspace_root
     agent_dir = workspace_root / "works" / work["slug"] / "agents" / agent["slug"]
@@ -523,8 +536,8 @@ def test_ws_resumes_agent_after_supervisor_loses_state(
     the supervisor has no live state. The WS should resume the provider
     session, replay the original transcript, then deliver fresh events
     from the rebuilt adapter."""
-    work = _create_work(app_client, tmp_workdir)
-    agent = _create_agent(app_client, work["slug"])
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
 
     # Drain the live demo so the transcript is fully written to disk.
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:

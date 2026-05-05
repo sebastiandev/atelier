@@ -64,7 +64,6 @@ class WorkStoreService:
             work = Work(
                 name=req.name,
                 description=req.description,
-                folder=req.folder,
                 status="active",
                 created_at=self._clock(),
             )
@@ -129,6 +128,7 @@ class WorkStoreService:
                 role=req.role,
                 provider=req.provider,
                 model=req.model,
+                folder=req.folder,
                 status="idle",
                 started_at=self._clock(),
             )

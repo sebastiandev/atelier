@@ -61,10 +61,10 @@ def _canned_demo_events() -> list[AgentEvent]:
 
 @pytest.fixture
 def tmp_workdir(tmp_path: Path) -> str:
-    """A real on-disk directory tests can pass as a Work's `folder`.
+    """A real on-disk directory tests can pass as an Agent's ``folder``.
 
-    `start_agent` validates the folder exists (otherwise the eventual
-    subprocess `cwd` raises ENOENT). Tests that POST agents need a real
+    ``start_agent`` validates the folder exists (otherwise the eventual
+    subprocess ``cwd`` raises ENOENT). Tests that POST agents need a real
     path; this fixture gives them one inside the per-test tmp tree.
     """
     folder = tmp_path / "workdir"

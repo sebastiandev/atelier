@@ -14,11 +14,10 @@ from fastapi.testclient import TestClient
 from src.settings import Settings
 
 
-def _new_work(name: str = "Migration", folder: str = "/code/foo") -> dict[str, object]:
+def _new_work(name: str = "Migration") -> dict[str, object]:
     return {
         "name": name,
         "description": f"brief for {name}",
-        "folder": folder,
         "contexts": [],
     }
 
@@ -39,8 +38,11 @@ def test_post_creates_work_and_returns_detail(
     assert body["name"] == "Migration"
     assert body["status"] == "active"
     assert body["contexts"] == []
-
+    # ``folder`` is now per-agent; the response should not carry it on a
+    # Work. ``atelier_path`` is the new pill the FE shows in the header.
+    assert "folder" not in body
     work_dir = test_settings.workspace_root / "works" / "WRK-001"
+    assert body["atelier_path"] == str(work_dir)
     assert (work_dir / "work.json").exists()
     assert (work_dir / "brief.md").exists()
 
@@ -264,15 +266,43 @@ def test_create_then_list(app_client: TestClient, count: int) -> None:
     assert len(body) == count
 
 
-def test_folder_round_trips_as_string(app_client: TestClient) -> None:
-    app_client.post("/api/works", json=_new_work(folder="/Users/seba/code/foo"))
-    body = app_client.get("/api/works/WRK-001").json()
-    assert body["folder"] == "/Users/seba/code/foo"
-    assert isinstance(body["folder"], str)
-
-
 def test_empty_workspace_lists_empty(app_client: TestClient) -> None:
     assert app_client.get("/api/works").json() == []
+
+
+# ---------------------------------------------------------------------------
+# Reveal — file-browser shell-out
+# ---------------------------------------------------------------------------
+
+
+def test_reveal_returns_204_and_runs_open_command(
+    app_client: TestClient, test_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reveal shells out to the OS file browser. We monkeypatch
+    ``subprocess.run`` so the test doesn't actually pop a Finder window."""
+    import subprocess as sp
+
+    from src.application.http.routes import works as works_module
+
+    captured: dict[str, object] = {}
+
+    def fake_run(args: list[str], check: bool = False) -> sp.CompletedProcess[bytes]:
+        captured["args"] = args
+        captured["check"] = check
+        return sp.CompletedProcess(args, 0, b"", b"")
+
+    monkeypatch.setattr(works_module.subprocess, "run", fake_run)
+
+    app_client.post("/api/works", json=_new_work())
+    response = app_client.post("/api/works/WRK-001/reveal")
+    assert response.status_code == 204
+
+    assert isinstance(captured["args"], list)
+    assert str(test_settings.workspace_root / "works" / "WRK-001") in captured["args"]
+
+
+def test_reveal_404_for_unknown_work(app_client: TestClient) -> None:
+    assert app_client.post("/api/works/WRK-404/reveal").status_code == 404
 
 
 def test_create_response_includes_iso_timestamp(app_client: TestClient) -> None:

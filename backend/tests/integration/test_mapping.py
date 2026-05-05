@@ -27,7 +27,6 @@ def _seed_work(session: Session, slug: str = "WRK-001") -> Work:
         slug=slug,
         name="Fix checkout",
         description="500 spike",
-        folder=Path("/Users/seba/code/shop"),
         status="active",
         created_at=UTC_NOW,
     )
@@ -47,6 +46,7 @@ def _seed_agent(
         role="architect",
         provider="claude-code",
         model="claude-opus-4-7",
+        folder=Path("/Users/seba/code/shop"),
         status="idle",
         started_at=UTC_NOW,
     )
@@ -74,8 +74,6 @@ def test_work_round_trip(isolated_engine: Engine) -> None:
         assert loaded.slug == "WRK-001"
         assert loaded.name == "Fix checkout"
         assert loaded.status == "active"
-        assert loaded.folder == Path("/Users/seba/code/shop")
-        assert isinstance(loaded.folder, Path)
 
 
 def test_work_id_is_autoincrement_int(isolated_engine: Engine) -> None:
@@ -85,7 +83,6 @@ def test_work_id_is_autoincrement_int(isolated_engine: Engine) -> None:
             slug="WRK-002",
             name="x",
             description="y",
-            folder=Path("/tmp"),
             status="active",
             created_at=UTC_NOW,
         )
@@ -108,7 +105,6 @@ def test_work_slug_is_unique(isolated_engine: Engine) -> None:
                 slug="WRK-001",  # collides with the previous insert
                 name="other",
                 description="other",
-                folder=Path("/elsewhere"),
                 status="active",
                 created_at=UTC_NOW,
             )

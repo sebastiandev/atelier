@@ -5,7 +5,8 @@ off to the matching command, format the result. No business logic here;
 that lives behind the WorkStore port.
 """
 
-from pathlib import Path
+import subprocess
+import sys
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -25,6 +26,8 @@ from src.domain.workstore.dtos import (
     WorkRecord,
 )
 from src.domain.workstore.ports import WorkStore
+from src.infrastructure.filesystem.paths import WorkspacePaths
+from src.settings import Settings
 
 router = APIRouter()
 
@@ -34,38 +37,53 @@ def get_workstore(request: Request) -> WorkStore:
     return request.app.state.workstore  # type: ignore[no-any-return]
 
 
+def get_settings_dep(request: Request) -> Settings:
+    return request.app.state.settings  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
+SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 
 
 @router.get("/works", response_model=list[WorkSummary])
-def list_works_endpoint(workstore: WorkStoreDep) -> list[WorkSummary]:
+def list_works_endpoint(
+    workstore: WorkStoreDep, settings: SettingsDep
+) -> list[WorkSummary]:
     works = list_all.execute(workstore)
-    return [_to_summary(w) for w in works]
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    return [_to_summary(w, paths) for w in works]
 
 
 @router.post("/works", response_model=WorkDetail, status_code=status.HTTP_201_CREATED)
-def create_work_endpoint(payload: NewWorkRequest, workstore: WorkStoreDep) -> WorkDetail:
+def create_work_endpoint(
+    payload: NewWorkRequest, workstore: WorkStoreDep, settings: SettingsDep
+) -> WorkDetail:
     record = create.execute(workstore, _to_create_request(payload))
-    return _to_detail(record)
+    return _to_detail(record, WorkspacePaths(workspace_root=settings.workspace_root))
 
 
 @router.get("/works/{work_slug}", response_model=WorkDetail)
-def get_work_endpoint(work_slug: str, workstore: WorkStoreDep) -> WorkDetail:
+def get_work_endpoint(
+    work_slug: str, workstore: WorkStoreDep, settings: SettingsDep
+) -> WorkDetail:
     record = get.execute(workstore, work_slug)
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"work not found: {work_slug}")
-    return _to_detail(record)
+    return _to_detail(record, WorkspacePaths(workspace_root=settings.workspace_root))
 
 
 @router.patch("/works/{work_slug}", response_model=WorkDetail)
 def patch_work_endpoint(
-    work_slug: str, payload: PatchWorkRequest, workstore: WorkStoreDep
+    work_slug: str,
+    payload: PatchWorkRequest,
+    workstore: WorkStoreDep,
+    settings: SettingsDep,
 ) -> WorkDetail:
     try:
         record = update.execute(workstore, _to_update_request(work_slug, payload))
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    return _to_detail(record)
+    return _to_detail(record, WorkspacePaths(workspace_root=settings.workspace_root))
 
 
 @router.delete("/works/{work_slug}", status_code=status.HTTP_204_NO_CONTENT)
@@ -76,19 +94,48 @@ def delete_work_endpoint(work_slug: str, workstore: WorkStoreDep) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
+@router.post("/works/{work_slug}/reveal", status_code=status.HTTP_204_NO_CONTENT)
+def reveal_work_endpoint(
+    work_slug: str, workstore: WorkStoreDep, settings: SettingsDep
+) -> None:
+    """Open the work's atelier folder in the OS file browser. Slug → path
+    is server-computed (defends against arbitrary path injection) and the
+    work must exist (so we don't pop a Finder window for a typo)."""
+    record = get.execute(workstore, work_slug)
+    if record is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"work not found: {work_slug}")
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    target = paths.work_dir(work_slug)
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        _open_in_file_browser(str(target))
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"reveal failed: {exc}",
+        ) from exc
+
+
+def _open_in_file_browser(path: str) -> None:
+    """Cross-platform 'show this folder' shell-out. Windows' explorer.exe
+    returns exit code 1 on success — don't ``check`` there."""
+    if sys.platform == "darwin":
+        subprocess.run(["open", path], check=True)
+    elif sys.platform == "win32":
+        subprocess.run(["explorer", path], check=False)
+    else:
+        subprocess.run(["xdg-open", path], check=True)
+
+
 # ---------------------------------------------------------------------------
 # Translators between pydantic schemas and domain DTOs/entities
 # ---------------------------------------------------------------------------
 
 
 def _to_create_request(payload: NewWorkRequest) -> CreateWorkRequest:
-    # Expand ~ here so the persisted folder is canonical — the rest of
-    # the stack (worktree manager, adapter cwd, mkdir-on-start) sees a
-    # real absolute path instead of a tilde-relative string.
     return CreateWorkRequest(
         name=payload.name,
         description=payload.description,
-        folder=Path(payload.folder).expanduser(),
         contexts=[_to_domain_context(c) for c in payload.contexts],
     )
 
@@ -115,19 +162,20 @@ def _to_schema_context(c: Context) -> ContextSchema:
     return ContextSchema(type=c.type, value=c.value, conn_id=c.conn_id)
 
 
-def _to_summary(work: Work) -> WorkSummary:
+def _to_summary(work: Work, paths: WorkspacePaths) -> WorkSummary:
+    slug = _require_slug(work)
     return WorkSummary(
-        slug=_require_slug(work),
+        slug=slug,
         name=work.name,
         description=work.description,
-        folder=str(work.folder),
         status=work.status,
         created_at=work.created_at,
+        atelier_path=str(paths.work_dir(slug)),
     )
 
 
-def _to_detail(record: WorkRecord) -> WorkDetail:
-    summary = _to_summary(record.work)
+def _to_detail(record: WorkRecord, paths: WorkspacePaths) -> WorkDetail:
+    summary = _to_summary(record.work, paths)
     return WorkDetail(
         **summary.model_dump(),
         contexts=[_to_schema_context(c) for c in record.contexts],

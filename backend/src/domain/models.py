@@ -62,13 +62,17 @@ class Work:
     The frontend's `WorkUnit` shape (per design handoff) embeds children; that
     aggregation happens in the `application/http/schemas.py` response model,
     not on this entity.
+
+    Note: a Work is a *goal*, not a location. The directory each agent
+    operates in lives on the Agent entity — agents in the same Work can
+    target different repos (e.g. a frontend-repo agent + a backend-repo
+    agent collaborating on one cross-cutting task).
     """
 
     id: int | None = None
     slug: str | None = None
     name: str
     description: str
-    folder: Path
     status: WorkStatus
     created_at: datetime
 
@@ -91,6 +95,7 @@ class Agent:
     role: str
     provider: Provider
     model: str
+    folder: Path
     status: AgentStatus
     started_at: datetime
     stopped_at: datetime | None = None

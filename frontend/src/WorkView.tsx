@@ -9,6 +9,7 @@ import {
   createAgent,
   getWork,
   listAgents,
+  revealWork,
 } from "./api";
 import { NewAgentDialog } from "./NewAgentDialog";
 import { useClosedStore } from "./state/closed";
@@ -126,9 +127,23 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           {work.name}
         </span>
         <div className="spacer" />
-        <span className="folder-pill mono" title={work.folder}>
-          {shortenPath(work.folder)}
-        </span>
+        <button
+          className="folder-pill mono"
+          type="button"
+          title={`Open ${work.atelier_path} in the file browser`}
+          onClick={() => {
+            // Best-effort reveal: the backend tries the platform's file
+            // browser. If it fails (e.g. headless Linux without xdg-open),
+            // we fall back to copying the path to the clipboard so the
+            // user still has it. Either way, no UI for the failure path
+            // — this is a convenience, not a load-bearing action.
+            revealWork(work.slug).catch(() => {
+              navigator.clipboard?.writeText(work.atelier_path).catch(() => {});
+            });
+          }}
+        >
+          {shortenPath(work.atelier_path)}
+        </button>
         <TweaksToggle />
         <ThemeToggle />
       </header>
@@ -256,7 +271,14 @@ function RailSection({
 
 function shortenPath(p: string): string {
   if (!p) return "";
-  const parts = p.split("/");
-  if (parts.length <= 3) return p;
+  // Substitute ``$HOME/...`` → ``~/...`` for display when we can detect
+  // home from the path. Backend sends absolute paths; FE has no env var
+  // access, so we just probe the common ``/Users/{user}`` and
+  // ``/home/{user}`` prefixes plus check whether ``Atelier`` is the
+  // user's home — covers macOS + Linux, the platforms we ship today.
+  const homeMatch = p.match(/^(\/Users\/[^/]+|\/home\/[^/]+)\/(.*)$/);
+  const display = homeMatch ? `~/${homeMatch[2]}` : p;
+  const parts = display.split("/");
+  if (parts.length <= 3) return display;
   return [parts[0], "…", ...parts.slice(-2)].join("/");
 }
