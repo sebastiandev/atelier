@@ -22,7 +22,7 @@ from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from src.domain.commands.agents import resume as resume_cmd
+from src.domain.commands.agents import resume_plan
 from src.domain.supervisor import AgentSupervisorService
 
 router = APIRouter()
@@ -51,15 +51,15 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
             await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
             return
         try:
-            plan = resume_cmd.execute(
+            plan = resume_plan.execute(
                 workstore,
                 worktree_manager,
                 settings,
-                resume_cmd.ResumeAgentRequest(
+                resume_plan.ResumeAgentRequest(
                     work_slug=history_work_slug, agent_slug=agent_slug
                 ),
             )
-        except resume_cmd.AgentNotFound:
+        except resume_plan.AgentNotFound:
             await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
             return
         await supervisor.start_agent(

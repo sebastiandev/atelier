@@ -1,6 +1,6 @@
-"""Re-launch an existing agent on the supervisor.
+"""Build a plan to re-launch an existing agent on the supervisor.
 
-Sister command of ``start_agent``. The agent row already exists; this
+Sister command of ``start_plan``. The agent row already exists; this
 re-uses the persisted persona/role/provider/model plus ``session_id``
 so the provider SDK resumes the prior conversation. Used by the WS
 handler when a client reconnects to an agent that is no longer running

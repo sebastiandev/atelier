@@ -1,17 +1,19 @@
-"""Prepare an agent for launch.
+"""Build a plan to launch an agent.
 
-Pulled out of the HTTP route per the thin-router rule. The command:
+Pulled out of the HTTP route per the thin-router rule. This command does
+not start the agent — it returns a ``StartAgentPlan`` the route then
+hands to ``supervisor.start_agent`` over the (forced) async boundary.
+The split keeps the planning side sync + unit-testable; only the
+supervisor call is async.
+
+The command:
 
   1. Adds the agent row to its work (allocates the slug).
   2. Provisions a per-agent workdir via the WorktreeManager — a real
      ``git worktree`` checkout when the work's folder is a repo, the
      folder itself when it isn't.
   3. Builds the provider config + adapter via the SPECS registry.
-  4. Returns ``(agent, adapter, context)``.
-
-The supervisor's ``start_agent`` is async and lives at the WS/SDK
-boundary, so the caller awaits it. Per architecture: the command stays
-sync; async stops at the supervisor.
+  4. Returns ``(agent, adapter, context, first_message)``.
 """
 
 from __future__ import annotations

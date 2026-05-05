@@ -2,7 +2,7 @@
 
 POST /api/works/{work_slug}/agents creates an agent row + provisions a
 git worktree + starts it on the supervisor. The orchestration sits in
-``domain/commands/agents/start.py``; the route stays thin: parse →
+``domain/commands/agents/start_plan.py``; the route stays thin: parse →
 command → format.
 
 Wire format: provider + model + free ``options`` dict. The provider's
@@ -14,7 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import AgentSummary, NewAgentRequest
-from src.domain.commands.agents import list_for_work, start as start_cmd
+from src.domain.commands.agents import list_for_work, start_plan
 from src.domain.models import Agent, Context
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.worktrees import WorktreeManager
@@ -70,7 +70,7 @@ async def create_agent(
     worktree_manager: WorktreeDep,
     settings: SettingsDep,
 ) -> AgentSummary:
-    req = start_cmd.StartAgentRequest(
+    req = start_plan.StartAgentRequest(
         work_slug=work_slug,
         name=payload.name,
         persona=payload.persona,
@@ -84,10 +84,10 @@ async def create_agent(
         ),
     )
     try:
-        plan = start_cmd.execute(workstore, worktree_manager, settings, req)
-    except start_cmd.WorkNotFound as e:
+        plan = start_plan.execute(workstore, worktree_manager, settings, req)
+    except start_plan.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    except (start_cmd.InvalidProviderConfig, start_cmd.WorkFolderMissing) as e:
+    except (start_plan.InvalidProviderConfig, start_plan.WorkFolderMissing) as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
 
     assert plan.agent.slug is not None
