@@ -107,6 +107,12 @@ class Connection:
     The actual token never lives on the entity — it sits in the OS keychain
     under a key derived from `slug` (e.g. `f"atelier:{conn.slug}"`). The
     keyring reference is therefore not stored on the entity or in SQLite.
+
+    ``config`` is a typed-per-type dataclass (``JiraConfig`` / ``SentryConfig``
+    / ``HoneycombConfig``) carrying the fields specific to that source —
+    e.g. Jira's ``url`` + ``email``. Stored as JSON on the SQL row;
+    deserialised back to the right type via ``configs.dict_to_config``.
+    Verifier + fetcher dispatch on ``type(config)`` via singledispatch.
     """
 
     id: int | None = None
@@ -114,12 +120,7 @@ class Connection:
     type: ConnectionType
     name: str
     created_at: datetime
-    url: str | None = None
-    org: str | None = None
-    region: str | None = None
-    env: str | None = None
-    team: str | None = None
-    email: str | None = None
+    config: object  # ConnectionConfig — typed via configs.py to avoid a circular import.
     verified: bool = False
     last_used: datetime | None = None
 

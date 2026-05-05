@@ -141,13 +141,19 @@ class WorkStoreService:
         return agent
 
     def render_agent_contexts(
-        self, work_slug: str, agent_slug: str, contexts: list[Context]
+        self,
+        work_slug: str,
+        agent_slug: str,
+        contexts: list[Context],
+        fetched_bodies: dict[int, str] | None = None,
     ) -> str | None:
         """Write per-source files + the index for an agent. Returns the
         absolute path to ``context.md``, or ``None`` if there are no
         contexts to render."""
         with self._lock:
-            return render_agent_contexts(self._files, work_slug, agent_slug, contexts)
+            return render_agent_contexts(
+                self._files, work_slug, agent_slug, contexts, fetched_bodies
+            )
 
     def list_agents_for_work(self, work_slug: str) -> list[Agent]:
         with self._lock:

@@ -110,16 +110,19 @@ def test_connection_has_no_token_field() -> None:
 
 
 def test_connection_minimal_construction() -> None:
+    from src.domain.connections.configs import JiraConfig
+
     conn = Connection(
         type="jira",
         name="Acme Jira",
         created_at=UTC_NOW,
+        config=JiraConfig(url="https://acme.atlassian.net", email="a@b.com"),
     )
     assert conn.id is None
     assert conn.slug is None
     assert conn.verified is False
-    assert conn.url is None
     assert conn.last_used is None
+    assert isinstance(conn.config, JiraConfig)
 
 
 # ---------------------------------------------------------------------------

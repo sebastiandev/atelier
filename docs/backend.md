@@ -256,11 +256,13 @@ The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib
 
 A `Context` (`domain/models.py`) is `(type, value, conn_id?)`. Both `Work` and `Agent` can carry a list — but **contexts are FS-only**: they live in `work.json` / `agent.json` next to the entity, never on the SQL row. The dataclasses themselves don't have a `contexts` field (SQLAlchemy populates instances via `__new__` + setattr on mapped columns and bypasses `__init__`, so a `field(default_factory=list)` default would never fire — `dataclass.__eq__` then crashes in `reconcile`'s `db_agent != fs_agent` check). Instead contexts travel as a sibling value: `serialize_work_record(work, contexts)` and `serialize_agent(agent, contexts)`.
 
-**At agent-create time** (`domain/commands/agents/start.py`), the `WorkStore.render_agent_contexts(work_slug, agent_slug, contexts)` port is called once. `domain/agents/context_render.py` is the pure-domain renderer:
+**At agent-create time** (`domain/commands/agents/start_plan.py`), connection-backed contexts (`jira` / `sentry` / `honeycomb`) are pre-fetched **before** the agent row is allocated: the command iterates `req.contexts`, calls `connection_store.fetch_context_body(c)` for each connection-backed entry, and builds a `dict[int, str]` of resolved bodies keyed by index. Any `ContextFetchError` raised by the fetcher (missing connection, missing token, network/auth/HTTP failure) propagates straight out of `execute()` — the route maps it to 422. Halting here means a fetch failure leaves no agent row, no worktree, no context dir to clean up. Then the `WorkStore.render_agent_contexts(work_slug, agent_slug, contexts, fetched_bodies)` port is called once. `domain/agents/context_render.py` is the pure-domain renderer:
 
-- For `text` / `url` / `file` it writes the value directly into `context/<type>-<n>.md`.
-- For `jira` / `sentry` / `honeycomb` it writes a placeholder body — `"Not yet rendered — Phase 2 will fetch via the connector"` — at `context/<type>-<value>.md` when the value parses as a slug, else numbered. Phase 2 will replace the placeholder body via `infrastructure/connections/fetchers/`; the FS shape stays the same.
+- For `text` / `url` / `file` / `agentout` it generates the body inline from `c.value`.
+- For `jira` / `sentry` / `honeycomb` it writes the matching entry from `fetched_bodies` at `context/<type>-<value>.md` (when the value parses as a slug, else numbered). A connection-backed context with no entry in `fetched_bodies` raises `RuntimeError` — the boundary is responsible for resolving them.
 - Then it builds `context.md` — sections grouped by type, one bullet per file, linked relatively (`[text-1.md](context/text-1.md)`).
+
+Per-source fetchers live under `infrastructure/connections/fetchers/`, dispatched by `connection.type` like the verifier. Currently registered: `jira` (full implementation, ADF → markdown). `sentry` / `honeycomb` raise `ContextFetchError("not yet supported")` so the user sees an actionable message rather than a silent placeholder.
 
 The renderer returns the absolute path of `context.md`, which becomes the `first_message` injected by the supervisor on first start (see [AgentSupervisorService](#agentsupervisorservice)). Token-budget-conscious by design: the index is the only thing sent to the model; the agent decides what to actually read.
 
@@ -316,7 +318,7 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 
 **Orphan sweep on startup.** `main.py` lifespan walks every work, asks the workstore for live agent slugs, and tells the manager to remove worktree directories that don't match. This is the cleanup path for crashed runs and soft-deleted works. It satisfies the AC "deleting a Work removes them" via reconcile-style sweep rather than coupling the soft-delete command to git ops directly.
 
-**Wired into the start_agent command** (`domain/commands/agents/start.py`). The route stays thin: parse the request, call `start.execute(...)`, await `supervisor.start_agent`. The command validates the provider config first (via `Spec.build`) so a bad model can't allocate an agent row + worktree we'd have to roll back. Two domain errors: `WorkNotFound` → 404, `InvalidProviderConfig` → 422.
+**Wired into the start_plan command** (`domain/commands/agents/start_plan.py`). The route stays thin: parse the request, call `start_plan.execute(...)`, await `supervisor.start_agent`. The command validates the provider config first (via `Spec.build`) so a bad model can't allocate an agent row + worktree we'd have to roll back, then pre-fetches connection-backed contexts before any side effect. Domain errors: `WorkNotFound` → 404; `InvalidProviderConfig` / `WorkFolderMissing` / `ContextFetchError` → 422.
 
 ## ConnectionStore
 
@@ -325,13 +327,20 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 - **SQLite** holds the metadata row only — `id`, `slug`, `type`, `name`, `created_at`, optional `url`/`org`/`region`/`env`/`team`/`email`, plus `verified` + `last_used`. **No token, no keyring reference**: the keychain key is the slug (`atelier:con-3`), so storing the reference would just duplicate state.
 - **OS keychain** (via the Python `keyring` package) holds the token under `(service="atelier", username=<slug>)`.
 
-`ConnectionStoreService` (the public port `ConnectionStore`) composes three narrower ports — `ConnectionRepository` for the SQL row, `SecretStore` for the keychain, `ConnectionVerifier` for the source's auth endpoint — same pattern as `WorkStoreService`. The verifier is a simple type-keyed dispatch (`infrastructure/connections/verifier.py`): Jira hits `/rest/api/3/myself` with Basic auth, Sentry hits `/api/0/` with a Bearer token, Honeycomb hits `/1/auth` with `X-Honeycomb-Team`. Network errors map to `VerifyResult(verified=False, error=...)`; the verifier never raises.
+`ConnectionStoreService` (the public port `ConnectionStore`) composes four narrower ports — `ConnectionRepository` for the SQL row, `SecretStore` for the keychain, `ConnectionVerifier` for the source's auth endpoint, and `ContextFetcher` for pulling a context body (Jira ticket, etc.) — same pattern as `WorkStoreService`. The verifier is a simple type-keyed dispatch (`infrastructure/connections/verifier.py`): Jira hits `/rest/api/3/myself` with Basic auth, Sentry hits `/api/0/` with a Bearer token, Honeycomb hits `/1/auth` with `X-Honeycomb-Team`. Network errors map to `VerifyResult(verified=False, error=...)`; the verifier never raises.
+
+`ContextFetcher` follows the same dispatch shape (`infrastructure/connections/fetchers/`). `ConnectionStoreService.fetch_context_body(context)` resolves the connection + token from the context's `conn_id`, calls the fetcher, and stamps `last_used` on success. Any failure — missing connection, no token in the keychain, fetcher raises — surfaces as `ContextFetchError`. Called by `start_plan` to pre-fetch agent contexts before allocating the row.
 
 **Token never crosses the API surface.** `NewConnectionRequest` and `PatchConnectionRequest` accept `token`; `ConnectionRead` (the response model) has no `token` field at all. Tests assert this on every read path. On `verify` success the supervisor materialises the token in-memory, presents it to the verifier, then discards it — the `Connection` entity never carries it.
+
+**Typed configs.** The wide nullable columns (url/org/region/env/team/email) collapsed into a single JSON ``config`` column. Each source owns a frozen dataclass (``JiraConfig``, ``SentryConfig``, ``HoneycombConfig``) in ``domain/connections/configs.py``; the repository serialises typed → dict at flush and dict → typed after load. The verifier and fetcher both dispatch on ``type(config)`` via ``functools.singledispatch`` — adding a new source = new config dataclass + register a handler, no schema migration. The wire format uses a Pydantic discriminated union: ``{"name": "...", "token": "...", "config": {"type": "jira", "url": "...", "email": "..."}}``.
+
+**Type descriptors.** ``GET /api/connections/types`` returns a ``ConnectionDescriptor[]`` that the frontend renders into per-type forms — same pattern as ``GET /api/providers``. Each descriptor exposes ``label``, ``glyph``, ``docs`` URL, ``config_fields`` (id/label/placeholder/required/secret/options), and two capability flags: ``verifiable`` and ``context_fetchable``. The FE uses ``context_fetchable`` to filter the agent-context picker so users can't pick a source whose fetcher would 422 at agent creation.
 
 REST endpoints (`application/http/routes/connections.py`):
 
 ```
+GET    /api/connections/types             -> ConnectionDescriptor[]
 GET    /api/connections                   -> ConnectionRead[]
 POST   /api/connections                   -> ConnectionRead   (writes keychain)
 GET    /api/connections/{slug}            -> ConnectionRead

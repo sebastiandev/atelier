@@ -181,13 +181,15 @@ def test_agent_work_id_is_int_fk(isolated_engine: Engine) -> None:
 
 
 def test_connection_round_trip(isolated_engine: Engine) -> None:
+    """Mapping-level round-trip — bypasses the repo, so ``config`` is the
+    dict shape the JsonDict TypeDecorator expects on the bind side."""
     with Session(isolated_engine) as session:
         conn = Connection(
             slug="con-1",
             type="jira",
             name="Acme",
             created_at=UTC_NOW,
-            url="https://acme.atlassian.net",
+            config={"url": "https://acme.atlassian.net", "email": "a@b.com"},
             verified=True,
         )
         session.add(conn)
@@ -199,7 +201,10 @@ def test_connection_round_trip(isolated_engine: Engine) -> None:
         assert loaded is not None
         assert loaded.slug == "con-1"
         assert loaded.verified is True
-        assert loaded.url == "https://acme.atlassian.net"
+        assert loaded.config == {
+            "url": "https://acme.atlassian.net",
+            "email": "a@b.com",
+        }
 
 
 def test_connections_table_has_no_token_or_keyring_ref_columns(

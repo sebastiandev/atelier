@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import AgentSummary, NewAgentRequest
 from src.domain.commands.agents import list_for_work, start_plan
+from src.domain.connections import ConnectionStore, ContextFetchError
 from src.domain.models import Agent, Context
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.worktrees import WorktreeManager
@@ -40,10 +41,15 @@ def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
 
 
+def get_connection_store(request: Request) -> ConnectionStore:
+    return request.app.state.connection_store  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
 WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
+ConnectionStoreDep = Annotated[ConnectionStore, Depends(get_connection_store)]
 
 
 @router.get("/works/{work_slug}/agents", response_model=list[AgentSummary])
@@ -68,6 +74,7 @@ async def create_agent(
     workstore: WorkStoreDep,
     supervisor: SupervisorDep,
     worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
     settings: SettingsDep,
 ) -> AgentSummary:
     req = start_plan.StartAgentRequest(
@@ -84,10 +91,14 @@ async def create_agent(
         ),
     )
     try:
-        plan = start_plan.execute(workstore, worktree_manager, settings, req)
+        plan = start_plan.execute(
+            workstore, worktree_manager, connection_store, settings, req
+        )
     except start_plan.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except (start_plan.InvalidProviderConfig, start_plan.WorkFolderMissing) as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
+    except ContextFetchError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
 
     assert plan.agent.slug is not None

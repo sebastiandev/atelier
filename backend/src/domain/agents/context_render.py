@@ -1,8 +1,13 @@
 """Render an agent's contexts into per-source files plus an index.
 
-Phase 1: ``text`` / ``url`` / ``file`` get fully written; connection-backed
-types (``jira`` / ``sentry`` / ``honeycomb``) get placeholder bodies. Phase 2
-will replace the placeholders with real fetched content via connectors.
+Self-contained types (``text`` / ``url`` / ``file`` / ``agentout``) are
+rendered inline. Connection-backed types (``jira`` / ``sentry`` /
+``honeycomb``) are not fetched here — the caller pre-fetches at the
+boundary (``start_plan``) and threads the resolved bodies in via
+``fetched_bodies``. This split keeps the renderer pure and makes the
+fetch failure-mode (halt agent start) trivial to enforce: a missing
+body for a connection-backed context is a programmer error, not a
+runtime fallback.
 
 Output layout under the agent's metadata dir (``<workspace_root>/works/<work>/agents/<agent>/``)::
 
@@ -53,18 +58,27 @@ def render_agent_contexts(
     work_slug: str,
     agent_slug: str,
     contexts: list[Context],
+    fetched_bodies: dict[int, str] | None = None,
 ) -> str | None:
     """Write per-source files + the index. Returns the absolute path to the
-    index file, or ``None`` when ``contexts`` is empty."""
+    index file, or ``None`` when ``contexts`` is empty.
+
+    ``fetched_bodies`` is keyed by index into ``contexts``; the boundary
+    pre-fetches connection-backed entries and supplies them here. A
+    connection-backed context with no entry in ``fetched_bodies`` raises —
+    that's a wiring bug, not a user error."""
     if not contexts:
         return None
 
+    fetched = fetched_bodies or {}
     entries: list[tuple[str, Context]] = []
     taken: set[str] = set()
     counters: dict[str, int] = {}
-    for c in contexts:
+    for idx, c in enumerate(contexts):
         filename = _filename_for(c, taken, counters)
-        files.write_agent_context_file(work_slug, agent_slug, filename, _body_for(c))
+        files.write_agent_context_file(
+            work_slug, agent_slug, filename, _body_for(c, fetched.get(idx))
+        )
         entries.append((filename, c))
 
     return files.write_agent_context_index(work_slug, agent_slug, _build_index(entries))
@@ -89,7 +103,7 @@ def _filename_for(c: Context, taken: set[str], counters: dict[str, int]) -> str:
     return candidate
 
 
-def _body_for(c: Context) -> str:
+def _body_for(c: Context, fetched: str | None) -> str:
     if c.type == "text":
         return c.value if c.value.endswith("\n") else c.value + "\n"
     if c.type == "url":
@@ -98,12 +112,11 @@ def _body_for(c: Context) -> str:
         return f"# File\n\nPath: `{c.value}`\n\nRead with the Read tool when needed.\n"
     if c.type == "agentout":
         return f"# Agent output\n\nAgent: `{c.value}`\n"
-    conn_part = f" (connection `{c.conn_id}`)" if c.conn_id else ""
-    return (
-        f"# {c.type.capitalize()}\n\n"
-        f"Value: `{c.value}`{conn_part}\n\n"
-        "Not yet rendered — Phase 2 will fetch via the connector.\n"
-    )
+    if fetched is None:
+        raise RuntimeError(
+            f"connection-backed context type {c.type!r} requires a pre-fetched body"
+        )
+    return fetched if fetched.endswith("\n") else fetched + "\n"
 
 
 def _build_index(entries: list[tuple[str, Context]]) -> str:

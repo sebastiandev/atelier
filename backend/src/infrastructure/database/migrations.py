@@ -10,9 +10,13 @@ Idempotent: running this on an already-initialized database is a no-op.
 
 from sqlalchemy import Engine, select, text
 
-from src.infrastructure.database.tables import metadata, schema_version_table
+from src.infrastructure.database.tables import (
+    connections_table,
+    metadata,
+    schema_version_table,
+)
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 class SchemaMismatchError(RuntimeError):
@@ -40,6 +44,17 @@ def initialize_database(engine: Engine) -> None:
         if existing == 1:
             # v1 → v2: agents.session_id (provider thread/session handle).
             conn.execute(text("ALTER TABLE agents ADD COLUMN session_id TEXT"))
+            existing = 2
+        if existing == 2:
+            # v2 → v3: connections table reshaped — wide nullable columns
+            # (url, org, region, env, team, email) collapsed into a single
+            # JSON ``config`` column whose shape is owned by per-type
+            # dataclasses. No data migration: existing rows are wiped (the
+            # user accepted this trade-off for the simpler shape).
+            conn.execute(text("DROP TABLE IF EXISTS connections"))
+            connections_table.create(conn)
+            existing = 3
+        if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)
             )

@@ -15,7 +15,7 @@ from src.domain.connections import ConnectionStoreService, VerifyResult
 from src.infrastructure.database.connection_repository import SqlConnectionRepository
 from src.main import create_app
 from src.settings import Settings
-from tests.unit.domain.connections._stubs import StubSecrets, StubVerifier
+from tests.unit.domain.connections._stubs import StubFetcher, StubSecrets, StubVerifier
 
 
 @pytest.fixture
@@ -29,8 +29,16 @@ def stub_secrets() -> StubSecrets:
 
 
 @pytest.fixture
+def stub_fetcher() -> StubFetcher:
+    return StubFetcher()
+
+
+@pytest.fixture
 def connections_client(
-    test_settings: Settings, stub_secrets: StubSecrets, stub_verifier: StubVerifier
+    test_settings: Settings,
+    stub_secrets: StubSecrets,
+    stub_verifier: StubVerifier,
+    stub_fetcher: StubFetcher,
 ) -> Iterator[TestClient]:
     """TestClient where the ConnectionStore uses the real SQL repo against
     the tmp DB but a stub keychain + stub verifier — no OS keychain
@@ -39,7 +47,7 @@ def connections_client(
     with TestClient(app) as client:
         repo = SqlConnectionRepository(client.app.state.session_factory)
         client.app.state.connection_store = ConnectionStoreService(
-            repo, stub_secrets, stub_verifier
+            repo, stub_secrets, stub_verifier, stub_fetcher
         )
         yield client
 
@@ -55,11 +63,9 @@ def _create_jira(
     response = client.post(
         "/api/connections",
         json={
-            "type": "jira",
             "name": name,
             "token": token,
-            "url": url,
-            "email": email,
+            "config": {"type": "jira", "url": url, "email": email},
         },
     )
     response.raise_for_status()
@@ -76,7 +82,9 @@ def test_create_returns_metadata_without_token(
 ) -> None:
     body = _create_jira(connections_client)
     assert body["slug"] == "con-1"
-    assert body["type"] == "jira"
+    assert body["config"]["type"] == "jira"
+    assert body["config"]["url"] == "https://example.atlassian.net"
+    assert body["config"]["email"] == "user@example.com"
     assert body["name"] == "Jira"
     assert body["verified"] is False
     assert body["last_used"] is None
@@ -220,7 +228,7 @@ def test_verify_404_for_unknown(connections_client: TestClient) -> None:
 def test_create_requires_token(connections_client: TestClient) -> None:
     response = connections_client.post(
         "/api/connections",
-        json={"type": "jira", "name": "Jira", "url": "https://x"},
+        json={"name": "Jira", "config": {"type": "jira", "url": "https://x", "email": "a@b"}},
     )
     assert response.status_code == 422
 
@@ -228,6 +236,73 @@ def test_create_requires_token(connections_client: TestClient) -> None:
 def test_create_rejects_unknown_type(connections_client: TestClient) -> None:
     response = connections_client.post(
         "/api/connections",
-        json={"type": "linear", "name": "x", "token": "y"},
+        json={"name": "x", "token": "y", "config": {"type": "linear", "url": "x"}},
     )
     assert response.status_code == 422
+
+
+def test_create_rejects_jira_without_required_fields(
+    connections_client: TestClient,
+) -> None:
+    """Jira config requires url + email — partial config is rejected at
+    422 by the discriminated union."""
+    response = connections_client.post(
+        "/api/connections",
+        json={
+            "name": "x",
+            "token": "y",
+            "config": {"type": "jira", "url": "https://x"},  # missing email
+        },
+    )
+    assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Type descriptors
+# ---------------------------------------------------------------------------
+
+
+def test_list_connection_types_returns_descriptors(
+    connections_client: TestClient,
+) -> None:
+    response = connections_client.get("/api/connections/types")
+    assert response.status_code == 200
+    body = response.json()
+    types = {d["type"] for d in body}
+    assert types == {"jira", "sentry", "honeycomb"}
+
+
+def test_descriptor_shape(connections_client: TestClient) -> None:
+    """Smoke-tests the wire shape: each descriptor exposes label, glyph,
+    docs, config_fields, and the two capability flags. Jira has both
+    flags on (verify + fetch); Sentry/Honeycomb only verify (no fetcher
+    yet)."""
+    body = connections_client.get("/api/connections/types").json()
+    by_type = {d["type"]: d for d in body}
+
+    jira = by_type["jira"]
+    assert jira["label"] == "Jira"
+    assert jira["glyph"] == "JR"
+    assert jira["verifiable"] is True
+    assert jira["context_fetchable"] is True
+    field_ids = {f["id"] for f in jira["config_fields"]}
+    assert field_ids == {"url", "email"}
+
+    assert by_type["sentry"]["context_fetchable"] is False
+    assert by_type["honeycomb"]["context_fetchable"] is False
+
+
+def test_descriptor_field_carries_required_secret_options(
+    connections_client: TestClient,
+) -> None:
+    """The Sentry descriptor is the one that exercises every field
+    attribute — required, options (enum), and a non-required free-text
+    field. If this stays in sync with descriptors.py, the FE can rely on
+    the same shape across types."""
+    body = connections_client.get("/api/connections/types").json()
+    sentry = next(d for d in body if d["type"] == "sentry")
+    fields_by_id = {f["id"]: f for f in sentry["config_fields"]}
+
+    assert fields_by_id["org"]["required"] is True
+    assert fields_by_id["region"]["required"] is False
+    assert fields_by_id["region"]["options"] == ["us", "eu", "self-hosted"]

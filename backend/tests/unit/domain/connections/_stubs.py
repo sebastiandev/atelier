@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from src.domain.connections.dtos import VerifyResult
-from src.domain.models import Connection
+from src.domain.connections.dtos import ContextFetchError, VerifyResult
+from src.domain.models import Connection, Context
 
 
 class StubRepository:
@@ -71,3 +71,26 @@ class StubVerifier:
         if not self._results:
             return VerifyResult(verified=True)
         return self._results.pop(0)
+
+
+class StubFetcher:
+    """Replays a queued list of bodies (str) or errors (Exception). Tests
+    enqueue what they want returned for each fetch call; the stub records
+    every (slug, value, token) it saw."""
+
+    def __init__(self) -> None:
+        self._results: list[str | Exception] = []
+        self.calls: list[tuple[str, str, str]] = []
+
+    def queue(self, *results: str | Exception) -> None:
+        self._results.extend(results)
+
+    def __call__(self, connection: Connection, context: Context, token: str) -> str:
+        slug = connection.slug or "?"
+        self.calls.append((slug, context.value, token))
+        if not self._results:
+            raise ContextFetchError("no result queued")
+        result = self._results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result

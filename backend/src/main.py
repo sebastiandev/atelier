@@ -9,7 +9,7 @@ from src.application.ws import agents as ws_agents
 from src.domain.connections import ConnectionStoreService
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore import WorkStoreService, reconcile
-from src.infrastructure.connections import KeyringSecretStore, verify
+from src.infrastructure.connections import KeyringSecretStore, fetch_context, verify
 from src.infrastructure.database import (
     SqlWorkRepository,
     configure_mappings,
@@ -58,7 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         connection_repo = SqlConnectionRepository(session_factory)
         connection_store = ConnectionStoreService(
-            connection_repo, KeyringSecretStore(), verify
+            connection_repo, KeyringSecretStore(), verify, fetch_context
         )
 
         worktree_manager = GitWorktreeManager(paths)

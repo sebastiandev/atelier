@@ -7,6 +7,8 @@ body rendering, and the index-grouping shape — all via a stub
 
 from typing import Any
 
+import pytest
+
 from src.domain.agents.context_render import render_agent_contexts
 from src.domain.models import Context
 
@@ -47,7 +49,11 @@ def test_returns_none_for_empty_contexts() -> None:
 def test_clean_slug_value_becomes_filename() -> None:
     files = _StubFiles()
     render_agent_contexts(
-        files, "WRK-001", "agt-1", [Context(type="jira", value="ENG-3421", conn_id="con-1")]
+        files,
+        "WRK-001",
+        "agt-1",
+        [Context(type="jira", value="ENG-3421", conn_id="con-1")],
+        {0: "# ENG-3421\n\nbody\n"},
     )
     [(_, _, filename, _)] = files.context_files
     assert filename == "jira-ENG-3421.md"
@@ -79,6 +85,7 @@ def test_duplicate_clean_slugs_get_numbered() -> None:
             Context(type="jira", value="ENG-3421"),
             Context(type="jira", value="ENG-3421"),
         ],
+        {0: "first\n", 1: "second\n"},
     )
     filenames = [name for _, _, name, _ in files.context_files]
     assert filenames == ["jira-ENG-3421.md", "jira-1.md"]
@@ -93,18 +100,32 @@ def test_text_body_is_just_the_value() -> None:
     assert body == "hello world\n"
 
 
-def test_connection_backed_body_is_placeholder() -> None:
+def test_connection_backed_body_uses_fetched_markdown() -> None:
     files = _StubFiles()
+    fetched = "# ENG-3421 — Login flaky\n\n- **Status:** Open\n"
     render_agent_contexts(
         files,
         "WRK-001",
         "agt-1",
         [Context(type="jira", value="ENG-3421", conn_id="con-1")],
+        {0: fetched},
     )
     [(_, _, _, body)] = files.context_files
-    assert "Not yet rendered" in body
-    assert "ENG-3421" in body
-    assert "con-1" in body
+    assert body == fetched
+
+
+def test_connection_backed_body_missing_fetched_raises() -> None:
+    """Connection-backed types require a pre-fetched body — the caller
+    (start_plan) is responsible. A missing entry is a programmer error,
+    not a runtime fallback."""
+    files = _StubFiles()
+    with pytest.raises(RuntimeError, match="requires a pre-fetched body"):
+        render_agent_contexts(
+            files,
+            "WRK-001",
+            "agt-1",
+            [Context(type="jira", value="ENG-3421", conn_id="con-1")],
+        )
 
 
 def test_index_groups_entries_by_type() -> None:
@@ -118,6 +139,7 @@ def test_index_groups_entries_by_type() -> None:
             Context(type="jira", value="ENG-1"),
             Context(type="text", value="another"),
         ],
+        {1: "fetched body\n"},
     )
     [(_, _, index)] = files.indexes
     assert "## Text" in index

@@ -45,7 +45,11 @@ class WorkStore(Protocol):
     def add_agent_to_work(self, req: AddAgentRequest) -> Agent: ...
 
     def render_agent_contexts(
-        self, work_slug: str, agent_slug: str, contexts: list[Context]
+        self,
+        work_slug: str,
+        agent_slug: str,
+        contexts: list[Context],
+        fetched_bodies: dict[int, str] | None = None,
     ) -> str | None: ...
 
     def list_agents_for_work(self, work_slug: str) -> list[Agent]: ...

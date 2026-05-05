@@ -465,6 +465,40 @@ def test_create_agent_with_contexts_emits_first_user_input(
     assert [e["seq"] for e in rest] == list(range(2, _DEMO_EVENT_COUNT + 2))
 
 
+def test_create_agent_422_when_connection_context_unfetchable(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    """A connection-backed context whose ConnectionStore can't resolve
+    (here: a non-existent connection) halts the whole start. No agent
+    row, no worktree, no context dir — the user retries cleanly after
+    fixing the connection."""
+    work = _create_work(app_client, tmp_workdir)
+    response = app_client.post(
+        f"/api/works/{work['slug']}/agents",
+        json={
+            "name": "Architect",
+            "persona": "architect",
+            "role": "architect",
+            "provider": "amp",
+            "model": "smart",
+            "contexts": [
+                {"type": "jira", "value": "ENG-3421", "conn_id": "con-999"},
+            ],
+        },
+    )
+    assert response.status_code == 422
+    assert "connection not found" in response.json()["detail"]
+
+    # No agent row, no worktree, no context dir on disk.
+    workspace_root: Path = app_client.app.state.settings.workspace_root
+    agents_dir = workspace_root / "works" / work["slug"] / "agents"
+    assert not agents_dir.exists() or not any(agents_dir.iterdir())
+
+    list_response = app_client.get(f"/api/works/{work['slug']}/agents")
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+
+
 def test_create_agent_without_contexts_does_not_inject_first_message(
     app_client: TestClient, tmp_workdir: str
 ) -> None:

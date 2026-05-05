@@ -7,13 +7,12 @@ side has to do filesystem-existence validation.
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
 from src.domain.models import (
     AgentStatus,
-    ConnectionType,
     ContextType,
     Persona,
     Provider,
@@ -79,30 +78,46 @@ class AgentSummary(BaseModel):
     stopped_at: datetime | None = None
 
 
+class JiraConfigSchema(BaseModel):
+    type: Literal["jira"]
+    url: str = Field(min_length=1)
+    email: str = Field(min_length=1)
+
+
+class SentryConfigSchema(BaseModel):
+    type: Literal["sentry"]
+    org: str = Field(min_length=1)
+    region: str | None = None
+
+
+class HoneycombConfigSchema(BaseModel):
+    type: Literal["honeycomb"]
+    env: str = Field(min_length=1)
+    team: str | None = None
+
+
+# Discriminated union — Pydantic picks the right config shape based on
+# the ``type`` literal, surfacing field-shape errors as 422 rather than
+# silently accepting (or dropping) keys that don't apply.
+ConnectionConfigSchema = Annotated[
+    JiraConfigSchema | SentryConfigSchema | HoneycombConfigSchema,
+    Field(discriminator="type"),
+]
+
+
 class NewConnectionRequest(BaseModel):
-    type: ConnectionType
     name: str = Field(min_length=1)
     token: str = Field(min_length=1)
-    url: str | None = None
-    org: str | None = None
-    region: str | None = None
-    env: str | None = None
-    team: str | None = None
-    email: str | None = None
+    config: ConnectionConfigSchema
 
 
 class PatchConnectionRequest(BaseModel):
-    """Partial update — every field is optional. Pass ``token`` to rotate
-    the keychain entry."""
+    """Partial update. Pass ``token`` to rotate the keychain entry; pass
+    ``config`` to replace the typed config wholesale."""
 
     name: str | None = Field(default=None, min_length=1)
     token: str | None = Field(default=None, min_length=1)
-    url: str | None = None
-    org: str | None = None
-    region: str | None = None
-    env: str | None = None
-    team: str | None = None
-    email: str | None = None
+    config: ConnectionConfigSchema | None = None
 
 
 class ConnectionRead(BaseModel):
@@ -110,15 +125,9 @@ class ConnectionRead(BaseModel):
     — the token never leaves the keychain over the API."""
 
     slug: str
-    type: ConnectionType
     name: str
     created_at: datetime
-    url: str | None = None
-    org: str | None = None
-    region: str | None = None
-    env: str | None = None
-    team: str | None = None
-    email: str | None = None
+    config: ConnectionConfigSchema
     verified: bool
     last_used: datetime | None = None
 

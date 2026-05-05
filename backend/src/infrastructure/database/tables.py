@@ -83,6 +83,35 @@ class UTCDateTime(TypeDecorator[datetime]):
         return value
 
 
+class JsonDict(TypeDecorator[dict[str, Any]]):
+    """Stores a Python dict as JSON text. Round-trips through ``json``,
+    so leaf values must be JSON-serialisable (str/int/float/bool/None/list/dict).
+
+    Used for ``connections.config`` — the per-type config travels as a
+    typed dataclass in the domain layer, gets converted to a dict at the
+    repository boundary, and is stored as JSON here. Keeping the SA
+    column type narrow (vs. SA's vendor-specific JSON column) means we
+    don't depend on SQLite's json1 extension being available.
+    """
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> Any:
+        if value is None:
+            return None
+        import json
+
+        return json.dumps(value, separators=(",", ":"))
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> Any:
+        if value is None:
+            return None
+        import json
+
+        return json.loads(value)
+
+
 metadata = MetaData()
 
 
@@ -189,12 +218,11 @@ connections_table = Table(
     Column("type", String, nullable=False),
     Column("name", String, nullable=False),
     Column("created_at", UTCDateTime, nullable=False),
-    Column("url", String, nullable=True),
-    Column("org", String, nullable=True),
-    Column("region", String, nullable=True),
-    Column("env", String, nullable=True),
-    Column("team", String, nullable=True),
-    Column("email", String, nullable=True),
+    # Per-type config (e.g. Jira's url+email). Shape is enforced by the
+    # typed dataclass in domain/connections/configs.py; the repository
+    # serialises it to JSON here so adding a new connection type doesn't
+    # require a schema migration.
+    Column("config", JsonDict, nullable=False),
     Column("verified", Boolean, nullable=False, default=False),
     Column("last_used", UTCDateTime, nullable=True),
 )
@@ -228,6 +256,7 @@ schema_version_table = Table(
 
 
 __all__ = [
+    "JsonDict",
     "PathType",
     "UTCDateTime",
     "agents_table",

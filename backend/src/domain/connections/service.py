@@ -14,6 +14,7 @@ to `false` happens implicitly when a verify call fails.
 from datetime import UTC, datetime
 
 from src.domain.connections.dtos import (
+    ContextFetchError,
     CreateConnectionRequest,
     UpdateConnectionRequest,
     VerifyResult,
@@ -21,9 +22,10 @@ from src.domain.connections.dtos import (
 from src.domain.connections.ports import (
     ConnectionRepository,
     ConnectionVerifier,
+    ContextFetcher,
     SecretStore,
 )
-from src.domain.models import Connection
+from src.domain.models import Connection, Context
 
 
 class ConnectionStoreService:
@@ -32,22 +34,19 @@ class ConnectionStoreService:
         repository: ConnectionRepository,
         secrets: SecretStore,
         verifier: ConnectionVerifier,
+        fetcher: ContextFetcher,
     ) -> None:
         self._repository = repository
         self._secrets = secrets
         self._verifier = verifier
+        self._fetcher = fetcher
 
     def create(self, req: CreateConnectionRequest) -> Connection:
         connection = Connection(
             type=req.type,
             name=req.name,
             created_at=_now(),
-            url=req.url,
-            org=req.org,
-            region=req.region,
-            env=req.env,
-            team=req.team,
-            email=req.email,
+            config=req.config,
             verified=False,
             last_used=None,
         )
@@ -71,18 +70,8 @@ class ConnectionStoreService:
             raise ValueError(f"connection not found: {req.slug}")
         if req.name is not None:
             existing.name = req.name
-        if req.url is not None:
-            existing.url = req.url
-        if req.org is not None:
-            existing.org = req.org
-        if req.region is not None:
-            existing.region = req.region
-        if req.env is not None:
-            existing.env = req.env
-        if req.team is not None:
-            existing.team = req.team
-        if req.email is not None:
-            existing.email = req.email
+        if req.config is not None:
+            existing.config = req.config
         if req.token is not None:
             self._secrets.set(req.slug, req.token)
         return self._repository.upsert(existing)
@@ -110,6 +99,28 @@ class ConnectionStoreService:
             existing.last_used = _now()
         self._repository.upsert(existing)
         return result
+
+    def fetch_context_body(self, context: Context) -> str:
+        if not context.conn_id:
+            raise ContextFetchError(
+                f"context type {context.type!r} requires a connection (conn_id)"
+            )
+        connection = self._repository.get_by_slug(context.conn_id)
+        if connection is None:
+            raise ContextFetchError(
+                f"connection not found: {context.conn_id}"
+            )
+        token = self._secrets.get(context.conn_id)
+        if token is None:
+            raise ContextFetchError(
+                f"no token in keychain for connection: {context.conn_id}"
+            )
+        body = self._fetcher(connection, context, token)
+        # A successful fetch is a real use of the credential — same
+        # treatment as a successful verify.
+        connection.last_used = _now()
+        self._repository.upsert(connection)
+        return body
 
 
 def _now() -> datetime:

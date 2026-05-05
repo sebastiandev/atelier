@@ -27,12 +27,17 @@ from src.domain.agents import (
     CommonAgentConfig,
     render_system_prompt,
 )
+from src.domain.connections import ConnectionStore
 from src.domain.models import Agent, Context, Persona, Provider
 from src.domain.worktrees import WorktreeManager
 from src.domain.workstore.dtos import AddAgentRequest
 from src.domain.workstore.ports import WorkStore
 from src.infrastructure.agents import build_adapter
 from src.settings import Settings
+
+# Context types whose body must be fetched from an external connection
+# at start time. Anything else is rendered inline by the renderer.
+_CONNECTION_BACKED_TYPES = frozenset({"jira", "sentry", "honeycomb"})
 
 
 @dataclass(frozen=True)
@@ -79,6 +84,7 @@ class WorkFolderMissing(ValueError):
 def execute(
     workstore: WorkStore,
     worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
     settings: Settings,
     req: StartAgentRequest,
 ) -> StartAgentPlan:
@@ -113,6 +119,18 @@ def execute(
     except ValueError as exc:
         raise InvalidProviderConfig(str(exc)) from exc
 
+    # Pre-fetch connection-backed contexts BEFORE allocating the agent
+    # row. ConnectionStore raises ContextFetchError on any failure
+    # (missing connection, missing token, fetcher error). We let it
+    # propagate — the route maps it to 422. Halting here means a fetch
+    # failure leaves no agent row, no worktree, no context dir to clean
+    # up: the user retries cleanly after fixing the connection.
+    fetched_bodies: dict[int, str] = {
+        idx: connection_store.fetch_context_body(c)
+        for idx, c in enumerate(req.contexts)
+        if c.type in _CONNECTION_BACKED_TYPES
+    }
+
     try:
         agent = workstore.add_agent_to_work(
             AddAgentRequest(
@@ -135,7 +153,7 @@ def execute(
         raise RuntimeError("workstore returned agent without slug")
 
     index_path = workstore.render_agent_contexts(
-        req.work_slug, agent.slug, list(req.contexts)
+        req.work_slug, agent.slug, list(req.contexts), fetched_bodies
     )
     first_message = (
         f"Context for this task is at `{index_path}`. "

@@ -20,7 +20,7 @@ from src.domain.connections.dtos import (
     UpdateConnectionRequest,
     VerifyResult,
 )
-from src.domain.models import Connection
+from src.domain.models import Connection, Context
 
 
 class ConnectionRepository(Protocol):
@@ -55,6 +55,17 @@ class ConnectionVerifier(Protocol):
     def __call__(self, connection: Connection, token: str) -> VerifyResult: ...
 
 
+class ContextFetcher(Protocol):
+    """Pulls the body of a connection-backed context (e.g. a Jira ticket)
+    and returns it as ready-to-write markdown. Dispatches on
+    ``connection.type``. Raises ``ContextFetchError`` on any failure;
+    never returns an empty/error string."""
+
+    def __call__(
+        self, connection: Connection, context: Context, token: str
+    ) -> str: ...
+
+
 class ConnectionStore(Protocol):
     """Public persistence boundary for connection metadata + tokens."""
 
@@ -69,3 +80,9 @@ class ConnectionStore(Protocol):
     def delete(self, slug: str) -> None: ...
 
     def verify(self, slug: str) -> VerifyResult: ...
+
+    def fetch_context_body(self, context: Context) -> str:
+        """Resolve the connection + token for ``context.conn_id`` and call
+        the fetcher. Raises ``ContextFetchError`` if the connection or
+        token is missing, or if the fetcher itself fails."""
+        ...

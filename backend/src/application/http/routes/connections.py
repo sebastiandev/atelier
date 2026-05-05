@@ -11,9 +11,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import (
+    ConnectionConfigSchema,
     ConnectionRead,
+    HoneycombConfigSchema,
+    JiraConfigSchema,
     NewConnectionRequest,
     PatchConnectionRequest,
+    SentryConfigSchema,
     VerifyResponse,
 )
 from src.domain.commands.connections import (
@@ -35,8 +39,14 @@ from src.domain.commands.connections import (
     verify as cmd_verify,
 )
 from src.domain.connections import (
+    DESCRIPTORS,
+    ConnectionConfig,
+    ConnectionDescriptor,
     ConnectionStore,
     CreateConnectionRequest,
+    HoneycombConfig,
+    JiraConfig,
+    SentryConfig,
     UpdateConnectionRequest,
     VerifyResult,
 )
@@ -50,6 +60,17 @@ def get_connection_store(request: Request) -> ConnectionStore:
 
 
 ConnectionStoreDep = Annotated[ConnectionStore, Depends(get_connection_store)]
+
+
+@router.get("/connections/types", response_model=list[ConnectionDescriptor])
+def list_connection_types_endpoint() -> list[ConnectionDescriptor]:
+    """The set of source types the FE can render forms for.
+
+    Includes per-type form fields, doc URL, glyph, and capability flags
+    (verifiable, context_fetchable). The FE uses ``context_fetchable``
+    to filter the agent-context picker — picking a non-fetchable type
+    would 422 at agent creation."""
+    return list(DESCRIPTORS.values())
 
 
 @router.get("/connections", response_model=list[ConnectionRead])
@@ -109,15 +130,10 @@ def verify_connection_endpoint(slug: str, store: ConnectionStoreDep) -> VerifyRe
 
 def _to_create_request(payload: NewConnectionRequest) -> CreateConnectionRequest:
     return CreateConnectionRequest(
-        type=payload.type,
+        type=payload.config.type,
         name=payload.name,
         token=payload.token,
-        url=payload.url,
-        org=payload.org,
-        region=payload.region,
-        env=payload.env,
-        team=payload.team,
-        email=payload.email,
+        config=_schema_to_config(payload.config),
     )
 
 
@@ -126,29 +142,35 @@ def _to_update_request(slug: str, payload: PatchConnectionRequest) -> UpdateConn
         slug=slug,
         name=payload.name,
         token=payload.token,
-        url=payload.url,
-        org=payload.org,
-        region=payload.region,
-        env=payload.env,
-        team=payload.team,
-        email=payload.email,
+        config=_schema_to_config(payload.config) if payload.config else None,
     )
+
+
+def _schema_to_config(schema: ConnectionConfigSchema) -> ConnectionConfig:
+    if isinstance(schema, JiraConfigSchema):
+        return JiraConfig(url=schema.url, email=schema.email)
+    if isinstance(schema, SentryConfigSchema):
+        return SentryConfig(org=schema.org, region=schema.region)
+    return HoneycombConfig(env=schema.env, team=schema.team)
+
+
+def _config_to_schema(config: ConnectionConfig) -> ConnectionConfigSchema:
+    if isinstance(config, JiraConfig):
+        return JiraConfigSchema(type="jira", url=config.url, email=config.email)
+    if isinstance(config, SentryConfig):
+        return SentryConfigSchema(type="sentry", org=config.org, region=config.region)
+    return HoneycombConfigSchema(type="honeycomb", env=config.env, team=config.team)
 
 
 def _to_read(connection: Connection) -> ConnectionRead:
     if connection.slug is None:
         raise RuntimeError("persisted Connection has no slug")
+    assert isinstance(connection.config, JiraConfig | SentryConfig | HoneycombConfig)
     return ConnectionRead(
         slug=connection.slug,
-        type=connection.type,
         name=connection.name,
         created_at=connection.created_at,
-        url=connection.url,
-        org=connection.org,
-        region=connection.region,
-        env=connection.env,
-        team=connection.team,
-        email=connection.email,
+        config=_config_to_schema(connection.config),
         verified=connection.verified,
         last_used=connection.last_used,
     )

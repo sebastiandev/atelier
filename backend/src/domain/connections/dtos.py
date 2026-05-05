@@ -8,6 +8,7 @@ secret lives in the OS keychain alone.
 
 from dataclasses import dataclass
 
+from src.domain.connections.configs import ConnectionConfig
 from src.domain.models import ConnectionType
 
 
@@ -16,35 +17,35 @@ class CreateConnectionRequest:
     type: ConnectionType
     name: str
     token: str
-    url: str | None = None
-    org: str | None = None
-    region: str | None = None
-    env: str | None = None
-    team: str | None = None
-    email: str | None = None
+    config: ConnectionConfig
 
 
 @dataclass(frozen=True)
 class UpdateConnectionRequest:
-    """Partial update — fields left as ``None`` stay unchanged.
+    """Partial update — ``None`` fields stay unchanged.
 
-    Passing ``token`` rewrites the keychain entry; metadata fields update
-    the SQLite row. ``verified`` is **not** updatable here — it's owned by
-    the verify path so callers can't lie about it.
-    """
+    Passing ``token`` rewrites the keychain entry. Passing ``config``
+    replaces the typed config wholesale (it's a single value; partial
+    updates of inner fields would mean introducing per-type partial DTOs
+    for marginal gain). ``verified`` is owned by the verify path."""
 
     slug: str
     name: str | None = None
     token: str | None = None
-    url: str | None = None
-    org: str | None = None
-    region: str | None = None
-    env: str | None = None
-    team: str | None = None
-    email: str | None = None
+    config: ConnectionConfig | None = None
 
 
 @dataclass(frozen=True)
 class VerifyResult:
     verified: bool
     error: str | None = None
+
+
+class ContextFetchError(Exception):
+    """A connection-backed context could not be fetched.
+
+    Raised at agent-start time when a fetcher rejects the request (auth,
+    network, missing resource) or when the connection is missing / has
+    no token in the keychain. The route maps this to 422 — the user
+    picked a context they can't access, so the agent shouldn't start.
+    """
