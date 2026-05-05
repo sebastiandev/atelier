@@ -2,20 +2,20 @@ import { useEffect, useState } from "react";
 
 import {
   type Connection,
+  type ConnectionConfig,
+  type ConnectionDescriptor,
+  type ConnectionField,
   type ConnectionType,
   type NewConnectionPayload,
   type PatchConnectionPayload,
+  connectionType,
   createConnection,
   deleteConnection,
   listConnections,
   patchConnection,
   verifyConnection,
 } from "./api";
-import {
-  CONNECTION_FIELDS,
-  CONNECTION_TYPES,
-  type ConnectionSchema,
-} from "./connectionFields";
+import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
 
@@ -23,6 +23,7 @@ type Draft = Record<string, string>;
 type VerifyState = "idle" | "verifying" | "ok" | "err";
 
 export function Connections() {
+  const { descriptors, byType, loading, error: descError } = useConnectionDescriptors();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -88,7 +89,7 @@ export function Connections() {
   }
 
   async function verifyNew() {
-    if (!openType) return;
+    if (!openType || !byType) return;
     setNewVerify("verifying");
     setNewError(null);
     try {
@@ -99,7 +100,7 @@ export function Connections() {
       // duplicate rows.
       let slug = createdSlug;
       if (slug === null) {
-        const created = await createConnection(toCreatePayload(openType, newDraft));
+        const created = await createConnection(toCreatePayload(openType, byType[openType], newDraft));
         slug = created.slug;
         setCreatedSlug(slug);
         setConnections((prev) => [
@@ -107,7 +108,7 @@ export function Connections() {
           created,
         ]);
       } else {
-        const updated = await patchConnection(slug, toPatchPayload(newDraft));
+        const updated = await patchConnection(slug, toPatchPayload(openType, byType[openType], newDraft));
         setConnections((prev) => prev.map((c) => (c.slug === slug ? updated : c)));
       }
       const result = await verifyConnection(slug);
@@ -130,9 +131,14 @@ export function Connections() {
   }
 
   async function saveEdit() {
-    if (!editSlug) return;
+    if (!editSlug || !byType) return;
+    const editing = connections.find((c) => c.slug === editSlug);
+    if (!editing) return;
     try {
-      const updated = await patchConnection(editSlug, toPatchPayload(editDraft));
+      const updated = await patchConnection(
+        editSlug,
+        toPatchPayload(connectionType(editing), byType[connectionType(editing)], editDraft),
+      );
       setConnections((prev) => prev.map((c) => (c.slug === editSlug ? updated : c)));
       cancelEdit();
     } catch (err) {
@@ -201,164 +207,166 @@ export function Connections() {
       </div>
 
       {loadError && <div className="form-error">{loadError}</div>}
+      {descError && <div className="form-error">Couldn't load connection types: {descError}</div>}
 
-      <div className="conn-screen">
-        {CONNECTION_TYPES.map((type) => {
-          const schema = CONNECTION_FIELDS[type];
-          const list = connections.filter((c) => c.type === type);
-          return (
-            <section key={type} className="conn-group" data-source={type}>
-              <div className="conn-group-hd">
-                <div className="conn-group-title">
-                  <span className="ctx-type" data-source={type}>
-                    <span className="mono">{schema.glyph}</span>
-                    {schema.label}
-                  </span>
-                  <span className="count mono">{list.length}</span>
+      {loading ? (
+        <div className="conn-screen"><span className="hint">Loading…</span></div>
+      ) : (
+        <div className="conn-screen">
+          {(descriptors ?? []).map((descriptor) => {
+            const list = connections.filter((c) => connectionType(c) === descriptor.type);
+            return (
+              <section key={descriptor.type} className="conn-group" data-source={descriptor.type}>
+                <div className="conn-group-hd">
+                  <div className="conn-group-title">
+                    <span className="ctx-type" data-source={descriptor.type}>
+                      <span className="mono">{descriptor.glyph}</span>
+                      {descriptor.label}
+                    </span>
+                    <span className="count mono">{list.length}</span>
+                  </div>
+                  <button className="btn sm" onClick={() => startNew(descriptor.type)}>
+                    + New {descriptor.label}
+                  </button>
                 </div>
-                <button className="btn sm" onClick={() => startNew(type)}>
-                  + New {schema.label}
-                </button>
-              </div>
 
-              {list.length === 0 && openType !== type && (
-                <div className="conn-empty">
-                  No {schema.label} connection yet. Add one to let agents pull{" "}
-                  {schema.label.toLowerCase()} context.
-                </div>
-              )}
+                {list.length === 0 && openType !== descriptor.type && (
+                  <div className="conn-empty">
+                    No {descriptor.label} connection yet. Add one to let agents pull{" "}
+                    {descriptor.label.toLowerCase()} context.
+                  </div>
+                )}
 
-              <div className="conn-list">
-                {list.map((c) => {
-                  const isEditing = editSlug === c.slug;
-                  return (
-                    <div
-                      key={c.slug}
-                      className={"conn-card" + (isEditing ? " editing" : "")}
-                      data-source={type}
-                    >
-                      <button
-                        type="button"
-                        className="conn-card-hd"
-                        onClick={() => (isEditing ? cancelEdit() : startEdit(c))}
+                <div className="conn-list">
+                  {list.map((c) => {
+                    const isEditing = editSlug === c.slug;
+                    return (
+                      <div
+                        key={c.slug}
+                        className={"conn-card" + (isEditing ? " editing" : "")}
+                        data-source={descriptor.type}
                       >
-                        <div className="conn-card-name">
-                          <span className="conn-card-title">{c.name}</span>
-                          {c.verified && <span className="verify-pill ok">✓ Verified</span>}
-                        </div>
-                        <div className="conn-card-meta mono">
-                          {c.url && <span>{prettyHost(c.url)}</span>}
-                          {c.org && <span>· {c.org}</span>}
-                          {c.email && <span>· {c.email}</span>}
-                          {c.env && <span>· env={c.env}</span>}
-                          {c.team && <span>· team={c.team}</span>}
-                        </div>
-                        <div className="conn-card-aside">
-                          {c.last_used && (
-                            <span className="hint">Last used {formatRelative(c.last_used)}</span>
-                          )}
-                          <span aria-hidden>{isEditing ? "▾" : "▸"}</span>
-                        </div>
-                      </button>
-                      {isEditing && (
-                        <div className="conn-card-bd">
-                          <ConnFieldGrid
-                            schema={schema}
-                            draft={editDraft}
-                            onChange={(d) => {
-                              setEditDraft(d);
-                              setEditVerify("idle");
-                            }}
-                            revealed={!!revealed[c.slug]}
-                            onToggleReveal={() =>
-                              setRevealed((r) => ({ ...r, [c.slug]: !r[c.slug] }))
-                            }
-                          />
-                          {editError && <div className="form-error">{editError}</div>}
-                          <div className="conn-card-ft">
-                            <button
-                              type="button"
-                              className="btn sm danger ghost"
-                              onClick={() => disconnect(c.slug)}
-                            >
-                              Disconnect
-                            </button>
-                            <span className="spacer" />
-                            <VerifyPill state={editVerify} />
-                            <button
-                              type="button"
-                              className="btn sm"
-                              disabled={editVerify === "verifying"}
-                              onClick={() => reverify(c.slug)}
-                            >
-                              Re-verify
-                            </button>
-                            <button
-                              type="button"
-                              className="btn sm primary"
-                              onClick={saveEdit}
-                            >
-                              Save
-                            </button>
+                        <button
+                          type="button"
+                          className="conn-card-hd"
+                          onClick={() => (isEditing ? cancelEdit() : startEdit(c))}
+                        >
+                          <div className="conn-card-name">
+                            <span className="conn-card-title">{c.name}</span>
+                            {c.verified && <span className="verify-pill ok">✓ Verified</span>}
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {openType === type && (
-                <div className="conn-card editing fresh" data-source={type}>
-                  <div className="conn-card-hd-static">
-                    <span className="conn-card-title">New {schema.label} connection</span>
-                    <span className="hint">{schema.docs}</span>
-                  </div>
-                  <div className="conn-card-bd">
-                    <ConnFieldGrid
-                      schema={schema}
-                      draft={newDraft}
-                      onChange={(d) => {
-                        setNewDraft(d);
-                        setNewVerify("idle");
-                      }}
-                      revealed
-                    />
-                    {newError && <div className="form-error">{newError}</div>}
-                    <div className="conn-card-ft">
-                      <button type="button" className="btn sm ghost" onClick={cancelNew}>
-                        Cancel
-                      </button>
-                      <span className="spacer" />
-                      <VerifyPill state={newVerify} />
-                      <button
-                        type="button"
-                        className="btn sm"
-                        disabled={
-                          newVerify === "verifying" ||
-                          newVerify === "ok" ||
-                          !canSubmit(schema, newDraft)
-                        }
-                        onClick={verifyNew}
-                      >
-                        {newVerify === "ok" ? "Connected" : "Verify"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn sm primary"
-                        disabled={newVerify !== "ok"}
-                        onClick={saveNew}
-                      >
-                        Save connection
-                      </button>
-                    </div>
-                  </div>
+                          <div className="conn-card-meta mono">
+                            {configMeta(c.config).map((m, i) => (
+                              <span key={i}>{i === 0 ? m : `· ${m}`}</span>
+                            ))}
+                          </div>
+                          <div className="conn-card-aside">
+                            {c.last_used && (
+                              <span className="hint">Last used {formatRelative(c.last_used)}</span>
+                            )}
+                            <span aria-hidden>{isEditing ? "▾" : "▸"}</span>
+                          </div>
+                        </button>
+                        {isEditing && (
+                          <div className="conn-card-bd">
+                            <ConnFieldGrid
+                              descriptor={descriptor}
+                              draft={editDraft}
+                              onChange={(d) => {
+                                setEditDraft(d);
+                                setEditVerify("idle");
+                              }}
+                              revealed={!!revealed[c.slug]}
+                              onToggleReveal={() =>
+                                setRevealed((r) => ({ ...r, [c.slug]: !r[c.slug] }))
+                              }
+                            />
+                            {editError && <div className="form-error">{editError}</div>}
+                            <div className="conn-card-ft">
+                              <button
+                                type="button"
+                                className="btn sm danger ghost"
+                                onClick={() => disconnect(c.slug)}
+                              >
+                                Disconnect
+                              </button>
+                              <span className="spacer" />
+                              <VerifyPill state={editVerify} />
+                              <button
+                                type="button"
+                                className="btn sm"
+                                disabled={editVerify === "verifying"}
+                                onClick={() => reverify(c.slug)}
+                              >
+                                Re-verify
+                              </button>
+                              <button
+                                type="button"
+                                className="btn sm primary"
+                                onClick={saveEdit}
+                              >
+                                Save
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              )}
-            </section>
-          );
-        })}
-      </div>
+
+                {openType === descriptor.type && (
+                  <div className="conn-card editing fresh" data-source={descriptor.type}>
+                    <div className="conn-card-hd-static">
+                      <span className="conn-card-title">New {descriptor.label} connection</span>
+                      <span className="hint">{descriptor.docs}</span>
+                    </div>
+                    <div className="conn-card-bd">
+                      <ConnFieldGrid
+                        descriptor={descriptor}
+                        draft={newDraft}
+                        onChange={(d) => {
+                          setNewDraft(d);
+                          setNewVerify("idle");
+                        }}
+                        revealed
+                      />
+                      {newError && <div className="form-error">{newError}</div>}
+                      <div className="conn-card-ft">
+                        <button type="button" className="btn sm ghost" onClick={cancelNew}>
+                          Cancel
+                        </button>
+                        <span className="spacer" />
+                        <VerifyPill state={newVerify} />
+                        <button
+                          type="button"
+                          className="btn sm"
+                          disabled={
+                            newVerify === "verifying" ||
+                            newVerify === "ok" ||
+                            !canSubmit(descriptor, newDraft)
+                          }
+                          onClick={verifyNew}
+                        >
+                          {newVerify === "ok" ? "Connected" : "Verify"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn sm primary"
+                          disabled={newVerify !== "ok"}
+                          onClick={saveNew}
+                        >
+                          Save connection
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -376,22 +384,28 @@ function VerifyPill({ state }: { state: VerifyState }) {
   return null;
 }
 
+/**
+ * Renders the universal name + token fields plus the descriptor's
+ * type-specific config_fields. The form is one flat draft dict keyed by
+ * field id (`name`, `token`, plus whatever the descriptor declares).
+ */
 function ConnFieldGrid({
-  schema,
+  descriptor,
   draft,
   onChange,
   revealed,
   onToggleReveal,
 }: {
-  schema: ConnectionSchema;
+  descriptor: ConnectionDescriptor;
   draft: Draft;
   onChange: (next: Draft) => void;
   revealed: boolean;
   onToggleReveal?: () => void;
 }) {
+  const fields = renderableFields(descriptor);
   return (
     <div className="conn-fields">
-      {schema.fields.map((f) => (
+      {fields.map((f) => (
         <label key={f.id} className="conn-field">
           <span className="conn-field-lbl">
             {f.label}
@@ -414,7 +428,7 @@ function ConnFieldGrid({
               <input
                 className="input sm"
                 type={revealed ? "text" : "password"}
-                placeholder={f.placeholder}
+                placeholder={f.placeholder ?? undefined}
                 value={draft[f.id] ?? ""}
                 onChange={(e) => onChange({ ...draft, [f.id]: e.target.value })}
               />
@@ -432,7 +446,7 @@ function ConnFieldGrid({
           ) : (
             <input
               className="input sm"
-              placeholder={f.placeholder}
+              placeholder={f.placeholder ?? undefined}
               value={draft[f.id] ?? ""}
               onChange={(e) => onChange({ ...draft, [f.id]: e.target.value })}
             />
@@ -443,48 +457,109 @@ function ConnFieldGrid({
   );
 }
 
-function canSubmit(schema: ConnectionSchema, draft: Draft): boolean {
-  return schema.fields.every((f) => !f.required || (draft[f.id] ?? "").trim() !== "");
+const NAME_FIELD: ConnectionField = {
+  id: "name",
+  label: "Connection name",
+  placeholder: "Acme",
+  required: true,
+  secret: false,
+  options: null,
+};
+
+const TOKEN_FIELD: ConnectionField = {
+  id: "token",
+  label: "API token",
+  placeholder: null,
+  required: true,
+  secret: true,
+  options: null,
+};
+
+/** Universal fields (name first, token last) sandwiching the
+ * descriptor's type-specific config fields. */
+function renderableFields(descriptor: ConnectionDescriptor): ConnectionField[] {
+  return [NAME_FIELD, ...descriptor.config_fields, TOKEN_FIELD];
 }
 
+function canSubmit(descriptor: ConnectionDescriptor, draft: Draft): boolean {
+  return renderableFields(descriptor).every(
+    (f) => !f.required || (draft[f.id] ?? "").trim() !== "",
+  );
+}
+
+/** Build the editor draft from a persisted connection. The token isn't
+ * carried in the read shape — user types one to rotate. */
 function toDraft(connection: Connection): Draft {
   const out: Draft = { name: connection.name };
-  if (connection.url) out.url = connection.url;
-  if (connection.org) out.org = connection.org;
-  if (connection.region) out.region = connection.region;
-  if (connection.env) out.env = connection.env;
-  if (connection.team) out.team = connection.team;
-  if (connection.email) out.email = connection.email;
-  // token stays empty — server never returns it; user types a value to
-  // rotate.
+  for (const [k, v] of Object.entries(connection.config)) {
+    if (k === "type") continue;
+    if (typeof v === "string") out[k] = v;
+  }
   return out;
 }
 
-function toCreatePayload(type: ConnectionType, draft: Draft): NewConnectionPayload {
+/** Pluck the descriptor's config_fields out of the draft to assemble
+ * the typed config payload. Empty values are dropped — the discriminated
+ * union on the server enforces required fields. */
+function draftToConfig(
+  type: ConnectionType,
+  descriptor: ConnectionDescriptor,
+  draft: Draft,
+): ConnectionConfig {
+  const config: Record<string, unknown> = { type };
+  for (const f of descriptor.config_fields) {
+    const value = draft[f.id]?.trim();
+    if (value !== undefined && value !== "") {
+      config[f.id] = value;
+    } else if (!f.required) {
+      // Optional field omitted — the backend treats absence as null on
+      // these (e.g. Sentry.region, Honeycomb.team).
+      config[f.id] = null;
+    }
+  }
+  return config as ConnectionConfig;
+}
+
+function toCreatePayload(
+  type: ConnectionType,
+  descriptor: ConnectionDescriptor,
+  draft: Draft,
+): NewConnectionPayload {
   return {
-    type,
     name: (draft.name ?? "").trim(),
     token: (draft.token ?? "").trim(),
-    url: draft.url?.trim() || undefined,
-    org: draft.org?.trim() || undefined,
-    region: draft.region?.trim() || undefined,
-    env: draft.env?.trim() || undefined,
-    team: draft.team?.trim() || undefined,
-    email: draft.email?.trim() || undefined,
+    config: draftToConfig(type, descriptor, draft),
   };
 }
 
-function toPatchPayload(draft: Draft): PatchConnectionPayload {
+function toPatchPayload(
+  type: ConnectionType,
+  descriptor: ConnectionDescriptor,
+  draft: Draft,
+): PatchConnectionPayload {
   const payload: PatchConnectionPayload = {};
   if (draft.name) payload.name = draft.name.trim();
   if (draft.token) payload.token = draft.token.trim();
-  if (draft.url !== undefined) payload.url = draft.url.trim() || undefined;
-  if (draft.org !== undefined) payload.org = draft.org.trim() || undefined;
-  if (draft.region !== undefined) payload.region = draft.region.trim() || undefined;
-  if (draft.env !== undefined) payload.env = draft.env.trim() || undefined;
-  if (draft.team !== undefined) payload.team = draft.team.trim() || undefined;
-  if (draft.email !== undefined) payload.email = draft.email.trim() || undefined;
+  // If any config field has a value in the draft, send the whole config
+  // (the backend replaces wholesale — partial config updates aren't a
+  // thing in the typed model).
+  const touched = descriptor.config_fields.some((f) => draft[f.id] !== undefined);
+  if (touched) payload.config = draftToConfig(type, descriptor, draft);
   return payload;
+}
+
+/** Build the meta-row strings shown next to a connection's title.
+ * Iterates the config dict so new types light up automatically without
+ * adding cases here. */
+function configMeta(config: ConnectionConfig): string[] {
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(config)) {
+    if (k === "type" || v == null || typeof v !== "string") continue;
+    if (k === "url") out.push(prettyHost(v));
+    else if (k === "email") out.push(v);
+    else out.push(`${k}=${v}`);
+  }
+  return out;
 }
 
 function prettyHost(url: string): string {

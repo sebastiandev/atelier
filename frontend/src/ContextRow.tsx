@@ -2,16 +2,17 @@ import { useEffect, useState } from "react";
 
 import {
   type Connection,
+  type ConnectionConfig,
+  type ConnectionDescriptor,
+  type ConnectionField,
   type ConnectionType,
   type ContextEntry,
+  connectionType,
   createConnection,
   patchConnection,
   verifyConnection,
 } from "./api";
-import {
-  CONNECTION_FIELDS,
-  type ConnectionSchema,
-} from "./connectionFields";
+import { useConnectionDescriptors } from "./connectionDescriptors";
 
 type Draft = Record<string, string>;
 type VerifyState = "idle" | "verifying" | "ok" | "err";
@@ -57,8 +58,9 @@ export function ContextRow({
   onConnectionSaved,
 }: Props) {
   const type = context.type as ConnectionType;
-  const schema = CONNECTION_FIELDS[type];
-  const conns = connections.filter((c) => c.type === type);
+  const { byType } = useConnectionDescriptors();
+  const descriptor = byType?.[type];
+  const conns = connections.filter((c) => connectionType(c) === type);
 
   const [mode, setMode] = useState<"pick" | "new">(conns.length === 0 ? "new" : "pick");
   const [draft, setDraft] = useState<Draft>({});
@@ -76,6 +78,18 @@ export function ContextRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conns.length]);
 
+  // Auto-commit the first connection when entering pick mode without
+  // one selected. The dropdown *displays* conns[0] in that case, but
+  // until the user explicitly picks (or the parent already supplies a
+  // conn_id) the context object's conn_id stays null — and the backend
+  // rejects connection-backed contexts with no conn_id at agent start.
+  useEffect(() => {
+    if (mode === "pick" && !context.conn_id && conns.length > 0) {
+      onChange({ ...context, conn_id: conns[0].slug });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, conns.length, context.conn_id]);
+
   function updateDraft(next: Draft) {
     setDraft(next);
     setVerifyState("idle");
@@ -83,22 +97,16 @@ export function ContextRow({
   }
 
   async function verify() {
+    if (!descriptor) return;
     setVerifyState("verifying");
     setVerifyError(null);
-    const fields = {
-      name: (draft.name ?? "").trim(),
-      token: (draft.token ?? "").trim(),
-      url: draft.url?.trim() || undefined,
-      org: draft.org?.trim() || undefined,
-      region: draft.region?.trim() || undefined,
-      env: draft.env?.trim() || undefined,
-      team: draft.team?.trim() || undefined,
-      email: draft.email?.trim() || undefined,
-    };
+    const config = draftToConfig(type, descriptor, draft);
+    const name = (draft.name ?? "").trim();
+    const token = (draft.token ?? "").trim();
     try {
       const created = pending
-        ? await patchConnection(pending.slug, fields)
-        : await createConnection({ type, ...fields });
+        ? await patchConnection(pending.slug, { name, token, config })
+        : await createConnection({ name, token, config });
       const result = await verifyConnection(created.slug);
       setPending({ ...created, verified: result.verified });
       setVerifyState(result.verified ? "ok" : "err");
@@ -142,12 +150,18 @@ export function ContextRow({
   const selectedConnId =
     context.conn_id ?? (conns.length > 0 ? conns[0].slug : null);
 
+  // While descriptors load (one-time fetch on first mount in the tab),
+  // render a tiny placeholder rather than crash on the missing schema.
+  if (!descriptor) {
+    return <div className="context-card" data-source={type}><span className="hint">Loading…</span></div>;
+  }
+
   return (
     <div className="context-card" data-source={type}>
       <div className="context-card-hd">
         <div className="ctx-type" data-source={type}>
-          <span className="mono">{schema.glyph}</span>
-          {schema.label}
+          <span className="mono">{descriptor.glyph}</span>
+          {descriptor.label}
         </div>
         <button
           type="button"
@@ -162,7 +176,7 @@ export function ContextRow({
 
       {mode === "new" ? (
         <NewConnectionInline
-          schema={schema}
+          descriptor={descriptor}
           draft={draft}
           onChange={updateDraft}
           onVerify={verify}
@@ -193,7 +207,7 @@ export function ContextRow({
                   {c.verified ? " · ✓" : ""}
                 </option>
               ))}
-              <option value="__new__">+ New {schema.label} connection…</option>
+              <option value="__new__">+ New {descriptor.label} connection…</option>
             </select>
           </div>
           <input
@@ -208,8 +222,47 @@ export function ContextRow({
   );
 }
 
+const NAME_FIELD: ConnectionField = {
+  id: "name",
+  label: "Connection name",
+  placeholder: "Acme",
+  required: true,
+  secret: false,
+  options: null,
+};
+
+const TOKEN_FIELD: ConnectionField = {
+  id: "token",
+  label: "API token",
+  placeholder: null,
+  required: true,
+  secret: true,
+  options: null,
+};
+
+function renderableFields(descriptor: ConnectionDescriptor): ConnectionField[] {
+  return [NAME_FIELD, ...descriptor.config_fields, TOKEN_FIELD];
+}
+
+function draftToConfig(
+  type: ConnectionType,
+  descriptor: ConnectionDescriptor,
+  draft: Draft,
+): ConnectionConfig {
+  const config: Record<string, unknown> = { type };
+  for (const f of descriptor.config_fields) {
+    const value = draft[f.id]?.trim();
+    if (value !== undefined && value !== "") {
+      config[f.id] = value;
+    } else if (!f.required) {
+      config[f.id] = null;
+    }
+  }
+  return config as ConnectionConfig;
+}
+
 function NewConnectionInline({
-  schema,
+  descriptor,
   draft,
   onChange,
   onVerify,
@@ -219,7 +272,7 @@ function NewConnectionInline({
   verifyError,
   showCancelHint,
 }: {
-  schema: ConnectionSchema;
+  descriptor: ConnectionDescriptor;
   draft: Draft;
   onChange: (next: Draft) => void;
   onVerify: () => void;
@@ -229,17 +282,18 @@ function NewConnectionInline({
   verifyError: string | null;
   showCancelHint: boolean;
 }) {
-  const canVerify = schema.fields.every(
+  const fields = renderableFields(descriptor);
+  const canVerify = fields.every(
     (f) => !f.required || (draft[f.id] ?? "").trim() !== "",
   );
   return (
     <div className="conn-new">
       <div className="conn-new-hd">
-        <div className="conn-new-title">New {schema.label} connection</div>
-        <div className="hint">{schema.docs}</div>
+        <div className="conn-new-title">New {descriptor.label} connection</div>
+        <div className="hint">{descriptor.docs}</div>
       </div>
       <div className="conn-fields">
-        {schema.fields.map((f) => (
+        {fields.map((f) => (
           <label key={f.id} className="conn-field">
             <span className="conn-field-lbl">
               {f.label}
@@ -261,7 +315,7 @@ function NewConnectionInline({
               <input
                 className="input sm"
                 type={f.secret ? "password" : "text"}
-                placeholder={f.placeholder}
+                placeholder={f.placeholder ?? undefined}
                 value={draft[f.id] ?? ""}
                 onChange={(e) => onChange({ ...draft, [f.id]: e.target.value })}
               />

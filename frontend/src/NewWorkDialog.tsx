@@ -7,7 +7,7 @@ import {
   type CreateWorkPayload,
   listConnections,
 } from "./api";
-import { CONNECTION_FIELDS, CONNECTION_TYPES } from "./connectionFields";
+import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 
 type Props = {
@@ -25,6 +25,11 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const { descriptors } = useConnectionDescriptors();
+  // Filter to types whose backend fetcher actually works — picking a
+  // non-fetchable type would 422 at agent creation time. ``descriptors``
+  // is null while loading; render no buttons until it arrives.
+  const fetchableTypes = (descriptors ?? []).filter((d) => d.context_fetchable);
 
   const slug = name.trim().toLowerCase().replace(/\s+/g, "-") || "new-work";
   const suggestedFolder = `~/work/${slug}`;
@@ -154,15 +159,15 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
             ))}
             <div className="add-context-row">
               <span className="hint">+ Add context</span>
-              {CONNECTION_TYPES.map((type) => (
+              {fetchableTypes.map((d) => (
                 <button
-                  key={type}
+                  key={d.type}
                   type="button"
                   className="btn sm"
-                  data-source={type}
-                  onClick={() => addContext(type)}
+                  data-source={d.type}
+                  onClick={() => addContext(d.type)}
                 >
-                  {CONNECTION_FIELDS[type].label}
+                  {d.label}
                 </button>
               ))}
             </div>

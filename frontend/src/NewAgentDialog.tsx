@@ -12,7 +12,7 @@ import {
   listConnections,
   listProviders,
 } from "./api";
-import { CONNECTION_FIELDS, CONNECTION_TYPES } from "./connectionFields";
+import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 
@@ -44,8 +44,15 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
   const [model, setModel] = useState<string | null>(null);
   const [options, setOptions] = useState<Record<string, string>>({});
 
+  const [goal, setGoal] = useState("");
   const [contexts, setContexts] = useState<ContextEntry[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
+  const { descriptors: connectionDescriptors } = useConnectionDescriptors();
+  // Only types whose backend fetcher is wired show up as add-context
+  // buttons — picking a non-fetchable type would 422 at agent creation.
+  const fetchableTypes = (connectionDescriptors ?? []).filter(
+    (d) => d.context_fetchable,
+  );
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -158,9 +165,18 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
     if (Object.keys(options).length > 0) {
       payload.options = options;
     }
-    const trimmedContexts = contexts.filter((c) => c.value.trim() || c.conn_id);
-    if (trimmedContexts.length > 0) {
-      payload.contexts = trimmedContexts;
+    // Prepend the optional initial-goal textarea as a synthesized text
+    // context so the agent's first-message points at it the same way
+    // any user-added text context would. Same wire shape as if the user
+    // had clicked "+ Text" and typed.
+    const collected: ContextEntry[] = [];
+    const trimmedGoal = goal.trim();
+    if (trimmedGoal) {
+      collected.push({ type: "text", value: trimmedGoal, conn_id: null });
+    }
+    collected.push(...contexts.filter((c) => c.value.trim() || c.conn_id));
+    if (collected.length > 0) {
+      payload.contexts = collected;
     }
     setSubmitting(true);
     setError(null);
@@ -357,6 +373,19 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
           )}
 
           <div className="field">
+            <span className="label">
+              Initial goal <span className="hint">(optional)</span>
+            </span>
+            <textarea
+              className="textarea sm"
+              rows={3}
+              placeholder="What should this agent work on first? e.g. Investigate why /search returns 500 on queries with non-ASCII characters."
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+            />
+          </div>
+
+          <div className="field">
             <span className="label">Context</span>
             <span className="hint">
               Pointers the agent can read on demand. Connection-backed sources
@@ -394,15 +423,15 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
                   {s.label}
                 </button>
               ))}
-              {CONNECTION_TYPES.map((type) => (
+              {fetchableTypes.map((d) => (
                 <button
-                  key={type}
+                  key={d.type}
                   type="button"
                   className="btn sm"
-                  data-source={type}
-                  onClick={() => addConnectionContext(type)}
+                  data-source={d.type}
+                  onClick={() => addConnectionContext(d.type)}
                 >
-                  {CONNECTION_FIELDS[type].label}
+                  {d.label}
                 </button>
               ))}
             </div>

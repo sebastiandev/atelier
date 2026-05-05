@@ -143,48 +143,71 @@ export function createAgent(
 
 export type ConnectionType = "jira" | "sentry" | "honeycomb";
 
+// Per-type configs — discriminated union on `type`. Mirrors the backend
+// dataclasses (JiraConfig / SentryConfig / HoneycombConfig).
+export type JiraConfig = { type: "jira"; url: string; email: string };
+export type SentryConfig = { type: "sentry"; org: string; region: string | null };
+export type HoneycombConfig = { type: "honeycomb"; env: string; team: string | null };
+export type ConnectionConfig = JiraConfig | SentryConfig | HoneycombConfig;
+
 export type Connection = {
   slug: string;
-  type: ConnectionType;
   name: string;
   created_at: string;
-  url: string | null;
-  org: string | null;
-  region: string | null;
-  env: string | null;
-  team: string | null;
-  email: string | null;
+  config: ConnectionConfig;
   verified: boolean;
   last_used: string | null;
 };
 
+// Convenience: every config has a `type` discriminator. Keeps callers
+// from reaching into config when they only need the type tag.
+export function connectionType(c: Connection): ConnectionType {
+  return c.config.type;
+}
+
 export type NewConnectionPayload = {
-  type: ConnectionType;
   name: string;
   token: string;
-  url?: string;
-  org?: string;
-  region?: string;
-  env?: string;
-  team?: string;
-  email?: string;
+  config: ConnectionConfig;
 };
 
 export type PatchConnectionPayload = {
   name?: string;
   token?: string;
-  url?: string;
-  org?: string;
-  region?: string;
-  env?: string;
-  team?: string;
-  email?: string;
+  config?: ConnectionConfig;
 };
 
 export type VerifyResponse = {
   verified: boolean;
   error: string | null;
 };
+
+// Mirror of backend ConnectionField / ConnectionDescriptor. Drives the
+// per-type form rendering.
+export type ConnectionField = {
+  id: string;
+  label: string;
+  placeholder: string | null;
+  required: boolean;
+  secret: boolean;
+  options: string[] | null;
+};
+
+export type ConnectionDescriptor = {
+  type: ConnectionType;
+  label: string;
+  glyph: string;
+  docs: string;
+  config_fields: ConnectionField[];
+  verifiable: boolean;
+  context_fetchable: boolean;
+};
+
+export function listConnectionTypes(): Promise<ConnectionDescriptor[]> {
+  return fetch("/api/connections/types").then((r) =>
+    jsonOrThrow<ConnectionDescriptor[]>(r),
+  );
+}
 
 export function listConnections(): Promise<Connection[]> {
   return fetch("/api/connections").then((r) => jsonOrThrow<Connection[]>(r));
