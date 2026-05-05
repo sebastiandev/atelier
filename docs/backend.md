@@ -171,6 +171,55 @@ The fix decouples production from consumption with an internal queue:
 
 Two safety details: `stop_turn` and `close` walk every pending future and `set_result("deny")` so the SDK callback can return cleanly before `interrupt()` / `disconnect()` is called — otherwise the callback would hang forever and disconnect would block. `allow_always` is a session-only `set[str]` on the adapter — the user clicks "always allow Bash" once and the next Bash invocation skips the callback entirely without emitting any permission event.
 
+### Tool permissions for Amp: the delegate-bridge
+
+Amp's SDK has no async permission callback — its CLI exposes a *declarative* permission system (per-tool ``allow|reject|ask|delegate`` rules in a settings file) and a ``--dangerously-allow-all`` flag. ``ask`` blocks the CLI on a TTY prompt, which we can't answer because we pipe stdin/stdout. So the only knob that lets us hold the model mid-call is ``delegate`` — substituting a custom command for the tool's native execution.
+
+We use ``delegate`` to gate Bash specifically. The other tools (Read/Edit/Write/Grep/Glob/…) are Amp-internal; replacing them would mean reimplementing their semantics, which would drift fast. **So only Bash is gated on Amp.** That covers ``git commit/push``, ``gh pr create``, file deletes, ``sudo`` — the real footguns. Edit/Write to your own working tree is comparable risk to typing it yourself.
+
+```
+   Amp CLI ──► python amp_permission_bridge.py -c "<command>"
+                     │
+                     ├─ reads $ATELIER_PERMISSION_SOCKET
+                     ├─ AF_UNIX connect → writes {tool:"Bash", argv:["-c","<cmd>"]}
+                     ├─ blocks on socket read for {decision:"allow"|"allow_always"|"deny"}
+                     ├─ on allow:  os.execvp("bash", ["bash","-c","<cmd>"])
+                     │             ↑ replaces the bridge process; Amp sees the
+                     │               real bash exit code, stdout, stderr.
+                     └─ on deny:   print "atelier: denied by user" to stderr; exit 1
+                                   ↑ Amp surfaces stderr as the tool result.
+
+   AmpAdapter listens on the socket:
+        on connect → reads request line
+                   → calls _decide_permission(tool, argv)
+                       → emits PermissionRequest(request_id, tool_name, tool_input)
+                         into _outgoing → events() → supervisor → WS → tile prompt UI
+                       → awaits self._pending[rid]
+                   → user clicks → ws frame → supervisor.resolve_permission
+                                            → adapter.resolve_permission(rid, decision)
+                                            → fut.set_result(decision)
+                       → emits PermissionDecision(request_id, decision)
+                   → writes {decision} back to bridge socket
+        bridge unblocks, exec/exit accordingly.
+```
+
+**Why a Unix socket** and not HTTP: parent-child IPC over a 0700 tmpdir, no network surface, no auth tokens — the random socket path *is* the secret. The path comes in via the env var ``ATELIER_PERMISSION_SOCKET`` that we set on ``AmpOptions.env`` for the CLI subprocess.
+
+**Why ``execvp`` and not ``subprocess.run``**: the shim becomes the bash process. No double fork, stdout/stderr stream straight back to Amp, signals work naturally, exit code propagates. From Amp's perspective the delegate target IS bash — it can't tell we proxied.
+
+**Permission modes** (``AmpAgentConfig.permission_mode``):
+- ``DEFAULT`` — opens the socket, registers ``Bash → delegate`` plus an explicit allow-list for read tools / Edit / Write / etc.
+- ``ALLOW_ALL`` — passes ``--dangerously-allow-all``, skips the socket entirely. Old pre-permission behaviour. Risky.
+- ``CUSTOM`` — opens the socket, ``Bash → delegate``, allow-list comes from the user-supplied tool names. ``"Bash"`` in that list is silently dropped (the user isn't allowed to disable shell gating from the dialog).
+
+**Limitations to keep in mind:**
+- Only Bash is gated. Edit/Write to your repo by an agent you launched is auto-approved on Amp; if that's a concern, run those tasks under Claude.
+- ``allow_always`` is per-tool, session-only. A "Allow always" click on Bash means *every* subsequent Bash invocation runs without asking. The session-only scope means restarting the agent restores the prompt.
+- The CLI's default for un-listed tools is ``ask``, which would hang. So the adapter **enumerates** every tool the agent uses. If a brand-new Amp tool ships and isn't in our list, the agent will block; the fix is adding it to ``AMP_DEFAULT_AUTO_ALLOWED_TOOLS``. Failing closed beats silent auto-allow.
+- The bridge is fail-closed. Missing socket, missing env var, malformed handshake → exits non-zero with a stderr message.
+
+The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib-only — it ships in the source tree but runs as a detached child of the Amp CLI, so it must not import any Atelier modules (the CLI's invocation env doesn't carry our virtualenv).
+
 ### Slow-subscriber drop
 
 `subscribe()` returns an `AgentSubscription { queue, kicked }`. The queue caps at `SUBSCRIBER_QUEUE_MAX` (256). If publishing overflows it, the supervisor catches `QueueFull`, sets `kicked`, and drops the subscriber slot — bounding memory growth without blocking the publish path. The WS handler watches `kicked` alongside the queue and closes with code 4408 when it fires; the client retries with backoff and resumes from `?cursor=N`. Events published after the drop still land on disk, so nothing is lost.

@@ -92,6 +92,15 @@ export type ProviderField = {
   label: string;
   values: string[];
   default: string;
+  value_labels?: string[] | null;
+};
+
+export type ProviderTextField = {
+  label: string;
+  default: string;
+  placeholder?: string | null;
+  hint?: string | null;
+  visible_when?: [string, string] | null;
 };
 
 export type ProviderDescriptor = {
@@ -99,6 +108,8 @@ export type ProviderDescriptor = {
   label: string;
   primary_field: ProviderField;
   options: Record<string, ProviderField>;
+  text_options?: Record<string, ProviderTextField>;
+  advanced_intro?: string | null;
 };
 
 export type CreateAgentPayload = {

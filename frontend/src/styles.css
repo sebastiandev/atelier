@@ -533,6 +533,12 @@ body {
   padding-left: 0.85rem;
   border-left: 1px solid var(--line-soft);
 }
+.advanced-intro {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg-3);
+}
 .input,
 .textarea {
   background: var(--bg-1);

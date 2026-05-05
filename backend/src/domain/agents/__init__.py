@@ -2,9 +2,11 @@
 
 from src.domain.agents.context_render import render_agent_contexts
 from src.domain.agents.configs import (
+    AMP_DEFAULT_AUTO_ALLOWED_TOOLS,
     AgentConfig,
     AmpAgentConfig,
     AmpMode,
+    AmpPermissionMode,
     ClaudeAgentConfig,
     ClaudeEffort,
     ClaudeModel,
@@ -36,10 +38,12 @@ from src.domain.agents.specs import (
     EnumOption,
     ProviderDescriptor,
     Spec,
+    TextOption,
 )
 from src.domain.agents.system_prompt import render_system_prompt
 
 __all__ = [
+    "AMP_DEFAULT_AUTO_ALLOWED_TOOLS",
     "SPECS",
     "AgentAdapter",
     "AgentConfig",
@@ -47,6 +51,7 @@ __all__ = [
     "AgentStartContext",
     "AmpAgentConfig",
     "AmpMode",
+    "AmpPermissionMode",
     "AmpSpec",
     "ArtifactMarker",
     "ClaudeAgentConfig",
@@ -66,6 +71,7 @@ __all__ = [
     "SessionEstablished",
     "Spec",
     "StatusChange",
+    "TextOption",
     "ThinkingComplete",
     "ThinkingDelta",
     "ToolCall",

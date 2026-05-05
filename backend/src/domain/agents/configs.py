@@ -44,6 +44,11 @@ class ClaudePermissionMode(str, Enum):
     DEFAULT = "default"
     ACCEPT_EDITS = "acceptEdits"
     PLAN = "plan"
+    # Auto-approves every tool — the SDK still calls our ``can_use_tool``
+    # callback, but Atelier's Claude adapter short-circuits and returns
+    # ``allow`` without emitting a permission event so the dialog stays
+    # quiet. Use only for trusted, fast-iterating tasks.
+    BYPASS = "bypassPermissions"
 
 
 class AmpMode(str, Enum):
@@ -51,6 +56,55 @@ class AmpMode(str, Enum):
     RUSH = "rush"
     DEEP = "deep"
     LARGE = "large"
+
+
+class AmpPermissionMode(str, Enum):
+    """Top-level permissioning policy for an Amp agent.
+
+    Amp's CLI has no async ``can_use_tool`` callback; tool gating works
+    through declarative permission rules + a ``delegate`` mechanism that
+    lets us run a shim before Bash. These three modes pick which side of
+    the friction-vs-safety tradeoff the user wants. **All three still
+    allow the agent to ask** — denying or stopping a turn is independent
+    of this setting.
+
+    - ``DEFAULT`` — conservative auto-allow list (Read/Grep/Glob/Edit/
+      Write/etc.); Bash gated through the bridge → permission UI.
+    - ``ALLOW_ALL`` — ``--dangerously-allow-all`` on the CLI. No prompts,
+      no gating. Fastest, riskiest. Equivalent to the pre-permission UI
+      behaviour.
+    - ``CUSTOM`` — the user supplies a list of tool names to auto-allow;
+      Bash always stays gated through the bridge regardless of the list
+      (otherwise the user could disable shell gating, defeating the
+      reason this knob exists).
+    """
+
+    DEFAULT = "default"
+    ALLOW_ALL = "allow_all"
+    CUSTOM = "custom"
+
+
+AMP_DEFAULT_AUTO_ALLOWED_TOOLS: tuple[str, ...] = (
+    "Read",
+    "Grep",
+    "Glob",
+    "edit_file",
+    "create_file",
+    "WebFetch",
+    "Task",
+    "TodoWrite",
+    "undo_edit",
+    "get_diagnostics",
+)
+"""Tools auto-allowed by ``AmpPermissionMode.DEFAULT``.
+
+Read-only research + the Amp tools the agent uses in normal flow that
+aren't shell. Everything not on this list AND not on the user's CUSTOM
+list defaults to the CLI's ``ask`` behaviour, which would hang because
+the CLI has no TTY — so we ALWAYS pass an explicit rule for every tool
+the agent might use. If a brand-new Amp tool appears and isn't here,
+the user will see a hang and we add it (failing closed beats silent
+auto-allow)."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -85,16 +139,22 @@ class ClaudeAgentConfig:
 class AmpAgentConfig:
     common: CommonAgentConfig
     mode: AmpMode = AmpMode.SMART
+    permission_mode: AmpPermissionMode = AmpPermissionMode.DEFAULT
+    # Only meaningful when ``permission_mode == CUSTOM``. Bash stays gated
+    # through the bridge regardless — including ``"Bash"`` here is a no-op.
+    custom_allowed_tools: tuple[str, ...] = ()
 
 
 AgentConfig = ClaudeAgentConfig | AmpAgentConfig
 
 
 __all__ = [
+    "AMP_DEFAULT_AUTO_ALLOWED_TOOLS",
     "DEFAULT_ALLOWED_TOOLS",
     "AgentConfig",
     "AmpAgentConfig",
     "AmpMode",
+    "AmpPermissionMode",
     "ClaudeAgentConfig",
     "ClaudeEffort",
     "ClaudeModel",

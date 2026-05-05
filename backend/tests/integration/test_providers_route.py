@@ -24,4 +24,11 @@ def test_amp_descriptor_has_mode_selector(app_client: TestClient) -> None:
     amp = next(p for p in response.json() if p["name"] == "amp")
     assert amp["primary_field"]["label"] == "Mode"
     assert "smart" in amp["primary_field"]["values"]
-    assert amp["options"] == {}
+    assert "permission_mode" in amp["options"]
+    assert amp["options"]["permission_mode"]["default"] == "default"
+    assert "custom_allowed_tools" in amp["text_options"]
+    assert amp["text_options"]["custom_allowed_tools"]["visible_when"] == [
+        "permission_mode",
+        "custom",
+    ]
+    assert "Permissions decide" in amp["advanced_intro"]

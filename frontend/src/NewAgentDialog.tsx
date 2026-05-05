@@ -286,40 +286,73 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
                     value={model ?? provider.primary_field.default}
                     onChange={(e) => setModel(e.target.value)}
                   >
-                    {provider.primary_field.values.map((v) => (
+                    {provider.primary_field.values.map((v, i) => (
                       <option key={v} value={v}>
-                        {v}
+                        {provider.primary_field.value_labels?.[i] ?? v}
                       </option>
                     ))}
                   </select>
                 </label>
               )}
 
-              {provider && Object.keys(provider.options).length > 0 && (
-                <details className="advanced-section">
-                  <summary>Advanced</summary>
-                  <div className="advanced-body">
-                    {Object.entries(provider.options).map(([key, field]) => (
-                      <label key={key} className="field">
-                        <span className="label">{field.label}</span>
-                        <select
-                          className="input"
-                          value={options[key] ?? field.default}
-                          onChange={(e) =>
-                            setOptions((prev) => ({ ...prev, [key]: e.target.value }))
-                          }
-                        >
-                          {field.values.map((v) => (
-                            <option key={v} value={v}>
-                              {v}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    ))}
-                  </div>
-                </details>
-              )}
+              {provider &&
+                (Object.keys(provider.options).length > 0 ||
+                  Object.keys(provider.text_options ?? {}).length > 0) && (
+                  <details className="advanced-section">
+                    <summary>Advanced</summary>
+                    <div className="advanced-body">
+                      {provider.advanced_intro && (
+                        <p className="advanced-intro">{provider.advanced_intro}</p>
+                      )}
+                      {Object.entries(provider.options).map(([key, field]) => (
+                        <label key={key} className="field">
+                          <span className="label">{field.label}</span>
+                          <select
+                            className="input"
+                            value={options[key] ?? field.default}
+                            onChange={(e) =>
+                              setOptions((prev) => ({ ...prev, [key]: e.target.value }))
+                            }
+                          >
+                            {field.values.map((v, i) => (
+                              <option key={v} value={v}>
+                                {field.value_labels?.[i] ?? v}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      ))}
+                      {Object.entries(provider.text_options ?? {}).map(([key, field]) => {
+                        if (
+                          field.visible_when &&
+                          (options[field.visible_when[0]] ??
+                            provider.options[field.visible_when[0]]?.default) !==
+                            field.visible_when[1]
+                        ) {
+                          return null;
+                        }
+                        return (
+                          <label key={key} className="field">
+                            <span className="label">{field.label}</span>
+                            <textarea
+                              className="textarea sm"
+                              rows={3}
+                              placeholder={field.placeholder ?? ""}
+                              value={options[key] ?? field.default}
+                              onChange={(e) =>
+                                setOptions((prev) => ({
+                                  ...prev,
+                                  [key]: e.target.value,
+                                }))
+                              }
+                            />
+                            {field.hint && <span className="hint">{field.hint}</span>}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </details>
+                )}
             </>
           )}
 
@@ -394,6 +427,9 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
 function defaultsFor(provider: ProviderDescriptor): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, field] of Object.entries(provider.options)) {
+    out[key] = field.default;
+  }
+  for (const [key, field] of Object.entries(provider.text_options ?? {})) {
     out[key] = field.default;
   }
   return out;
