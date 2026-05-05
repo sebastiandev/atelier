@@ -95,7 +95,13 @@ from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from typing import Any
 
-from src.domain.agents import AgentAdapter, AgentEvent, AgentStartContext, SessionEstablished
+from src.domain.agents import (
+    AgentAdapter,
+    AgentEvent,
+    AgentStartContext,
+    PermissionDecisionValue,
+    SessionEstablished,
+)
 from src.domain.workstore.ports import TranscriptLog
 
 SetSessionIdFn = Callable[[str, str], None]
@@ -162,6 +168,8 @@ class AgentSupervisorService:
         agent_slug: str,
         adapter: AgentAdapter,
         context: AgentStartContext,
+        *,
+        first_message: str | None = None,
     ) -> None:
         # Seed seq from any pre-existing transcript so resume continues
         # monotonically — restarting at 0 would let new events collide
@@ -180,6 +188,13 @@ class AgentSupervisorService:
             )
             self._states[agent_slug] = state
         await adapter.start(context)
+        # Inject the synthesised contexts message before the event task
+        # starts: the user_input transcript line lands first; the SDK
+        # sees the input; events flow afterwards. Resume callers pass
+        # ``first_message=None`` because the SDK session already
+        # includes the original turn.
+        if first_message is not None:
+            await self.send_input(agent_slug, first_message)
         state.task = asyncio.create_task(self._run_agent(state), name=f"agent-{agent_slug}")
 
     async def send_input(self, agent_slug: str, text: str) -> None:
@@ -193,6 +208,16 @@ class AgentSupervisorService:
             },
         )
         await state.adapter.send_input(text)
+
+    async def resolve_permission(
+        self, agent_slug: str, request_id: str, decision: PermissionDecisionValue
+    ) -> None:
+        # Routes a user's allow/deny decision back to the adapter that
+        # raised the prompt. The adapter emits ``PermissionDecision``
+        # itself once the future resolves, so no transcript write here —
+        # the publish path stays the same as any other adapter event.
+        state = self._require_state(agent_slug)
+        await state.adapter.resolve_permission(request_id, decision)
 
     async def stop_turn(self, agent_slug: str) -> None:
         # Records the user's intent in the transcript before forwarding

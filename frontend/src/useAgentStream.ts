@@ -1,10 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type AgentEvent = {
   seq: number;
   type: string;
   ts: string;
   [key: string]: unknown;
+};
+
+export type PermissionDecision = "allow" | "allow_always" | "deny";
+
+export type PendingPermission = {
+  request_id: string;
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  ts: string;
+  seq: number;
 };
 
 export type ConnectionStatus =
@@ -135,5 +145,40 @@ export function useAgentStream(agentSlug: string) {
     }
   }
 
-  return { events, status, sendInput, sendStop };
+  function sendPermission(request_id: string, decision: PermissionDecision) {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "permission", request_id, decision }));
+    }
+  }
+
+  // Derive the open prompts from the event log. A `permission_request`
+  // opens one; a matching `permission_decision` closes it. The transcript
+  // is the source of truth, so this trivially survives WS reconnects —
+  // replay rebuilds the same set the server sees.
+  const pendingPermissions = useMemo(() => {
+    const open = new Map<string, PendingPermission>();
+    for (const ev of events) {
+      if (ev.type === "permission_request" && typeof ev.request_id === "string") {
+        open.set(ev.request_id, {
+          request_id: ev.request_id,
+          tool_name: typeof ev.tool_name === "string" ? ev.tool_name : "(unknown)",
+          tool_input:
+            ev.tool_input && typeof ev.tool_input === "object"
+              ? (ev.tool_input as Record<string, unknown>)
+              : {},
+          ts: ev.ts,
+          seq: ev.seq,
+        });
+      } else if (
+        ev.type === "permission_decision" &&
+        typeof ev.request_id === "string"
+      ) {
+        open.delete(ev.request_id);
+      }
+    }
+    return Array.from(open.values());
+  }, [events]);
+
+  return { events, status, sendInput, sendStop, sendPermission, pendingPermissions };
 }

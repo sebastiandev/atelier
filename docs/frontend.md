@@ -120,9 +120,9 @@ This is what powers: the `AgentTile` tile-mode top border, the `WorkView` rail r
 
 Both dialogs (`NewWorkDialog`, `NewAgentDialog`) keep the surface small. Advanced controls land as the stories that own them ship; the dialogs grow rather than carrying stub UI ahead of time.
 
-`NewWorkDialog` accepts an optional `contexts` array of `ContextEntry`. The body renders a `Context` field with one `ContextRow` per entry plus a "+ Add context" row exposing one button per `ConnectionType`. `ContextRow` is the headline interaction from STORY-019 — see [ContextRow](#contextrow) below.
+Both dialogs accept an optional `contexts` array of `ContextEntry`. `NewWorkDialog` exposes one button per `ConnectionType`; `NewAgentDialog` exposes the connection-backed types **plus** simple `text` / `url` / `file` types. Connection-backed entries render through `ContextRow` (see below); the simple types render through `SimpleContextRow.tsx` — a stripped-down card with a textarea (text) or input (url, file) and a remove button.
 
-The worktree base-branch picker lives with STORY-016. Per-agent contexts in `NewAgentDialog` need a backend extension (Agent has no contexts column today) and are out of scope for STORY-019.
+The worktree base-branch picker lives with STORY-016.
 
 ## ContextRow
 
@@ -171,4 +171,4 @@ Items still on the Phase B / future-sprint list (kept here as a quick checklist;
 - [ ] Transcript virtualization (only when a transcript actually gets long)
 - [x] Light-theme tokens + theme toggle
 - [x] `NewAgentDialog`: collapsible Advanced section for provider `options`
-- [ ] Inline context attachments in `NewWorkDialog` / `NewAgentDialog` (Sprint 3, depends on `ConnectionStore`)
+- [x] Inline context attachments in `NewWorkDialog` / `NewAgentDialog` (per-agent contexts: `text`/`url`/`file` plus connection-backed)

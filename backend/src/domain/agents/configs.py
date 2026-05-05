@@ -59,7 +59,17 @@ class CommonAgentConfig:
 
     workdir: Path
     system_prompt: str
-    context_md: str = ""
+
+
+DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob")
+"""Tools the Claude SDK auto-allows without invoking the permission callback.
+
+Read-only research tools — no side effects, no network mutation. Anything
+that mutates state (Edit, Write, Bash, WebFetch, ...) flows through
+``can_use_tool`` so the user reviews each invocation. The user sees the
+exact ``tool_input`` (e.g. the literal Bash command, the file path + new
+content for Edit) and can approve, allow-always for that tool name, or
+deny."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -68,6 +78,7 @@ class ClaudeAgentConfig:
     model: ClaudeModel
     thinking_effort: ClaudeEffort = ClaudeEffort.OFF
     permission_mode: ClaudePermissionMode = ClaudePermissionMode.DEFAULT
+    allowed_tools: tuple[str, ...] = DEFAULT_ALLOWED_TOOLS
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -80,6 +91,7 @@ AgentConfig = ClaudeAgentConfig | AmpAgentConfig
 
 
 __all__ = [
+    "DEFAULT_ALLOWED_TOOLS",
     "AgentConfig",
     "AmpAgentConfig",
     "AmpMode",

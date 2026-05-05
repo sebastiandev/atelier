@@ -1,5 +1,6 @@
 """Agent boundary: AgentAdapter port, AgentConfig hierarchy, AgentEvent union."""
 
+from src.domain.agents.context_render import render_agent_contexts
 from src.domain.agents.configs import (
     AgentConfig,
     AmpAgentConfig,
@@ -16,6 +17,9 @@ from src.domain.agents.events import (
     Error,
     MessageComplete,
     MessageDelta,
+    PermissionDecision,
+    PermissionDecisionValue,
+    PermissionRequest,
     SessionEstablished,
     StatusChange,
     ThinkingComplete,
@@ -55,6 +59,9 @@ __all__ = [
     "Error",
     "MessageComplete",
     "MessageDelta",
+    "PermissionDecision",
+    "PermissionDecisionValue",
+    "PermissionRequest",
     "ProviderDescriptor",
     "SessionEstablished",
     "Spec",
@@ -64,5 +71,6 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "TurnMetrics",
+    "render_agent_contexts",
     "render_system_prompt",
 ]

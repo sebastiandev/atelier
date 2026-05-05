@@ -121,6 +121,40 @@ class SessionEstablished:
     session_id: str
 
 
+PermissionDecisionValue = Literal["allow", "allow_always", "deny"]
+
+
+@dataclass(frozen=True, kw_only=True)
+class PermissionRequest:
+    """The adapter is asking the user whether a tool may run.
+
+    Emitted from the SDK's ``can_use_tool`` callback before the tool
+    invocation proceeds. ``request_id`` is opaque to the supervisor;
+    the user's decision is routed back through ``adapter.resolve_permission``
+    keyed on the same id.
+    """
+
+    type: Literal["permission_request"] = "permission_request"
+    ts: datetime
+    request_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+
+
+@dataclass(frozen=True, kw_only=True)
+class PermissionDecision:
+    """The user's answer to a ``PermissionRequest``.
+
+    Emitted by the adapter once the corresponding future has been
+    resolved, so the transcript holds both halves of the exchange.
+    """
+
+    type: Literal["permission_decision"] = "permission_decision"
+    ts: datetime
+    request_id: str
+    decision: PermissionDecisionValue
+
+
 @dataclass(frozen=True, kw_only=True)
 class TurnMetrics:
     """Per-turn rollup: duration + token usage. Adapters emit one of
@@ -150,6 +184,8 @@ AgentEvent = (
     | ArtifactMarker
     | Error
     | SessionEstablished
+    | PermissionRequest
+    | PermissionDecision
     | TurnMetrics
 )
 
@@ -160,6 +196,9 @@ __all__ = [
     "Error",
     "MessageComplete",
     "MessageDelta",
+    "PermissionDecision",
+    "PermissionDecisionValue",
+    "PermissionRequest",
     "SessionEstablished",
     "StatusChange",
     "ThinkingComplete",

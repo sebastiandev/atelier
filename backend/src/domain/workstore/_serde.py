@@ -45,7 +45,9 @@ def deserialize_contexts(data: dict[str, Any]) -> list[Context]:
     ]
 
 
-def serialize_agent(agent: Agent) -> dict[str, Any]:
+def serialize_agent(agent: Agent, contexts: list[Context] | None = None) -> dict[str, Any]:
+    """Serialise an agent for ``agent.json``. ``contexts`` is FS-only — it
+    mirrors ``Work.contexts``: not on the entity, passed as a sibling."""
     return {
         "id": agent.id,
         "slug": agent.slug,
@@ -59,6 +61,7 @@ def serialize_agent(agent: Agent) -> dict[str, Any]:
         "started_at": agent.started_at.isoformat(),
         "stopped_at": agent.stopped_at.isoformat() if agent.stopped_at else None,
         "session_id": agent.session_id,
+        "contexts": [_serialize_context(c) for c in (contexts or [])],
     }
 
 

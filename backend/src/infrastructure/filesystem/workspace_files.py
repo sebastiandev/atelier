@@ -43,6 +43,21 @@ class FsWorkspaceFiles:
         atomic_write_text(target, content)
         return str(target)
 
+    def write_agent_context_file(
+        self, work_slug: str, agent_slug: str, filename: str, content: str
+    ) -> str:
+        _validate_filename(filename)
+        target = self._paths.agent_context_dir(work_slug, agent_slug) / filename
+        atomic_write_text(target, content)
+        return str(target)
+
+    def write_agent_context_index(
+        self, work_slug: str, agent_slug: str, content: str
+    ) -> str:
+        target = self._paths.agent_context_index(work_slug, agent_slug)
+        atomic_write_text(target, content)
+        return str(target)
+
     def list_work_slugs(self) -> list[str]:
         return _list_valid_subdirs(self._paths.works_dir())
 

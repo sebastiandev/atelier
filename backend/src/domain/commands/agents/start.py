@@ -25,7 +25,7 @@ from src.domain.agents import (
     CommonAgentConfig,
     render_system_prompt,
 )
-from src.domain.models import Agent, Persona, Provider
+from src.domain.models import Agent, Context, Persona, Provider
 from src.domain.worktrees import WorktreeManager
 from src.domain.workstore.dtos import AddAgentRequest
 from src.domain.workstore.ports import WorkStore
@@ -42,6 +42,7 @@ class StartAgentRequest:
     provider: Provider
     model: str
     options: dict[str, object]
+    contexts: tuple[Context, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,11 @@ class StartAgentPlan:
     agent: Agent
     adapter: AgentAdapter
     context: AgentStartContext
+    # Synthesised "Context for this task is at <abs>/context.md…" message
+    # to inject as the agent's first user input. ``None`` when the agent
+    # was created without contexts. Resume never sets this — the SDK
+    # session already includes the original first message.
+    first_message: str | None = None
 
 
 class WorkNotFound(ValueError):
@@ -114,6 +120,7 @@ def execute(
                 role=req.role,
                 provider=req.provider,
                 model=req.model,
+                contexts=req.contexts,
             )
         )
     except ValueError as exc:
@@ -124,6 +131,16 @@ def execute(
 
     if agent.slug is None:
         raise RuntimeError("workstore returned agent without slug")
+
+    index_path = workstore.render_agent_contexts(
+        req.work_slug, agent.slug, list(req.contexts)
+    )
+    first_message = (
+        f"Context for this task is at `{index_path}`. "
+        "Read individual files as needed."
+        if index_path
+        else None
+    )
 
     workdir = worktree_manager.ensure(
         work_slug=req.work_slug,
@@ -139,9 +156,10 @@ def execute(
     adapter = build_adapter(config, settings)
     context = AgentStartContext(
         workdir=common.workdir,
-        context_md=common.context_md,
         model=req.model,
         system_prompt=common.system_prompt,
         session_id=agent.session_id,
     )
-    return StartAgentPlan(agent=agent, adapter=adapter, context=context)
+    return StartAgentPlan(
+        agent=agent, adapter=adapter, context=context, first_message=first_message
+    )

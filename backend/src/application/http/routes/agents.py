@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import AgentSummary, NewAgentRequest
 from src.domain.commands.agents import list_for_work, start as start_cmd
-from src.domain.models import Agent
+from src.domain.models import Agent, Context
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.worktrees import WorktreeManager
 from src.domain.workstore.ports import WorkStore
@@ -78,6 +78,10 @@ async def create_agent(
         provider=payload.provider,
         model=payload.model,
         options=payload.options,
+        contexts=tuple(
+            Context(type=c.type, value=c.value, conn_id=c.conn_id)
+            for c in payload.contexts
+        ),
     )
     try:
         plan = start_cmd.execute(workstore, worktree_manager, settings, req)
@@ -87,7 +91,13 @@ async def create_agent(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
 
     assert plan.agent.slug is not None
-    await supervisor.start_agent(work_slug, plan.agent.slug, plan.adapter, plan.context)
+    await supervisor.start_agent(
+        work_slug,
+        plan.agent.slug,
+        plan.adapter,
+        plan.context,
+        first_message=plan.first_message,
+    )
     return _to_summary(work_slug, plan.agent)
 
 

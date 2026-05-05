@@ -9,9 +9,17 @@ agent session stays alive across multiple turns.
 
 Lifecycle:
   start()       — connect ClaudeSDKClient (no first prompt sent)
-  events()      — async generator: drain user-input queue, send query,
-                  yield converted events for each turn, then loop
-  send_input(t) — enqueue user text; events() consumes and forwards
+  events()      — async generator: drain ``_outgoing`` (fed by a side
+                  pump task that forwards SDK responses + permission
+                  events). The decoupling matters because the SDK's
+                  ``can_use_tool`` callback runs inline in the response
+                  loop and awaits a future; if ``events()`` fed off the
+                  response iterator directly, the ``PermissionRequest``
+                  emitted by the callback could never reach the
+                  supervisor before the future resolved.
+  send_input(t) — enqueue user text; the pump consumes and forwards
+  resolve_permission(rid, decision) — answers an open ``can_use_tool``
+                  by setting the corresponding future
   close()       — disconnect SDK; idempotent (sentinel unblocks events())
 
 Auth: the underlying SDK shells out to the local Claude Code CLI, which
@@ -22,7 +30,9 @@ object for the dev .env.local flow.
 
 import asyncio
 import json
+import uuid
 from collections.abc import AsyncIterator, Iterable
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,6 +40,8 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    PermissionResultAllow,
+    PermissionResultDeny,
     ResultMessage,
     TextBlock,
     ThinkingBlock,
@@ -45,6 +57,9 @@ from src.domain.agents import (
     ClaudeEffort,
     Error,
     MessageComplete,
+    PermissionDecision,
+    PermissionDecisionValue,
+    PermissionRequest,
     SessionEstablished,
     StatusChange,
     ThinkingComplete,
@@ -65,6 +80,7 @@ class ClaudeCodeAdapter:
         self._config = config
         self._client: ClaudeSDKClient | None = None
         self._user_inputs: asyncio.Queue[str | object] = asyncio.Queue()
+        self._outgoing: asyncio.Queue[AgentEvent | object] = asyncio.Queue()
         self._closed = False
         # Track the SDK session: the value passed to ``resume`` (if any),
         # the value last seen on a ResultMessage, and a warning to surface
@@ -72,6 +88,13 @@ class ClaudeCodeAdapter:
         self._resume_session_id: str | None = None
         self._reported_session_id: str | None = None
         self._pending_warning: str | None = None
+        # Permission callback state. ``_pending`` holds open futures keyed
+        # by request_id; ``_allow_always`` is a session-only set of tool
+        # names the user has chosen to auto-allow for the rest of this
+        # adapter's lifetime (cleared on close).
+        self._pending: dict[str, asyncio.Future[PermissionDecisionValue]] = {}
+        self._allow_always: set[str] = set()
+        self._pump_task: asyncio.Task[None] | None = None
 
     async def start(self, context: AgentStartContext) -> None:
         # ``context`` is mostly informational (the adapter is configured
@@ -108,6 +131,12 @@ class ClaudeCodeAdapter:
         # destabilise the supervisor's stream.
         if self._client is None or self._closed:
             return
+        # If a permission prompt is open, the user pressing Esc means
+        # "abort the turn" — deny any in-flight permission requests so
+        # the SDK callback can return cleanly before the interrupt lands.
+        for fut in list(self._pending.values()):
+            if not fut.done():
+                fut.set_result("deny")
         try:
             await self._client.interrupt()
         except Exception:  # noqa: BLE001
@@ -116,36 +145,125 @@ class ClaudeCodeAdapter:
             # if there's a real problem. No need to raise here.
             pass
 
+    async def resolve_permission(
+        self, request_id: str, decision: PermissionDecisionValue
+    ) -> None:
+        fut = self._pending.get(request_id)
+        if fut is None or fut.done():
+            # Stale or duplicate decision; safe to ignore. A stale frame
+            # can arrive if the WS reconnects mid-prompt and the user
+            # re-clicks before the replay catches up.
+            return
+        fut.set_result(decision)
+
     async def events(self) -> AsyncIterator[AgentEvent]:
         if self._client is None:
             raise RuntimeError("events() called before start()")
         if self._pending_warning is not None:
             yield Error(ts=datetime.now(UTC), message=self._pending_warning)
             self._pending_warning = None
+        # Spawn the pump that forwards SDK responses + permission events
+        # into ``_outgoing``. Decoupling the response iterator from the
+        # ``yield`` site is what lets ``can_use_tool`` (which runs inline
+        # in the SDK's response loop) emit a ``PermissionRequest`` and
+        # then await a future without starving the supervisor.
+        self._pump_task = asyncio.create_task(
+            self._run_input_pump(), name="claude-input-pump"
+        )
+        try:
+            while True:
+                item = await self._outgoing.get()
+                if item is _SHUTDOWN:
+                    return
+                yield item  # type: ignore[misc]
+        finally:
+            if self._pump_task is not None and not self._pump_task.done():
+                self._pump_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._pump_task
+
+    async def _run_input_pump(self) -> None:
+        assert self._client is not None
         while True:
             text = await self._user_inputs.get()
             if text is _SHUTDOWN:
+                await self._outgoing.put(_SHUTDOWN)
                 return
             assert isinstance(text, str)
-            yield StatusChange(ts=datetime.now(UTC), status="thinking")
+            await self._outgoing.put(StatusChange(ts=datetime.now(UTC), status="thinking"))
             try:
                 await self._client.query(text)
                 async for msg in self._client.receive_response():
                     sid = _session_id_of(msg)
                     if sid is not None and sid != self._reported_session_id:
                         self._reported_session_id = sid
-                        yield SessionEstablished(ts=datetime.now(UTC), session_id=sid)
+                        await self._outgoing.put(
+                            SessionEstablished(ts=datetime.now(UTC), session_id=sid)
+                        )
                     for ev in _convert(msg, model=self._config.model.value):
-                        yield ev
+                        await self._outgoing.put(ev)
             except Exception as e:  # noqa: BLE001
-                yield Error(ts=datetime.now(UTC), message=str(e))
-                yield StatusChange(ts=datetime.now(UTC), status="idle")
+                await self._outgoing.put(Error(ts=datetime.now(UTC), message=str(e)))
+                await self._outgoing.put(
+                    StatusChange(ts=datetime.now(UTC), status="idle")
+                )
+
+    async def _can_use_tool(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        _context: object,
+    ) -> PermissionResultAllow | PermissionResultDeny:
+        """SDK callback. Gates each non-allowlisted tool through the user.
+
+        Auto-allows tools the user previously said "always allow" to in
+        this session — short-circuits without emitting an event so the
+        transcript stays clean.
+        """
+        if tool_name in self._allow_always:
+            return PermissionResultAllow()
+        request_id = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[PermissionDecisionValue] = loop.create_future()
+        self._pending[request_id] = fut
+        await self._outgoing.put(
+            PermissionRequest(
+                ts=datetime.now(UTC),
+                request_id=request_id,
+                tool_name=tool_name,
+                tool_input=dict(tool_input),
+            )
+        )
+        try:
+            try:
+                decision = await fut
+            except asyncio.CancelledError:
+                # Turn was cancelled (Esc / supervisor shutdown). Treat
+                # as deny so the SDK doesn't run the tool.
+                decision = "deny"
+        finally:
+            self._pending.pop(request_id, None)
+        await self._outgoing.put(
+            PermissionDecision(
+                ts=datetime.now(UTC), request_id=request_id, decision=decision
+            )
+        )
+        if decision == "allow_always":
+            self._allow_always.add(tool_name)
+        if decision in ("allow", "allow_always"):
+            return PermissionResultAllow()
+        return PermissionResultDeny(message="user denied", interrupt=False)
 
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        # Unblock events() if it's waiting on the queue.
+        # Resolve any in-flight permission prompts so the SDK callback
+        # can return; otherwise disconnect would block on a hung future.
+        for fut in list(self._pending.values()):
+            if not fut.done():
+                fut.set_result("deny")
+        # Unblock events() / pump if they're waiting on the queue.
         await self._user_inputs.put(_SHUTDOWN)
         if self._client is not None:
             await self._client.disconnect()
@@ -156,6 +274,10 @@ class ClaudeCodeAdapter:
             "system_prompt": self._config.common.system_prompt,
             "cwd": str(self._config.common.workdir),
             "permission_mode": self._config.permission_mode.value,
+            # Conservative auto-allow list (read-only research tools).
+            # Anything outside this set flows through ``can_use_tool``.
+            "allowed_tools": list(self._config.allowed_tools),
+            "can_use_tool": self._can_use_tool,
         }
         if self._config.thinking_effort is not ClaudeEffort.OFF:
             kwargs["effort"] = self._config.thinking_effort.value

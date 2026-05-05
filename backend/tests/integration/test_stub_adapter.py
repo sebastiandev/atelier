@@ -35,7 +35,6 @@ def _run(coro: Coroutine[None, None, T]) -> T:
 def _start_context() -> AgentStartContext:
     return AgentStartContext(
         workdir=Path("/tmp/agent-1"),
-        context_md="# brief",
         model="claude-opus-4-7",
         system_prompt="you are an agent",
     )

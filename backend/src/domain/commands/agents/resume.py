@@ -82,7 +82,6 @@ def execute(
     adapter = build_adapter(config, settings)
     context = AgentStartContext(
         workdir=common.workdir,
-        context_md=common.context_md,
         model=agent.model,
         system_prompt=common.system_prompt,
         session_id=agent.session_id,

@@ -7,6 +7,7 @@ through replay-from-disk + live fan-out, plus exercises the input path.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -303,6 +304,53 @@ def test_ws_stop_frame_creates_user_stop_event(app_client: TestClient, tmp_workd
         assert ev["seq"] == _DEMO_EVENT_COUNT + 1
 
 
+def test_ws_permission_frame_forwards_to_adapter(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    """The WS handler accepts ``{type:"permission", request_id, decision}`` and
+    routes it to ``supervisor.resolve_permission``, which delegates to the
+    adapter. The stub adapter records each call so we can assert."""
+    work = _create_work(app_client, tmp_workdir)
+    agent = _create_agent(app_client, work["slug"])
+
+    with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
+        for _ in range(_DEMO_EVENT_COUNT):
+            ws.receive_json()
+
+        ws.send_text(
+            json.dumps(
+                {"type": "permission", "request_id": "req-1", "decision": "allow"}
+            )
+        )
+        ws.send_text(
+            json.dumps(
+                {"type": "permission", "request_id": "req-2", "decision": "deny"}
+            )
+        )
+        # Bad shape — should be ignored.
+        ws.send_text(json.dumps({"type": "permission", "request_id": "req-x"}))
+        ws.send_text(
+            json.dumps(
+                {"type": "permission", "request_id": "req-y", "decision": "bogus"}
+            )
+        )
+        # Real input afterwards: confirms the WS loop is still alive.
+        ws.send_text(json.dumps({"type": "input", "text": "ok"}))
+        ev = ws.receive_json()
+        assert ev["type"] == "user_input"
+
+    state = app_client.app.state.supervisor._states.get(agent["slug"])
+    # State may have been cleaned up if the WS close happened first; the
+    # adapter ref we want sits on the AgentState while the agent is live.
+    # Reach into the supervisor's registry to confirm the routed calls.
+    assert state is not None, "agent state should still exist"
+    adapter = state.adapter
+    assert getattr(adapter, "permission_resolutions") == [
+        ("req-1", "allow"),
+        ("req-2", "deny"),
+    ]
+
+
 def test_ws_malformed_input_frame_is_ignored(app_client: TestClient, tmp_workdir: str) -> None:
     work = _create_work(app_client, tmp_workdir)
     agent = _create_agent(app_client, work["slug"])
@@ -332,6 +380,106 @@ def test_ws_unknown_agent_closes(app_client: TestClient) -> None:
     with pytest.raises(WebSocketDisconnect):
         with app_client.websocket_connect("/api/agents/agt-404/stream") as ws:
             ws.receive_json()
+
+
+# ---------------------------------------------------------------------------
+# Contexts: per-source files + index + first-message injection
+# ---------------------------------------------------------------------------
+
+
+def test_create_agent_with_contexts_writes_files_and_index(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    work = _create_work(app_client, tmp_workdir)
+    response = app_client.post(
+        f"/api/works/{work['slug']}/agents",
+        json={
+            "name": "Architect",
+            "persona": "architect",
+            "role": "architect",
+            "provider": "amp",
+            "model": "smart",
+            "contexts": [
+                {"type": "text", "value": "the bug only repros under load"},
+                {"type": "url", "value": "https://example.com/runbook"},
+            ],
+        },
+    )
+    assert response.status_code == 201
+    agent = response.json()
+
+    workspace_root: Path = app_client.app.state.settings.workspace_root
+    agent_dir = workspace_root / "works" / work["slug"] / "agents" / agent["slug"]
+
+    text_file = agent_dir / "context" / "text-1.md"
+    url_file = agent_dir / "context" / "url-1.md"
+    index = agent_dir / "context.md"
+
+    assert text_file.read_text(encoding="utf-8").startswith("the bug only repros under load")
+    assert "https://example.com/runbook" in url_file.read_text(encoding="utf-8")
+
+    index_md = index.read_text(encoding="utf-8")
+    assert "[text-1.md](context/text-1.md)" in index_md
+    assert "[url-1.md](context/url-1.md)" in index_md
+
+    persisted = json.loads((agent_dir / "agent.json").read_text(encoding="utf-8"))
+    assert persisted["contexts"] == [
+        {"type": "text", "value": "the bug only repros under load"},
+        {"type": "url", "value": "https://example.com/runbook"},
+    ]
+
+
+def test_create_agent_with_contexts_emits_first_user_input(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    work = _create_work(app_client, tmp_workdir)
+    response = app_client.post(
+        f"/api/works/{work['slug']}/agents",
+        json={
+            "name": "Architect",
+            "persona": "architect",
+            "role": "architect",
+            "provider": "amp",
+            "model": "smart",
+            "contexts": [{"type": "text", "value": "hello"}],
+        },
+    )
+    assert response.status_code == 201
+    agent = response.json()
+
+    workspace_root: Path = app_client.app.state.settings.workspace_root
+    expected_index = (
+        workspace_root / "works" / work["slug"] / "agents" / agent["slug"] / "context.md"
+    )
+
+    with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
+        first = ws.receive_json()
+        # 15 demo events follow the synthesised user_input.
+        rest = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT)]
+
+    assert first["seq"] == 1
+    assert first["type"] == "user_input"
+    assert str(expected_index) in first["text"]
+    assert "Read individual files" in first["text"]
+
+    assert [e["seq"] for e in rest] == list(range(2, _DEMO_EVENT_COUNT + 2))
+
+
+def test_create_agent_without_contexts_does_not_inject_first_message(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    work = _create_work(app_client, tmp_workdir)
+    agent = _create_agent(app_client, work["slug"])
+
+    workspace_root: Path = app_client.app.state.settings.workspace_root
+    agent_dir = workspace_root / "works" / work["slug"] / "agents" / agent["slug"]
+    assert not (agent_dir / "context.md").exists()
+    assert not (agent_dir / "context").exists()
+
+    with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
+        events = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT)]
+    assert events[0]["type"] == "status_change"
+    assert [e["seq"] for e in events] == list(range(1, _DEMO_EVENT_COUNT + 1))
 
 
 def test_ws_resumes_agent_after_supervisor_loses_state(

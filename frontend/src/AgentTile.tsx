@@ -11,6 +11,8 @@ import { PERSONA_GLYPH, type Persona } from "./api";
 import { MarkdownText } from "./MarkdownText";
 import {
   type AgentEvent,
+  type PendingPermission,
+  type PermissionDecision,
   useAgentStream,
 } from "./useAgentStream";
 
@@ -47,7 +49,14 @@ export function AgentTile({
   model,
   onClose,
 }: AgentTileProps) {
-  const { events, status, sendInput, sendStop } = useAgentStream(agentSlug);
+  const {
+    events,
+    status,
+    sendInput,
+    sendStop,
+    sendPermission,
+    pendingPermissions,
+  } = useAgentStream(agentSlug);
   const [draft, setDraft] = useState("");
   // Optimistic "thinking" between Send and the first status_change event
   // back from the adapter, so the dot reacts instantly.
@@ -217,6 +226,17 @@ export function AgentTile({
         ))}
       </div>
       {lastMetrics && <TurnMetricsBar metrics={lastMetrics} />}
+      {pendingPermissions.length > 0 && (
+        <div className="permission-prompts">
+          {pendingPermissions.map((p) => (
+            <PermissionPrompt
+              key={p.request_id}
+              prompt={p}
+              onDecide={sendPermission}
+            />
+          ))}
+        </div>
+      )}
       <form className="composer" onSubmit={handleSubmit}>
         <textarea
           ref={textareaRef}
@@ -325,7 +345,8 @@ type RenderUnit =
   | { kind: "todo_list"; key: number; todos: TodoItem[] }
   | { kind: "status"; key: number; status: string }
   | { kind: "artifact"; key: number; payload: unknown }
-  | { kind: "error"; key: number; message: string };
+  | { kind: "error"; key: number; message: string }
+  | { kind: "permission_resolved"; key: number; decision: PermissionDecision; tool_name: string };
 
 function groupEvents(events: AgentEvent[]): RenderUnit[] {
   const out: RenderUnit[] = [];
@@ -339,6 +360,10 @@ function groupEvents(events: AgentEvent[]): RenderUnit[] {
   // already rendered the call in a richer form (e.g. TodoWrite as a
   // checklist) — the generic "→ result ok" line would just be noise.
   const suppressedToolResults = new Set<string>();
+  // Resolved permission_decision lines need the tool_name from the
+  // earlier permission_request — backend doesn't echo it on the
+  // decision. Build the lookup as we walk.
+  const permissionTools = new Map<string, string>();
 
   for (const ev of events) {
     if (ev.type === "message_delta") {
@@ -399,6 +424,28 @@ function groupEvents(events: AgentEvent[]): RenderUnit[] {
       // Drop: we already showed the rich render of the corresponding call.
       pendingAssistant = null;
       pendingThinking = null;
+    } else if (ev.type === "permission_request") {
+      // Don't push a transcript line — the prompt UI lives above the
+      // composer for unresolved requests. We only record the tool_name
+      // so the matching decision can render with it.
+      const rid = stringField(ev, "request_id");
+      const tool = stringField(ev, "tool_name");
+      if (rid) permissionTools.set(rid, tool);
+      pendingAssistant = null;
+      pendingThinking = null;
+    } else if (ev.type === "permission_decision") {
+      pendingAssistant = null;
+      pendingThinking = null;
+      const rid = stringField(ev, "request_id");
+      const decision = stringField(ev, "decision") as PermissionDecision;
+      if (decision === "allow" || decision === "allow_always" || decision === "deny") {
+        out.push({
+          kind: "permission_resolved",
+          key: ev.seq,
+          decision,
+          tool_name: permissionTools.get(rid) ?? "(unknown tool)",
+        });
+      }
     } else {
       pendingAssistant = null;
       pendingThinking = null;
@@ -636,7 +683,96 @@ function Unit({ unit }: { unit: RenderUnit }) {
       );
     case "error":
       return <div className="msg msg-error">{unit.message}</div>;
+    case "permission_resolved":
+      return (
+        <div className="msg msg-permission" data-decision={unit.decision}>
+          {unit.decision === "deny" ? "✗ denied" : "✓ allowed"}{" "}
+          <span className="tool-name">{unit.tool_name}</span>
+          {unit.decision === "allow_always" && (
+            <span className="hint"> · always</span>
+          )}
+        </div>
+      );
   }
+}
+
+function PermissionPrompt({
+  prompt,
+  onDecide,
+}: {
+  prompt: PendingPermission;
+  onDecide: (request_id: string, decision: PermissionDecision) => void;
+}) {
+  const [showInput, setShowInput] = useState(false);
+  const summary = summariseToolInput(prompt.tool_name, prompt.tool_input);
+  return (
+    <div className="permission-prompt" role="alertdialog" aria-label={`Permission for ${prompt.tool_name}`}>
+      <div className="permission-prompt-hd">
+        <span className="permission-prompt-icon" aria-hidden>🔒</span>
+        <span className="permission-prompt-title">
+          Allow <span className="tool-name">{prompt.tool_name}</span>?
+        </span>
+        <button
+          type="button"
+          className="permission-prompt-toggle"
+          onClick={() => setShowInput((v) => !v)}
+          aria-expanded={showInput}
+        >
+          {showInput ? "Hide details" : "Show details"}
+        </button>
+      </div>
+      {summary && <div className="permission-prompt-summary mono">{summary}</div>}
+      {showInput && (
+        <pre className="permission-prompt-input">
+          {JSON.stringify(prompt.tool_input, null, 2)}
+        </pre>
+      )}
+      <div className="permission-prompt-actions">
+        <button
+          type="button"
+          className="btn sm primary"
+          onClick={() => onDecide(prompt.request_id, "allow")}
+        >
+          Allow once
+        </button>
+        <button
+          type="button"
+          className="btn sm"
+          onClick={() => onDecide(prompt.request_id, "allow_always")}
+          title={`Allow ${prompt.tool_name} for the rest of this session`}
+        >
+          Allow always
+        </button>
+        <button
+          type="button"
+          className="btn sm ghost"
+          onClick={() => onDecide(prompt.request_id, "deny")}
+        >
+          Deny
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function summariseToolInput(toolName: string, input: Record<string, unknown>): string {
+  // Pull the most informative single field per tool so the user can
+  // decide without expanding the full JSON. Falls through to empty on
+  // tools we don't have a special case for; the user can click "Show
+  // details" to see everything.
+  if (toolName === "Bash") {
+    const cmd = input.command;
+    return typeof cmd === "string" ? cmd : "";
+  }
+  if (toolName === "Edit" || toolName === "Write" || toolName === "Read") {
+    const path = input.file_path ?? input.path;
+    return typeof path === "string" ? path : "";
+  }
+  if (toolName === "WebFetch") {
+    const url = input.url;
+    return typeof url === "string" ? url : "";
+  }
+  return "";
 }
 
 function TodoList({ todos }: { todos: TodoItem[] }) {

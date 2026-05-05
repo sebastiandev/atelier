@@ -27,7 +27,7 @@ backend/src/
 
 Three roles, one unifying registry:
 
-1. **Config** (`domain/agents/configs.py`) — typed runtime instance. `CommonAgentConfig` carries the cross-provider bits (workdir, system_prompt, context_md). Each provider gets a frozen dataclass that wraps `common: CommonAgentConfig` and adds its own knobs (`ClaudeAgentConfig` has `model: ClaudeModel`, `thinking_effort: ClaudeEffort`, ...). Composition over inheritance — frozen dataclasses + ABC + defaults play badly together.
+1. **Config** (`domain/agents/configs.py`) — typed runtime instance. `CommonAgentConfig` carries the cross-provider bits (workdir, system_prompt). Each provider gets a frozen dataclass that wraps `common: CommonAgentConfig` and adds its own knobs (`ClaudeAgentConfig` has `model: ClaudeModel`, `thinking_effort: ClaudeEffort`, ...). Composition over inheritance — frozen dataclasses + ABC + defaults play badly together.
 
 2. **Spec** (`domain/agents/specs.py`) — descriptor + builder. `Spec.describe()` returns a `ProviderDescriptor` that the new-agent dialog renders into form fields. `Spec.build(common, model, options)` validates the wire-format dict into a typed `AgentConfig`. Same Spec instance powers `GET /api/providers` and `POST /api/works/<slug>/agents`, so descriptor and validator can't drift. The `SPECS` registry maps `provider name → Spec`.
 
@@ -55,25 +55,129 @@ Each has a `Literal` `type` discriminator; the frontend pattern-matches on it.
 
 ## AgentSupervisorService
 
-`domain/supervisor/service.py`. One `asyncio.Task` per running agent. Single-subscriber model: at most one WS subscriber per agent; a new connection replaces the old one cleanly.
+`domain/supervisor/service.py`. The supervisor is the traffic cop sitting between the browser, the agent SDK, and the on-disk transcript. There is **one `asyncio.Task` per running agent** ("the agent task"), pumping that agent's adapter event stream. The supervisor is single-subscriber: at most one WS connection per agent; a second `subscribe()` replaces the slot.
 
-Pipeline per event from the adapter:
+### The big picture
 
-1. Stamp `seq`.
-2. Append to `transcript.ndjson` (with fsync — see [Transcript log](#transcript-log) below).
-3. Fan out to the (at most one) live subscriber via a bounded `asyncio.Queue`.
+```
+   ┌─────────────┐   WebSocket    ┌──────────────┐  AgentAdapter   ┌────────────┐
+   │   Browser   │ ◄────────────► │  Supervisor  │ ◄─────────────► │ Claude/Amp │
+   │ (AgentTile) │                │              │                 │    SDK     │
+   └─────────────┘                └───────┬──────┘                 └────────────┘
+                                          │
+                                          │ append + fsync
+                                          ▼
+                                  ┌───────────────┐
+                                  │ transcript.   │  ← canonical, on disk
+                                  │   ndjson      │
+                                  └───────────────┘
+```
 
-The fsync-before-fanout ordering means a crash never leaves a subscriber having seen an event that isn't on disk.
+Three concurrent things happen per agent:
 
-**Slow-subscriber drop.** `subscribe()` returns an `AgentSubscription { queue, kicked }`. The queue caps at `SUBSCRIBER_QUEUE_MAX` (256). If the consumer falls that far behind, the supervisor catches `QueueFull`, sets `kicked`, and drops the subscriber from the slot — bounding memory growth without blocking the publish path. The WS handler watches `kicked` alongside the queue and closes with code 4408 when it fires; the client retries with backoff and resumes from `?cursor=N`. Events published after the drop still hit disk, so nothing is lost.
+1. **Agent task** — iterates `adapter.events()` and publishes each event.
+2. **WS subscriber (0 or 1)** — drains a bounded queue of published events.
+3. **Inbound user actions** — `send_input` / `stop_turn` / `resolve_permission`, called from any number of WS handlers.
 
-Input flow: the WS handler forwards `{"type":"input","text":"..."}` to `supervisor.send_input(slug, text)`, which writes a `UserInput` transcript line and forwards to the adapter's input channel.
+A per-agent `publish_lock` (an `asyncio.Lock`) serialises every "publish a line" operation, so these three threads of execution never interleave a partial publish.
 
-`get_work_slug_for(agent_slug)` is the supervisor's in-memory map. Returning `None` means "no live adapter for this slug" — typically because the backend was restarted, or the user closed the agent to the rail. The WS handler resumes the provider session via the `resume_agent` command in that case (see [WS protocol](#ws-protocol)); 4404 is reserved for slugs that don't exist on disk at all.
+### What "publish" means
 
-**Provider session resume.** Each adapter captures the SDK's session/thread ID on its first message and emits a `SessionEstablished` event; the supervisor calls a `set_session_id` callback (wired to `WorkStore.set_agent_session_id`) so the ID is persisted on the agent row. On reconnect after the supervisor lost its in-memory state, `resume_agent` reads the row, builds a fresh adapter, and passes the stored ID back to the SDK as `resume` (Claude) or `continue_thread` (Amp). The conversation continues exactly where it left off — no transcript replay needed on the SDK side.
+Every line that lands in the transcript — whether it originated from the SDK, from user input, or as a synthesised line — goes through `_publish(state, payload)`. Under the lock, in this order:
 
-**Seq seeding on resume.** Because each `_AgentState` starts at `seq=0`, a naive resume would let new events collide with existing on-disk seqs. `start_agent` calls `transcript_log.last_seq(work, agent)` (a tail-read of the NDJSON) and seeds `state.seq` from that, so seqs continue monotonically across the resume boundary.
+1. Stamp the next per-agent monotonic `seq` (1, 2, 3, …).
+2. Append to `transcript.ndjson` with fsync (`asyncio.to_thread` because NDJSON I/O is sync).
+3. Hand to the (at most one) live subscriber via `queue.put_nowait`.
+
+The ORDER is the load-bearing invariant: **no event reaches a subscriber before it's already on disk.** A crash between step 2 and step 3 leaves the event durable; the browser hasn't seen it yet but picks it up on the next reconnect via replay-from-cursor.
+
+`send_input` and `resolve_permission` use the same `_publish` for their outbound transcript lines (`user_input`, plus any adapter-emitted `permission_*` lines), so seqs interleave one canonical conversation regardless of who originated each line.
+
+### Lifecycle: starting an agent
+
+`start_agent(work_slug, agent_slug, adapter, context, first_message=None)`:
+
+1. **Seed `seq`.** Tail-read `transcript.ndjson` via `transcript_log.last_seq` and seed `state.seq` from it, so a resume continues monotonically rather than colliding with existing history.
+2. **Register state.** Under `_registry_lock`, build the `_AgentState` and put it in `_states[agent_slug]`.
+3. **`await adapter.start(context)`** — the adapter connects to its SDK (Claude: spawns `claude` CLI subprocess; Amp: marks itself ready, spawns lazily on first input).
+4. **Optional first-message injection.** When the start command synthesised one (typically because contexts were attached), `await self.send_input(agent_slug, first_message)` runs once — the line lands as `user_input` at `seq=1` with normal publish ordering.
+5. **Spawn the agent task.** `asyncio.create_task(self._run_agent(state))`. From here on, every event the SDK emits flows through `_publish`.
+
+`_run_agent` is the consumer side: `async for event in adapter.events()`. For `SessionEstablished` events it calls `_set_session_id` (the WorkStore hook) so the SDK's session/thread ID gets persisted to SQL — that's the resume handle. Every event gets `_publish`-ed.
+
+### Lifecycle: stopping a turn / closing an agent
+
+- **`stop_turn(agent_slug)`** writes a `user_stop` transcript line (so the user's intent is durable even if the SDK call fails), then `await state.adapter.stop_turn()`. Claude calls `interrupt()` over the SDK control protocol; Amp no-ops today (its CLI exposes no per-turn cancel).
+- **`stop_agent(agent_slug)`** pops the state from the registry, cancels the agent task, awaits it (suppressing `CancelledError`), and calls `adapter.close()`. Idempotent on the slug.
+- **`shutdown()`** stops every running agent — called from the FastAPI lifespan teardown.
+
+### Resume after a backend restart
+
+If the WS handler can't find live state (`get_work_slug_for(slug)` returns `None`), it doesn't 4404 immediately — it tries `resume_agent(work_slug, agent_slug)`:
+
+1. The command reads the persisted agent row + its `session_id` (the SDK's resume handle, captured earlier).
+2. It builds a fresh adapter through the spec registry — same persona/role/provider/model — and passes `session_id` into the new `AgentStartContext`.
+3. The Claude adapter forwards it as `resume=<id>` to the SDK; the Amp adapter forwards it as `continue_thread`. The provider's own session storage takes over from there.
+4. The supervisor calls `start_agent(...)` with `first_message=None` — the SDK session already contains the original turn, so re-injecting context would double-prompt.
+5. The WS subscribes; the client replays from its `?cursor=N` cursor (events that were on disk but not seen) and then drains live events.
+
+The 4404 close code is reserved for agents that don't exist on disk at all.
+
+### How the SDK adapters fit in
+
+Each adapter implements the `AgentAdapter` Protocol from `domain/agents/ports.py`:
+
+| Method | When called | What it does |
+|---|---|---|
+| `start(context)` | once, by `start_agent` | Connect to the SDK with the right options (model, system_prompt, allowed_tools, …). Wires per-adapter state (resume id, can_use_tool callback). |
+| `events()` | once, by `_run_agent` | Async generator. Emits normalised `AgentEvent`s in the order the SDK produces them. |
+| `send_input(text)` | by `send_input` (and once by `start_agent` for first-message) | Pushes a turn into the adapter's input channel. |
+| `stop_turn()` | by `stop_turn` | Cancel the in-flight turn without tearing down the session. |
+| `resolve_permission(rid, decision)` | by `resolve_permission` | Answer a `PermissionRequest` the adapter previously emitted. |
+| `close()` | by `stop_agent` / `shutdown` | Disconnect from the SDK. Idempotent. |
+
+Adapters whose SDK doesn't expose a feature no-op the corresponding method (Amp's `stop_turn`, `resolve_permission`; the stub's everything-but-events). The supervisor calls them uniformly so its own code doesn't branch on provider.
+
+### Tool permissions: the `can_use_tool` callback flow
+
+The Claude adapter is the interesting case. The Claude SDK takes a `can_use_tool: async (tool_name, tool_input, ctx) → PermissionResult` option; for every tool the model wants to use that isn't in `allowed_tools` (Atelier's default: `["Read", "Grep", "Glob"]`), the SDK awaits the callback before invoking the tool. The callback's return value (`Allow` / `Deny`) is what the SDK acts on.
+
+Naive wiring would deadlock the supervisor: the callback runs *inside* the SDK's response iterator, so if `events()` were `async for msg in receive_response(): yield convert(msg)`, the `PermissionRequest` event the callback emits would never reach the supervisor — `events()` is blocked at the `__anext__()` waiting for the next SDK message, which won't come until the callback returns, which won't return until the user responds, which the user can't because nothing reached the WS.
+
+The fix decouples production from consumption with an internal queue:
+
+```
+        SDK                 _can_use_tool             _outgoing             events()
+   ─────────────────────────────────────────────────────────────────────────────────
+                            (called inline)
+                            ↓
+   ToolUse →  callback
+                            put: PermissionRequest  ──►          ──►  yield  →  publish
+                            await future ⏳
+                                                                                  ▼
+   ◄──── allow (or deny) ── future.set_result(...)  ◄── resolve_permission ← WS frame
+                            ↓
+                            put: PermissionDecision  ──►         ──►  yield  →  publish
+                            return PermissionResult
+   ToolResult →             ...
+```
+
+- A side **pump task** (`_run_input_pump`) owns `async for msg in receive_response()` and forwards converted events into `_outgoing`.
+- `events()` only drains `_outgoing` — never directly reads from the SDK.
+- The callback `_can_use_tool` runs on the pump task, generates a `request_id`, creates a future, parks in `self._pending[rid]`, puts a `PermissionRequest` event on `_outgoing`, and `await fut`.
+- The supervisor's `_run_agent` loop drains `_outgoing` via `events()`, publishes the `PermissionRequest` (so it lands in the transcript and reaches the WS).
+- The user clicks Allow / Allow always / Deny → `{"type":"permission",...}` over WS → `supervisor.resolve_permission(slug, rid, decision)` → `adapter.resolve_permission(rid, decision)` → `fut.set_result(decision)`.
+- The callback unparks, emits a `PermissionDecision` event for the transcript, and returns the SDK result. The SDK proceeds.
+
+Two safety details: `stop_turn` and `close` walk every pending future and `set_result("deny")` so the SDK callback can return cleanly before `interrupt()` / `disconnect()` is called — otherwise the callback would hang forever and disconnect would block. `allow_always` is a session-only `set[str]` on the adapter — the user clicks "always allow Bash" once and the next Bash invocation skips the callback entirely without emitting any permission event.
+
+### Slow-subscriber drop
+
+`subscribe()` returns an `AgentSubscription { queue, kicked }`. The queue caps at `SUBSCRIBER_QUEUE_MAX` (256). If publishing overflows it, the supervisor catches `QueueFull`, sets `kicked`, and drops the subscriber slot — bounding memory growth without blocking the publish path. The WS handler watches `kicked` alongside the queue and closes with code 4408 when it fires; the client retries with backoff and resumes from `?cursor=N`. Events published after the drop still land on disk, so nothing is lost.
+
+### Subscribe atomicity (replay vs live)
+
+`subscribe()` snapshots `from_seq = state.seq` *under the publish lock*, then registers the queue *under the same lock*. That atomicity is the trick that makes "replay-then-live" exactly-once: any event with `seq <= from_seq` is already on disk and in the replay window; any event with `seq > from_seq` lands in the queue and only there. No overlap, no gap. See [WS protocol](#ws-protocol) for how the handler stitches the two.
 
 ## Persistence model
 
@@ -87,12 +191,31 @@ Input flow: the WS handler forwards `{"type":"input","text":"..."}` to `supervis
         └── agents/
             └── <agent_slug>/
                 ├── agent.json
-                └── transcript.ndjson
+                ├── transcript.ndjson
+                ├── context.md            ← index (sections per type, links to files)
+                └── context/              ← per-source files
+                    ├── text-1.md
+                    ├── url-1.md
+                    └── jira-ENG-3421.md
 ```
 
 **Filesystem is canonical.** SQLite is treated as a derived index. The `WorkStoreService` writes DB first then FS within a service-level `threading.RLock`; a crash between the two leaves an orphan DB row, and startup `reconcile` (`domain/workstore/reconcile.py`) repairs it: delete DB rows whose FS dir is gone; restore DB rows from `work.json`/`agent.json` if the FS has them but DB doesn't; FS wins on any field conflict.
 
 `reconcile(repo, files)` runs in the FastAPI lifespan startup hook. The reconcile invariant is the AC for STORY-005 — see `tests/integration/test_workstore_e2e.py` for the round-trip guarantees.
+
+## Contexts pipeline
+
+A `Context` (`domain/models.py`) is `(type, value, conn_id?)`. Both `Work` and `Agent` can carry a list — but **contexts are FS-only**: they live in `work.json` / `agent.json` next to the entity, never on the SQL row. The dataclasses themselves don't have a `contexts` field (SQLAlchemy populates instances via `__new__` + setattr on mapped columns and bypasses `__init__`, so a `field(default_factory=list)` default would never fire — `dataclass.__eq__` then crashes in `reconcile`'s `db_agent != fs_agent` check). Instead contexts travel as a sibling value: `serialize_work_record(work, contexts)` and `serialize_agent(agent, contexts)`.
+
+**At agent-create time** (`domain/commands/agents/start.py`), the `WorkStore.render_agent_contexts(work_slug, agent_slug, contexts)` port is called once. `domain/agents/context_render.py` is the pure-domain renderer:
+
+- For `text` / `url` / `file` it writes the value directly into `context/<type>-<n>.md`.
+- For `jira` / `sentry` / `honeycomb` it writes a placeholder body — `"Not yet rendered — Phase 2 will fetch via the connector"` — at `context/<type>-<value>.md` when the value parses as a slug, else numbered. Phase 2 will replace the placeholder body via `infrastructure/connections/fetchers/`; the FS shape stays the same.
+- Then it builds `context.md` — sections grouped by type, one bullet per file, linked relatively (`[text-1.md](context/text-1.md)`).
+
+The renderer returns the absolute path of `context.md`, which becomes the `first_message` injected by the supervisor on first start (see [AgentSupervisorService](#agentsupervisorservice)). Token-budget-conscious by design: the index is the only thing sent to the model; the agent decides what to actually read.
+
+**Why filesystem, not a DB column.** Contexts are user-curated reference material, not queryable state. Putting them in SQL means a join table or a JSON column, both of which fight reconcile's "FS is canonical" invariant. The agent's `Read` tool already handles the FS — adding a SQL relation buys nothing. If we ever need to filter agents by context-type or count them in a query, that's the trigger to revisit; today nothing reads them via SQL.
 
 ## Transcript log
 

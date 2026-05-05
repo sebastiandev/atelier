@@ -48,7 +48,6 @@ from src.infrastructure.agents.amp_adapter import AmpAdapter, _convert
 def _start_context() -> AgentStartContext:
     return AgentStartContext(
         workdir=Path("/tmp/amp-adapter-test"),
-        context_md="",
         model="smart",
         system_prompt="prompt",
     )
@@ -356,7 +355,6 @@ def test_passes_continue_thread_when_session_id_set() -> None:
     async def session() -> None:
         ctx = AgentStartContext(
             workdir=Path("/tmp/amp-adapter-test"),
-            context_md="",
             model="smart",
             system_prompt="prompt",
             session_id="thread-xyz",

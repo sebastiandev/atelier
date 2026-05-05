@@ -97,7 +97,6 @@ def _scripted_events() -> list[AgentEvent]:
 def _start_context() -> AgentStartContext:
     return AgentStartContext(
         workdir=Path("/tmp/contract-agent"),
-        context_md="# brief",
         model="m",
         system_prompt="you are an agent",
     )

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from src.domain.agents.events import AgentEvent
+from src.domain.agents.events import AgentEvent, PermissionDecisionValue
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,6 @@ class AgentStartContext:
     """
 
     workdir: Path
-    context_md: str
     model: str
     system_prompt: str
     session_id: str | None = None
@@ -50,6 +49,12 @@ class AgentAdapter(Protocol):
     ready to accept the next ``send_input``. Adapters whose underlying
     SDK can't interrupt mid-turn no-op here; callers must not assume the
     turn was actually cancelled.
+
+    ``resolve_permission(request_id, decision)`` answers a
+    ``PermissionRequest`` the adapter previously emitted. Adapters whose
+    SDK doesn't gate tools through a callback (Amp today, the stub
+    always) can no-op — the supervisor still calls them so the input
+    path is uniform.
     """
 
     async def start(self, context: AgentStartContext) -> None: ...
@@ -57,6 +62,10 @@ class AgentAdapter(Protocol):
     async def send_input(self, text: str) -> None: ...
 
     async def stop_turn(self) -> None: ...
+
+    async def resolve_permission(
+        self, request_id: str, decision: PermissionDecisionValue
+    ) -> None: ...
 
     def events(self) -> AsyncIterator[AgentEvent]: ...
 

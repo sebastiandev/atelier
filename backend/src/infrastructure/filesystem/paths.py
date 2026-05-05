@@ -56,5 +56,11 @@ class WorkspacePaths:
     def transcript(self, work_slug: str, agent_slug: str) -> Path:
         return self.agent_dir(work_slug, agent_slug) / "transcript.ndjson"
 
+    def agent_context_dir(self, work_slug: str, agent_slug: str) -> Path:
+        return self.agent_dir(work_slug, agent_slug) / "context"
+
+    def agent_context_index(self, work_slug: str, agent_slug: str) -> Path:
+        return self.agent_dir(work_slug, agent_slug) / "context.md"
+
 
 __all__ = ["WorkspacePaths"]

@@ -35,7 +35,6 @@ def _run(coro: Any) -> Any:
 def _start_context() -> AgentStartContext:
     return AgentStartContext(
         workdir=Path("/tmp/agent"),
-        context_md="brief",
         model="m",
         system_prompt="s",
     )
@@ -205,6 +204,34 @@ def test_stop_turn_to_unknown_agent_raises() -> None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         with pytest.raises(ValueError, match="not running"):
             await supervisor.stop_turn("agt-404")
+
+    _run(run())
+
+
+# ---------------------------------------------------------------------------
+# resolve_permission
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_permission_forwards_to_adapter() -> None:
+    async def run() -> list[tuple[str, str]]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter([])
+        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await supervisor.resolve_permission("agt-1", "req-1", "allow")
+        await supervisor.resolve_permission("agt-1", "req-2", "deny")
+        await supervisor.shutdown()
+        return adapter.permission_resolutions
+
+    resolutions = _run(run())
+    assert resolutions == [("req-1", "allow"), ("req-2", "deny")]
+
+
+def test_resolve_permission_to_unknown_agent_raises() -> None:
+    async def run() -> None:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        with pytest.raises(ValueError, match="not running"):
+            await supervisor.resolve_permission("agt-404", "req-1", "allow")
 
     _run(run())
 

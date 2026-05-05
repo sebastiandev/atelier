@@ -14,7 +14,7 @@ import dataclasses
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
-from src.domain.agents.events import AgentEvent
+from src.domain.agents.events import AgentEvent, PermissionDecisionValue
 from src.domain.agents.ports import AgentStartContext
 
 
@@ -30,6 +30,7 @@ class StubAgentAdapter:
         self.start_context: AgentStartContext | None = None
         self.received_inputs: list[str] = []
         self.stop_turn_calls: int = 0
+        self.permission_resolutions: list[tuple[str, PermissionDecisionValue]] = []
         self.closed: bool = False
 
     async def start(self, context: AgentStartContext) -> None:
@@ -44,6 +45,14 @@ class StubAgentAdapter:
         # No-op for the stub: it doesn't model an in-flight turn. Tests
         # that care about the contract observe ``stop_turn_calls``.
         self.stop_turn_calls += 1
+
+    async def resolve_permission(
+        self, request_id: str, decision: PermissionDecisionValue
+    ) -> None:
+        # No-op for the stub: it never emits permission_request, so a
+        # caller-side resolution arrives in tests only when the contract
+        # is being exercised. ``permission_resolutions`` lets tests assert.
+        self.permission_resolutions.append((request_id, decision))
 
     async def events(self) -> AsyncIterator[AgentEvent]:
         for event in self._scripted:

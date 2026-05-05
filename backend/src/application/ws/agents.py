@@ -130,6 +130,14 @@ async def _receive_inputs(
                 await supervisor.send_input(agent_slug, text)
         elif kind == "stop":
             await supervisor.stop_turn(agent_slug)
+        elif kind == "permission":
+            request_id = parsed.get("request_id")
+            decision = parsed.get("decision")
+            if (
+                isinstance(request_id, str)
+                and decision in ("allow", "allow_always", "deny")
+            ):
+                await supervisor.resolve_permission(agent_slug, request_id, decision)
 
 
 def _parse_cursor(value: str | None) -> int:

@@ -19,7 +19,8 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from src.domain.models import Agent, Artifact, Handoff, Work
+from src.domain.agents.context_render import render_agent_contexts
+from src.domain.models import Agent, Artifact, Context, Handoff, Work
 from src.domain.workstore._serde import (
     deserialize_contexts,
     serialize_agent,
@@ -134,8 +135,19 @@ class WorkStoreService:
             agent = self._repo.add_agent(agent)
             slug = _require_slug(agent)
             self._files.ensure_agent_dir(req.work_slug, slug)
-            self._files.write_agent_json(req.work_slug, slug, serialize_agent(agent))
+            self._files.write_agent_json(
+                req.work_slug, slug, serialize_agent(agent, list(req.contexts))
+            )
         return agent
+
+    def render_agent_contexts(
+        self, work_slug: str, agent_slug: str, contexts: list[Context]
+    ) -> str | None:
+        """Write per-source files + the index for an agent. Returns the
+        absolute path to ``context.md``, or ``None`` if there are no
+        contexts to render."""
+        with self._lock:
+            return render_agent_contexts(self._files, work_slug, agent_slug, contexts)
 
     def list_agents_for_work(self, work_slug: str) -> list[Agent]:
         with self._lock:

@@ -53,6 +53,7 @@ class AddAgentRequest:
     role: str
     provider: Provider
     model: str
+    contexts: tuple[Context, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -1,13 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  type Connection,
+  type ConnectionType,
+  type ContextEntry,
   type CreateAgentPayload,
   type Persona,
   type ProviderDescriptor,
   PERSONAS,
   PERSONA_GLYPH,
+  listConnections,
   listProviders,
 } from "./api";
+import { CONNECTION_FIELDS, CONNECTION_TYPES } from "./connectionFields";
+import { ContextRow } from "./ContextRow";
+import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 
 type Props = {
   workSlug: string;
@@ -15,6 +22,12 @@ type Props = {
   onClose: () => void;
   onCreate: (payload: CreateAgentPayload) => Promise<void>;
 };
+
+const SIMPLE_TYPES: { id: SimpleContextType; label: string }[] = [
+  { id: "text", label: "Text" },
+  { id: "url", label: "URL" },
+  { id: "file", label: "File" },
+];
 
 const CUSTOM_PERSONA_PLACEHOLDER: Persona = "developer";
 
@@ -31,9 +44,18 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
   const [model, setModel] = useState<string | null>(null);
   const [options, setOptions] = useState<Record<string, string>>({});
 
+  const [contexts, setContexts] = useState<ContextEntry[]>([]);
+  const [connections, setConnections] = useState<Connection[]>([]);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    listConnections()
+      .then(setConnections)
+      .catch(() => setConnections([]));
+  }, []);
 
   useEffect(() => {
     listProviders()
@@ -89,6 +111,29 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
     setCustomMode(true);
   }
 
+  function addConnectionContext(type: ConnectionType) {
+    setContexts((prev) => [...prev, { type, value: "", conn_id: null }]);
+  }
+
+  function addSimpleContext(type: SimpleContextType) {
+    setContexts((prev) => [...prev, { type, value: "", conn_id: null }]);
+  }
+
+  function patchContext(index: number, next: ContextEntry) {
+    setContexts((prev) => prev.map((c, i) => (i === index ? next : c)));
+  }
+
+  function removeContext(index: number) {
+    setContexts((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function upsertConnection(connection: Connection) {
+    setConnections((prev) => {
+      const without = prev.filter((c) => c.slug !== connection.slug);
+      return [...without, connection];
+    });
+  }
+
   const canSubmit =
     !!provider &&
     !!model &&
@@ -112,6 +157,10 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
     };
     if (Object.keys(options).length > 0) {
       payload.options = options;
+    }
+    const trimmedContexts = contexts.filter((c) => c.value.trim() || c.conn_id);
+    if (trimmedContexts.length > 0) {
+      payload.contexts = trimmedContexts;
     }
     setSubmitting(true);
     setError(null);
@@ -274,8 +323,56 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
             </>
           )}
 
-          <div className="hint">
-            Context attachments and worktree base-branch picker land in Sprint 3.
+          <div className="field">
+            <span className="label">Context</span>
+            <span className="hint">
+              Pointers the agent can read on demand. Connection-backed sources
+              get full content in a later sprint.
+            </span>
+            {contexts.map((c, i) =>
+              SIMPLE_TYPES.some((s) => s.id === c.type) ? (
+                <SimpleContextRow
+                  key={i}
+                  context={c}
+                  onChange={(next) => patchContext(i, next)}
+                  onRemove={() => removeContext(i)}
+                />
+              ) : (
+                <ContextRow
+                  key={i}
+                  context={c}
+                  connections={connections}
+                  onChange={(next) => patchContext(i, next)}
+                  onRemove={() => removeContext(i)}
+                  onConnectionSaved={upsertConnection}
+                />
+              ),
+            )}
+            <div className="add-context-row">
+              <span className="hint">+ Add context</span>
+              {SIMPLE_TYPES.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="btn sm"
+                  data-source={s.id}
+                  onClick={() => addSimpleContext(s.id)}
+                >
+                  {s.label}
+                </button>
+              ))}
+              {CONNECTION_TYPES.map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  className="btn sm"
+                  data-source={type}
+                  onClick={() => addConnectionContext(type)}
+                >
+                  {CONNECTION_FIELDS[type].label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {error && <div className="form-error">{error}</div>}

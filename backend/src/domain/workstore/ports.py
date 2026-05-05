@@ -18,7 +18,7 @@ types.
 from collections.abc import Iterator
 from typing import Any, Protocol
 
-from src.domain.models import Agent, Artifact, Handoff, Work
+from src.domain.models import Agent, Artifact, Context, Handoff, Work
 from src.domain.workstore.dtos import (
     AddAgentRequest,
     CreateWorkRequest,
@@ -43,6 +43,10 @@ class WorkStore(Protocol):
     def soft_delete_work(self, work_slug: str) -> None: ...
 
     def add_agent_to_work(self, req: AddAgentRequest) -> Agent: ...
+
+    def render_agent_contexts(
+        self, work_slug: str, agent_slug: str, contexts: list[Context]
+    ) -> str | None: ...
 
     def list_agents_for_work(self, work_slug: str) -> list[Agent]: ...
 
@@ -108,6 +112,13 @@ class WorkspaceFiles(Protocol):
     def read_agent_json(self, work_slug: str, agent_slug: str) -> dict[str, Any] | None: ...
 
     def write_handoff_doc(self, work_slug: str, filename: str, content: str) -> str: ...
+
+    def write_agent_context_file(
+        self, work_slug: str, agent_slug: str, filename: str, content: str
+    ) -> str: ...
+    def write_agent_context_index(
+        self, work_slug: str, agent_slug: str, content: str
+    ) -> str: ...
 
     def list_work_slugs(self) -> list[str]: ...
     def list_agent_slugs(self, work_slug: str) -> list[str]: ...

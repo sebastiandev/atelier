@@ -108,6 +108,7 @@ export type CreateAgentPayload = {
   provider: string;
   model: string;
   options?: Record<string, string>;
+  contexts?: ContextEntry[];
 };
 
 export function listProviders(): Promise<ProviderDescriptor[]> {
@@ -121,7 +122,7 @@ export function createAgent(
   return fetch(`/api/works/${workSlug}/agents`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, contexts: payload.contexts ?? [] }),
   }).then((r) => jsonOrThrow<AgentSummary>(r));
 }
 

@@ -63,6 +63,7 @@ class NewAgentRequest(BaseModel):
     # Provider-specific knobs (e.g. Claude's thinking_effort). The Spec
     # for ``provider`` validates the contents; unknown keys are rejected.
     options: dict[str, Any] = Field(default_factory=dict)
+    contexts: list[ContextSchema] = Field(default_factory=list)
 
 
 class AgentSummary(BaseModel):
