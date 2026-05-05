@@ -1,0 +1,353 @@
+# API flow diagrams
+
+One sequence diagram per public endpoint. The diagrams show what the router, command, and ports actually do — not exhaustive — so a reader can spot the right files without reading every layer.
+
+Conventions used in the diagrams:
+
+- **Router** = `application/http/routes/*.py` or `application/ws/*.py` (thin glue per CLAUDE.md).
+- **Command** = `domain/commands/**/*.py` (the orchestration unit each route delegates to).
+- **WorkStore** = the SQL+FS port composed in `domain/workstore/service.py`.
+- **Supervisor** = `AgentSupervisorService` (one task per running agent).
+- **Adapter** = the per-provider `AgentAdapter` impl (Claude / Amp / Stub).
+- A box with double border denotes an *external* boundary (the browser, the SDK CLI subprocess, the keychain, the filesystem).
+
+Where a flow has notable concurrency or queueing, look for the side note at the end of the section.
+
+---
+
+## `GET /api/health`
+
+```
+Browser ──► Router (health.py)
+                │
+                └─► returns {"status":"ok"}
+```
+
+Bare liveness probe. No persistence touched.
+
+---
+
+## `GET /api/providers`
+
+```
+Browser ──► Router (providers.py)
+                │
+                └─► for spec in SPECS.values():
+                        spec.describe()  →  ProviderDescriptor
+                    return list
+```
+
+Same `Spec` instances back the create-agent validator (`spec.build`) so the descriptor and validator can't drift. The response carries `primary_field` + `options` (enums) + `text_options` (free-form fields like Amp's custom allowlist) + `advanced_intro` (explainer copy).
+
+---
+
+## `GET /api/works`
+
+```
+Browser ──► Router (works.py)
+                │
+                └─► WorkStore.list_works()
+                        │
+                        └─► WorkRepository.list_works()  (SQLite)
+                            ╔══════════╗
+                            ║ atelier.db║
+                            ╚══════════╝
+```
+
+Soft-deleted works are filtered out at the service layer. SQL is the index; the canonical state is `work.json` on disk, but listing works only reads the index.
+
+---
+
+## `POST /api/works`
+
+```
+Browser ──► Router (works.py) ──► WorkStore.create_work(req)
+                                       │
+                                       ├─► repo.add_work(work)        ← assigns id+slug
+                                       ├─► files.ensure_work_dir(slug)
+                                       ├─► files.write_work_json(slug, …) ← contexts go here
+                                       └─► files.write_brief(slug, description)
+                                       └─► returns WorkRecord(work, contexts)
+                                Router formats WorkDetail (Pydantic)
+```
+
+DB-first ordering: the repo commits before the FS write. A crash between the two leaves an orphan DB row, which startup `reconcile` heals against the canonical `work.json`. **Contexts live FS-only** (in `work.json`); not on the SQL row.
+
+---
+
+## `GET /api/works/{slug}`
+
+```
+Browser ──► Router ──► WorkStore.get_work(slug)
+                            │
+                            ├─► repo.get_work_by_slug(slug)
+                            └─► files.read_work_json(slug)  ← contexts come from here
+                            └─► returns WorkRecord(work, contexts) | None
+                        Router formats WorkDetail
+```
+
+Returns 404 when the work is missing or soft-deleted.
+
+---
+
+## `PATCH /api/works/{slug}`
+
+```
+Browser ──► Router ──► WorkStore.update_work(req)
+                            │
+                            ├─► repo.upsert_work(existing)        ← name/description/status
+                            ├─► files.write_work_json(slug, …)    ← merged contexts
+                            └─► files.write_brief(slug, …)        ← only if description changed
+                       returns WorkRecord
+```
+
+Partial update: any field left as `None` in the request is preserved.
+
+---
+
+## `DELETE /api/works/{slug}`
+
+```
+Browser ──► Router ──► WorkStore.soft_delete_work(slug)
+                            │
+                            ├─► repo.upsert_work(existing with status="deleted")
+                            └─► files.write_work_json(slug, …)    ← status flips on disk too
+```
+
+Soft delete: the row + folder stay, status flips to `deleted`. List endpoints filter them out.
+
+---
+
+## `GET /api/works/{slug}/agents`
+
+```
+Browser ──► Router (agents.py) ──► commands.list_for_work.execute(workstore, slug)
+                                        │
+                                        └─► WorkStore.list_agents_for_work(slug)
+                                                │
+                                                └─► repo.list_agents_for_work(slug)
+                                        returns list[Agent]
+                                   Router maps each to AgentSummary
+```
+
+404 if the work doesn't exist.
+
+---
+
+## `POST /api/works/{slug}/agents`
+
+The fattest endpoint. Creates an agent row, provisions a worktree, renders contexts, builds a provider config, spawns the SDK adapter, registers it on the supervisor, and (if contexts were attached) injects the first-message context pointer.
+
+```
+Browser
+   │  payload = {name, persona, role, provider, model, options, contexts}
+   ▼
+Router (agents.py)
+   │
+   ▼
+commands.start.execute(workstore, worktree_manager, settings, req)
+   │
+   ├─► WorkStore.get_work(slug)                        ← validate work exists + folder mkdir-able
+   ├─► SPECS[provider].build(common, model, options)   ← validate options before allocating
+   ├─► WorkStore.add_agent_to_work(req with contexts)  ← persists agent.json + contexts
+   │       └─► repo.add_agent → assigns slug
+   │       └─► files.write_agent_json(work, agent, … contexts …)
+   ├─► WorkStore.render_agent_contexts(work, agent, contexts)
+   │       └─► writes agents/<slug>/context/<files>.md
+   │       └─► writes agents/<slug>/context.md  (index)
+   │       returns abs_path | None
+   ├─► WorktreeManager.ensure(work, agent, source)     ← git worktree if source is a repo
+   ├─► build_adapter(config, settings)                 ← singledispatch: Claude / Amp / Stub
+   └─► returns StartAgentPlan(agent, adapter, context, first_message?)
+                                     │
+                                     ▼
+Router ──► supervisor.start_agent(work, agent_slug, adapter, context, first_message)
+                │
+                ├─► seq = transcript_log.last_seq(...)        ← seed for monotonic resumes
+                ├─► register _AgentState in self._states
+                ├─► await adapter.start(context)              ← Claude: connect SDK
+                │                                                 Amp: open Unix permission socket
+                ├─► if first_message is not None:
+                │       supervisor.send_input(slug, first_message)  ← lands as user_input seq=1
+                └─► task = asyncio.create_task(self._run_agent(state))
+                              │
+                              └─► async for event in adapter.events():
+                                      _publish(state, event)  ← seq+fsync+queue under publish_lock
+
+Router ──► returns AgentSummary
+```
+
+After the response: events stream from the adapter into the transcript and any subscribed WS subscriber. See [WS: `/api/agents/{slug}/stream`](#ws-apiagentsslugstream) for the consumer side.
+
+Edge cases: missing `work_slug` → 404; bad model / unknown options → 422 (`InvalidProviderConfig`); folder `mkdir` failure → 422 (`WorkFolderMissing`).
+
+---
+
+## WS `/api/agents/{slug}/stream`
+
+The supervisor → browser fan-out, plus the inbound input/stop/permission frames. Sequence depends on whether the supervisor has live state for the slug.
+
+### Case A — agent is live in the supervisor
+
+```
+Browser ─── connect ?cursor=N ───► Router (ws/agents.py)
+                                       │
+                                       ├─► supervisor.get_work_slug_for(slug) → work_slug
+                                       ├─► await websocket.accept()
+                                       │
+                                       └─► async with supervisor.subscribe(slug):  (atomic)
+                                              │            ──► (from_seq, AgentSubscription{queue, kicked})
+                                              │
+                                              ├─► REPLAY: transcript_log.read_from_cursor(work, slug, N)
+                                              │           filter seq ≤ from_seq
+                                              │           websocket.send_json(event) for each
+                                              │
+                                              └─► LIVE: race three tasks
+                                                    drain: queue.get() → ws.send_json
+                                                    recv:  ws.receive_text() → parse → dispatch
+                                                    kick:  sub.kicked.wait() → close(4408)
+```
+
+Atomicity (`subscribe` snapshots `from_seq` *under the publish lock* and registers the queue under the same lock) gives "no overlap, no gap": every event with `seq ≤ from_seq` is on disk and replayable; every event with `seq > from_seq` flows only through the queue.
+
+The `recv` task dispatches inbound frames:
+- `{"type":"input","text":"…"}` → `supervisor.send_input(slug, text)` (writes `user_input` line, forwards to adapter).
+- `{"type":"stop"}` → `supervisor.stop_turn(slug)` (writes `user_stop` line, calls `adapter.stop_turn()`).
+- `{"type":"permission","request_id":"…","decision":"allow|allow_always|deny"}` → `supervisor.resolve_permission(slug, rid, decision)` (delegates to `adapter.resolve_permission`, which completes the open future).
+
+Anything else is ignored.
+
+### Case B — supervisor lost state (backend restart, agent closed-to-rail)
+
+```
+Browser ─── connect ?cursor=N ───► Router
+                                       │
+                                       ├─► supervisor.get_work_slug_for(slug) → None
+                                       ├─► WorkStore.get_work_slug_for_agent(slug)
+                                       │       │
+                                       │       ├─ None  → ws.close(4404)  ← truly unknown slug
+                                       │       └─ work_slug → continue
+                                       │
+                                       ├─► commands.resume.execute(workstore, worktree_manager, settings, req)
+                                       │       └─► reads agent row + session_id from SQL
+                                       │       └─► rebuilds adapter via SPECS[provider].build(...)
+                                       │       └─► returns ResumeAgentPlan(agent, adapter, context.session_id)
+                                       │
+                                       ├─► supervisor.start_agent(work, slug, adapter, context)
+                                       │       (no first_message — the SDK session retains the original turn)
+                                       │       └─► Claude adapter passes session_id as `resume`
+                                       │           Amp adapter passes session_id as `continue_thread`
+                                       │
+                                       └─► (continues as Case A: subscribe → replay → live)
+```
+
+The agent's transcript on disk and the SDK session on the provider side keep the conversation continuous across the restart. The supervisor's per-task seq seed is taken from `transcript_log.last_seq` so new events keep climbing without colliding with replayed history.
+
+### Adapter event pumping (inside the agent task)
+
+```
+adapter.events()                          supervisor._run_agent
+   │                                            │
+   │  ◄─── state.adapter ─────                  │
+   │                                            │
+   ├─► (Claude) async for msg in receive_response(): convert → _outgoing
+   │   side task: ─────────► _outgoing.put(AgentEvent)
+   │                                ▲
+   │  can_use_tool callback ────────┤  (Permission flow — see backend.md)
+   │
+   ├─► (Amp) async for msg in executor(...): convert → _outgoing
+   │   bridge socket connection ─────► _outgoing.put(PermissionRequest)
+   │   resolve_permission(rid, …) ◄─── future.set_result(decision)
+   │                                ─► writes back to bridge over socket
+   │
+   └─► drain: _outgoing.get() → yield to events() → _publish(state, event)
+                                                       ├─ seq stamp
+                                                       ├─ append+fsync transcript.ndjson
+                                                       └─ queue.put_nowait if subscribed
+```
+
+Both adapters use the same outgoing-queue + pump pattern so synchronous SDK callbacks (Claude's `can_use_tool`, Amp's bridge connection handler) can interleave events with the SDK's own message stream without blocking. See `docs/backend.md` → "Tool permissions: the can_use_tool callback flow" and "Tool permissions for Amp: the delegate-bridge".
+
+---
+
+## Connections
+
+### `GET /api/connections`
+
+```
+Browser ──► Router (connections.py) ──► ConnectionStore.list()
+                                              └─► repo.list()  (SQLite)
+                                        Router maps to ConnectionRead (no token field)
+```
+
+Tokens never leave the keychain over the API.
+
+### `POST /api/connections`
+
+```
+Browser ──► Router ──► ConnectionStore.create(payload)
+                            │
+                            ├─► repo.add(connection)     ← assigns id+slug
+                            └─► secret_store.set(slug, token)   ╔══════════╗
+                                                                 ║ keyring  ║
+                                                                 ╚══════════╝
+                       returns ConnectionRead
+```
+
+The token only ever lives in the OS keychain (the `KeyringSecretStore` adapter). The DB row carries metadata only.
+
+### `GET /api/connections/{slug}`
+
+```
+Browser ──► Router ──► repo.get_by_slug(slug) → 404 if missing
+                       returns ConnectionRead
+```
+
+### `PATCH /api/connections/{slug}`
+
+```
+Browser ──► Router ──► ConnectionStore.update(slug, payload)
+                            │
+                            ├─► repo.upsert(connection)
+                            └─► (if token in payload) secret_store.set(slug, new_token)
+                       returns ConnectionRead
+```
+
+Token rotation happens iff `token` is in the payload; metadata-only patches don't touch the keychain.
+
+### `DELETE /api/connections/{slug}`
+
+```
+Browser ──► Router ──► ConnectionStore.delete(slug)
+                            │
+                            ├─► repo.delete(slug)
+                            └─► secret_store.delete(slug)
+                       204 No Content
+```
+
+### `POST /api/connections/{slug}/verify`
+
+```
+Browser ──► Router ──► ConnectionStore.verify(slug)
+                            │
+                            ├─► repo.get_by_slug(slug)
+                            ├─► secret_store.get(slug) → token
+                            └─► verify(connection, token)   ← per-type adapter (jira, sentry, honeycomb)
+                       returns VerifyResponse{verified, error?}
+                       (also persists last_used + verified flag on the row)
+```
+
+`verify` is a per-type pure function (`infrastructure/connections/verify.py`); it lives behind a port so tests can stub it.
+
+---
+
+## Persistence ordering (cross-cutting)
+
+Several flows write to both SQL and the filesystem. The convention everywhere:
+
+1. **Persist to SQL first** (commits per call inside the repo).
+2. **Then write to FS** (atomic via `<path>.tmp` + rename + fsync).
+
+A crash between (1) and (2) leaves an orphan DB row. On startup, `reconcile` (`domain/workstore/reconcile.py`) walks the FS as canonical and brings the SQL index back into agreement: insert rows that exist on disk but not in DB, update rows whose DB state differs from disk, delete rows that no longer exist on disk.
+
+This is why the FS layout (`work.json`, `agent.json`, `transcript.ndjson`, `context.md` + `context/`) is the source of truth — the DB is just an index that supports fast queries, and any mismatch is reconciled toward the disk.

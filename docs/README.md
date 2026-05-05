@@ -13,6 +13,7 @@ the code wins — but please update the doc.
 | --- | --- |
 | [`architecture.md`](architecture.md) | Clean architecture layers, dependency rule, ports, command pattern, project-wide conventions |
 | [`backend.md`](backend.md) | Backend-specific: provider abstraction, supervisor model, persistence layout, transcript log, WS protocol |
+| [`api-flows.md`](api-flows.md) | One sequence diagram per HTTP/WS endpoint — what each route does, which command runs, which ports get touched |
 | [`frontend.md`](frontend.md) | Frontend-specific: routing, `AgentTile` modes, `useAgentStream`, design tokens + persona theming, dialog conventions |
 
 ## Other authoritative sources
