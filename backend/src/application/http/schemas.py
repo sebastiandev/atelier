@@ -87,7 +87,6 @@ class JiraConfigSchema(BaseModel):
 class SentryConfigSchema(BaseModel):
     type: Literal["sentry"]
     org: str = Field(min_length=1)
-    region: str | None = None
 
 
 class HoneycombConfigSchema(BaseModel):

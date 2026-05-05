@@ -146,7 +146,7 @@ export type ConnectionType = "jira" | "sentry" | "honeycomb";
 // Per-type configs — discriminated union on `type`. Mirrors the backend
 // dataclasses (JiraConfig / SentryConfig / HoneycombConfig).
 export type JiraConfig = { type: "jira"; url: string; email: string };
-export type SentryConfig = { type: "sentry"; org: string; region: string | null };
+export type SentryConfig = { type: "sentry"; org: string };
 export type HoneycombConfig = { type: "honeycomb"; env: string; team: string | null };
 export type ConnectionConfig = JiraConfig | SentryConfig | HoneycombConfig;
 

@@ -150,7 +150,7 @@ def _schema_to_config(schema: ConnectionConfigSchema) -> ConnectionConfig:
     if isinstance(schema, JiraConfigSchema):
         return JiraConfig(url=schema.url, email=schema.email)
     if isinstance(schema, SentryConfigSchema):
-        return SentryConfig(org=schema.org, region=schema.region)
+        return SentryConfig(org=schema.org)
     return HoneycombConfig(env=schema.env, team=schema.team)
 
 
@@ -158,7 +158,7 @@ def _config_to_schema(config: ConnectionConfig) -> ConnectionConfigSchema:
     if isinstance(config, JiraConfig):
         return JiraConfigSchema(type="jira", url=config.url, email=config.email)
     if isinstance(config, SentryConfig):
-        return SentryConfigSchema(type="sentry", org=config.org, region=config.region)
+        return SentryConfigSchema(type="sentry", org=config.org)
     return HoneycombConfigSchema(type="honeycomb", env=config.env, team=config.team)
 
 

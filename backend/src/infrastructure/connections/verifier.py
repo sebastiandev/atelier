@@ -3,7 +3,7 @@
 Calls the source's auth endpoint to confirm the supplied token works:
 
   - Jira:      ``GET {url}/rest/api/3/myself`` with Basic auth (email + token)
-  - Sentry:    ``GET https://sentry.io/api/0/`` with Bearer token
+  - Sentry:    ``GET https://sentry.io/api/0/organizations/{org}/`` with Bearer token
   - Honeycomb: ``GET https://api.honeycomb.io/1/auth`` with X-Honeycomb-Team
 
 Dispatch via ``functools.singledispatch`` on the typed config — adding a
@@ -56,7 +56,7 @@ def _(config: JiraConfig, token: str) -> VerifyResult:
 @_verify.register
 def _(config: SentryConfig, token: str) -> VerifyResult:
     response = httpx.get(
-        "https://sentry.io/api/0/",
+        f"https://sentry.io/api/0/organizations/{config.org}/",
         headers={"Authorization": f"Bearer {token}"},
         timeout=_TIMEOUT_SECONDS,
     )

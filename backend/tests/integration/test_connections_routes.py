@@ -274,9 +274,8 @@ def test_list_connection_types_returns_descriptors(
 
 def test_descriptor_shape(connections_client: TestClient) -> None:
     """Smoke-tests the wire shape: each descriptor exposes label, glyph,
-    docs, config_fields, and the two capability flags. Jira has both
-    flags on (verify + fetch); Sentry/Honeycomb only verify (no fetcher
-    yet)."""
+    docs, config_fields, and the two capability flags. Jira and Sentry
+    are both fetchable; Honeycomb only verifies (no fetcher yet)."""
     body = connections_client.get("/api/connections/types").json()
     by_type = {d["type"]: d for d in body}
 
@@ -288,21 +287,18 @@ def test_descriptor_shape(connections_client: TestClient) -> None:
     field_ids = {f["id"] for f in jira["config_fields"]}
     assert field_ids == {"url", "email"}
 
-    assert by_type["sentry"]["context_fetchable"] is False
+    assert by_type["sentry"]["context_fetchable"] is True
     assert by_type["honeycomb"]["context_fetchable"] is False
 
 
-def test_descriptor_field_carries_required_secret_options(
+def test_descriptor_field_carries_required_attribute(
     connections_client: TestClient,
 ) -> None:
-    """The Sentry descriptor is the one that exercises every field
-    attribute — required, options (enum), and a non-required free-text
-    field. If this stays in sync with descriptors.py, the FE can rely on
-    the same shape across types."""
+    """Required-flag round-trips through the descriptor wire shape.
+    Sentry has a single required ``org`` field after dropping ``region``."""
     body = connections_client.get("/api/connections/types").json()
     sentry = next(d for d in body if d["type"] == "sentry")
     fields_by_id = {f["id"]: f for f in sentry["config_fields"]}
 
+    assert set(fields_by_id) == {"org"}
     assert fields_by_id["org"]["required"] is True
-    assert fields_by_id["region"]["required"] is False
-    assert fields_by_id["region"]["options"] == ["us", "eu", "self-hosted"]

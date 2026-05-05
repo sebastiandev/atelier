@@ -40,8 +40,7 @@ class ConnectionField:
     # secrets (e.g. Sentry's separate org-level token) can ride this
     # path without a schema change.
     secret: bool = False
-    # Enum-style fields (e.g. Sentry's region: us / eu / self-hosted).
-    # Empty/None for free-text.
+    # Enum-style fields (preset choices). Empty/None for free-text.
     options: list[str] | None = None
 
 
@@ -91,15 +90,9 @@ DESCRIPTORS: dict[ConnectionType, ConnectionDescriptor] = {
                 placeholder="acme",
                 required=True,
             ),
-            ConnectionField(
-                id="region",
-                label="Region",
-                placeholder="us",
-                options=["us", "eu", "self-hosted"],
-            ),
         ],
         verifiable=True,
-        context_fetchable=False,
+        context_fetchable=True,
     ),
     "honeycomb": ConnectionDescriptor(
         type="honeycomb",

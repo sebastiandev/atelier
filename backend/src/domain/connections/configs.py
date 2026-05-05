@@ -30,7 +30,6 @@ class JiraConfig:
 @dataclass(frozen=True)
 class SentryConfig:
     org: str
-    region: str | None = None
 
 
 @dataclass(frozen=True)

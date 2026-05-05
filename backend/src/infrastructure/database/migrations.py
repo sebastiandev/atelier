@@ -16,7 +16,7 @@ from src.infrastructure.database.tables import (
     schema_version_table,
 )
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 class SchemaMismatchError(RuntimeError):
@@ -54,6 +54,14 @@ def initialize_database(engine: Engine) -> None:
             conn.execute(text("DROP TABLE IF EXISTS connections"))
             connections_table.create(conn)
             existing = 3
+        if existing == 3:
+            # v3 → v4: SentryConfig dropped its ``region`` field (sentry.io
+            # has no region prefix; verifier + fetcher target the org-scoped
+            # endpoint). Existing sentry rows would TypeError on hydrate
+            # (``cls(**data)`` rejects the stale ``region`` key), so wipe
+            # only those — jira/honeycomb rows stay intact.
+            conn.execute(text("DELETE FROM connections WHERE type = 'sentry'"))
+            existing = 4
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

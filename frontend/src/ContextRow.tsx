@@ -31,7 +31,7 @@ type Props = {
 
 const ITEM_PLACEHOLDER: Record<ConnectionType, string> = {
   jira: "Ticket key or URL (e.g. ENG-3421)",
-  sentry: "Issue ID, event ID, or Sentry URL",
+  sentry: "Issue ID or Sentry issue URL",
   honeycomb: "Trigger name or query URL",
 };
 

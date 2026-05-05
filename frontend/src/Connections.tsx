@@ -513,7 +513,7 @@ function draftToConfig(
       config[f.id] = value;
     } else if (!f.required) {
       // Optional field omitted — the backend treats absence as null on
-      // these (e.g. Sentry.region, Honeycomb.team).
+      // these (e.g. Honeycomb.team).
       config[f.id] = null;
     }
   }
