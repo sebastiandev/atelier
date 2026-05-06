@@ -225,6 +225,16 @@ class WorkStoreService:
                     cursor = payload
         return cursor
 
+    def is_session_ingested(
+        self, work_slug: str, agent_slug: str, session_id: str
+    ) -> bool:
+        for event in self._transcript_log.read_from_cursor(work_slug, agent_slug, 0):
+            if event.get("session_id") != session_id:
+                continue
+            if event.get("type") in ("session_established", "sdk_session_merged"):
+                return True
+        return False
+
     def record_artifact(self, req: RecordArtifactRequest) -> Artifact:
         with self._lock:
             parent = self._require_work(req.work_slug)

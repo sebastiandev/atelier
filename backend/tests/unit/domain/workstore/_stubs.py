@@ -81,6 +81,25 @@ class StubRepository:
             return []
         return [a for a in self.agents.values() if a.work_id == work.id]
 
+    def get_work_slug_for_agent(self, agent_slug: str) -> str | None:
+        agent = self.agents.get(agent_slug)
+        if agent is None:
+            return None
+        return _resolve_work_slug(self, agent.work_id)
+
+    def set_agent_session_id(self, agent_slug: str, session_id: str) -> None:
+        agent = self.agents.get(agent_slug)
+        if agent is None:
+            return
+        if agent.session_id is not None and agent.session_id != session_id:
+            agent.parent_session_id = agent.session_id
+        agent.session_id = session_id
+
+    def set_agent_status(self, agent_slug: str, status: Any) -> None:
+        agent = self.agents.get(agent_slug)
+        if agent is not None:
+            agent.status = status
+
     # -- Artifact / Handoff --
 
     def add_artifact(self, artifact: Artifact) -> Artifact:

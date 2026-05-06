@@ -89,6 +89,17 @@ class WorkStore(Protocol):
         SDK file's "new" entries start."""
         ...
 
+    def is_session_ingested(
+        self, work_slug: str, agent_slug: str, session_id: str
+    ) -> bool:
+        """True if the NDJSON ledger already contains content for the given
+        provider session — either via a ``session_established`` event
+        (supervisor streamed it live) or a ``sdk_session_merged`` marker
+        (catch-up merged it from the SDK file). Used to dedup parent-chain
+        merges so a re-attach doesn't re-import an already-ingested
+        ancestor session."""
+        ...
+
     def record_artifact(self, req: RecordArtifactRequest) -> Artifact: ...
 
     def record_handoff(self, req: RecordHandoffRequest) -> Handoff: ...

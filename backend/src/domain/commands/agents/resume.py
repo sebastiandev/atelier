@@ -137,11 +137,38 @@ def _catch_up_detached_agent(
     agent: Agent,
     workdir,  # type: ignore[no-untyped-def]  # pathlib.Path; avoiding extra import
 ) -> None:
-    """Read the SDK's transcript file, append events past the
-    last-detach cursor to our NDJSON, then flip status back to IDLE."""
+    """Read the SDK's transcript file(s), append new events to our NDJSON,
+    then flip status back to IDLE.
+
+    Walks ``parent_session_id`` (depth-1 — that's all the agent row stores)
+    so an ancestor session that's never been ingested gets exported in
+    full. Common case: a manual ``parent_session_id`` backfill on an
+    agent whose original conversation lived in a now-orphaned thread.
+    Steady-state re-attaches see the parent's ``session_established``
+    already in NDJSON and skip the parent merge.
+    """
     if agent.session_id is None:
         workstore.set_agent_status(agent_slug, AgentStatus.IDLE)
         return
+
+    if agent.parent_session_id and not workstore.is_session_ingested(
+        work_slug, agent_slug, agent.parent_session_id
+    ):
+        parent_events = merge_cli_transcript(
+            agent.provider, agent.parent_session_id, workdir, None
+        )
+        for event in parent_events:
+            workstore.append_transcript_event_with_seq(work_slug, agent_slug, event)
+        workstore.append_transcript_event_with_seq(
+            work_slug,
+            agent_slug,
+            {
+                "type": "sdk_session_merged",
+                "ts": datetime.now(UTC).isoformat(),
+                "session_id": agent.parent_session_id,
+                "events_merged": len(parent_events),
+            },
+        )
 
     cursor = workstore.find_last_detach_cursor(work_slug, agent_slug)
     new_events = merge_cli_transcript(

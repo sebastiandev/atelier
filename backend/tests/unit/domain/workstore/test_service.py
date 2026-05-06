@@ -467,3 +467,50 @@ def test_soft_delete_unknown_raises() -> None:
     service, _, _, _ = _make_service()
     with pytest.raises(ValueError, match="work not found"):
         service.soft_delete_work("WRK-404")
+
+
+# ---------------------------------------------------------------------------
+# is_session_ingested
+# ---------------------------------------------------------------------------
+
+
+def test_is_session_ingested_true_for_session_established() -> None:
+    service, _, _, log = _make_service()
+    log.events[("WRK-001", "agt-1")] = [
+        {"seq": 1, "type": "session_established", "session_id": "sess-A"},
+    ]
+    assert service.is_session_ingested("WRK-001", "agt-1", "sess-A") is True
+
+
+def test_is_session_ingested_true_for_sdk_session_merged_marker() -> None:
+    service, _, _, log = _make_service()
+    log.events[("WRK-001", "agt-1")] = [
+        {
+            "seq": 1,
+            "type": "sdk_session_merged",
+            "session_id": "sess-B",
+            "events_merged": 7,
+        },
+    ]
+    assert service.is_session_ingested("WRK-001", "agt-1", "sess-B") is True
+
+
+def test_is_session_ingested_false_when_session_id_doesnt_match() -> None:
+    service, _, _, log = _make_service()
+    log.events[("WRK-001", "agt-1")] = [
+        {"seq": 1, "type": "session_established", "session_id": "sess-A"},
+    ]
+    assert service.is_session_ingested("WRK-001", "agt-1", "sess-other") is False
+
+
+def test_is_session_ingested_false_for_other_event_types_carrying_session_id() -> None:
+    service, _, _, log = _make_service()
+    log.events[("WRK-001", "agt-1")] = [
+        {"seq": 1, "type": "user_input", "session_id": "sess-A", "text": "hi"},
+    ]
+    assert service.is_session_ingested("WRK-001", "agt-1", "sess-A") is False
+
+
+def test_is_session_ingested_false_for_empty_log() -> None:
+    service, _, _, _ = _make_service()
+    assert service.is_session_ingested("WRK-001", "agt-1", "sess-A") is False
