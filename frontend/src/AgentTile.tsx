@@ -200,6 +200,20 @@ export function AgentTile({
           </span>
         )}
         <span className="conn-status" data-conn-status={status}>{status}</span>
+        {onRevealWorktree && (
+          <button
+            type="button"
+            className="tile-ctl"
+            title={
+              worktreePath
+                ? `Open worktree in finder — ${worktreePath}`
+                : "Open worktree in finder"
+            }
+            onClick={onRevealWorktree}
+          >
+            <WorktreeIcon />
+          </button>
+        )}
         <div className="tile-controls">
           <button
             type="button"
@@ -217,20 +231,6 @@ export function AgentTile({
           >
             {maximized ? <RestoreIcon /> : <MaxIcon />}
           </button>
-          {onRevealWorktree && (
-            <button
-              type="button"
-              className="tile-ctl"
-              title={
-                worktreePath
-                  ? `Open worktree in finder — ${worktreePath}`
-                  : "Open worktree in finder"
-              }
-              onClick={onRevealWorktree}
-            >
-              <FolderIcon />
-            </button>
-          )}
           {onDetach && (
             <button
               type="button"
@@ -330,13 +330,31 @@ function HandoffIcon() {
     </svg>
   );
 }
-function FolderIcon() {
+function WorktreeIcon() {
+  // Folder-tree glyph: a vertical stem on the left with two short
+  // branches reaching to a top and bottom folder. Communicates "this
+  // opens a per-agent worktree dir under the work tree" — distinct
+  // from a plain folder icon, which we'd use for the work-level dir.
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
       <path
-        d="M2 4.5a1 1 0 0 1 1-1h3.4l1.2 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4.5z"
+        d="M2.5 3.5 v9 M2.5 5.5 h2.5 M2.5 11 h2.5"
         stroke="currentColor"
-        strokeWidth="1.4"
+        strokeWidth="1.3"
+        fill="none"
+        strokeLinecap="round"
+      />
+      <path
+        d="M5 4 h2 l1 1 h3 v3 h-6 z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        fill="none"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5 9.5 h2 l1 1 h3 v3 h-6 z"
+        stroke="currentColor"
+        strokeWidth="1.3"
         fill="none"
         strokeLinejoin="round"
       />
