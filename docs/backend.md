@@ -93,17 +93,31 @@ The ORDER is the load-bearing invariant: **no event reaches a subscriber before 
 
 `send_input` and `resolve_permission` use the same `_publish` for their outbound transcript lines (`user_input`, plus any adapter-emitted `permission_*` lines), so seqs interleave one canonical conversation regardless of who originated each line.
 
-### Lifecycle: starting an agent
+### Lifecycle: register, start, resume
 
-`start_agent(work_slug, agent_slug, adapter, context, first_message=None)`:
+`register_agent(work_slug, agent_slug, adapter, context, *, lazy=False)`:
 
 1. **Seed `seq`.** Tail-read `transcript.ndjson` via `transcript_log.last_seq` and seed `state.seq` from it, so a resume continues monotonically rather than colliding with existing history.
-2. **Register state.** Under `_registry_lock`, build the `_AgentState` and put it in `_states[agent_slug]`.
-3. **`await adapter.start(context)`** — the adapter connects to its SDK (Claude: spawns `claude` CLI subprocess; Amp: marks itself ready, spawns lazily on first input).
-4. **Optional first-message injection.** When the start command synthesised one (typically because contexts were attached), `await self.send_input(agent_slug, first_message)` runs once — the line lands as `user_input` at `seq=1` with normal publish ordering.
-5. **Spawn the agent task.** `asyncio.create_task(self._run_agent(state))`. From here on, every event the SDK emits flows through `_publish`.
+2. **Register state.** Under `_registry_lock`, build the `_AgentState` and put it in `_states[agent_slug]`. Concurrent registration of the same slug raises `RuntimeError`; the loser drops its adapter copy.
+3. **`await adapter.start(context)`** — cheap per-adapter setup: Amp stands up the permission Unix socket; Claude connects its SDK control channel. The CLI subprocess is NOT spawned here.
+4. **Spawn the events-pump task** — `asyncio.create_task(self._run_agent(state))`. Iterating `adapter.events()` is what actually fires the underlying CLI. **Skipped when `lazy=True`** — the first `send_input` creates the task instead.
 
 `_run_agent` is the consumer side: `async for event in adapter.events()`. For `SessionEstablished` events it calls `_set_session_id` (the WorkStore hook) so the SDK's session/thread ID gets persisted to SQL — that's the resume handle. Every event gets `_publish`-ed.
+
+`is_registered(agent_slug) -> bool` lets callers (`connect`, `resume`) check whether to attach to existing state or rebuild the adapter; replaces an earlier side-channel that returned the work slug for the same purpose.
+
+#### The four async commands feeding the supervisor
+
+There is **one inward path** from the WS endpoint into domain logic:
+
+- **`agents/start.execute`** — REST `POST /api/agents`. Allocates the row, builds the adapter, calls `register_agent` **eagerly** (default), and (if contexts produced a synthesised first message) sends it. Fresh agents have no prior provider session to fork from, so eager is fine.
+- **`agents/connect.execute`** — WS `/api/agents/{slug}/stream`. `@asynccontextmanager` that resolves the agent (calling `resume.execute` if the supervisor has no live state) and yields a `Subscription`. The WS handler is `async with connect.execute(...) as sub`.
+- **`agents/resume.execute`** — Re-attach. Rebuilds the adapter from the persisted row, runs the detach catch-up merge if `status==DETACHED`, and calls `register_agent(..., lazy=True)`. **Lazy** because Amp's `--execute --stream-json` forks on resume — the SDK only spawns once the user actually types.
+- **`agents/handle_user_action.execute`** — Inbound from the WS receive loop. Parses the JSON frame into a typed `UserAction` (`SendInput`, `StopTurn`, `ResolvePermission` from `domain/agents/user_actions.py`) and `match`-dispatches to the corresponding supervisor method. The WS receive loop is five lines.
+
+#### Re-attach (resume) and lazy spawn
+
+When `connect` finds the supervisor has no live state — backend restart, agent closed-to-rail, or `status=DETACHED` — it calls `resume.execute`. Resume runs `register_agent(..., lazy=True)`: the events pump is **not** started. The user sees the existing transcript via the replay window. Only when they type does `send_input` create the pump task and the SDK process spawn. This is the fix for Amp's fork-on-resume bug — a view-only re-attach no longer burns a fork.
 
 ### Lifecycle: stopping a turn / closing an agent
 
@@ -113,15 +127,27 @@ The ORDER is the load-bearing invariant: **no event reaches a subscriber before 
 
 ### Resume after a backend restart
 
-If the WS handler can't find live state (`get_work_slug_for(slug)` returns `None`), it doesn't 4404 immediately — it tries `resume_agent(work_slug, agent_slug)`:
+`connect.execute` is the inward path. If `is_registered(slug)` is False, it resolves the work slug via `workstore.get_work_slug_for_agent`, then calls `resume.execute`:
 
-1. The command reads the persisted agent row + its `session_id` (the SDK's resume handle, captured earlier).
-2. It builds a fresh adapter through the spec registry — same persona/role/provider/model — and passes `session_id` into the new `AgentStartContext`.
-3. The Claude adapter forwards it as `resume=<id>` to the SDK; the Amp adapter forwards it as `continue_thread`. The provider's own session storage takes over from there.
-4. The supervisor calls `start_agent(...)` with `first_message=None` — the SDK session already contains the original turn, so re-injecting context would double-prompt.
-5. The WS subscribes; the client replays from its `?cursor=N` cursor (events that were on disk but not seen) and then drains live events.
+1. Read the persisted agent row + its `session_id` (the SDK's resume handle, captured earlier).
+2. Build a fresh adapter through the spec registry — same persona/role/provider/model — and pass `session_id` into the new `AgentStartContext`. Claude forwards as `resume=<id>`; Amp as `continue_thread`.
+3. If `status == DETACHED`, run the detach catch-up merge first (see [Detach to CLI + catch-up](#detach-to-cli--catch-up)).
+4. `register_agent(..., lazy=True)` — registers state, runs `adapter.start` (cheap setup), but doesn't fire the events pump. Concurrent registration races (StrictMode double-mount, two tabs) raise `RuntimeError`; resume drops its adapter copy and verifies the agent IS now registered.
+5. `connect` then yields the `Subscription`. The client replays from its `?cursor=N` cursor (events on disk past the cursor) and then drains live events from the queue.
 
 The 4404 close code is reserved for agents that don't exist on disk at all.
+
+### Detach to CLI + catch-up
+
+Detaching hands a running agent to a terminal CLI. `agents/detach.execute` stops the supervisor's task, flips status to `DETACHED`, writes a `user_detached` transcript marker carrying an `sdk_cursor` snapshot (Claude: timestamp; Amp: message count), then shells out to the user's preferred terminal with the right resume command.
+
+Re-attach runs through `resume.execute` → `_catch_up_detached_agent`:
+
+- Read the SDK's transcript file/thread (Claude: `~/.claude/projects/<munged-cwd>/<sid>.jsonl`; Amp: `amp threads export <id>`) starting from the `sdk_cursor`. Translate Anthropic-shaped content blocks (`text` / `thinking` / `tool_use` / `tool_result`) into `AgentEvent`-shaped dicts and append to NDJSON.
+- If `agent.parent_session_id` is set and not already ingested, also export the parent session in full and emit a `sdk_session_merged` marker. Dedup is via `WorkStore.is_session_ingested`, which scans NDJSON for a `session_established` event (supervisor streamed the parent live) or a previous `sdk_session_merged` marker. Only depth-1 — the agent row stores one parent.
+- Emit a `user_reattached` marker; flip status back to `IDLE`.
+
+`agents.parent_session_id` (schema v6) is set atomically inside `set_agent_session_id`: when the new sid differs from the current, the previous sid is captured as parent. This linked-list lineage exists so providers that fork on resume (Amp) can recover the original transcript from the orphaned ancestor.
 
 ### How the SDK adapters fit in
 
@@ -129,9 +155,9 @@ Each adapter implements the `AgentAdapter` Protocol from `domain/agents/ports.py
 
 | Method | When called | What it does |
 |---|---|---|
-| `start(context)` | once, by `start_agent` | Connect to the SDK with the right options (model, system_prompt, allowed_tools, …). Wires per-adapter state (resume id, can_use_tool callback). |
-| `events()` | once, by `_run_agent` | Async generator. Emits normalised `AgentEvent`s in the order the SDK produces them. |
-| `send_input(text)` | by `send_input` (and once by `start_agent` for first-message) | Pushes a turn into the adapter's input channel. |
+| `start(context)` | once, by `register_agent` | Cheap per-adapter setup: Amp's permission socket, Claude's SDK control channel. Does **not** spawn the CLI subprocess. |
+| `events()` | once, by `_run_agent` (the events-pump task) | Async generator. Emits normalised `AgentEvent`s in the order the SDK produces them. **First iteration** is what spawns the underlying CLI — so the lazy-resume path (which skips creating the pump task) keeps the SDK dormant. |
+| `send_input(text)` | by `send_input` (also called by `start.execute` to inject a synthesised first message) | Pushes a turn into the adapter's input channel. |
 | `stop_turn()` | by `stop_turn` | Cancel the in-flight turn without tearing down the session. |
 | `resolve_permission(rid, decision)` | by `resolve_permission` | Answer a `PermissionRequest` the adapter previously emitted. |
 | `close()` | by `stop_agent` / `shutdown` | Disconnect from the SDK. Idempotent. |
@@ -256,7 +282,7 @@ The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib
 
 A `Context` (`domain/models.py`) is `(type, value, conn_id?)`. Both `Work` and `Agent` can carry a list — but **contexts are FS-only**: they live in `work.json` / `agent.json` next to the entity, never on the SQL row. The dataclasses themselves don't have a `contexts` field (SQLAlchemy populates instances via `__new__` + setattr on mapped columns and bypasses `__init__`, so a `field(default_factory=list)` default would never fire — `dataclass.__eq__` then crashes in `reconcile`'s `db_agent != fs_agent` check). Instead contexts travel as a sibling value: `serialize_work_record(work, contexts)` and `serialize_agent(agent, contexts)`.
 
-**At agent-create time** (`domain/commands/agents/start_plan.py`), connection-backed contexts (`jira` / `sentry` / `honeycomb`) are pre-fetched **before** the agent row is allocated: the command iterates `req.contexts`, calls `connection_store.fetch_context_body(c)` for each connection-backed entry, and builds a `dict[int, str]` of resolved bodies keyed by index. Any `ContextFetchError` raised by the fetcher (missing connection, missing token, network/auth/HTTP failure) propagates straight out of `execute()` — the route maps it to 422. Halting here means a fetch failure leaves no agent row, no worktree, no context dir to clean up. Then the `WorkStore.render_agent_contexts(work_slug, agent_slug, contexts, fetched_bodies)` port is called once. `domain/agents/context_render.py` is the pure-domain renderer:
+**At agent-create time** (`domain/commands/agents/start.py`), connection-backed contexts (`jira` / `sentry` / `honeycomb`) are pre-fetched **before** the agent row is allocated: the command iterates `req.contexts`, calls `connection_store.fetch_context_body(c)` for each connection-backed entry, and builds a `dict[int, str]` of resolved bodies keyed by index. Any `ContextFetchError` raised by the fetcher (missing connection, missing token, network/auth/HTTP failure) propagates straight out of `execute()` — the route maps it to 422. Halting here means a fetch failure leaves no agent row, no worktree, no context dir to clean up. Then the `WorkStore.render_agent_contexts(work_slug, agent_slug, contexts, fetched_bodies)` port is called once. `domain/agents/context_render.py` is the pure-domain renderer:
 
 - For `text` / `url` / `file` / `agentout` it generates the body inline from `c.value`.
 - For `jira` / `sentry` / `honeycomb` it writes the matching entry from `fetched_bodies` at `context/<type>-<value>.md` (when the value parses as a slug, else numbered). A connection-backed context with no entry in `fetched_bodies` raises `RuntimeError` — the boundary is responsible for resolving them.
@@ -282,11 +308,13 @@ The cursor is a `seq` integer. `read_from_cursor(work_slug, agent_slug, cursor)`
 
 **Server → client**: each frame is one `AgentEvent` serialized as JSON. The supervisor maintains the seq monotonicity, so the client can persist the last seq and resume from there on reconnect.
 
-**Client → server**:
-- `{"type":"input","text":"..."}` — appends a `user_input` transcript line and forwards to the adapter.
-- `{"type":"stop"}` — appends a `user_stop` transcript line and calls `adapter.stop_turn()`. Claude interrupts mid-turn via the SDK's control protocol; Amp's adapter no-ops for now (the SDK exposes no per-turn cancel — full per-turn cancel for Amp is a tracked follow-up). The user-facing intent is always recorded.
+**Client → server**: the WS receive loop parses each frame into a typed `UserAction` (`domain/agents/user_actions.py`) and forwards to `handle_user_action.execute`. Three action types:
 
-Anything else is ignored.
+- `{"type":"input","text":"..."}` → `SendInput` — appends a `user_input` transcript line and forwards to the adapter (creates the lazy pump if not yet running).
+- `{"type":"stop"}` → `StopTurn` — appends a `user_stop` transcript line and calls `adapter.stop_turn()`. Claude interrupts mid-turn via the SDK's control protocol; Amp's adapter no-ops for now (the SDK exposes no per-turn cancel — full per-turn cancel for Amp is a tracked follow-up). The user-facing intent is always recorded.
+- `{"type":"permission","request_id":"...","decision":"allow|allow_always|deny"}` → `ResolvePermission` — answers a `PermissionRequest` the adapter previously emitted. The decision values come from `get_args(PermissionDecisionValue)` so the wire and the domain stay in lockstep.
+
+Frames that don't parse to a known action are ignored.
 
 **Replay-then-live** semantics on connect:
 
@@ -304,7 +332,7 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 | 4408 | Slow subscriber — the per-subscription queue overflowed. Frontend retries with backoff and resumes from `?cursor=N`. |
 | 1000/1001/etc. | Transient (network, server restart). Frontend retries with exponential backoff. |
 
-**Resume on reconnect.** When the slug is in SQLite but the supervisor has no live state, the handler calls `resume_agent.execute(...)` to rebuild the adapter (passing through the persisted `session_id`) and `supervisor.start_agent` to attach. A normal replay-then-live then proceeds — the client doesn't need to know whether it's connecting to a fresh adapter, an in-flight one, or a freshly-resumed one.
+**Resume on reconnect.** When the slug is in SQLite but the supervisor has no live state, `connect.execute` calls `resume.execute(...)` to rebuild the adapter (passing through the persisted `session_id`) and `register_agent(..., lazy=True)` to attach without firing the SDK pump. A normal replay-then-live then proceeds — the client doesn't need to know whether it's connecting to a fresh adapter, an in-flight one, or a freshly-resumed (lazy) one.
 
 ## WorktreeManager
 
@@ -318,7 +346,7 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 
 **Orphan sweep on startup.** `main.py` lifespan walks every work, asks the workstore for live agent slugs, and tells the manager to remove worktree directories that don't match. This is the cleanup path for crashed runs and soft-deleted works. It satisfies the AC "deleting a Work removes them" via reconcile-style sweep rather than coupling the soft-delete command to git ops directly.
 
-**Wired into the start_plan command** (`domain/commands/agents/start_plan.py`). The route stays thin: parse the request, call `start_plan.execute(...)`, await `supervisor.start_agent`. The command validates the provider config first (via `Spec.build`) so a bad model can't allocate an agent row + worktree we'd have to roll back, then pre-fetches connection-backed contexts before any side effect. Domain errors: `WorkNotFound` → 404; `InvalidProviderConfig` / `WorkFolderMissing` / `ContextFetchError` → 422.
+**Wired into the `agents/start` command** (`domain/commands/agents/start.py`). The route stays thin: parse the request, `await start.execute(...)`. The command validates the provider config first (via `Spec.build`) so a bad model can't allocate an agent row + worktree we'd have to roll back, then pre-fetches connection-backed contexts before any side effect, then `register_agent` (eager) and an optional first-message send. Domain errors: `WorkNotFound` → 404; `InvalidProviderConfig` / `AgentFolderMissing` / `ContextFetchError` → 422.
 
 ## ConnectionStore
 
@@ -329,7 +357,7 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 
 `ConnectionStoreService` (the public port `ConnectionStore`) composes four narrower ports — `ConnectionRepository` for the SQL row, `SecretStore` for the keychain, `ConnectionVerifier` for the source's auth endpoint, and `ContextFetcher` for pulling a context body (Jira ticket, etc.) — same pattern as `WorkStoreService`. The verifier is a simple type-keyed dispatch (`infrastructure/connections/verifier.py`): Jira hits `/rest/api/3/myself` with Basic auth, Sentry hits `/api/0/organizations/{org}/` with a Bearer token (validates token *and* org slug), Honeycomb hits `/1/auth` with `X-Honeycomb-Team`. Network errors map to `VerifyResult(verified=False, error=...)`; the verifier never raises.
 
-`ContextFetcher` follows the same dispatch shape (`infrastructure/connections/fetchers/`). `ConnectionStoreService.fetch_context_body(context)` resolves the connection + token from the context's `conn_id`, calls the fetcher, and stamps `last_used` on success. Any failure — missing connection, no token in the keychain, fetcher raises — surfaces as `ContextFetchError`. Called by `start_plan` to pre-fetch agent contexts before allocating the row.
+`ContextFetcher` follows the same dispatch shape (`infrastructure/connections/fetchers/`). `ConnectionStoreService.fetch_context_body(context)` resolves the connection + token from the context's `conn_id`, calls the fetcher, and stamps `last_used` on success. Any failure — missing connection, no token in the keychain, fetcher raises — surfaces as `ContextFetchError`. Called by `agents/start` to pre-fetch agent contexts before allocating the row.
 
 **Token never crosses the API surface.** `NewConnectionRequest` and `PatchConnectionRequest` accept `token`; `ConnectionRead` (the response model) has no `token` field at all. Tests assert this on every read path. On `verify` success the supervisor materialises the token in-memory, presents it to the verifier, then discards it — the `Connection` entity never carries it.
 

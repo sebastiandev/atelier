@@ -61,7 +61,7 @@ Adding a new provider = define `<P>AgentConfig`, register a handler. The dispatc
 
 These are non-obvious and load-bearing — break them at your peril.
 
-**Async only at the WS / supervisor / SDK boundary.** REST routes, commands, repos, and SQLAlchemy are all sync. When a sync command needs to invoke an async dependency, bridge with `asyncio.to_thread`. This keeps the bulk of the codebase simple and testable; only the streaming layer is asyncio-flavored.
+**Async only where forced.** REST routes, repos, and SQLAlchemy are sync. The async surface is the WebSocket endpoint, the supervisor, the SDK adapters, and any command that awaits one of those (`agents/connect`, `agents/start`, `agents/resume`, `agents/handle_user_action`, `agents/detach`). Commands that touch only the workstore stay sync — when they need to invoke an async dependency, bridge with `asyncio.to_thread`. The boundary stays narrow on purpose.
 
 **Int PK + slug TEXT UNIQUE on every public table.** SQL FKs use `id`, but every public-facing identifier (URLs, folder names, JSON cross-refs) uses `slug` (`WRK-001`, `agt-7`, `con-3`). Slugs are derived from the int PK at create time. See `infrastructure/database/tables.py`.
 
@@ -80,7 +80,7 @@ These are the contracts the layers and process boundaries agree on. Changing one
 | Seam | What flows | Defined in |
 | --- | --- | --- |
 | HTTP | Pydantic schemas | `backend/src/application/http/schemas.py` |
-| WS frames | JSON event envelope (server→client) + `{type:"input",text:string}` (client→server) | `backend/src/application/ws/agents.py` + `frontend/src/useAgentStream.ts` |
+| WS frames | JSON event envelope (server→client) + a typed `UserAction` taxonomy (`SendInput` / `StopTurn` / `ResolvePermission`) parsed from `{type, ...}` frames (client→server) | `backend/src/application/ws/agents.py` + `backend/src/domain/agents/user_actions.py` + `frontend/src/useAgentStream.ts` |
 | AgentEvent union | 7+ frozen dataclass variants with `Literal` discriminators | `backend/src/domain/agents/events.py` |
 | Provider descriptors | `GET /api/providers` shape — drives the `NewAgentDialog` | `backend/src/domain/agents/specs.py`, `frontend/src/api.ts` |
 | Workspace layout | `~/Atelier/works/<slug>/work.json`, `agents/<slug>/agent.json`, `transcript.ndjson` | `infrastructure/filesystem/` |
