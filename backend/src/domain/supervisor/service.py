@@ -357,4 +357,4 @@ def _event_to_dict(event: AgentEvent) -> dict[str, Any]:
     return d
 
 
-__all__ = ["AgentSubscription", "AgentSupervisorService", "SUBSCRIBER_QUEUE_MAX"]
+__all__ = ["SUBSCRIBER_QUEUE_MAX", "AgentSubscription", "AgentSupervisorService"]

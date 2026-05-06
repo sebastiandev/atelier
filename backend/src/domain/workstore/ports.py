@@ -18,7 +18,7 @@ types.
 from collections.abc import Iterator
 from typing import Any, Protocol
 
-from src.domain.models import Agent, Artifact, Context, Handoff, Work
+from src.domain.models import Agent, AgentStatus, Artifact, Context, Handoff, Work
 from src.domain.workstore.dtos import (
     AddAgentRequest,
     CreateWorkRequest,
@@ -58,9 +58,23 @@ class WorkStore(Protocol):
 
     def set_agent_session_id(self, agent_slug: str, session_id: str) -> None: ...
 
+    def set_agent_status(self, agent_slug: str, status: AgentStatus) -> None: ...
+
     def append_transcript_event(
         self, work_slug: str, agent_slug: str, event: dict[str, Any]
     ) -> None: ...
+
+    def append_transcript_event_with_seq(
+        self, work_slug: str, agent_slug: str, payload: dict[str, Any]
+    ) -> int:
+        """Stamp the next monotonic ``seq`` and append. Returns the seq.
+
+        For writes outside the supervisor's hot-path (e.g. transcript
+        markers from sync route handlers, the CLI catch-up merge). The
+        supervisor itself manages seq under its own lock; this method
+        is for moments when no supervisor lock is in play.
+        """
+        ...
 
     def read_transcript_from_cursor(
         self, work_slug: str, agent_slug: str, cursor: int
@@ -95,6 +109,7 @@ class WorkRepository(Protocol):
     def list_agents_for_work(self, work_slug: str) -> list[Agent]: ...
     def get_work_slug_for_agent(self, agent_slug: str) -> str | None: ...
     def set_agent_session_id(self, agent_slug: str, session_id: str) -> None: ...
+    def set_agent_status(self, agent_slug: str, status: AgentStatus) -> None: ...
 
     # Artifact / Handoff (add only — reconcile of these lives in later stories)
     def add_artifact(self, artifact: Artifact) -> Artifact: ...

@@ -355,7 +355,7 @@ def test_ws_permission_frame_forwards_to_adapter(
     # Reach into the supervisor's registry to confirm the routed calls.
     assert state is not None, "agent state should still exist"
     adapter = state.adapter
-    assert getattr(adapter, "permission_resolutions") == [
+    assert adapter.permission_resolutions == [
         ("req-1", "allow"),
         ("req-2", "deny"),
     ]
@@ -550,7 +550,7 @@ def test_ws_resumes_agent_after_supervisor_loses_state(
     # owns the event loop and re-entering it from sync code wedges the
     # whole suite. The full lifecycle is exercised by the DELETE tests.
     supervisor = app_client.app.state.supervisor
-    supervisor._states.pop(agent["slug"], None)  # noqa: SLF001 — test hook
+    supervisor._states.pop(agent["slug"], None)
 
     # Reconnect from cursor=0; expect the original transcript followed by
     # a freshly-emitted run from the rebuilt stub adapter (the canned
@@ -563,3 +563,119 @@ def test_ws_resumes_agent_after_supervisor_loses_state(
         events = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT * 2)]
     seqs = [e["seq"] for e in events]
     assert seqs == list(range(1, _DEMO_EVENT_COUNT * 2 + 1))
+
+
+# ---------------------------------------------------------------------------
+# REST: detach (hand the agent to a terminal CLI)
+# ---------------------------------------------------------------------------
+
+
+def test_detach_409_when_agent_has_no_session_id(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    """Detach without a provider session_id would just open a fresh CLI
+    conversation, defeating the point. The route surfaces this as 409
+    rather than silently succeeding."""
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    # Stub adapter doesn't emit SessionEstablished, so session_id is None.
+    response = app_client.post(f"/api/agents/{agent['slug']}/detach")
+    assert response.status_code == 409
+    assert "session" in response.json()["detail"].lower()
+
+
+def test_detach_404_for_unknown_agent(app_client: TestClient) -> None:
+    response = app_client.post("/api/agents/agt-404/detach")
+    assert response.status_code == 404
+
+
+def test_detach_flips_status_writes_marker_and_returns_command(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Happy path: agent has a session_id, the route stops the supervisor,
+    flips status to ``detached``, writes a ``user_detached`` transcript
+    marker, and returns the resume command. We monkey-patch the actual
+    terminal launch so the test doesn't pop a window."""
+
+    captured: dict[str, object] = {}
+
+    def fake_launch(command: str):  # type: ignore[no-untyped-def]
+        from src.infrastructure.cli_launcher import LaunchResult
+
+        captured["command"] = command
+        return LaunchResult(command=command, launched=True)
+
+    monkeypatch.setattr(
+        "src.domain.commands.agents.detach.launch_in_terminal", fake_launch
+    )
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    # Backfill a session_id on the agent row directly — the canned stub
+    # adapter doesn't emit SessionEstablished, but production adapters do
+    # and that's the realistic precondition for detach.
+    workstore = app_client.app.state.workstore
+    workstore.set_agent_session_id(agent["slug"], "sess-from-test")
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/detach")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["launched"] is True
+    assert "amp threads continue" in body["command"]
+    assert "sess-from-test" in body["command"]
+    assert captured["command"] == body["command"]
+
+    # Status flipped on the agent row.
+    listing = app_client.get(f"/api/works/{work['slug']}/agents").json()
+    statuses = {a["slug"]: a["status"] for a in listing}
+    assert statuses[agent["slug"]] == "detached"
+
+    # Transcript carries a user_detached marker with an sdk_cursor payload
+    # (so the catch-up merge has a starting point on re-attach).
+    workspace_root: Path = app_client.app.state.settings.workspace_root
+    transcript_path = (
+        workspace_root
+        / "works"
+        / work["slug"]
+        / "agents"
+        / agent["slug"]
+        / "transcript.ndjson"
+    )
+    lines = [
+        json.loads(line)
+        for line in transcript_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    detach_markers = [e for e in lines if e["type"] == "user_detached"]
+    assert len(detach_markers) == 1
+    cursor = detach_markers[0].get("sdk_cursor")
+    assert isinstance(cursor, dict)
+    assert cursor["provider"] == "amp"
+
+
+def test_detach_returns_clipboard_fallback_when_launch_fails(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When no terminal can be launched (sandbox, missing emulator), the
+    response still carries the command string so the FE copies it to
+    the user's clipboard."""
+
+    def fake_launch(command: str):  # type: ignore[no-untyped-def]
+        from src.infrastructure.cli_launcher import LaunchResult
+
+        return LaunchResult(command=command, launched=False)
+
+    monkeypatch.setattr(
+        "src.domain.commands.agents.detach.launch_in_terminal", fake_launch
+    )
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    workstore = app_client.app.state.workstore
+    workstore.set_agent_session_id(agent["slug"], "sess-from-test")
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/detach")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["launched"] is False
+    assert body["command"]  # populated for the clipboard path

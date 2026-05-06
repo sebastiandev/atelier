@@ -66,7 +66,13 @@ export function revealWork(slug: string): Promise<void> {
 }
 
 export type Persona = "architect" | "developer" | "product" | "ux" | "writer";
-export type AgentStatus = "idle" | "live" | "thinking" | "error" | "stopped";
+export type AgentStatus =
+  | "idle"
+  | "live"
+  | "thinking"
+  | "error"
+  | "stopped"
+  | "detached";
 
 export type AgentSummary = {
   slug: string;
@@ -154,6 +160,26 @@ export function createAgent(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, contexts: payload.contexts ?? [] }),
   }).then((r) => jsonOrThrow<AgentSummary>(r));
+}
+
+export type DetachAgentResult = {
+  command: string;
+  launched: boolean;
+};
+
+/**
+ * Detach an agent from Atelier and hand it to the user's terminal CLI.
+ *
+ * The backend stops the supervisor's SDK process, flips the agent's
+ * status to ``detached``, and shells out to the OS terminal with
+ * ``claude --resume`` / ``amp threads continue``. If the shell-out
+ * fails (no detected terminal emulator), ``launched`` is false and the
+ * caller should copy ``command`` to the clipboard instead.
+ */
+export function detachAgent(agentSlug: string): Promise<DetachAgentResult> {
+  return fetch(`/api/agents/${agentSlug}/detach`, { method: "POST" }).then((r) =>
+    jsonOrThrow<DetachAgentResult>(r),
+  );
 }
 
 // ---------------------------------------------------------------------------

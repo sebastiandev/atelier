@@ -60,6 +60,7 @@ def serialize_agent(agent: Agent, contexts: list[Context] | None = None) -> dict
         "started_at": agent.started_at.isoformat(),
         "stopped_at": agent.stopped_at.isoformat() if agent.stopped_at else None,
         "session_id": agent.session_id,
+        "parent_session_id": agent.parent_session_id,
         "contexts": [_serialize_context(c) for c in (contexts or [])],
     }
 
@@ -80,6 +81,7 @@ def deserialize_agent(data: dict[str, Any]) -> Agent:
         started_at=datetime.fromisoformat(data["started_at"]),
         stopped_at=datetime.fromisoformat(stopped_raw) if stopped_raw else None,
         session_id=data.get("session_id"),
+        parent_session_id=data.get("parent_session_id"),
     )
 
 

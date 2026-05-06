@@ -15,7 +15,6 @@ from functools import singledispatch
 from src.domain.connections.configs import ConnectionConfig, JiraConfig, SentryConfig
 from src.domain.connections.dtos import ContextFetchError
 from src.domain.models import Connection, Context
-
 from src.infrastructure.connections.fetchers.jira import fetch_jira
 from src.infrastructure.connections.fetchers.sentry import fetch_sentry
 

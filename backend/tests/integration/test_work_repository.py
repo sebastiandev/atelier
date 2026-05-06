@@ -225,6 +225,66 @@ def test_set_agent_session_id_persists(repo: SqlWorkRepository) -> None:
     assert fetched.session_id == "sess-xyz"
 
 
+def test_set_agent_session_id_first_assignment_leaves_parent_null(
+    repo: SqlWorkRepository,
+) -> None:
+    work = repo.add_work(_new_work())
+    assert work.id is not None
+    repo.add_agent(_new_agent(work_id=work.id))
+    repo.set_agent_session_id("agt-1", "sess-first")
+    fetched = repo.get_agent_by_slug("agt-1")
+    assert fetched is not None
+    assert fetched.session_id == "sess-first"
+    assert fetched.parent_session_id is None
+
+
+def test_set_agent_session_id_promotes_old_to_parent_on_change(
+    repo: SqlWorkRepository,
+) -> None:
+    work = repo.add_work(_new_work())
+    assert work.id is not None
+    repo.add_agent(_new_agent(work_id=work.id))
+    repo.set_agent_session_id("agt-1", "sess-A")
+    repo.set_agent_session_id("agt-1", "sess-B")
+    fetched = repo.get_agent_by_slug("agt-1")
+    assert fetched is not None
+    assert fetched.session_id == "sess-B"
+    assert fetched.parent_session_id == "sess-A"
+
+
+def test_set_agent_session_id_idempotent_keeps_parent(
+    repo: SqlWorkRepository,
+) -> None:
+    work = repo.add_work(_new_work())
+    assert work.id is not None
+    repo.add_agent(_new_agent(work_id=work.id))
+    repo.set_agent_session_id("agt-1", "sess-A")
+    repo.set_agent_session_id("agt-1", "sess-B")  # parent ← sess-A
+    repo.set_agent_session_id("agt-1", "sess-B")  # idempotent — no change
+    fetched = repo.get_agent_by_slug("agt-1")
+    assert fetched is not None
+    assert fetched.session_id == "sess-B"
+    assert fetched.parent_session_id == "sess-A"
+
+
+def test_set_agent_session_id_chains_across_multiple_resumes(
+    repo: SqlWorkRepository,
+) -> None:
+    # parent_session_id is a single hop, not the full chain. Walking the
+    # chain across several forks needs to be possible by following the
+    # links one row at a time — but each row only stores its own parent.
+    work = repo.add_work(_new_work())
+    assert work.id is not None
+    repo.add_agent(_new_agent(work_id=work.id))
+    repo.set_agent_session_id("agt-1", "sess-A")
+    repo.set_agent_session_id("agt-1", "sess-B")
+    repo.set_agent_session_id("agt-1", "sess-C")
+    fetched = repo.get_agent_by_slug("agt-1")
+    assert fetched is not None
+    assert fetched.session_id == "sess-C"
+    assert fetched.parent_session_id == "sess-B"
+
+
 # ---------------------------------------------------------------------------
 # Artifact / Handoff
 # ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ Notes:
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -30,10 +31,26 @@ WorkStatus = Literal["active", "completed", "deleted"]
 ContextType = Literal["sentry", "honeycomb", "jira", "url", "text", "file", "agentout"]
 Persona = Literal["architect", "developer", "product", "ux", "writer", "custom"]
 Provider = Literal["claude-code", "amp"]
-AgentStatus = Literal["live", "thinking", "idle", "stopped"]
 ConnectionType = Literal["sentry", "honeycomb", "jira"]
 ArtifactType = Literal["pr", "jira", "doc"]
 HandoffTargetDialog = Literal["new-agent"]
+
+
+class AgentStatus(StrEnum):
+    """Lifecycle states for an Agent.
+
+    `StrEnum` so equality with bare strings still works (`status == "idle"`
+    keeps reading correctly) and JSON serialisation falls through to the
+    string value. Imperative SA mapping round-trips via the
+    `AgentStatusType` decorator on `agents.status` so the dataclass field
+    is the typed enum on read, not a plain string.
+    """
+
+    LIVE = "live"
+    THINKING = "thinking"
+    IDLE = "idle"
+    STOPPED = "stopped"
+    DETACHED = "detached"
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +120,12 @@ class Agent:
     # resume the same conversation on reconnect: passed as ``resume`` to
     # the Claude SDK or ``continue_thread`` to the Amp SDK.
     session_id: str | None = None
+    # Linked-list lineage of provider sessions. Some providers (Amp's
+    # `--execute --stream-json`) fork on resume; ``parent_session_id``
+    # points at the previous session whose visual transcript still
+    # belongs to this agent. Walking the chain reconstructs the full
+    # message history across forks at re-attach time.
+    parent_session_id: str | None = None
 
 
 @dataclass(kw_only=True)

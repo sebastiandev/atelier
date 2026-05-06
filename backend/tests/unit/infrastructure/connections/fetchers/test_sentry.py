@@ -5,7 +5,8 @@ The mock transport dispatches by URL substring so each test can shape
 both responses independently.
 """
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 import pytest

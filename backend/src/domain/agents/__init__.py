@@ -1,6 +1,5 @@
 """Agent boundary: AgentAdapter port, AgentConfig hierarchy, AgentEvent union."""
 
-from src.domain.agents.context_render import render_agent_contexts
 from src.domain.agents.configs import (
     AMP_DEFAULT_AUTO_ALLOWED_TOOLS,
     AgentConfig,
@@ -13,6 +12,7 @@ from src.domain.agents.configs import (
     ClaudePermissionMode,
     CommonAgentConfig,
 )
+from src.domain.agents.context_render import render_agent_contexts
 from src.domain.agents.events import (
     AgentEvent,
     ArtifactMarker,

@@ -394,7 +394,7 @@ class AmpAdapter:
             self._server.close()
             try:
                 await self._server.wait_closed()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._server = None
         if self._socket_dir is not None and os.path.isdir(self._socket_dir):

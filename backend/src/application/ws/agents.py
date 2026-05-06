@@ -18,12 +18,15 @@
 import asyncio
 import json
 from contextlib import suppress
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.domain.commands.agents import resume_plan
+from src.domain.models import AgentStatus
 from src.domain.supervisor import AgentSupervisorService
+from src.infrastructure.cli_transcript import merge_cli_transcript
 
 router = APIRouter()
 
@@ -43,9 +46,12 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
 
     work_slug = supervisor.get_work_slug_for(agent_slug)
     if work_slug is None:
-        # Supervisor has no live state — backend restart, or the agent
-        # was closed-to-rail. Resume the provider session from the row
-        # if the agent exists; truly unknown slugs still 4404.
+        # Supervisor has no live state — backend restart, the agent was
+        # closed-to-rail, or it was detached to CLI. Resume the provider
+        # session from the row if the agent exists; truly unknown slugs
+        # still 4404. If detached, run the SDK-transcript catch-up merge
+        # first so the user's NDJSON includes anything the CLI typed
+        # before the supervisor takes back over.
         history_work_slug = workstore.get_work_slug_for_agent(agent_slug)
         if history_work_slug is None:
             await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
@@ -62,9 +68,31 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
         except resume_plan.AgentNotFound:
             await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
             return
-        await supervisor.start_agent(
-            history_work_slug, agent_slug, plan.adapter, plan.context
-        )
+        if plan.agent.status == AgentStatus.DETACHED:
+            await asyncio.to_thread(
+                _catch_up_detached_agent,
+                workstore,
+                history_work_slug,
+                agent_slug,
+                plan,
+            )
+        try:
+            await supervisor.start_agent(
+                history_work_slug, agent_slug, plan.adapter, plan.context
+            )
+        except RuntimeError:
+            # A concurrent WS connection (React StrictMode double-mount,
+            # rapid clicks, or just two tabs) saw the same "no live state"
+            # snapshot and won the race to start_agent. The supervisor
+            # owns the agent now — close our adapter copy to avoid leaking
+            # an SDK process and proceed to subscribe.
+            with suppress(Exception):
+                await plan.adapter.close()
+            if supervisor.get_work_slug_for(agent_slug) is None:
+                # Still no live state — the failure was something other
+                # than the race (truly unrecoverable). Close the WS.
+                await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
+                return
         work_slug = history_work_slug
 
     await websocket.accept()
@@ -138,6 +166,61 @@ async def _receive_inputs(
                 and decision in ("allow", "allow_always", "deny")
             ):
                 await supervisor.resolve_permission(agent_slug, request_id, decision)
+
+
+def _catch_up_detached_agent(
+    workstore: Any,
+    work_slug: str,
+    agent_slug: str,
+    plan: resume_plan.ResumeAgentPlan,
+) -> None:
+    """Read the SDK's transcript file, append any events we don't have
+    yet, then flip the agent's status back to ``idle`` so the supervisor
+    starts it normally. Sync because ``WorkStoreService`` and the SDK
+    file are both blocking; the caller bridges to the loop via
+    ``asyncio.to_thread``.
+
+    The cursor lives on the most recent ``user_detached`` event in our
+    NDJSON. If we can't find it (older detach without a cursor, file
+    corruption), we pass ``None`` and the merge starts from "now" — i.e.
+    no events appended, which is the safe degenerate behaviour."""
+    if plan.agent.session_id is None:
+        workstore.set_agent_status(agent_slug, AgentStatus.IDLE)
+        return
+
+    cursor = _last_detach_cursor(workstore, work_slug, agent_slug)
+    new_events = merge_cli_transcript(
+        plan.agent.provider,
+        plan.agent.session_id,
+        plan.context.workdir,
+        cursor,
+    )
+    for event in new_events:
+        workstore.append_transcript_event_with_seq(work_slug, agent_slug, event)
+    workstore.append_transcript_event_with_seq(
+        work_slug,
+        agent_slug,
+        {
+            "type": "user_reattached",
+            "ts": datetime.now(UTC).isoformat(),
+            "events_merged": len(new_events),
+        },
+    )
+    workstore.set_agent_status(agent_slug, AgentStatus.IDLE)
+
+
+def _last_detach_cursor(
+    workstore: Any, work_slug: str, agent_slug: str
+) -> dict[str, Any] | None:
+    """Walk our NDJSON to find the most recent ``user_detached`` marker.
+    Returns the marker's ``sdk_cursor`` payload, or None if not found."""
+    cursor: dict[str, Any] | None = None
+    for event in workstore.read_transcript_from_cursor(work_slug, agent_slug, 0):
+        if event.get("type") == "user_detached":
+            payload = event.get("sdk_cursor")
+            if isinstance(payload, dict):
+                cursor = payload
+    return cursor
 
 
 def _parse_cursor(value: str | None) -> int:

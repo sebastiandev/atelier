@@ -26,6 +26,12 @@ type AgentTileProps = {
   provider?: string;
   model?: string;
   onClose?: () => void;
+  /** Hand the agent off to the user's terminal CLI. The supervisor's
+   *  SDK process is stopped server-side; this callback is responsible
+   *  for any client-side cleanup (typically: close-to-rail, surface a
+   *  toast on the launch result). When omitted, the detach button is
+   *  hidden — the parent didn't wire it for this surface. */
+  onDetach?: () => void;
 };
 
 /**
@@ -48,6 +54,7 @@ export function AgentTile({
   provider,
   model,
   onClose,
+  onDetach,
 }: AgentTileProps) {
   const {
     events,
@@ -200,6 +207,16 @@ export function AgentTile({
           >
             {maximized ? <RestoreIcon /> : <MaxIcon />}
           </button>
+          {onDetach && (
+            <button
+              type="button"
+              className="tile-ctl"
+              title="Detach to terminal — opens the CLI mid-conversation, closes this tile to the rail"
+              onClick={onDetach}
+            >
+              <DetachIcon />
+            </button>
+          )}
           <button
             type="button"
             className="tile-ctl"
@@ -289,6 +306,24 @@ function HandoffIcon() {
     </svg>
   );
 }
+function DetachIcon() {
+  // Terminal prompt glyph — chevron + cursor bar — communicates "this
+  // is leaving for a CLI." Distinct enough from CloseIcon (×) and
+  // MaxIcon (square) at 13×13.
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path
+        d="M3 4l3 4-3 4M9 12h4"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function MaxIcon() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>

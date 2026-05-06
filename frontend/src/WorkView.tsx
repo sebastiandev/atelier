@@ -7,6 +7,7 @@ import {
   type WorkDetail,
   PERSONA_GLYPH,
   createAgent,
+  detachAgent,
   getWork,
   listAgents,
   revealWork,
@@ -28,6 +29,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [error, setError] = useState<string | null>(null);
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
+  // Transient banner for the detach flow — fades out after 4s. Used both
+  // for "launched in Terminal" success and "couldn't launch — command
+  // copied to clipboard" fallback. One slot is plenty: detaches happen
+  // one at a time and overlapping toasts would just compete for room.
+  const [toast, setToast] = useState<string | null>(null);
   const tileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const closedSlugs = useClosedStore((s) => s.byWork[workSlug] ?? NO_CLOSED);
   const closeAgent = useClosedStore((s) => s.close);
@@ -81,6 +87,41 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     return next;
+  }
+
+  function showToast(message: string) {
+    setToast(message);
+    window.setTimeout(() => setToast((current) => (current === message ? null : current)), 4000);
+  }
+
+  async function handleDetach(agentSlug: string) {
+    // Optimistically close-to-rail FIRST so the UI feels instant — the
+    // backend is going to stop the supervisor anyway. On error we show
+    // the failure but leave the rail state alone (the user can click
+    // the rail entry to re-open and try something else).
+    closeAgent(workSlug, agentSlug);
+    if (focusedSlug === agentSlug) setFocusedSlug(null);
+    try {
+      const result = await detachAgent(agentSlug);
+      if (result.launched) {
+        showToast("Detached — opened in your terminal.");
+      } else {
+        // Fallback: copy the command for the user to paste manually.
+        const copied = await navigator.clipboard
+          ?.writeText(result.command)
+          .then(() => true)
+          .catch(() => false);
+        showToast(
+          copied
+            ? "Couldn't launch a terminal — resume command copied to your clipboard."
+            : `Couldn't launch a terminal. Run: ${result.command}`,
+        );
+      }
+      await refreshAgents();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      showToast(`Detach failed: ${message}`);
+    }
   }
 
   if (error) {
@@ -158,22 +199,31 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             )}
             {agents.map((a) => {
               const isClosed = closedSlugs.includes(a.slug);
+              const isDetached = a.status === "detached";
+              const tooltip = isDetached
+                ? "Detached to CLI — click to re-attach (Atelier merges any CLI activity into the transcript)"
+                : isClosed
+                  ? "Closed — click to reopen"
+                  : undefined;
               return (
                 <button
                   key={a.slug}
                   className={
                     "rail-agent" +
                     (focusedSlug === a.slug ? " focused" : "") +
-                    (isClosed ? " minimized" : "")
+                    (isClosed ? " minimized" : "") +
+                    (isDetached ? " detached" : "")
                   }
                   data-persona={a.persona}
                   onClick={() => focusAgent(a.slug)}
-                  title={isClosed ? "Closed — click to reopen" : undefined}
+                  title={tooltip}
                 >
                   <span className="pip">{PERSONA_GLYPH[a.persona] ?? "AG"}</span>
                   <span className="meta">
                     <span className="name mono">{a.name}</span>
-                    <span className="role">{a.role}</span>
+                    <span className="role">
+                      {isDetached ? "in CLI · click to re-attach" : a.role}
+                    </span>
                   </span>
                   <span className="status-dot" data-status={a.status} />
                 </button>
@@ -229,6 +279,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                     closeAgent(workSlug, a.slug);
                     if (focusedSlug === a.slug) setFocusedSlug(null);
                   }}
+                  onDetach={() => {
+                    void handleDetach(a.slug);
+                  }}
                 />
               </div>
             ))}
@@ -244,6 +297,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             await handleCreateAgent(payload);
           }}
         />
+      )}
+      {toast && (
+        <div className="toast" role="status" aria-live="polite">
+          {toast}
+        </div>
       )}
     </div>
   );

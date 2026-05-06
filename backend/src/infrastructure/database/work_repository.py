@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.domain.models import Agent, Artifact, Handoff, Work
@@ -117,14 +117,38 @@ class SqlWorkRepository:
                 existing.started_at = agent.started_at
                 existing.stopped_at = agent.stopped_at
                 existing.session_id = agent.session_id
+                existing.parent_session_id = agent.parent_session_id
         return agent
 
     def set_agent_session_id(self, agent_slug: str, session_id: str) -> None:
+        # Atomic: when the new session_id differs from the current one,
+        # capture the current as parent_session_id (linked-list lineage
+        # for providers that fork on resume). Same sid or no prior sid →
+        # parent stays as-is. Single UPDATE keeps the read+write race-free
+        # without an explicit transaction round-trip.
         with self._txn() as session:
             session.execute(
                 update(agents_table)
                 .where(agents_table.c.slug == agent_slug)
-                .values(session_id=session_id)
+                .values(
+                    parent_session_id=case(
+                        (
+                            agents_table.c.session_id.is_not(None)
+                            & (agents_table.c.session_id != session_id),
+                            agents_table.c.session_id,
+                        ),
+                        else_=agents_table.c.parent_session_id,
+                    ),
+                    session_id=session_id,
+                )
+            )
+
+    def set_agent_status(self, agent_slug: str, status: str) -> None:
+        with self._txn() as session:
+            session.execute(
+                update(agents_table)
+                .where(agents_table.c.slug == agent_slug)
+                .values(status=status)
             )
 
     def delete_agent(self, agent_slug: str) -> None:

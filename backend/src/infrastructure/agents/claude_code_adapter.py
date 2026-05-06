@@ -139,7 +139,7 @@ class ClaudeCodeAdapter:
                 fut.set_result("deny")
         try:
             await self._client.interrupt()
-        except Exception:  # noqa: BLE001
+        except Exception:
             # Underlying transport could be in a transient bad state
             # (e.g. between turns); the next send_input will fail loudly
             # if there's a real problem. No need to raise here.
@@ -202,7 +202,7 @@ class ClaudeCodeAdapter:
                         )
                     for ev in _convert(msg, model=self._config.model.value):
                         await self._outgoing.put(ev)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 await self._outgoing.put(Error(ts=datetime.now(UTC), message=str(e)))
                 await self._outgoing.put(
                     StatusChange(ts=datetime.now(UTC), status="idle")

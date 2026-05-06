@@ -842,6 +842,42 @@ body {
 .status-dot[data-status="stopped"] {
   background: var(--danger);
 }
+/* Detached: agent is alive elsewhere (terminal CLI). Use accent + ring
+   to read as "intentional, not failed" — different from idle, different
+   from error. */
+.status-dot[data-status="detached"] {
+  background: var(--accent, var(--good));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, var(--good)) 25%, transparent);
+}
+
+/* Toast — transient single-line confirmation, fades after the WorkView
+   timer clears it. Sits above the canvas, doesn't block input. */
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 16px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-pop);
+  color: var(--fg-1);
+  font-size: 13px;
+  z-index: 50;
+  animation: toast-fade-in 160ms ease-out;
+  max-width: 90vw;
+}
+@keyframes toast-fade-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
 @keyframes status-pulse {
   0% {
     box-shadow: 0 0 0 0 currentColor;

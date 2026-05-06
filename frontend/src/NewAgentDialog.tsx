@@ -15,7 +15,11 @@ import {
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
-import { useFolderRecentsStore } from "./state/folderRecents";
+import {
+  NO_FOLDERS,
+  deriveFolderCandidates,
+  useFolderRecentsStore,
+} from "./state/folderRecents";
 
 type Props = {
   workSlug: string;
@@ -47,8 +51,18 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
 
   // Folder + recents (per-work first, then global). Default to the first
   // candidate so the common "same folder as last time" case is one click.
-  const folderCandidates = useFolderRecentsStore((s) => s.candidates(workSlug));
+  // Select the raw slices — the derivation builds a fresh array each
+  // call and would trip Zustand's Object.is snapshot check if used as
+  // the selector itself (infinite re-render).
+  const folderRecentsByWork = useFolderRecentsStore(
+    (s) => s.byWork[workSlug] ?? NO_FOLDERS,
+  );
+  const folderRecentsGlobal = useFolderRecentsStore((s) => s.global);
   const rememberFolder = useFolderRecentsStore((s) => s.remember);
+  const folderCandidates = useMemo(
+    () => deriveFolderCandidates(folderRecentsByWork, folderRecentsGlobal),
+    [folderRecentsByWork, folderRecentsGlobal],
+  );
   const [folder, setFolder] = useState(() => folderCandidates[0] ?? "");
 
   const [goal, setGoal] = useState("");

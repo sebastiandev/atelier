@@ -86,6 +86,18 @@ class AgentSummary(BaseModel):
     stopped_at: datetime | None = None
 
 
+class DetachResponse(BaseModel):
+    """Result of POSTing /agents/{slug}/detach."""
+
+    command: str
+    """The shell command that resumes the CLI session — surfaced in a
+    toast on success, copied to clipboard on launch failure."""
+
+    launched: bool
+    """True if Atelier successfully spawned a terminal window. False
+    when the FE should copy ``command`` to the clipboard instead."""
+
+
 class JiraConfigSchema(BaseModel):
     type: Literal["jira"]
     url: str = Field(min_length=1)
@@ -148,6 +160,7 @@ __all__ = [
     "AgentSummary",
     "ConnectionRead",
     "ContextSchema",
+    "DetachResponse",
     "NewAgentRequest",
     "NewConnectionRequest",
     "NewWorkRequest",

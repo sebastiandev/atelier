@@ -33,6 +33,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.types import TypeDecorator
 
+from src.domain.models import AgentStatus
+
 
 class PathType(TypeDecorator[Path]):
     """Stores `pathlib.Path` as a String, round-trips correctly on read.
@@ -81,6 +83,32 @@ class UTCDateTime(TypeDecorator[datetime]):
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
         return value
+
+
+class AgentStatusType(TypeDecorator[AgentStatus]):
+    """Round-trips ``AgentStatus`` between Python enum and TEXT column.
+
+    The column stores the string value (``"idle"``, ``"detached"``, …) so
+    the on-disk shape matches what humans see in DB browsers and the
+    JSON-serialised agent.json. On read we wrap the string back into the
+    enum member; equality with bare strings still works because
+    ``AgentStatus`` is a ``StrEnum``.
+    """
+
+    impl = String
+    cache_ok = True
+
+    def process_bind_param(self, value: Any, dialect: Dialect) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, AgentStatus):
+            return value.value
+        return AgentStatus(value).value
+
+    def process_result_value(self, value: Any, dialect: Dialect) -> Any:
+        if value is None:
+            return None
+        return AgentStatus(value)
 
 
 class JsonDict(TypeDecorator[dict[str, Any]]):
@@ -150,10 +178,17 @@ agents_table = Table(
     # one cross-cutting goal. WorktreeManager.ensure(source=this) is
     # what turns it into a per-agent git worktree when it's a repo.
     Column("folder", PathType, nullable=False),
-    Column("status", String, nullable=False),
+    Column("status", AgentStatusType, nullable=False),
     Column("started_at", UTCDateTime, nullable=False),
     Column("stopped_at", UTCDateTime, nullable=True),
     Column("session_id", String, nullable=True),
+    # Linked-list lineage for provider sessions that fork on resume
+    # (notably Amp's `--execute --stream-json` mode, which spawns a new
+    # thread on every continue). Set to the previous session_id when the
+    # adapter emits SessionEstablished with a different ID; null on fresh
+    # agents and on agents whose provider doesn't fork. Walked at re-attach
+    # time to reconstruct the full visual transcript.
+    Column("parent_session_id", String, nullable=True),
 )
 
 

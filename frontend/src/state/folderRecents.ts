@@ -18,17 +18,30 @@ type FolderRecentsState = {
   byWork: Record<string, string[]>;
   global: string[];
   /**
-   * Returns the per-work list (most-recent first) followed by globals not
-   * already in it. Empty for a brand-new work that hasn't seen any agent
-   * created yet.
-   */
-  candidates: (workSlug: string) => string[];
-  /**
    * Record a folder as freshly used. De-dupes case-sensitively (paths
    * are case-sensitive on Linux/macOS — we don't try to be clever here).
    */
   remember: (workSlug: string, folder: string) => void;
 };
+
+/** Stable empty singleton for ``byWork[slug]`` lookups so the selector
+ *  doesn't return a fresh ``[]`` each render and trip Zustand's default
+ *  Object.is snapshot check (same trap as ``state/closed.ts``). */
+export const NO_FOLDERS: readonly string[] = [];
+
+/**
+ * Per-work list (most-recent first) followed by global recents not
+ * already in it. Pure derivation — call inside a ``useMemo`` from the
+ * raw slices selected via the store, never as a Zustand selector
+ * itself: it builds a new array each call.
+ */
+export function deriveFolderCandidates(
+  byWork: readonly string[],
+  global: readonly string[],
+): string[] {
+  const localSet = new Set(byWork);
+  return [...byWork, ...global.filter((f) => !localSet.has(f))];
+}
 
 function moveToFront(list: string[], value: string, cap: number): string[] {
   const trimmed = value.trim();
@@ -39,16 +52,9 @@ function moveToFront(list: string[], value: string, cap: number): string[] {
 
 export const useFolderRecentsStore = create<FolderRecentsState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       byWork: {},
       global: [],
-      candidates: (workSlug) => {
-        const state = get();
-        const local = state.byWork[workSlug] ?? [];
-        const localSet = new Set(local);
-        const globalRest = state.global.filter((f) => !localSet.has(f));
-        return [...local, ...globalRest];
-      },
       remember: (workSlug, folder) =>
         set((state) => ({
           byWork: {

@@ -20,7 +20,7 @@ from threading import RLock
 from typing import Any
 
 from src.domain.agents.context_render import render_agent_contexts
-from src.domain.models import Agent, Artifact, Context, Handoff, Work
+from src.domain.models import Agent, AgentStatus, Artifact, Context, Handoff, Work
 from src.domain.workstore._serde import (
     deserialize_contexts,
     serialize_agent,
@@ -129,7 +129,7 @@ class WorkStoreService:
                 provider=req.provider,
                 model=req.model,
                 folder=req.folder,
-                status="idle",
+                status=AgentStatus.IDLE,
                 started_at=self._clock(),
             )
             agent = self._repo.add_agent(agent)
@@ -175,6 +175,14 @@ class WorkStoreService:
         with self._lock:
             self._repo.set_agent_session_id(agent_slug, session_id)
 
+    def set_agent_status(self, agent_slug: str, status: str) -> None:
+        # Used by the detach flow (→ "detached") and the WS re-attach
+        # path that pulls an agent back from CLI (→ "idle"). Same single-
+        # UPDATE shape as set_agent_session_id; agent.json is allowed to
+        # lag and reconciles on next full upsert.
+        with self._lock:
+            self._repo.set_agent_status(agent_slug, status)
+
     def append_transcript_event(
         self, work_slug: str, agent_slug: str, event: dict[str, Any]
     ) -> None:
@@ -182,6 +190,20 @@ class WorkStoreService:
         # (STORY-009) owns single-writer semantics per agent transcript,
         # and the underlying NDJSON layer is crash-safe on its own.
         self._transcript_log.append(work_slug, agent_slug, event)
+
+    def append_transcript_event_with_seq(
+        self, work_slug: str, agent_slug: str, payload: dict[str, Any]
+    ) -> int:
+        # For writes that happen WITHOUT the supervisor running for this
+        # agent — detach markers, CLI catch-up merge. The supervisor is
+        # by construction not stamping seqs concurrently for the same
+        # agent in these paths (we stop it first), so a tail-read +
+        # increment + append is safe.
+        with self._lock:
+            seq = self._transcript_log.last_seq(work_slug, agent_slug) + 1
+            stamped = {"seq": seq, **payload}
+            self._transcript_log.append(work_slug, agent_slug, stamped)
+            return seq
 
     def read_transcript_from_cursor(
         self, work_slug: str, agent_slug: str, cursor: int

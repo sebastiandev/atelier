@@ -24,7 +24,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 class SchemaMismatchError(RuntimeError):
@@ -101,6 +101,17 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
                 if works_dir.exists():
                     shutil.rmtree(works_dir)
             existing = 5
+        if existing == 5:
+            # v5 → v6: track provider-session fork lineage. Some providers
+            # (Amp's `--execute --stream-json`) spawn a new thread on every
+            # resume, leaving the old thread orphaned. parent_session_id is
+            # set to the previous session_id when SessionEstablished arrives
+            # with a different ID; the chain reconstructs the full visual
+            # transcript at re-attach time.
+            conn.execute(
+                text("ALTER TABLE agents ADD COLUMN parent_session_id TEXT")
+            )
+            existing = 6
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

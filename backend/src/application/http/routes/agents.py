@@ -14,8 +14,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from src.application.http.schemas import AgentSummary, NewAgentRequest
-from src.domain.commands.agents import list_for_work, start_plan
+from src.application.http.schemas import (
+    AgentSummary,
+    DetachResponse,
+    NewAgentRequest,
+)
+from src.domain.commands.agents import detach, list_for_work, start_plan
 from src.domain.connections import ConnectionStore, ContextFetchError
 from src.domain.models import Agent, Context
 from src.domain.supervisor import AgentSupervisorService
@@ -115,6 +119,32 @@ async def create_agent(
         first_message=plan.first_message,
     )
     return _to_summary(work_slug, plan.agent)
+
+
+@router.post("/agents/{agent_slug}/detach", response_model=DetachResponse)
+async def detach_agent(
+    agent_slug: str,
+    workstore: WorkStoreDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+) -> DetachResponse:
+    """Stop the supervisor's SDK process for this agent, flip its status
+    to ``detached``, and shell out to the user's terminal with the
+    matching CLI resume command. If the terminal can't be launched (no
+    detected emulator on Linux, sandbox restrictions, etc.) the response
+    still includes the command string so the FE can copy-to-clipboard."""
+    try:
+        result = await detach.execute(
+            workstore,
+            supervisor,
+            worktree_manager,
+            detach.DetachAgentRequest(agent_slug=agent_slug),
+        )
+    except detach.AgentNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except detach.AgentNotResumable as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    return DetachResponse(command=result.command, launched=result.launched)
 
 
 def _to_summary(work_slug: str, agent: Agent) -> AgentSummary:

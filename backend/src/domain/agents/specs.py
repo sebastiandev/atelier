@@ -240,11 +240,11 @@ SPECS: dict[Provider, Spec] = {
 
 
 __all__ = [
+    "SPECS",
     "AmpSpec",
     "ClaudeSpec",
     "EnumOption",
     "ProviderDescriptor",
-    "SPECS",
     "Spec",
     "TextOption",
 ]
