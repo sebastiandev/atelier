@@ -53,6 +53,14 @@ class WorkspacePaths:
         _validate_slug(agent_slug)
         return self.work_dir(work_slug) / "agents" / agent_slug
 
+    def worktree_dir(self, work_slug: str, agent_slug: str) -> Path:
+        """Per-agent git worktree directory. Provisioned by the
+        WorktreeManager when the work's source folder is a git repo;
+        absent on disk when the source is a plain directory (in which
+        case the agent's adapter cwd is the source folder itself)."""
+        _validate_slug(agent_slug)
+        return self.work_dir(work_slug) / "worktrees" / agent_slug
+
     def transcript(self, work_slug: str, agent_slug: str) -> Path:
         return self.agent_dir(work_slug, agent_slug) / "transcript.ndjson"
 

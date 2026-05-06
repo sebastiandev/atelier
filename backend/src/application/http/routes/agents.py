@@ -10,6 +10,7 @@ Wire format: provider + model + free ``options`` dict + folder. The
 provider's Spec validates ``options``; unknown keys → 422.
 """
 
+import subprocess
 from pathlib import Path
 from typing import Annotated
 
@@ -26,6 +27,8 @@ from src.domain.models import Agent, Context
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
+from src.infrastructure.filesystem.paths import WorkspacePaths
+from src.infrastructure.filesystem.reveal import open_in_file_browser
 from src.settings import Settings
 
 router = APIRouter()
@@ -60,13 +63,14 @@ ConnectionStoreDep = Annotated[ConnectionStore, Depends(get_connection_store)]
 
 @router.get("/works/{work_slug}/agents", response_model=list[AgentSummary])
 def list_agents_for_work_endpoint(
-    work_slug: str, workstore: WorkStoreDep
+    work_slug: str, workstore: WorkStoreDep, settings: SettingsDep
 ) -> list[AgentSummary]:
     try:
         agents = list_for_work.execute(workstore, work_slug)
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    return [_to_summary(work_slug, a) for a in agents]
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    return [_to_summary(work_slug, a, paths) for a in agents]
 
 
 @router.post(
@@ -116,7 +120,8 @@ async def create_agent(
     except ContextFetchError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
 
-    return _to_summary(work_slug, agent)
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    return _to_summary(work_slug, agent, paths)
 
 
 @router.post("/agents/{agent_slug}/detach", response_model=DetachResponse)
@@ -145,7 +150,39 @@ async def detach_agent(
     return DetachResponse(command=result.command, launched=result.launched)
 
 
-def _to_summary(work_slug: str, agent: Agent) -> AgentSummary:
+@router.post("/agents/{agent_slug}/reveal", status_code=status.HTTP_204_NO_CONTENT)
+def reveal_agent_endpoint(
+    agent_slug: str, workstore: WorkStoreDep, settings: SettingsDep
+) -> None:
+    """Open the agent's worktree (or source folder, if no worktree was
+    provisioned) in the OS file browser. Symmetric with the work-level
+    reveal — this one targets the dir where the adapter's CLI actually
+    runs, so the user can poke at the agent's working tree."""
+    work_slug = workstore.get_work_slug_for_agent(agent_slug)
+    if work_slug is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+        )
+    agent = next(
+        (a for a in workstore.list_agents_for_work(work_slug) if a.slug == agent_slug),
+        None,
+    )
+    if agent is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+        )
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    target = _resolve_worktree_path(paths, work_slug, agent_slug, agent.folder)
+    try:
+        open_in_file_browser(str(target))
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"reveal failed: {exc}",
+        ) from exc
+
+
+def _to_summary(work_slug: str, agent: Agent, paths: WorkspacePaths) -> AgentSummary:
     if agent.slug is None:
         raise RuntimeError("persisted agent missing slug")
     return AgentSummary(
@@ -160,4 +197,17 @@ def _to_summary(work_slug: str, agent: Agent) -> AgentSummary:
         status=agent.status,
         started_at=agent.started_at,
         stopped_at=agent.stopped_at,
+        worktree_path=str(_resolve_worktree_path(paths, work_slug, agent.slug, agent.folder)),
     )
+
+
+def _resolve_worktree_path(
+    paths: WorkspacePaths, work_slug: str, agent_slug: str, folder: Path
+) -> Path:
+    """The directory the adapter actually runs in. Mirrors
+    ``WorktreeManager.ensure``'s contract: the per-agent worktree if it
+    was provisioned (git source folder), otherwise the source folder."""
+    candidate = paths.worktree_dir(work_slug, agent_slug)
+    if candidate.exists():
+        return candidate
+    return folder

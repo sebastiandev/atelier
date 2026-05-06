@@ -84,6 +84,12 @@ class AgentSummary(BaseModel):
     status: AgentStatus
     started_at: datetime
     stopped_at: datetime | None = None
+    # The directory the adapter actually runs in. For git source folders
+    # this is ``<workspace>/works/<work>/worktrees/<agent>/`` once
+    # provisioned by the WorktreeManager; for non-git sources (or before
+    # provisioning) it falls back to ``folder``. Surfaced on the agent
+    # tile so the user can reveal it in their file browser.
+    worktree_path: str
 
 
 class DetachResponse(BaseModel):

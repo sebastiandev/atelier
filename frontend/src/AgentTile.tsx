@@ -32,6 +32,14 @@ type AgentTileProps = {
    *  toast on the launch result). When omitted, the detach button is
    *  hidden — the parent didn't wire it for this surface. */
   onDetach?: () => void;
+  /** Open the agent's worktree (or source folder fallback) in the OS
+   *  file browser. The path is shown in the tooltip so the user can
+   *  also copy it from there. When omitted, the folder button is
+   *  hidden. */
+  onRevealWorktree?: () => void;
+  /** The worktree path (or source-folder fallback) — used purely for
+   *  the reveal button's tooltip. */
+  worktreePath?: string;
 };
 
 /**
@@ -55,6 +63,8 @@ export function AgentTile({
   model,
   onClose,
   onDetach,
+  onRevealWorktree,
+  worktreePath,
 }: AgentTileProps) {
   const {
     events,
@@ -207,6 +217,20 @@ export function AgentTile({
           >
             {maximized ? <RestoreIcon /> : <MaxIcon />}
           </button>
+          {onRevealWorktree && (
+            <button
+              type="button"
+              className="tile-ctl"
+              title={
+                worktreePath
+                  ? `Open worktree in finder — ${worktreePath}`
+                  : "Open worktree in finder"
+              }
+              onClick={onRevealWorktree}
+            >
+              <FolderIcon />
+            </button>
+          )}
           {onDetach && (
             <button
               type="button"
@@ -301,6 +325,19 @@ function HandoffIcon() {
         strokeWidth="1.4"
         fill="none"
         strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+function FolderIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path
+        d="M2 4.5a1 1 0 0 1 1-1h3.4l1.2 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4.5z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        fill="none"
         strokeLinejoin="round"
       />
     </svg>

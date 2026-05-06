@@ -88,6 +88,10 @@ export type AgentSummary = {
   status: AgentStatus;
   started_at: string;
   stopped_at: string | null;
+  // The dir the adapter actually runs in — the per-agent git worktree
+  // when provisioned, else the source folder. Surfaced on the tile so
+  // the user can reveal it in their file browser.
+  worktree_path: string;
 };
 
 export function listAgents(workSlug: string): Promise<AgentSummary[]> {
@@ -179,6 +183,22 @@ export type DetachAgentResult = {
 export function detachAgent(agentSlug: string): Promise<DetachAgentResult> {
   return fetch(`/api/agents/${agentSlug}/detach`, { method: "POST" }).then((r) =>
     jsonOrThrow<DetachAgentResult>(r),
+  );
+}
+
+/**
+ * Open the agent's worktree (or source folder, if no worktree was
+ * provisioned) in the OS file browser. Same shell-out pattern as
+ * ``revealWork``.
+ */
+export function revealAgent(agentSlug: string): Promise<void> {
+  return fetch(`/api/agents/${agentSlug}/reveal`, { method: "POST" }).then(
+    async (r) => {
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        throw new Error(`${r.status} ${r.statusText}: ${body}`);
+      }
+    },
   );
 }
 

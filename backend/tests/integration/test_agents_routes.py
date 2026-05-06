@@ -689,3 +689,82 @@ def test_detach_returns_clipboard_fallback_when_launch_fails(
     body = response.json()
     assert body["launched"] is False
     assert body["command"]  # populated for the clipboard path
+
+
+# ---------------------------------------------------------------------------
+# REST: reveal — open the agent's worktree in the OS file browser
+# ---------------------------------------------------------------------------
+
+
+def test_reveal_agent_opens_folder_when_no_worktree_provisioned(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """For a non-git source folder no worktree is provisioned, so reveal
+    falls back to the agent's source folder (== ``agent.folder``)."""
+    from src.application.http.routes import agents as agents_module
+
+    captured: dict[str, object] = {}
+
+    def fake_open(path: str) -> None:
+        captured["path"] = path
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    # Patch AFTER creation so the worktree manager's git probes run
+    # normally; the patch is just to silence the actual reveal call.
+    monkeypatch.setattr(agents_module, "open_in_file_browser", fake_open)
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/reveal")
+    assert response.status_code == 204
+    assert captured["path"] == tmp_workdir
+
+
+def test_reveal_agent_opens_worktree_when_provisioned(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the worktree dir exists on disk (provisioned by the
+    WorktreeManager for git source folders), reveal targets it instead
+    of the source folder."""
+    from src.application.http.routes import agents as agents_module
+
+    captured: dict[str, object] = {}
+
+    def fake_open(path: str) -> None:
+        captured["path"] = path
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    monkeypatch.setattr(agents_module, "open_in_file_browser", fake_open)
+
+    # Simulate the WorktreeManager having provisioned the per-agent
+    # worktree dir. The route checks ``exists()``; an empty dir suffices
+    # for the route's branching logic.
+    settings = app_client.app.state.settings
+    worktree = (
+        settings.workspace_root / "works" / work["slug"] / "worktrees" / agent["slug"]
+    )
+    worktree.mkdir(parents=True, exist_ok=True)
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/reveal")
+    assert response.status_code == 204
+    assert captured["path"] == str(worktree)
+
+
+def test_reveal_agent_404_for_unknown_slug(app_client: TestClient) -> None:
+    assert app_client.post("/api/agents/agt-404/reveal").status_code == 404
+
+
+def test_agent_summary_carries_worktree_path(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    """``worktree_path`` is included on every agent summary so the FE
+    can show the path on the tile pill without a second round-trip."""
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    listing = app_client.get(f"/api/works/{work['slug']}/agents").json()
+    fetched = next(a for a in listing if a["slug"] == agent["slug"])
+    # No worktree provisioned for the non-git tmp folder, so the path
+    # echoes the source folder.
+    assert fetched["worktree_path"] == tmp_workdir
+    # The create response carries it too.
+    assert agent["worktree_path"] == tmp_workdir

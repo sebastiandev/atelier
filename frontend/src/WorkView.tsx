@@ -10,6 +10,7 @@ import {
   detachAgent,
   getWork,
   listAgents,
+  revealAgent,
   revealWork,
 } from "./api";
 import { NewAgentDialog } from "./NewAgentDialog";
@@ -275,12 +276,23 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   agentName={a.name}
                   provider={a.provider}
                   model={a.model}
+                  worktreePath={a.worktree_path}
                   onClose={() => {
                     closeAgent(workSlug, a.slug);
                     if (focusedSlug === a.slug) setFocusedSlug(null);
                   }}
                   onDetach={() => {
                     void handleDetach(a.slug);
+                  }}
+                  onRevealWorktree={() => {
+                    // Best-effort reveal — same fallback shape as the
+                    // work-level pill: copy the path on backend
+                    // failure so the user can paste it into a terminal.
+                    revealAgent(a.slug).catch(() => {
+                      navigator.clipboard
+                        ?.writeText(a.worktree_path)
+                        .catch(() => {});
+                    });
                   }}
                 />
               </div>

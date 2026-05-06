@@ -6,7 +6,6 @@ that lives behind the WorkStore port.
 """
 
 import subprocess
-import sys
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -27,6 +26,7 @@ from src.domain.workstore.dtos import (
 )
 from src.domain.workstore.ports import WorkStore
 from src.infrastructure.filesystem.paths import WorkspacePaths
+from src.infrastructure.filesystem.reveal import open_in_file_browser
 from src.settings import Settings
 
 router = APIRouter()
@@ -108,23 +108,12 @@ def reveal_work_endpoint(
     target = paths.work_dir(work_slug)
     target.mkdir(parents=True, exist_ok=True)
     try:
-        _open_in_file_browser(str(target))
+        open_in_file_browser(str(target))
     except (OSError, subprocess.SubprocessError) as exc:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"reveal failed: {exc}",
         ) from exc
-
-
-def _open_in_file_browser(path: str) -> None:
-    """Cross-platform 'show this folder' shell-out. Windows' explorer.exe
-    returns exit code 1 on success — don't ``check`` there."""
-    if sys.platform == "darwin":
-        subprocess.run(["open", path], check=True)
-    elif sys.platform == "win32":
-        subprocess.run(["explorer", path], check=False)
-    else:
-        subprocess.run(["xdg-open", path], check=True)
 
 
 # ---------------------------------------------------------------------------
