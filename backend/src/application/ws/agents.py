@@ -20,7 +20,8 @@ from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from src.domain.commands.agents import connect
+from src.domain.agents import parse_user_action
+from src.domain.commands.agents import connect, handle_user_action
 from src.domain.supervisor import AgentSubscription, AgentSupervisorService
 
 router = APIRouter()
@@ -90,26 +91,14 @@ async def _receive_inputs(
     while True:
         msg = await websocket.receive_text()
         try:
-            parsed = json.loads(msg)
+            data = json.loads(msg)
         except json.JSONDecodeError:
             continue
-        if not isinstance(parsed, dict):
+        if not isinstance(data, dict):
             continue
-        kind = parsed.get("type")
-        if kind == "input":
-            text = parsed.get("text")
-            if isinstance(text, str):
-                await supervisor.send_input(agent_slug, text)
-        elif kind == "stop":
-            await supervisor.stop_turn(agent_slug)
-        elif kind == "permission":
-            request_id = parsed.get("request_id")
-            decision = parsed.get("decision")
-            if (
-                isinstance(request_id, str)
-                and decision in ("allow", "allow_always", "deny")
-            ):
-                await supervisor.resolve_permission(agent_slug, request_id, decision)
+        action = parse_user_action(data)
+        if action is not None:
+            await handle_user_action.execute(supervisor, agent_slug, action)
 
 
 def _parse_cursor(value: str | None) -> int:

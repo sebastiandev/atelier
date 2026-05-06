@@ -41,6 +41,13 @@ from src.domain.agents.specs import (
     TextOption,
 )
 from src.domain.agents.system_prompt import render_system_prompt
+from src.domain.agents.user_actions import (
+    ResolvePermission,
+    SendInput,
+    StopTurn,
+    UserAction,
+    parse_user_action,
+)
 
 __all__ = [
     "AMP_DEFAULT_AUTO_ALLOWED_TOOLS",
@@ -68,15 +75,20 @@ __all__ = [
     "PermissionDecisionValue",
     "PermissionRequest",
     "ProviderDescriptor",
+    "ResolvePermission",
+    "SendInput",
     "SessionEstablished",
     "Spec",
     "StatusChange",
+    "StopTurn",
     "TextOption",
     "ThinkingComplete",
     "ThinkingDelta",
     "ToolCall",
     "ToolResult",
     "TurnMetrics",
+    "UserAction",
+    "parse_user_action",
     "render_agent_contexts",
     "render_system_prompt",
 ]

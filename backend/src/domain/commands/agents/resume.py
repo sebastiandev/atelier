@@ -78,7 +78,7 @@ async def execute(
 
     # Idempotent: already registered. Caller (typically connect) just
     # subscribes to the existing state.
-    if supervisor.get_work_slug_for(req.agent_slug) is not None:
+    if supervisor.is_registered(req.agent_slug):
         return agent
 
     workdir = worktree_manager.ensure(
@@ -124,7 +124,7 @@ async def execute(
         # it doesn't, the failure was something other than the race.
         with suppress(Exception):
             await adapter.close()
-        if supervisor.get_work_slug_for(req.agent_slug) is None:
+        if not supervisor.is_registered(req.agent_slug):
             raise
 
     return agent

@@ -341,14 +341,13 @@ class AgentSupervisorService:
         for slug in slugs:
             await self.stop_agent(slug)
 
-    def get_work_slug_for(self, agent_slug: str) -> str | None:
-        """Return the work slug for a running agent, or None if unknown.
+    def is_registered(self, agent_slug: str) -> bool:
+        """True if the supervisor has live state for this agent.
 
-        Used by the WS handler to resolve the transcript path for replay
-        before subscribing.
+        Used by ``connect`` / ``resume`` to decide whether to rebuild the
+        adapter + register, or attach to existing state.
         """
-        state = self._states.get(agent_slug)
-        return state.work_slug if state else None
+        return agent_slug in self._states
 
     # -- internals --
 

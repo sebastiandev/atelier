@@ -56,8 +56,7 @@ async def execute(
     settings: Settings,
     req: ConnectRequest,
 ) -> AsyncIterator[AgentSubscription]:
-    work_slug = supervisor.get_work_slug_for(req.agent_slug)
-    if work_slug is None:
+    if not supervisor.is_registered(req.agent_slug):
         # Supervisor has no live state — backend restart, the agent was
         # closed-to-rail, or it was detached to CLI. Resume will resolve
         # the work_slug from the workstore, register the agent, and (if
