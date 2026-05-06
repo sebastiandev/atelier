@@ -29,16 +29,49 @@ from dataclasses import dataclass
 from typing import Any, get_args
 
 from src.domain.agents.events import PermissionDecisionValue
+from src.domain.models import Context, ContextType
 
 
 @dataclass(frozen=True)
 class SendInput:
     text: str
+    # Mid-session attachments. Empty for plain messages. Connection-backed
+    # entries (jira / sentry / honeycomb) carry a ``conn_id`` slug so the
+    # backend knows which credentials to use; simple types (text / url /
+    # file / agentout) leave it ``None``.
+    contexts: tuple[Context, ...] = ()
 
     @classmethod
     def parse(cls, data: dict[str, Any]) -> SendInput | None:
         text = data.get("text")
-        return cls(text=text) if isinstance(text, str) else None
+        if not isinstance(text, str):
+            return None
+        raw_contexts = data.get("contexts")
+        contexts: tuple[Context, ...] = ()
+        if raw_contexts is not None:
+            parsed = _parse_contexts(raw_contexts)
+            if parsed is None:
+                return None
+            contexts = parsed
+        return cls(text=text, contexts=contexts)
+
+
+def _parse_contexts(raw: Any) -> tuple[Context, ...] | None:
+    if not isinstance(raw, list):
+        return None
+    out: list[Context] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        ctype = item.get("type")
+        value = item.get("value")
+        if ctype not in get_args(ContextType) or not isinstance(value, str):
+            return None
+        conn_id = item.get("conn_id")
+        if conn_id is not None and not isinstance(conn_id, str):
+            return None
+        out.append(Context(type=ctype, value=value, conn_id=conn_id))
+    return tuple(out)
 
 
 @dataclass(frozen=True)

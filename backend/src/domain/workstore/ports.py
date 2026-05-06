@@ -50,11 +50,27 @@ class WorkStore(Protocol):
         agent_slug: str,
         contexts: list[Context],
         fetched_bodies: dict[int, str] | None = None,
+        *,
+        since_index: int = 0,
     ) -> str | None: ...
 
     def list_agents_for_work(self, work_slug: str) -> list[Agent]: ...
 
     def get_work_slug_for_agent(self, agent_slug: str) -> str | None: ...
+
+    def get_agent_contexts(self, work_slug: str, agent_slug: str) -> list[Context]:
+        """Read the agent's context list from ``agent.json``. Returns
+        an empty list when the agent has no contexts (or no agent.json
+        — treat both as 'no contexts'; the renderer no-ops on empty)."""
+        ...
+
+    def replace_agent_contexts(
+        self, work_slug: str, agent_slug: str, contexts: list[Context]
+    ) -> None:
+        """Persist the merged contexts list back to ``agent.json``.
+        Used by the mid-session add-context flow after the renderer has
+        written the new per-source files."""
+        ...
 
     def set_agent_session_id(self, agent_slug: str, session_id: str) -> None: ...
 

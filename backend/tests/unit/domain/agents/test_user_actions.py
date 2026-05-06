@@ -8,11 +8,68 @@ from src.domain.agents import (
     StopTurn,
     parse_user_action,
 )
+from src.domain.models import Context
 
 
 def test_parse_send_input() -> None:
     action = parse_user_action({"type": "input", "text": "hello"})
     assert action == SendInput(text="hello")
+
+
+def test_parse_send_input_with_contexts() -> None:
+    action = parse_user_action(
+        {
+            "type": "input",
+            "text": "look at this",
+            "contexts": [
+                {"type": "text", "value": "a note"},
+                {"type": "jira", "value": "ENG-1", "conn_id": "con-3"},
+            ],
+        }
+    )
+    assert action == SendInput(
+        text="look at this",
+        contexts=(
+            Context(type="text", value="a note", conn_id=None),
+            Context(type="jira", value="ENG-1", conn_id="con-3"),
+        ),
+    )
+
+
+def test_parse_send_input_with_empty_contexts_list() -> None:
+    action = parse_user_action(
+        {"type": "input", "text": "plain", "contexts": []}
+    )
+    assert action == SendInput(text="plain", contexts=())
+
+
+def test_parse_send_input_rejects_malformed_context_entry() -> None:
+    """Wire-level validation: an entry missing required fields makes
+    the whole frame unparseable rather than silently dropping the
+    bad entry."""
+    assert (
+        parse_user_action(
+            {
+                "type": "input",
+                "text": "x",
+                "contexts": [{"type": "text"}],  # missing value
+            }
+        )
+        is None
+    )
+
+
+def test_parse_send_input_rejects_unknown_context_type() -> None:
+    assert (
+        parse_user_action(
+            {
+                "type": "input",
+                "text": "x",
+                "contexts": [{"type": "rewind", "value": "v"}],
+            }
+        )
+        is None
+    )
 
 
 def test_parse_send_input_missing_text() -> None:

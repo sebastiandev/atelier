@@ -7,8 +7,18 @@ import {
   useState,
 } from "react";
 
-import { PERSONA_GLYPH, type Persona } from "./api";
+import {
+  type Connection,
+  type ConnectionType,
+  type ContextEntry,
+  PERSONA_GLYPH,
+  type Persona,
+  listConnections,
+} from "./api";
+import { useConnectionDescriptors } from "./connectionDescriptors";
+import { ContextRow } from "./ContextRow";
 import { MarkdownText } from "./MarkdownText";
+import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 import {
   type AgentEvent,
   type PendingPermission,
@@ -17,6 +27,18 @@ import {
 } from "./useAgentStream";
 
 const COMPOSER_MAX_HEIGHT = 200;
+
+const SIMPLE_PICKER_TYPES: { id: SimpleContextType; label: string }[] = [
+  { id: "text", label: "Text" },
+  { id: "url", label: "URL" },
+  { id: "file", label: "File" },
+];
+
+const SIMPLE_CONTEXT_TYPES: ReadonlySet<string> = new Set(["text", "url", "file"]);
+
+function isSimpleType(type: string): type is SimpleContextType {
+  return SIMPLE_CONTEXT_TYPES.has(type);
+}
 
 type AgentTileProps = {
   agentSlug: string;
@@ -78,6 +100,25 @@ export function AgentTile({
   // Optimistic "thinking" between Send and the first status_change event
   // back from the adapter, so the dot reacts instantly.
   const [optimisticThinking, setOptimisticThinking] = useState(false);
+
+  // Composer-local context attachments. Cleared on send. The user can
+  // remove individual entries before sending; once Send is hit they're
+  // shipped along with the input frame and the backend writes them into
+  // the agent's context dir.
+  const [pendingContexts, setPendingContexts] = useState<ContextEntry[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const { descriptors: connectionDescriptors } = useConnectionDescriptors();
+  const fetchableTypes = useMemo(
+    () => (connectionDescriptors ?? []).filter((d) => d.context_fetchable),
+    [connectionDescriptors],
+  );
+
+  useEffect(() => {
+    listConnections()
+      .then(setConnections)
+      .catch(() => setConnections([]));
+  }, []);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -111,12 +152,50 @@ export function AgentTile({
     if (last && last.type === "status_change") setOptimisticThinking(false);
   }, [events, optimisticThinking]);
 
+  // Drop entries the user opened but never typed into (empty value) —
+  // they'd 422 server-side. Connection-backed rows also need a conn_id
+  // (ContextRow auto-selects one once available).
+  const submittableContexts = useMemo(
+    () =>
+      pendingContexts.filter(
+        (c) => c.value.trim() !== "" && (c.conn_id !== null || isSimpleType(c.type)),
+      ),
+    [pendingContexts],
+  );
+
   function submit() {
     const text = draft.trim();
     if (!text) return;
-    sendInput(text);
+    sendInput(text, submittableContexts);
     setDraft("");
+    setPendingContexts([]);
+    setPickerOpen(false);
     setOptimisticThinking(true);
+  }
+
+  function addSimpleContext(type: SimpleContextType) {
+    setPendingContexts((prev) => [...prev, { type, value: "", conn_id: null }]);
+    setPickerOpen(false);
+  }
+
+  function addConnectionContext(type: ConnectionType) {
+    setPendingContexts((prev) => [...prev, { type, value: "", conn_id: null }]);
+    setPickerOpen(false);
+  }
+
+  function patchPendingContext(index: number, next: ContextEntry) {
+    setPendingContexts((prev) => prev.map((c, i) => (i === index ? next : c)));
+  }
+
+  function removePendingContext(index: number) {
+    setPendingContexts((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function upsertConnection(connection: Connection) {
+    setConnections((prev) => {
+      const without = prev.filter((c) => c.slug !== connection.slug);
+      return [...without, connection];
+    });
   }
 
   function handleSubmit(e: FormEvent) {
@@ -279,6 +358,29 @@ export function AgentTile({
         </div>
       )}
       <form className="composer" onSubmit={handleSubmit}>
+        {pendingContexts.length > 0 && (
+          <div className="composer-contexts">
+            {pendingContexts.map((c, i) =>
+              isSimpleType(c.type) ? (
+                <SimpleContextRow
+                  key={i}
+                  context={c}
+                  onChange={(next) => patchPendingContext(i, next)}
+                  onRemove={() => removePendingContext(i)}
+                />
+              ) : (
+                <ContextRow
+                  key={i}
+                  context={c}
+                  connections={connections}
+                  onChange={(next) => patchPendingContext(i, next)}
+                  onRemove={() => removePendingContext(i)}
+                  onConnectionSaved={upsertConnection}
+                />
+              ),
+            )}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           value={draft}
@@ -290,14 +392,43 @@ export function AgentTile({
           autoFocus={mode === "page"}
         />
         <div className="composer-actions">
-          <button
-            type="button"
-            className="composer-tool"
-            disabled
-            title="Add context — coming in Sprint 3"
-          >
-            + Add context
-          </button>
+          <div className="composer-add-context">
+            <button
+              type="button"
+              className="composer-tool"
+              onClick={() => setPickerOpen((o) => !o)}
+              title="Attach context to your next message — appended to context.md when you Send"
+              aria-expanded={pickerOpen}
+            >
+              + Add context
+            </button>
+            {pickerOpen && (
+              <div className="composer-context-picker">
+                {SIMPLE_PICKER_TYPES.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="btn sm"
+                    data-source={s.id}
+                    onClick={() => addSimpleContext(s.id)}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+                {fetchableTypes.map((d) => (
+                  <button
+                    key={d.type}
+                    type="button"
+                    className="btn sm"
+                    data-source={d.type}
+                    onClick={() => addConnectionContext(d.type)}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <span className="spacer" />
           <button
             type="submit"

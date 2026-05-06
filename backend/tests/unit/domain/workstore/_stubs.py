@@ -125,6 +125,8 @@ class StubFiles:
         self.briefs: dict[str, str] = {}
         self.agent_jsons: dict[tuple[str, str], dict[str, Any]] = {}
         self.handoff_docs: dict[tuple[str, str], str] = {}
+        self.context_files: dict[tuple[str, str, str], str] = {}
+        self.context_indexes: dict[tuple[str, str], str] = {}
 
     def ensure_work_dir(self, work_slug: str) -> None:
         self.work_dirs.add(work_slug)
@@ -150,6 +152,18 @@ class StubFiles:
     def write_handoff_doc(self, work_slug: str, filename: str, content: str) -> str:
         self.handoff_docs[(work_slug, filename)] = content
         return f"/stub/works/{work_slug}/handoffs/{filename}"
+
+    def write_agent_context_file(
+        self, work_slug: str, agent_slug: str, filename: str, content: str
+    ) -> str:
+        self.context_files[(work_slug, agent_slug, filename)] = content
+        return f"/stub/works/{work_slug}/agents/{agent_slug}/context/{filename}"
+
+    def write_agent_context_index(
+        self, work_slug: str, agent_slug: str, content: str
+    ) -> str:
+        self.context_indexes[(work_slug, agent_slug)] = content
+        return f"/stub/works/{work_slug}/agents/{agent_slug}/context.md"
 
     def list_work_slugs(self) -> list[str]:
         return sorted(self.work_jsons.keys())

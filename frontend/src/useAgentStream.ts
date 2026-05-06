@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import type { ContextEntry } from "./api";
+
 export type AgentEvent = {
   seq: number;
   type: string;
@@ -131,10 +133,12 @@ export function useAgentStream(agentSlug: string) {
     };
   }, [agentSlug]);
 
-  function sendInput(text: string) {
+  function sendInput(text: string, contexts?: ContextEntry[]) {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "input", text }));
+      const frame: Record<string, unknown> = { type: "input", text };
+      if (contexts && contexts.length > 0) frame.contexts = contexts;
+      ws.send(JSON.stringify(frame));
     }
   }
 

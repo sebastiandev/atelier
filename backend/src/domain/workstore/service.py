@@ -146,13 +146,24 @@ class WorkStoreService:
         agent_slug: str,
         contexts: list[Context],
         fetched_bodies: dict[int, str] | None = None,
+        *,
+        since_index: int = 0,
     ) -> str | None:
-        """Write per-source files + the index for an agent. Returns the
-        absolute path to ``context.md``, or ``None`` if there are no
-        contexts to render."""
+        """Write per-source files for ``contexts[since_index:]`` and
+        rebuild the index from the full list. Returns the absolute path
+        to ``context.md``, or ``None`` if ``contexts`` is empty.
+
+        ``since_index > 0`` is the mid-session "add context" path — only
+        the new entries' bodies are needed in ``fetched_bodies``, and
+        pre-existing files on disk are kept as-is."""
         with self._lock:
             return render_agent_contexts(
-                self._files, work_slug, agent_slug, contexts, fetched_bodies
+                self._files,
+                work_slug,
+                agent_slug,
+                contexts,
+                fetched_bodies,
+                since_index=since_index,
             )
 
     def list_agents_for_work(self, work_slug: str) -> list[Agent]:
@@ -166,6 +177,22 @@ class WorkStoreService:
         # backend restart). Single SQL join in the repo layer.
         with self._lock:
             return self._repo.get_work_slug_for_agent(agent_slug)
+
+    def get_agent_contexts(self, work_slug: str, agent_slug: str) -> list[Context]:
+        with self._lock:
+            data = self._files.read_agent_json(work_slug, agent_slug)
+            return deserialize_contexts(data) if data is not None else []
+
+    def replace_agent_contexts(
+        self, work_slug: str, agent_slug: str, contexts: list[Context]
+    ) -> None:
+        with self._lock:
+            agent = self._repo.get_agent_by_slug(agent_slug)
+            if agent is None:
+                raise ValueError(f"agent not found: {agent_slug}")
+            self._files.write_agent_json(
+                work_slug, agent_slug, serialize_agent(agent, contexts)
+            )
 
     def set_agent_session_id(self, agent_slug: str, session_id: str) -> None:
         # Hot path: called by the supervisor on the first SessionEstablished

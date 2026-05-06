@@ -21,8 +21,10 @@ from contextlib import suppress
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.domain.agents import parse_user_action
-from src.domain.commands.agents import connect, handle_user_action
+from src.domain.commands.agents import add_contexts, connect, handle_user_action
+from src.domain.connections import ConnectionStore, ContextFetchError
 from src.domain.supervisor import AgentSubscription, AgentSupervisorService
+from src.domain.workstore.ports import WorkStore
 
 router = APIRouter()
 
@@ -36,6 +38,7 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
     workstore = websocket.app.state.workstore
     supervisor = websocket.app.state.supervisor
     worktree_manager = websocket.app.state.worktree_manager
+    connection_store = websocket.app.state.connection_store
     settings = websocket.app.state.settings
 
     cursor = _parse_cursor(websocket.query_params.get("cursor"))
@@ -51,7 +54,9 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
             await websocket.accept()
             send_task = asyncio.create_task(_drain(sub, websocket))
             recv_task = asyncio.create_task(
-                _receive_inputs(websocket, supervisor, agent_slug)
+                _receive_inputs(
+                    websocket, supervisor, workstore, connection_store, agent_slug
+                )
             )
             kick_task = asyncio.create_task(sub.kicked.wait())
             try:
@@ -86,6 +91,8 @@ async def _drain(sub: AgentSubscription, websocket: WebSocket) -> None:
 async def _receive_inputs(
     websocket: WebSocket,
     supervisor: AgentSupervisorService,
+    workstore: WorkStore,
+    connection_store: ConnectionStore,
     agent_slug: str,
 ) -> None:
     while True:
@@ -97,8 +104,22 @@ async def _receive_inputs(
         if not isinstance(data, dict):
             continue
         action = parse_user_action(data)
-        if action is not None:
-            await handle_user_action.execute(supervisor, agent_slug, action)
+        if action is None:
+            continue
+        try:
+            await handle_user_action.execute(
+                supervisor, workstore, connection_store, agent_slug, action
+            )
+        except (ContextFetchError, add_contexts.AgentNotFound) as exc:
+            # Add-context failed (bad credentials, network, missing
+            # connection). The user's message was NOT delivered to the
+            # SDK. Surface the failure to the client so it can show a
+            # toast — the WS frame is purely advisory and not stamped
+            # into the transcript ledger.
+            with suppress(Exception):
+                await websocket.send_json(
+                    {"type": "client_error", "message": f"Add context failed: {exc}"}
+                )
 
 
 def _parse_cursor(value: str | None) -> int:

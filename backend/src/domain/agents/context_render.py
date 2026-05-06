@@ -59,29 +59,47 @@ def render_agent_contexts(
     agent_slug: str,
     contexts: list[Context],
     fetched_bodies: dict[int, str] | None = None,
+    *,
+    since_index: int = 0,
 ) -> str | None:
-    """Write per-source files + the index. Returns the absolute path to the
-    index file, or ``None`` when ``contexts`` is empty.
+    """Write per-source files for ``contexts[since_index:]`` and (re)build
+    the index from the full ``contexts`` list. Returns the absolute path
+    to the index file, or ``None`` when ``contexts`` is empty.
 
-    ``fetched_bodies`` is keyed by index into ``contexts``; the boundary
-    pre-fetches connection-backed entries and supplies them here. A
-    connection-backed context with no entry in ``fetched_bodies`` raises —
-    that's a wiring bug, not a user error."""
+    ``fetched_bodies`` is keyed by absolute index into ``contexts``; the
+    boundary pre-fetches connection-backed entries and supplies them
+    here. For ``since_index > 0`` only the new entries (those past the
+    cursor) need bodies — pre-existing connection-backed files on disk
+    are kept as-is, so a Jira ticket ingested at start doesn't get
+    re-fetched on every later add (the original snapshot stays stable).
+
+    A connection-backed context with no entry in ``fetched_bodies`` AND
+    index >= ``since_index`` raises — that's a wiring bug, not a user
+    error.
+    """
     if not contexts:
         return None
 
     fetched = fetched_bodies or {}
-    entries: list[tuple[str, Context]] = []
+    filenames = derive_filenames(contexts)
+    for idx in range(since_index, len(contexts)):
+        c = contexts[idx]
+        files.write_agent_context_file(
+            work_slug, agent_slug, filenames[idx], _body_for(c, fetched.get(idx))
+        )
+    entries = list(zip(filenames, contexts, strict=True))
+    return files.write_agent_context_index(work_slug, agent_slug, _build_index(entries))
+
+
+def derive_filenames(contexts: list[Context]) -> list[str]:
+    """Map each context to its on-disk filename, preserving order. The
+    filename is the same one ``render_agent_contexts`` would write — so
+    callers that want to reference newly-added entries (e.g. in the
+    auto-prepend hint sent alongside a user message) can derive them
+    without walking the filesystem."""
     taken: set[str] = set()
     counters: dict[str, int] = {}
-    for idx, c in enumerate(contexts):
-        filename = _filename_for(c, taken, counters)
-        files.write_agent_context_file(
-            work_slug, agent_slug, filename, _body_for(c, fetched.get(idx))
-        )
-        entries.append((filename, c))
-
-    return files.write_agent_context_index(work_slug, agent_slug, _build_index(entries))
+    return [_filename_for(c, taken, counters) for c in contexts]
 
 
 def _filename_for(c: Context, taken: set[str], counters: dict[str, int]) -> str:
@@ -142,4 +160,4 @@ def _summary(c: Context) -> str:
     return f" — {c.value}"
 
 
-__all__ = ["render_agent_contexts"]
+__all__ = ["derive_filenames", "render_agent_contexts"]

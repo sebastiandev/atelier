@@ -1333,6 +1333,29 @@ body {
   filter: brightness(1.1);
 }
 
+.composer-contexts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.composer-add-context {
+  position: relative;
+}
+.composer-context-picker {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  padding: 0.5rem;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 5;
+}
+
 /* Work view -------------------------------------------------------------- */
 
 .work-view {
