@@ -16,6 +16,7 @@ that points the SDK at what's new without inlining the full bodies.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.domain.agents.context_render import derive_filenames
@@ -42,6 +43,19 @@ class AddContextsResult:
     in order. Empty if no contexts were supplied (the command is then
     a no-op)."""
 
+    index_path: str | None
+    """Absolute path to the (rebuilt) ``context.md`` index, or ``None``
+    when ``new_filenames`` is empty (the command was a no-op). The
+    caller uses this to point the SDK at the file with an absolute
+    path — relative ``context.md`` would resolve against the adapter's
+    cwd (the per-agent worktree), which doesn't carry the index."""
+
+    new_file_paths: tuple[str, ...]
+    """Absolute paths to the just-added per-source files. Same length
+    and order as ``new_filenames`` — derived from the index dir + the
+    sub-folder name. The auto-prepend hint references these directly so
+    the SDK's Read tool resolves them on first try."""
+
 
 class AgentNotFound(ValueError):
     """The agent_slug doesn't resolve to a stored agent."""
@@ -53,7 +67,9 @@ def execute(
     req: AddContextsRequest,
 ) -> AddContextsResult:
     if not req.contexts:
-        return AddContextsResult(new_filenames=())
+        return AddContextsResult(
+            new_filenames=(), index_path=None, new_file_paths=()
+        )
 
     work_slug = workstore.get_work_slug_for_agent(req.agent_slug)
     if work_slug is None:
@@ -73,7 +89,7 @@ def execute(
         if c.type in _CONNECTION_BACKED_TYPES
     }
 
-    workstore.render_agent_contexts(
+    index_path = workstore.render_agent_contexts(
         work_slug,
         req.agent_slug,
         merged,
@@ -84,7 +100,18 @@ def execute(
 
     all_filenames = derive_filenames(merged)
     new_filenames = tuple(all_filenames[since_index:])
-    return AddContextsResult(new_filenames=new_filenames)
+    # Per-source files live in ``<index_dir>/context/<filename>`` — same
+    # layout the renderer writes to. Pre-compute absolute paths so the
+    # caller doesn't have to know the workspace layout.
+    new_file_paths: tuple[str, ...] = ()
+    if index_path is not None:
+        context_dir = Path(index_path).parent / "context"
+        new_file_paths = tuple(str(context_dir / name) for name in new_filenames)
+    return AddContextsResult(
+        new_filenames=new_filenames,
+        index_path=index_path,
+        new_file_paths=new_file_paths,
+    )
 
 
 __all__ = [

@@ -91,6 +91,8 @@ def test_add_contexts_no_op_for_empty_request() -> None:
         add_contexts.AddContextsRequest(agent_slug="agt-1", contexts=()),
     )
     assert result.new_filenames == ()
+    assert result.new_file_paths == ()
+    assert result.index_path is None
     assert conn_store.calls == []
 
 
@@ -109,6 +111,12 @@ def test_add_contexts_appends_text_and_returns_new_filename() -> None:
 
     # Existing was text-1; new should be text-2.
     assert result.new_filenames == ("text-2.md",)
+    # Absolute paths so the auto-prepend can hand them to the SDK
+    # without it having to resolve against the worktree cwd.
+    assert result.index_path is not None
+    assert result.index_path.endswith("/context.md")
+    assert len(result.new_file_paths) == 1
+    assert result.new_file_paths[0].endswith("/context/text-2.md")
     written = _files_written(files, "WRK-001", "agt-1")
     assert "text-2.md" in written
     # The agent.json now carries both contexts.

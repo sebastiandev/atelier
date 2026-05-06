@@ -58,7 +58,9 @@ async def execute(
                         agent_slug=agent_slug, contexts=contexts
                     ),
                 )
-                prepended = _prepend_context_hint(text, result.new_filenames)
+                prepended = _prepend_context_hint(
+                    text, result.new_file_paths, result.index_path
+                )
                 await supervisor.send_input(agent_slug, prepended)
             else:
                 await supervisor.send_input(agent_slug, text)
@@ -68,15 +70,22 @@ async def execute(
             await supervisor.resolve_permission(agent_slug, request_id, decision)
 
 
-def _prepend_context_hint(text: str, new_filenames: tuple[str, ...]) -> str:
+def _prepend_context_hint(
+    text: str, new_file_paths: tuple[str, ...], index_path: str | None
+) -> str:
     """Build the auto-prepend that points the SDK at new context files
     before the user's message. Mirrors the start-time first-message
-    pattern: tell the model where to look, let it Read on demand."""
-    if not new_filenames:
+    pattern: tell the model where to look, let it Read on demand.
+
+    Paths are absolute — relative paths would resolve against the
+    adapter's cwd (the per-agent git worktree), which doesn't contain
+    ``context.md`` (that lives in the agent's metadata dir under the
+    workspace root)."""
+    if not new_file_paths or index_path is None:
         return text
-    listed = ", ".join(f"`context/{name}`" for name in new_filenames)
+    listed = ", ".join(f"`{p}`" for p in new_file_paths)
     hint = (
-        f"[Atelier appended new context: {listed} — re-read `context.md` "
+        f"[Atelier appended new context: {listed} — re-read `{index_path}` "
         "for the updated index.]"
     )
     return f"{hint}\n\n{text}"
