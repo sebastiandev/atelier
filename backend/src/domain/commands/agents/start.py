@@ -1,30 +1,31 @@
-"""Build a plan to launch an agent.
+"""Create an agent and register it with the supervisor.
 
-Pulled out of the HTTP route per the thin-router rule. This command does
-not start the agent — it returns a ``StartAgentPlan`` the route then
-hands to ``supervisor.start_agent`` over the (forced) async boundary.
-The split keeps the planning side sync + unit-testable; only the
-supervisor call is async.
+Replaces the previous ``start_plan`` shape. The command is async and
+calls the supervisor directly so the route stays thin (parse → call
+command → format) and there's one inward path from the endpoint into
+domain logic.
 
-The command:
-
-  1. Validates the requested folder exists / can be created.
-  2. Adds the agent row (carrying the folder) to its work — slug allocated.
-  3. Provisions a per-agent workdir via the WorktreeManager — a real
-     ``git worktree`` checkout when the agent's folder is a repo, the
-     folder itself when it isn't.
-  4. Builds the provider config + adapter via the SPECS registry.
-  5. Returns ``(agent, adapter, context, first_message)``.
+Steps:
+  1. Validate the requested folder exists / can be created.
+  2. Validate the provider config (model + options) before allocating
+     state we'd have to roll back on failure.
+  3. Pre-fetch connection-backed contexts (jira / sentry / honeycomb).
+  4. Add the agent row + render contexts.
+  5. Provision the per-agent workdir via the WorktreeManager.
+  6. Build the adapter + register with the supervisor (lazy-spawn —
+     no SDK process starts here unless ``send_input`` runs below).
+  7. If contexts produced a synthesised first message, send it; this
+     triggers the supervisor's pump and the SDK actually launches.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.domain.agents import (
     SPECS,
-    AgentAdapter,
     AgentStartContext,
     CommonAgentConfig,
     render_system_prompt,
@@ -36,6 +37,9 @@ from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
 from src.infrastructure.agents import build_adapter
 from src.settings import Settings
+
+if TYPE_CHECKING:
+    from src.domain.supervisor import AgentSupervisorService
 
 # Context types whose body must be fetched from an external connection
 # at start time. Anything else is rendered inline by the renderer.
@@ -53,18 +57,6 @@ class StartAgentRequest:
     folder: Path
     options: dict[str, object]
     contexts: tuple[Context, ...] = ()
-
-
-@dataclass(frozen=True)
-class StartAgentPlan:
-    agent: Agent
-    adapter: AgentAdapter
-    context: AgentStartContext
-    # Synthesised "Context for this task is at <abs>/context.md…" message
-    # to inject as the agent's first user input. ``None`` when the agent
-    # was created without contexts. Resume never sets this — the SDK
-    # session already includes the original first message.
-    first_message: str | None = None
 
 
 class WorkNotFound(ValueError):
@@ -85,13 +77,14 @@ class AgentFolderMissing(ValueError):
     422 so the user can fix the path."""
 
 
-def execute(
+async def execute(
     workstore: WorkStore,
+    supervisor: AgentSupervisorService,
     worktree_manager: WorktreeManager,
     connection_store: ConnectionStore,
     settings: Settings,
     req: StartAgentRequest,
-) -> StartAgentPlan:
+) -> Agent:
     record = workstore.get_work(req.work_slug)
     if record is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
@@ -185,6 +178,20 @@ def execute(
         system_prompt=common.system_prompt,
         session_id=agent.session_id,
     )
-    return StartAgentPlan(
-        agent=agent, adapter=adapter, context=context, first_message=first_message
-    )
+    await supervisor.register_agent(req.work_slug, agent.slug, adapter, context)
+    if first_message is not None:
+        # Triggers the supervisor's lazy pump (which spawns the SDK and
+        # creates the events task). Without contexts, the agent stays
+        # dormant until the user types — Amp doesn't fork an empty
+        # thread, Claude doesn't connect its SDK client.
+        await supervisor.send_input(agent.slug, first_message)
+    return agent
+
+
+__all__ = [
+    "AgentFolderMissing",
+    "InvalidProviderConfig",
+    "StartAgentRequest",
+    "WorkNotFound",
+    "execute",
+]

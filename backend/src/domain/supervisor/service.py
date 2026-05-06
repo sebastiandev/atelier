@@ -117,19 +117,35 @@ _log = logging.getLogger(__name__)
 SUBSCRIBER_QUEUE_MAX = 256
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
 class AgentSubscription:
     """Handle returned by ``AgentSupervisorService.subscribe``.
 
+    Streams every event with ``seq > cursor`` exactly once, in order:
+    disk-replay events first (everything on disk at subscribe time that
+    the caller hasn't seen yet), then live events from the queue.
+
     ``queue`` is bounded to ``SUBSCRIBER_QUEUE_MAX``. If publishing
     overflows it (slow consumer), the supervisor sets ``kicked`` and
-    drops the subscriber slot. Callers should select between
-    ``queue.get()`` and ``kicked.wait()`` and close the upstream
+    drops the subscriber slot. Callers should monitor ``kicked``
+    alongside iteration of ``stream()`` and close the upstream
     connection if ``kicked`` fires.
     """
 
     queue: asyncio.Queue[dict[str, Any]]
     kicked: asyncio.Event
+    # Disk-replay events captured at subscribe time, ordered by seq.
+    # Yielded by ``stream()`` before the live queue. Populated under the
+    # publish lock so it never overlaps with what's about to land in the
+    # queue.
+    replay: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+
+    async def stream(self) -> AsyncIterator[dict[str, Any]]:
+        """Yield every event exactly once, in order: replay then live."""
+        for event in self.replay:
+            yield event
+        while True:
+            yield await self.queue.get()
 
 
 @dataclasses.dataclass
@@ -137,6 +153,12 @@ class _AgentState:
     work_slug: str
     agent_slug: str
     adapter: AgentAdapter
+    # Held until the first ``send_input`` triggers ``adapter.start`` and
+    # the events-pump task. Retaining it on the state lets the supervisor
+    # spawn lazily so a re-attach (or any "open agent from rail" flow)
+    # doesn't fork a new provider session unless the user actually types.
+    context: AgentStartContext
+    started: bool = False
     seq: int = 0
     task: asyncio.Task[None] | None = None
     publish_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
@@ -162,40 +184,54 @@ class AgentSupervisorService:
         self._states: dict[str, _AgentState] = {}
         self._registry_lock = asyncio.Lock()
 
-    async def start_agent(
+    async def register_agent(
         self,
         work_slug: str,
         agent_slug: str,
         adapter: AgentAdapter,
         context: AgentStartContext,
-        *,
-        first_message: str | None = None,
     ) -> None:
-        # Seed seq from any pre-existing transcript so resume continues
-        # monotonically — restarting at 0 would let new events collide
-        # with on-disk history. last_seq is a tail-read; cheap.
+        """Register an agent with the supervisor and start its events pump.
+
+        Steps:
+          1. Seed ``seq`` from the on-disk transcript so resume continues
+             monotonically — restarting at 0 would let new events collide
+             with on-disk history. ``last_seq`` is a tail-read; cheap.
+          2. Insert the agent into the registry (under ``_registry_lock``).
+          3. Call ``adapter.start(context)`` — cheap per-adapter setup
+             (Amp's permission socket, Claude's SDK connect).
+          4. Create the events-pump task that iterates ``adapter.events()``
+             and ferries each frame through ``_publish``.
+
+        Raises ``RuntimeError`` if the agent is already registered. The
+        caller (``connect`` / ``start`` / ``resume``) handles the race —
+        a concurrent caller that won drops its adapter copy.
+
+        TODO(lazy-spawn): for providers that fork-on-resume (Amp's
+        ``--execute --stream-json``), step 4 should be deferred to first
+        ``send_input`` so re-attach doesn't burn a fork. Land alongside
+        an Amp adapter change that defers the SDK's executor invocation
+        until the first prompt actually arrives.
+        """
         seed_seq = await asyncio.to_thread(
             self._transcript_log.last_seq, work_slug, agent_slug
         )
         async with self._registry_lock:
             if agent_slug in self._states:
-                raise RuntimeError(f"agent already running: {agent_slug}")
+                raise RuntimeError(f"agent already registered: {agent_slug}")
             state = _AgentState(
                 work_slug=work_slug,
                 agent_slug=agent_slug,
                 adapter=adapter,
+                context=context,
                 seq=seed_seq,
             )
             self._states[agent_slug] = state
         await adapter.start(context)
-        # Inject the synthesised contexts message before the event task
-        # starts: the user_input transcript line lands first; the SDK
-        # sees the input; events flow afterwards. Resume callers pass
-        # ``first_message=None`` because the SDK session already
-        # includes the original turn.
-        if first_message is not None:
-            await self.send_input(agent_slug, first_message)
-        state.task = asyncio.create_task(self._run_agent(state), name=f"agent-{agent_slug}")
+        state.started = True
+        state.task = asyncio.create_task(
+            self._run_agent(state), name=f"agent-{agent_slug}"
+        )
 
     async def send_input(self, agent_slug: str, text: str) -> None:
         state = self._require_state(agent_slug)
@@ -233,18 +269,22 @@ class AgentSupervisorService:
 
     @asynccontextmanager
     async def subscribe(
-        self, agent_slug: str
-    ) -> AsyncIterator[tuple[int, AgentSubscription]]:
-        """Yield ``(from_seq, subscription)`` registered atomically against publish.
+        self, agent_slug: str, cursor: int = 0
+    ) -> AsyncIterator[AgentSubscription]:
+        """Yield a ``Subscription`` whose ``stream()`` emits every event
+        with ``seq > cursor`` exactly once, in order: disk replay first,
+        then live events from the queue.
 
-        Any event with ``seq <= from_seq`` is already on disk; any event
-        with ``seq > from_seq`` lands in ``subscription.queue``. The caller
-        is responsible for replaying disk-side events between its cursor
-        and ``from_seq`` before draining the queue.
+        Atomicity: ``from_seq`` (current high-water seq) is captured under
+        the publish lock together with subscriber registration. Any event
+        with ``seq <= from_seq`` is already on disk and goes into the
+        replay list (filtered to ``seq > cursor``). Any event with
+        ``seq > from_seq`` was published after the lock released and is
+        delivered live via the queue. No overlap, no gap.
 
-        The queue is bounded; on overflow ``subscription.kicked`` fires and
-        the slot is cleared. Callers must monitor ``kicked`` alongside
-        the queue and close the upstream connection if it fires.
+        The queue is bounded; on overflow ``subscription.kicked`` fires
+        and the slot is cleared. Callers must monitor ``kicked`` alongside
+        ``stream()`` and close the upstream connection if it fires.
 
         A second subscribe to the same agent replaces the slot; the
         previous subscription is abandoned (its WS is presumed dead).
@@ -260,12 +300,29 @@ class AgentSupervisorService:
         async with state.publish_lock:
             from_seq = state.seq
             state.subscriber = subscription
+        # Disk read is sync + slow; do it outside the publish lock so it
+        # doesn't block other publishes. Filter to (cursor, from_seq] —
+        # events past from_seq land in the live queue instead, so reading
+        # them from disk would create duplicates.
+        all_events = await asyncio.to_thread(
+            self._read_disk_window, state.work_slug, agent_slug, cursor
+        )
+        subscription.replay = [
+            e for e in all_events if e["seq"] <= from_seq
+        ]
         try:
-            yield from_seq, subscription
+            yield subscription
         finally:
             async with state.publish_lock:
                 if state.subscriber is subscription:
                     state.subscriber = None
+
+    def _read_disk_window(
+        self, work_slug: str, agent_slug: str, cursor: int
+    ) -> list[dict[str, Any]]:
+        return list(
+            self._transcript_log.read_from_cursor(work_slug, agent_slug, cursor)
+        )
 
     async def stop_agent(self, agent_slug: str) -> None:
         async with self._registry_lock:

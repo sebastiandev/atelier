@@ -58,6 +58,22 @@ async def _await_agent(supervisor: AgentSupervisorService, agent_slug: str) -> N
         await state.task
 
 
+async def _start(
+    supervisor: AgentSupervisorService,
+    work_slug: str,
+    agent_slug: str,
+    adapter: Any,
+    context: AgentStartContext,
+) -> None:
+    """Test helper that mirrors the previous ``start_agent`` shape.
+
+    Just calls ``register_agent`` since registration today eagerly calls
+    ``adapter.start`` and creates the events-pump task. Kept as a helper
+    so tests don't need updating if the lazy-spawn refactor lands later.
+    """
+    await supervisor.register_agent(work_slug, agent_slug, adapter, context)
+
+
 # ---------------------------------------------------------------------------
 # Happy path: events flow with monotonic seq
 # ---------------------------------------------------------------------------
@@ -68,11 +84,13 @@ def test_start_agent_emits_events_with_monotonic_seq() -> None:
         log = StubTranscriptLog()
         supervisor = AgentSupervisorService(log)
         adapter = StubAgentAdapter(_scripted())
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (from_seq, sub):
+        async with supervisor.subscribe("agt-1") as sub:
             queue = sub.queue
-            assert from_seq == 0
+            # Subscribed before any event was published, so replay is empty
+            # and all 5 events flow through the live queue.
+            assert sub.replay == []
             events = [await queue.get() for _ in range(5)]
 
         await supervisor.shutdown()
@@ -89,8 +107,8 @@ def test_events_carry_iso_timestamp_strings() -> None:
     async def run() -> dict[str, Any]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter([_scripted()[0]])
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
-        async with supervisor.subscribe("agt-1") as (_, sub):
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        async with supervisor.subscribe("agt-1") as sub:
             queue = sub.queue
             ev = await queue.get()
         await supervisor.shutdown()
@@ -114,9 +132,9 @@ def test_write_through_before_fanout() -> None:
         log = StubTranscriptLog()
         supervisor = AgentSupervisorService(log)
         adapter = StubAgentAdapter(_scripted())
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (_, sub):
+        async with supervisor.subscribe("agt-1") as sub:
             queue = sub.queue
             for _ in range(5):
                 ev = await queue.get()
@@ -135,7 +153,7 @@ def test_log_receives_every_event() -> None:
         log = StubTranscriptLog()
         supervisor = AgentSupervisorService(log)
         adapter = StubAgentAdapter(_scripted())
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
         await _await_agent(supervisor, "agt-1")
         await supervisor.shutdown()
         return log
@@ -154,9 +172,9 @@ def test_send_input_writes_user_input_then_forwards_to_adapter() -> None:
     async def run() -> tuple[dict[str, Any], list[str]]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter([])  # no scripted events
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (_, sub):
+        async with supervisor.subscribe("agt-1") as sub:
             queue = sub.queue
             await supervisor.send_input("agt-1", "hello there")
             ev = await queue.get()
@@ -185,9 +203,9 @@ def test_stop_turn_writes_user_stop_and_forwards_to_adapter() -> None:
         log = StubTranscriptLog()
         supervisor = AgentSupervisorService(log)
         adapter = StubAgentAdapter([])
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (_, sub):
+        async with supervisor.subscribe("agt-1") as sub:
             await supervisor.stop_turn("agt-1")
             ev = await sub.queue.get()
         await supervisor.shutdown()
@@ -217,7 +235,7 @@ def test_resolve_permission_forwards_to_adapter() -> None:
     async def run() -> list[tuple[str, str]]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter([])
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
         await supervisor.resolve_permission("agt-1", "req-1", "allow")
         await supervisor.resolve_permission("agt-1", "req-2", "deny")
         await supervisor.shutdown()
@@ -249,12 +267,12 @@ def test_resubscribe_replaces_previous_subscriber() -> None:
     async def run() -> tuple[bool, str]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter([])
-        await supervisor.start_agent(
+        await _start(supervisor,
             "WRK-001", "agt-1", adapter, _start_context()
         )
 
-        async with supervisor.subscribe("agt-1") as (_, sub1):
-            async with supervisor.subscribe("agt-1") as (_, sub2):
+        async with supervisor.subscribe("agt-1") as sub1:
+            async with supervisor.subscribe("agt-1") as sub2:
                 # The slot now points at sub2; sub1 is abandoned.
                 await supervisor.send_input("agt-1", "after replace")
                 ev = await sub2.queue.get()
@@ -277,16 +295,16 @@ def test_outer_subscribe_finally_does_not_clear_inner_slot() -> None:
     async def run() -> bool:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter([])
-        await supervisor.start_agent(
+        await _start(supervisor,
             "WRK-001", "agt-1", adapter, _start_context()
         )
 
         # Manually drive the cm protocol to force a non-LIFO order.
         outer = supervisor.subscribe("agt-1")
-        _, _outer_sub = await outer.__aenter__()
+        _outer_sub = await outer.__aenter__()
 
         inner = supervisor.subscribe("agt-1")
-        _, inner_sub = await inner.__aenter__()
+        inner_sub = await inner.__aenter__()
 
         # Now exit OUTER first (the older one). Its finally should not
         # clear the slot, because the slot points at inner_sub.
@@ -309,17 +327,21 @@ def test_outer_subscribe_finally_does_not_clear_inner_slot() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_late_subscriber_sees_only_post_subscription_events() -> None:
-    async def run() -> tuple[int, bool]:
+def test_late_subscriber_with_cursor_sees_only_post_subscription_events() -> None:
+    async def run() -> tuple[int, list[dict[str, Any]], bool]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter(_scripted())
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
         # Wait for all five scripted events to be published + flushed.
         await _await_agent(supervisor, "agt-1")
 
-        async with supervisor.subscribe("agt-1") as (from_seq, sub):
+        # Subscribe with cursor=5 ("I've already seen seqs 1..5"). The
+        # replay window (5, ∞) is empty on disk, the queue is empty too
+        # (adapter exhausted), so nothing should arrive.
+        async with supervisor.subscribe("agt-1", cursor=5) as sub:
             queue = sub.queue
+            replay = sub.replay
             try:
                 await asyncio.wait_for(queue.get(), timeout=0.05)
                 got_event = True
@@ -327,11 +349,32 @@ def test_late_subscriber_sees_only_post_subscription_events() -> None:
                 got_event = False
 
         await supervisor.shutdown()
-        return from_seq, got_event
+        return len(replay), replay, got_event
 
-    from_seq, got_event = _run(run())
-    assert from_seq == 5
+    replay_len, replay, got_event = _run(run())
+    assert replay_len == 0
+    assert replay == []
     assert got_event is False
+
+
+def test_subscribe_with_cursor_zero_replays_full_disk_history() -> None:
+    """Cursor=0 means "I haven't seen anything"; the Subscription's
+    replay carries the entire transcript so the WS handler can forward
+    it before the live queue starts."""
+
+    async def run() -> list[int]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter(_scripted())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+
+        async with supervisor.subscribe("agt-1", cursor=0) as sub:
+            seqs = [e["seq"] for e in sub.replay]
+
+        await supervisor.shutdown()
+        return seqs
+
+    assert _run(run()) == [1, 2, 3, 4, 5]
 
 
 # ---------------------------------------------------------------------------
@@ -339,12 +382,12 @@ def test_late_subscriber_sees_only_post_subscription_events() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_double_start_raises() -> None:
+def test_double_register_raises() -> None:
     async def run() -> None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        await supervisor.start_agent("WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
-        with pytest.raises(RuntimeError, match="already running"):
-            await supervisor.start_agent("WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        with pytest.raises(RuntimeError, match="already registered"):
+            await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
         await supervisor.shutdown()
 
     _run(run())
@@ -355,8 +398,8 @@ def test_shutdown_closes_all_adapters() -> None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         a1 = StubAgentAdapter([])
         a2 = StubAgentAdapter([])
-        await supervisor.start_agent("WRK-001", "agt-1", a1, _start_context())
-        await supervisor.start_agent("WRK-001", "agt-2", a2, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", a1, _start_context())
+        await _start(supervisor, "WRK-001", "agt-2", a2, _start_context())
         await supervisor.shutdown()
         return a1.closed, a2.closed
 
@@ -369,7 +412,7 @@ def test_stop_agent_removes_state_and_closes_adapter() -> None:
     async def run() -> tuple[bool, bool]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter(_scripted())
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
         await _await_agent(supervisor, "agt-1")
         await supervisor.stop_agent("agt-1")
         return adapter.closed, "agt-1" in supervisor._states
@@ -435,7 +478,7 @@ def test_session_established_invokes_set_session_id_callback() -> None:
             StatusChange(ts=UTC_NOW, status="idle"),
         ]
         adapter = StubAgentAdapter(events)
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
         await _await_agent(supervisor, "agt-1")
         await supervisor.shutdown()
 
@@ -447,9 +490,9 @@ def test_adapter_task_error_emits_error_event() -> None:
     async def run() -> list[dict[str, Any]]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = _CrashingAdapter()
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (_, sub):
+        async with supervisor.subscribe("agt-1") as sub:
             queue = sub.queue
             first = await queue.get()
             second = await queue.get()
@@ -474,8 +517,8 @@ def test_subscription_queue_is_bounded() -> None:
 
     async def run() -> int:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        await supervisor.start_agent("WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
-        async with supervisor.subscribe("agt-1") as (_, sub):
+        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        async with supervisor.subscribe("agt-1") as sub:
             maxsize = sub.queue.maxsize
         await supervisor.shutdown()
         return maxsize
@@ -491,9 +534,9 @@ def test_slow_subscriber_is_kicked_and_slot_cleared() -> None:
     async def run() -> tuple[bool, bool, bool]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter([])  # publish via send_input only
-        await supervisor.start_agent("WRK-001", "agt-1", adapter, _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
-        async with supervisor.subscribe("agt-1") as (_, sub):
+        async with supervisor.subscribe("agt-1") as sub:
             # Don't drain the queue; fill past the cap to trigger overflow.
             for i in range(SUBSCRIBER_QUEUE_MAX + 5):
                 await supervisor.send_input("agt-1", f"msg-{i}")
@@ -517,9 +560,9 @@ def test_kicked_subscriber_does_not_block_further_publishing() -> None:
     async def run() -> int:
         log = StubTranscriptLog()
         supervisor = AgentSupervisorService(log)
-        await supervisor.start_agent("WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
 
-        async with supervisor.subscribe("agt-1") as (_, sub):
+        async with supervisor.subscribe("agt-1") as sub:
             for i in range(SUBSCRIBER_QUEUE_MAX + 1):
                 await supervisor.send_input("agt-1", f"msg-{i}")
             assert sub.kicked.is_set()

@@ -210,6 +210,21 @@ class WorkStoreService:
     ) -> Iterator[dict[str, Any]]:
         return self._transcript_log.read_from_cursor(work_slug, agent_slug, cursor)
 
+    def find_last_detach_cursor(
+        self, work_slug: str, agent_slug: str
+    ) -> dict[str, Any] | None:
+        # Walks the full NDJSON to find the most recent ``user_detached``
+        # marker's ``sdk_cursor``. The transcript is bounded in practice
+        # (one user, single-session) so a full read is cheap; if it ever
+        # gets large we can remember the cursor on the agent row instead.
+        cursor: dict[str, Any] | None = None
+        for event in self._transcript_log.read_from_cursor(work_slug, agent_slug, 0):
+            if event.get("type") == "user_detached":
+                payload = event.get("sdk_cursor")
+                if isinstance(payload, dict):
+                    cursor = payload
+        return cursor
+
     def record_artifact(self, req: RecordArtifactRequest) -> Artifact:
         with self._lock:
             parent = self._require_work(req.work_slug)

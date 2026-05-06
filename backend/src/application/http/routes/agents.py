@@ -2,8 +2,9 @@
 
 POST /api/works/{work_slug}/agents creates an agent row + provisions a
 git worktree + starts it on the supervisor. The orchestration sits in
-``domain/commands/agents/start_plan.py``; the route stays thin: parse →
-command → format.
+``domain/commands/agents/start.py`` — async command that drives the
+supervisor directly. The route stays thin: parse → call command →
+format.
 
 Wire format: provider + model + free ``options`` dict + folder. The
 provider's Spec validates ``options``; unknown keys → 422.
@@ -19,7 +20,7 @@ from src.application.http.schemas import (
     DetachResponse,
     NewAgentRequest,
 )
-from src.domain.commands.agents import detach, list_for_work, start_plan
+from src.domain.commands.agents import detach, list_for_work, start
 from src.domain.connections import ConnectionStore, ContextFetchError
 from src.domain.models import Agent, Context
 from src.domain.supervisor import AgentSupervisorService
@@ -82,7 +83,7 @@ async def create_agent(
     connection_store: ConnectionStoreDep,
     settings: SettingsDep,
 ) -> AgentSummary:
-    req = start_plan.StartAgentRequest(
+    req = start.StartAgentRequest(
         work_slug=work_slug,
         name=payload.name,
         persona=payload.persona,
@@ -100,25 +101,22 @@ async def create_agent(
         ),
     )
     try:
-        plan = start_plan.execute(
-            workstore, worktree_manager, connection_store, settings, req
+        agent = await start.execute(
+            workstore,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            settings,
+            req,
         )
-    except start_plan.WorkNotFound as e:
+    except start.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    except (start_plan.InvalidProviderConfig, start_plan.AgentFolderMissing) as e:
+    except (start.InvalidProviderConfig, start.AgentFolderMissing) as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except ContextFetchError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
 
-    assert plan.agent.slug is not None
-    await supervisor.start_agent(
-        work_slug,
-        plan.agent.slug,
-        plan.adapter,
-        plan.context,
-        first_message=plan.first_message,
-    )
-    return _to_summary(work_slug, plan.agent)
+    return _to_summary(work_slug, agent)
 
 
 @router.post("/agents/{agent_slug}/detach", response_model=DetachResponse)

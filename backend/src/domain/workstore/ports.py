@@ -80,6 +80,15 @@ class WorkStore(Protocol):
         self, work_slug: str, agent_slug: str, cursor: int
     ) -> Iterator[dict[str, Any]]: ...
 
+    def find_last_detach_cursor(
+        self, work_slug: str, agent_slug: str
+    ) -> dict[str, Any] | None:
+        """Walk the NDJSON transcript and return the ``sdk_cursor`` payload
+        from the most recent ``user_detached`` marker, or ``None`` if no
+        detach is recorded. Used by re-attach catch-up to know where the
+        SDK file's "new" entries start."""
+        ...
+
     def record_artifact(self, req: RecordArtifactRequest) -> Artifact: ...
 
     def record_handoff(self, req: RecordHandoffRequest) -> Handoff: ...

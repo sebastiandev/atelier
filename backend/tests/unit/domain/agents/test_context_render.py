@@ -116,7 +116,7 @@ def test_connection_backed_body_uses_fetched_markdown() -> None:
 
 def test_connection_backed_body_missing_fetched_raises() -> None:
     """Connection-backed types require a pre-fetched body — the caller
-    (start_plan) is responsible. A missing entry is a programmer error,
+    (start) is responsible. A missing entry is a programmer error,
     not a runtime fallback."""
     files = _StubFiles()
     with pytest.raises(RuntimeError, match="requires a pre-fetched body"):

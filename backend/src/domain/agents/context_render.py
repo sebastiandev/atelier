@@ -3,7 +3,7 @@
 Self-contained types (``text`` / ``url`` / ``file`` / ``agentout``) are
 rendered inline. Connection-backed types (``jira`` / ``sentry`` /
 ``honeycomb``) are not fetched here — the caller pre-fetches at the
-boundary (``start_plan``) and threads the resolved bodies in via
+boundary (``start``) and threads the resolved bodies in via
 ``fetched_bodies``. This split keeps the renderer pure and makes the
 fetch failure-mode (halt agent start) trivial to enforce: a missing
 body for a connection-backed context is a programmer error, not a
