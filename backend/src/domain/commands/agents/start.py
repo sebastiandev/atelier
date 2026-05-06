@@ -12,10 +12,12 @@ Steps:
   3. Pre-fetch connection-backed contexts (jira / sentry / honeycomb).
   4. Add the agent row + render contexts.
   5. Provision the per-agent workdir via the WorktreeManager.
-  6. Build the adapter + register with the supervisor (lazy-spawn —
-     no SDK process starts here unless ``send_input`` runs below).
-  7. If contexts produced a synthesised first message, send it; this
-     triggers the supervisor's pump and the SDK actually launches.
+  6. Build the adapter + register with the supervisor. Eager — fresh
+     agents have no fork concern (no prior provider session exists),
+     so the events pump runs immediately. ``resume`` takes the lazy
+     path; see ``register_agent``'s ``lazy`` flag.
+  7. If contexts produced a synthesised first message, send it now so
+     the agent's first SDK turn includes the context-index pointer.
 """
 
 from __future__ import annotations
@@ -180,10 +182,6 @@ async def execute(
     )
     await supervisor.register_agent(req.work_slug, agent.slug, adapter, context)
     if first_message is not None:
-        # Triggers the supervisor's lazy pump (which spawns the SDK and
-        # creates the events task). Without contexts, the agent stays
-        # dormant until the user types — Amp doesn't fork an empty
-        # thread, Claude doesn't connect its SDK client.
         await supervisor.send_input(agent.slug, first_message)
     return agent
 

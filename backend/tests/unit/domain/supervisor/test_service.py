@@ -574,3 +574,60 @@ def test_kicked_subscriber_does_not_block_further_publishing() -> None:
 
     # SUBSCRIBER_QUEUE_MAX queued + 1 that triggered overflow + 1 after-kick.
     assert _run(run()) == SUBSCRIBER_QUEUE_MAX + 2
+
+
+# ---------------------------------------------------------------------------
+# Lazy spawn (re-attach path: register without firing the events pump)
+# ---------------------------------------------------------------------------
+
+
+def test_lazy_register_does_not_start_pump_until_send_input() -> None:
+    """``register_agent(..., lazy=True)`` registers state and runs the
+    cheap ``adapter.start`` setup, but doesn't iterate ``adapter.events``.
+    The first ``send_input`` creates the pump task. This is the seam the
+    re-attach (resume) path uses to avoid burning a fork on providers
+    that fork-on-resume."""
+
+    async def run() -> tuple[bool, list[dict[str, Any]], list[str]]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log)
+        adapter = StubAgentAdapter(_scripted())
+        await supervisor.register_agent(
+            "WRK-001", "agt-1", adapter, _start_context(), lazy=True
+        )
+        # Adapter.start ran (cheap setup), but no events task exists.
+        state = supervisor._states["agt-1"]
+        no_task_yet = state.task is None
+
+        async with supervisor.subscribe("agt-1") as sub:
+            queue = sub.queue
+            await supervisor.send_input("agt-1", "wake up")
+            # 1 user_input + 5 scripted demo events from the now-live pump.
+            events = [await queue.get() for _ in range(6)]
+
+        await supervisor.shutdown()
+        return no_task_yet, events, adapter.received_inputs
+
+    no_task_yet, events, inputs = _run(run())
+    assert no_task_yet is True
+    assert events[0]["type"] == "user_input"
+    assert events[0]["text"] == "wake up"
+    assert [e["seq"] for e in events] == [1, 2, 3, 4, 5, 6]
+    assert events[-1]["type"] == "status_change"
+    assert inputs == ["wake up"]
+
+
+def test_lazy_register_calls_adapter_start_with_context() -> None:
+    """The ``adapter.start`` step still runs at register time even in
+    lazy mode — it's the cheap setup (Amp's permission socket, Claude's
+    SDK connect) that needs to be live before the first send_input."""
+
+    async def run() -> AgentStartContext | None:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter([])
+        ctx = _start_context()
+        await supervisor.register_agent("WRK-001", "agt-1", adapter, ctx, lazy=True)
+        await supervisor.shutdown()
+        return adapter.start_context
+
+    assert _run(run()) is not None

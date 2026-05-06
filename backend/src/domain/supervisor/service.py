@@ -190,8 +190,10 @@ class AgentSupervisorService:
         agent_slug: str,
         adapter: AgentAdapter,
         context: AgentStartContext,
+        *,
+        lazy: bool = False,
     ) -> None:
-        """Register an agent with the supervisor and start its events pump.
+        """Register an agent with the supervisor.
 
         Steps:
           1. Seed ``seq`` from the on-disk transcript so resume continues
@@ -200,18 +202,17 @@ class AgentSupervisorService:
           2. Insert the agent into the registry (under ``_registry_lock``).
           3. Call ``adapter.start(context)`` — cheap per-adapter setup
              (Amp's permission socket, Claude's SDK connect).
-          4. Create the events-pump task that iterates ``adapter.events()``
-             and ferries each frame through ``_publish``.
+          4. If ``lazy`` is False (default): create the events-pump task
+             that iterates ``adapter.events()`` and ferries each frame
+             through ``_publish``. If True: skip — ``send_input`` creates
+             the pump on first call. Lazy is for re-attach (``resume``)
+             on providers that fork-on-resume (Amp's
+             ``--execute --stream-json``); a view-only re-attach should
+             not burn a fork.
 
         Raises ``RuntimeError`` if the agent is already registered. The
         caller (``connect`` / ``start`` / ``resume``) handles the race —
         a concurrent caller that won drops its adapter copy.
-
-        TODO(lazy-spawn): for providers that fork-on-resume (Amp's
-        ``--execute --stream-json``), step 4 should be deferred to first
-        ``send_input`` so re-attach doesn't burn a fork. Land alongside
-        an Amp adapter change that defers the SDK's executor invocation
-        until the first prompt actually arrives.
         """
         seed_seq = await asyncio.to_thread(
             self._transcript_log.last_seq, work_slug, agent_slug
@@ -229,12 +230,20 @@ class AgentSupervisorService:
             self._states[agent_slug] = state
         await adapter.start(context)
         state.started = True
-        state.task = asyncio.create_task(
-            self._run_agent(state), name=f"agent-{agent_slug}"
-        )
+        if not lazy:
+            state.task = asyncio.create_task(
+                self._run_agent(state), name=f"agent-{agent_slug}"
+            )
 
     async def send_input(self, agent_slug: str, text: str) -> None:
         state = self._require_state(agent_slug)
+        if state.task is None:
+            # Lazy spawn: register_agent deferred the pump (re-attach
+            # path). Start it now, before publishing user_input, so the
+            # events task is alive to consume what the adapter forwards.
+            state.task = asyncio.create_task(
+                self._run_agent(state), name=f"agent-{state.agent_slug}"
+            )
         await self._publish(
             state,
             {

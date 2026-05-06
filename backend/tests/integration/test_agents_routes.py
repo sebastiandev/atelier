@@ -533,9 +533,11 @@ def test_ws_resumes_agent_after_supervisor_loses_state(
     app_client: TestClient, tmp_workdir: str
 ) -> None:
     """Simulates a backend restart: agent + transcript exist on disk, but
-    the supervisor has no live state. The WS should resume the provider
-    session, replay the original transcript, then deliver fresh events
-    from the rebuilt adapter."""
+    the supervisor has no live state. The WS resumes the provider
+    session, replays the original transcript, and stays dormant — the
+    rebuilt adapter does NOT auto-emit a fresh run, because the resume
+    path uses lazy spawn (no SDK process until the user types). Sending
+    an input frame triggers the lazy pump and the canned demo flows."""
     work = _create_work(app_client)
     agent = _create_agent(app_client, work["slug"], tmp_workdir)
 
@@ -552,17 +554,25 @@ def test_ws_resumes_agent_after_supervisor_loses_state(
     supervisor = app_client.app.state.supervisor
     supervisor._states.pop(agent["slug"], None)
 
-    # Reconnect from cursor=0; expect the original transcript followed by
-    # a freshly-emitted run from the rebuilt stub adapter (the canned
-    # demo replays on every spawn). Seqs are monotonically increasing
-    # across the resume boundary because the rebuilt supervisor state
-    # starts a new agent task that publishes through the same lock.
+    # Reconnect from cursor=0; replay yields the original transcript,
+    # then the connection sits idle (lazy resume — no auto-run). Sending
+    # an input frame fires the pump: user_input lands first, then the
+    # canned demo replays on the rebuilt adapter. Seqs are monotonically
+    # increasing across the resume boundary.
     with app_client.websocket_connect(
         f"/api/agents/{agent['slug']}/stream?cursor=0"
     ) as ws:
-        events = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT * 2)]
-    seqs = [e["seq"] for e in events]
-    assert seqs == list(range(1, _DEMO_EVENT_COUNT * 2 + 1))
+        replay = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT)]
+        ws.send_text(json.dumps({"type": "input", "text": "wake up"}))
+        # 1 user_input + DEMO_EVENT_COUNT demo events from the fresh pump.
+        live = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT + 1)]
+
+    assert [e["seq"] for e in replay] == list(range(1, _DEMO_EVENT_COUNT + 1))
+    assert live[0]["type"] == "user_input"
+    assert live[0]["text"] == "wake up"
+    assert [e["seq"] for e in live] == list(
+        range(_DEMO_EVENT_COUNT + 1, _DEMO_EVENT_COUNT * 2 + 2)
+    )
 
 
 # ---------------------------------------------------------------------------

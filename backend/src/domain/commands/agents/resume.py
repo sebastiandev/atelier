@@ -12,10 +12,10 @@ in that case. We drop our adapter copy to avoid leaking an SDK process,
 verify the agent IS now registered, and return — the caller subscribes
 to the existing state.
 
-Lazy spawn (Phase 2): registration does NOT start the events pump. The
-SDK process spawns lazily on the first ``send_input`` instead, so a
-re-attach that's only there to refresh the transcript view doesn't fork
-a new provider session.
+Lazy spawn: registers the agent with ``lazy=True`` so the supervisor
+does NOT start the events pump. The SDK process spawns lazily on the
+first ``send_input`` instead, so a re-attach that's only there to
+refresh the transcript view doesn't fork a new provider session.
 """
 
 from __future__ import annotations
@@ -115,7 +115,7 @@ async def execute(
 
     try:
         await supervisor.register_agent(
-            req.work_slug, req.agent_slug, adapter, context
+            req.work_slug, req.agent_slug, adapter, context, lazy=True
         )
     except RuntimeError:
         # A concurrent caller registered first (StrictMode double-mount,
