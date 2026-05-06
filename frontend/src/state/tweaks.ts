@@ -6,7 +6,9 @@ import { persist } from "zustand/middleware";
  *
  * `accentHue` (0-360°) drives the `--accent-h` CSS variable on `<html>`;
  * the rest of the accent ramp is `oklch()` derived from it. Defaults to
- * 250 to match the design tokens at `:root`.
+ * 250 to match the design tokens at `:root`. Note that `--md-accent`
+ * and `--md-heading` (used by the agent's rendered markdown) are
+ * decoupled — they're hardcoded sage + purple, not driven by this hue.
  *
  * `layout` controls how `WorkView` arranges its agent tiles. STORY-024
  * makes "windows" actually freeform-drag; until then it falls back to

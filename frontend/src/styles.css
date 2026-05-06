@@ -5,12 +5,24 @@
 :root {
   color-scheme: dark;
 
-  /* Accent — indigo */
+  /* Accent — indigo. Drives buttons, focus rings, the brand mark, and
+     anything outside the agent chat. The hue is user-tweakable via the
+     Tweaks panel slider (the rest of the ramp is `oklch()` derived). */
   --accent-h: 250;
   --accent: oklch(0.62 0.18 var(--accent-h));
   --accent-soft: oklch(0.62 0.18 var(--accent-h) / 0.18);
   --accent-line: oklch(0.62 0.18 var(--accent-h) / 0.45);
   --accent-fg: oklch(0.98 0.01 var(--accent-h));
+
+  /* Markdown palette — used ONLY by the agent's rendered markdown
+     (.md-h, .md-inline-code, .md-link). Decoupled from --accent so
+     re-skinning the chat doesn't change buttons / logo / focus rings.
+       --md-accent: bright sage matching the "added line" green in
+                    unified diff renderings.
+       --md-heading: soft purple — distinct from the sage so headings
+                     read as structural labels, not as code/links. */
+  --md-accent: oklch(0.78 0.12 145);
+  --md-heading: oklch(0.74 0.13 295);
 
   /* Background ramp (deepest → lifted) */
   --bg:    oklch(0.165 0.006 260);
@@ -88,6 +100,11 @@
   /* Accent overrides for higher-contrast soft tints on light bg */
   --accent-soft: oklch(0.62 0.18 var(--accent-h) / 0.12);
   --accent-line: oklch(0.62 0.18 var(--accent-h) / 0.35);
+
+  /* Markdown palette — drop both lightness values so the sage + purple
+     stay readable against the near-white background. */
+  --md-accent: oklch(0.50 0.13 145);
+  --md-heading: oklch(0.55 0.15 295);
 
   /* Lighter shadows */
   --shadow-1: 0 1px 0 oklch(1 0 0 / 0.04), 0 1px 2px oklch(0 0 0 / 0.06);
@@ -914,6 +931,17 @@ body {
 
 .msg-assistant {
   color: var(--fg);
+  /* `.msg` defaults to white-space: pre-wrap so user messages preserve
+     their typed line breaks. The assistant block, in contrast, is
+     rendered into structured HTML (paragraphs, lists, headings) by
+     ReactMarkdown — pre-wrap there would surface the raw blank lines
+     between markdown blocks as literal vertical gaps on top of the
+     element margins. Switch to normal whitespace handling here; the
+     <pre> inside code fences sets its own `pre` rule and is unaffected. */
+  white-space: normal;
+}
+.msg-thinking {
+  white-space: normal;
 }
 .msg-assistant .cursor {
   display: inline-block;
@@ -993,8 +1021,12 @@ body {
 
 /* Markdown rendering ----------------------------------------------------- */
 
-/* Tighten paragraph margins so consecutive assistant chunks read as
-   one stream rather than a stack of cards. */
+/* Density pass tuned to the Amp CLI's visual rhythm — bullets get a
+   small gap, paragraphs are separated, and headings have visible
+   breathing room above. The agent's markdown is often "loose" (blank
+   lines between list items), which means each <li> body gets wrapped
+   in <p> AND consecutive blocks get stacked vertical margins — flatten
+   the inner <p> so loose vs tight lists render at the same density. */
 .msg-assistant p,
 .msg-thinking p {
   margin: 0 0 0.5rem 0;
@@ -1007,8 +1039,36 @@ body {
 .msg-assistant ol,
 .msg-thinking ul,
 .msg-thinking ol {
-  margin: 0.3rem 0 0.5rem 1.2rem;
+  margin: 0.4rem 0 0.6rem 1.2rem;
   padding: 0;
+}
+/* Two consecutive lists (CommonMark splits a markdown list when there's
+   a paragraph or extra blank line between bullets) used to stack
+   bottom + top margin. Collapse the seam. */
+.msg-assistant ul + ul,
+.msg-assistant ul + ol,
+.msg-assistant ol + ul,
+.msg-assistant ol + ol,
+.msg-thinking ul + ul,
+.msg-thinking ul + ol,
+.msg-thinking ol + ul,
+.msg-thinking ol + ol {
+  margin-top: 0;
+}
+/* Loose list → <li><p>...</p></li>. Zero the inner <p> so bullet
+   density doesn't double up on paragraph margins. */
+.msg-assistant li > p,
+.msg-thinking li > p {
+  margin: 0;
+}
+.msg-assistant li,
+.msg-thinking li {
+  margin: 0.18rem 0;
+  line-height: 1.5;
+}
+.msg-assistant li::marker,
+.msg-thinking li::marker {
+  color: var(--muted);
 }
 .msg-assistant blockquote,
 .msg-thinking blockquote {
@@ -1018,13 +1078,34 @@ body {
   color: var(--muted);
 }
 .md-h {
-  margin: 0.6rem 0 0.3rem;
+  margin: 1rem 0 0.5rem;
   font-size: 14px;
   font-weight: 600;
-  color: var(--fg);
+  color: var(--md-heading);
+  line-height: 1.3;
+}
+/* Tier the headings by SIZE only — color is unified at --md-heading so
+   the heading family reads as one system, not three competing accents.
+   h1 lands as <h3 class=md-h> in our renderer (we demote two levels). */
+h3.md-h {
+  font-size: 14.5px;
+}
+h4.md-h {
+  font-size: 13.5px;
+}
+h5.md-h {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* First heading in a message has nothing above it — kill the top
+   margin so the assistant block doesn't start with a phantom gutter. */
+.msg-assistant > .md-h:first-child,
+.msg-thinking > .md-h:first-child {
+  margin-top: 0;
 }
 .md-link {
-  color: var(--accent);
+  color: var(--md-accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -1034,6 +1115,10 @@ body {
   border-radius: 3px;
   padding: 0.05rem 0.3rem;
   font-size: 12px;
+  /* Single accent for inline tokens — we don't lex `my_var` vs
+     `foo.bar()`, so one consistent color reads cleanly across all
+     inline mentions (paths, method names, identifiers, flags). */
+  color: var(--md-accent);
 }
 .md-code,
 .md-code-fallback {
