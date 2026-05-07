@@ -1,0 +1,12 @@
+#!/bin/bash
+# Thin launcher: open Terminal.app and run dev.sh from the installed repo path.
+# The REPO_ROOT value below is filled in by scripts/install-launcher.sh.
+
+REPO_ROOT="__REPO_ROOT__"
+
+osascript <<EOF
+tell application "Terminal"
+    activate
+    do script "cd \"$REPO_ROOT\" && ./scripts/dev.sh"
+end tell
+EOF

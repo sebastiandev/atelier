@@ -58,6 +58,12 @@ class WorkSummary(BaseModel):
     # a hidden bucket. Frontend resolves slug → name/glyph/color via the
     # /api/projects payload.
     project_slug: str | None = None
+    # Aggregated child counts. Populated by ``list_works`` for the workspace
+    # cards; default 0 for endpoints that don't have a ready-made counts
+    # dict (e.g. ``create_work`` returning the freshly-created shell, where
+    # both are still 0 anyway).
+    agent_count: int = 0
+    artifact_count: int = 0
 
 
 class WorkDetail(WorkSummary):

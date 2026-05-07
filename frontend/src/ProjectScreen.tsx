@@ -292,6 +292,12 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
                 </span>
                 <span className="work-row-meta">
                   <span>{formatDate(w.created_at)}</span>
+                  <span className="wc-stat" title={`${w.agent_count} agents`}>
+                    <AgentIcon /> {w.agent_count}
+                  </span>
+                  <span className="wc-stat" title={`${w.artifact_count} artifacts`}>
+                    <ArtifactIcon /> {w.artifact_count}
+                  </span>
                 </span>
               </span>
             </a>
@@ -336,7 +342,47 @@ function WorkTile({ work }: { work: WorkSummary }) {
         </span>
       </div>
       <div className="wc-desc">{work.description}</div>
+      <div className="wc-stats">
+        <span className="wc-stat" title={`${work.agent_count} agents`}>
+          <AgentIcon /> {work.agent_count}
+        </span>
+        <span className="wc-stat" title={`${work.artifact_count} artifacts`}>
+          <ArtifactIcon /> {work.artifact_count}
+        </span>
+      </div>
     </a>
+  );
+}
+
+function AgentIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <circle cx="6" cy="3.6" r="1.9" fill="currentColor" />
+      <path
+        d="M2 11 C2 7.6 4 6.6 6 6.6 C8 6.6 10 7.6 10 11 Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function ArtifactIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path
+        d="M3 1 L7.4 1 L10 3.6 L10 11 L3 11 Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7.4 1 L7.4 3.6 L10 3.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+    </svg>
   );
 }
 

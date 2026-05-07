@@ -88,6 +88,10 @@ class WorkStoreService:
         with self._lock:
             return [w for w in self._repo.list_works() if w.status != "deleted"]
 
+    def count_children_by_work_id(self) -> dict[int, dict[str, int]]:
+        with self._lock:
+            return self._repo.count_children_by_work_id()
+
     def update_work(self, req: UpdateWorkRequest) -> WorkRecord:
         with self._lock:
             existing = self._require_work(req.work_slug)

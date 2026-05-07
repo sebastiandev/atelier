@@ -17,11 +17,15 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import case, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.domain.models import Agent, Artifact, Handoff, Work
-from src.infrastructure.database.tables import agents_table, works_table
+from src.infrastructure.database.tables import (
+    agents_table,
+    artifacts_table,
+    works_table,
+)
 
 
 class SqlWorkRepository:
@@ -85,6 +89,23 @@ class SqlWorkRepository:
     def list_works(self) -> list[Work]:
         with self._txn() as session:
             return list(session.execute(select(Work)).scalars().all())
+
+    def count_children_by_work_id(self) -> dict[int, dict[str, int]]:
+        with self._txn() as session:
+            agent_rows = session.execute(
+                select(agents_table.c.work_id, func.count())
+                .group_by(agents_table.c.work_id)
+            ).all()
+            artifact_rows = session.execute(
+                select(artifacts_table.c.work_id, func.count())
+                .group_by(artifacts_table.c.work_id)
+            ).all()
+        out: dict[int, dict[str, int]] = {}
+        for wid, cnt in agent_rows:
+            out.setdefault(wid, {"agents": 0, "artifacts": 0})["agents"] = cnt
+        for wid, cnt in artifact_rows:
+            out.setdefault(wid, {"agents": 0, "artifacts": 0})["artifacts"] = cnt
+        return out
 
     # -- Agent --------------------------------------------------------
 

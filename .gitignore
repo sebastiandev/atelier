@@ -32,6 +32,5 @@ frontend/.vite/
 
 # Work-local artifacts (not version-controlled)
 _bmad-output/
-design_handoff_atelier/
-design_handoff_projects/
+design/
 .claude/

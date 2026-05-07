@@ -1,0 +1,22 @@
+@echo off
+REM Thin launcher: cd to the installed repo and run dev.sh via bash.
+REM Requires Git Bash or WSL on PATH. The REPO_ROOT below is filled in by the installer.
+
+setlocal
+set "REPO_ROOT=__REPO_ROOT__"
+
+cd /d "%REPO_ROOT%" || (
+    echo Could not cd to %REPO_ROOT%
+    pause
+    exit /b 1
+)
+
+where bash >nul 2>nul
+if errorlevel 1 (
+    echo bash not found on PATH. Install Git for Windows or enable WSL, then retry.
+    pause
+    exit /b 1
+)
+
+bash scripts/dev.sh
+pause

@@ -54,6 +54,14 @@ class StubRepository:
     def list_works(self) -> list[Work]:
         return list(self.works.values())
 
+    def count_children_by_work_id(self) -> dict[int, dict[str, int]]:
+        out: dict[int, dict[str, int]] = {}
+        for agent in self.agents.values():
+            out.setdefault(agent.work_id, {"agents": 0, "artifacts": 0})["agents"] += 1
+        for artifact in self.artifacts.values():
+            out.setdefault(artifact.work_id, {"agents": 0, "artifacts": 0})["artifacts"] += 1
+        return out
+
     # -- Agent --
 
     def add_agent(self, agent: Agent) -> Agent:

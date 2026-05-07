@@ -568,6 +568,12 @@ function WorkRow({
         </span>
         <span className="work-row-meta">
           <span>{created}</span>
+          <span className="wc-stat" title={`${work.agent_count} agents`}>
+            <AgentIcon /> {work.agent_count}
+          </span>
+          <span className="wc-stat" title={`${work.artifact_count} artifacts`}>
+            <ArtifactIcon /> {work.artifact_count}
+          </span>
         </span>
       </span>
       {showProject && project && (
@@ -608,16 +614,56 @@ function WorkTile({
         </span>
       </div>
       <div className="wc-desc">{work.description}</div>
-      {showProject && project && (
-        <span
-          className="proj-chip"
-          style={{ ["--proj-h" as string]: String(project.color) }}
-        >
-          <span className="dot" />
-          {project.name}
+      <div className="wc-stats">
+        <span className="wc-stat" title={`${work.agent_count} agents`}>
+          <AgentIcon /> {work.agent_count}
         </span>
-      )}
+        <span className="wc-stat" title={`${work.artifact_count} artifacts`}>
+          <ArtifactIcon /> {work.artifact_count}
+        </span>
+        {showProject && project && (
+          <span
+            className="proj-chip"
+            style={{ ["--proj-h" as string]: String(project.color), marginLeft: "auto" }}
+          >
+            <span className="dot" />
+            {project.name}
+          </span>
+        )}
+      </div>
     </a>
+  );
+}
+
+function AgentIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <circle cx="6" cy="3.6" r="1.9" fill="currentColor" />
+      <path
+        d="M2 11 C2 7.6 4 6.6 6 6.6 C8 6.6 10 7.6 10 11 Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function ArtifactIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path
+        d="M3 1 L7.4 1 L10 3.6 L10 11 L3 11 Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7.4 1 L7.4 3.6 L10 3.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+    </svg>
   );
 }
 
@@ -645,5 +691,23 @@ function ListIcon() {
 function formatDate(iso: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const diffMs = Date.now() - d.getTime();
+  const min = Math.round(diffMs / 60_000);
+  const hr = Math.round(diffMs / 3_600_000);
+  const day = Math.round(diffMs / 86_400_000);
+
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  if (hr < 24) return `${hr}h ago`;
+  if (day === 1) return "yesterday";
+  if (day < 7) return `${day}d ago`;
+  if (day < 30) return `${Math.round(day / 7)}w ago`;
+
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(
+    undefined,
+    sameYear
+      ? { month: "short", day: "numeric" }
+      : { month: "short", day: "numeric", year: "numeric" },
+  );
 }

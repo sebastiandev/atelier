@@ -13,6 +13,11 @@ export type WorkSummary = {
   // Optional grouping. ``null`` is "loose work". Resolve to a Project
   // record via ``listProjects()``.
   project_slug: string | null;
+  // Aggregated child counts for the workspace cards. Default to 0 when the
+  // backend doesn't populate them (e.g. older payloads or freshly-created
+  // works that have no children yet).
+  agent_count: number;
+  artifact_count: number;
 };
 
 export type ContextEntry = {

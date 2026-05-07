@@ -3,6 +3,7 @@
 Vite + React 18 + TypeScript. Dev server on `127.0.0.1:4173` (5173 conflicts on the user's machine), proxying `/api/*` to the backend on `8001` with WS upgrade enabled — same-origin, no CORS.
 
 > Read [`architecture.md`](architecture.md) for the cross-layer rules and the seam definitions.
+> Read [`design-system.md`](design-system.md) for visual conventions (brand mark, section headers, cards, icons, time formats).
 
 ## Layout
 
@@ -145,7 +146,7 @@ A non-delta event (`tool_call`, `status_change`, `user_input`, …) closes any p
 
 ## Design tokens
 
-Lifted from `design_handoff_atelier/design_files/styles.css` (gitignored — keep it in sync if it changes upstream).
+Lifted from `design/design_handoff_atelier/design_files/styles.css` (gitignored — keep it in sync if it changes upstream).
 
 **Dark is the default at `:root`; light is opt-in via `[data-theme="light"]`.** `App.tsx` mirrors `useThemeStore.theme` onto `<html data-theme=...>`, and the override block in `styles.css` swaps the background ramp, foreground ramp, lines, status hues, and shadow stack to light values. Persona tints are intentionally untouched — the same hue reads on both themes. The `<ThemeToggle>` component sits in the Home + WorkView topbars and flips the store; the choice persists under `atelier:theme` in `localStorage`.
 

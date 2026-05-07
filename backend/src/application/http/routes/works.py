@@ -57,8 +57,12 @@ def list_works_endpoint(
     workstore: WorkStoreDep, settings: SettingsDep
 ) -> list[WorkSummary]:
     works = list_all.execute(workstore)
+    counts = workstore.count_children_by_work_id()
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
-    return [_to_summary(w, paths) for w in works]
+    return [
+        _to_summary(w, paths, counts.get(w.id) if w.id is not None else None)
+        for w in works
+    ]
 
 
 @router.post("/works", response_model=WorkDetail, status_code=status.HTTP_201_CREATED)
@@ -168,7 +172,11 @@ def _to_schema_context(c: Context) -> ContextSchema:
     return ContextSchema(type=c.type, value=c.value, conn_id=c.conn_id)
 
 
-def _to_summary(work: Work, paths: WorkspacePaths) -> WorkSummary:
+def _to_summary(
+    work: Work,
+    paths: WorkspacePaths,
+    counts: dict[str, int] | None = None,
+) -> WorkSummary:
     slug = _require_slug(work)
     return WorkSummary(
         slug=slug,
@@ -178,6 +186,8 @@ def _to_summary(work: Work, paths: WorkspacePaths) -> WorkSummary:
         created_at=work.created_at,
         atelier_path=str(paths.work_dir(slug)),
         project_slug=work.project_slug,
+        agent_count=(counts or {}).get("agents", 0),
+        artifact_count=(counts or {}).get("artifacts", 0),
     )
 
 

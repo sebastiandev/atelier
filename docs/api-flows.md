@@ -46,15 +46,21 @@ Same `Spec` instances back the create-agent validator (`spec.build`) so the desc
 ```
 Browser ──► Router (works.py)
                 │
-                └─► WorkStore.list_works()
+                ├─► WorkStore.list_works()
+                │       │
+                │       └─► WorkRepository.list_works()
+                │
+                └─► WorkStore.count_children_by_work_id()
                         │
-                        └─► WorkRepository.list_works()  (SQLite)
-                            ╔══════════╗
+                        └─► WorkRepository.count_children_by_work_id()
+                            ╔═══════════╗
                             ║ atelier.db║
-                            ╚══════════╝
+                            ╚═══════════╝
+                Router joins each Work with counts.get(w.id) → WorkSummary
+                                            (agent_count, artifact_count)
 ```
 
-Soft-deleted works are filtered out at the service layer. SQL is the index; the canonical state is `work.json` on disk, but listing works only reads the index.
+Soft-deleted works are filtered out at the service layer. SQL is the index; the canonical state is `work.json` on disk, but listing works only reads the index. Counts come from two `GROUP BY work_id` queries on the agents and artifacts tables — missing work ids default to zero on both axes; the router does the join in-memory.
 
 ---
 
@@ -115,6 +121,24 @@ Browser ──► Router ──► WorkStore.soft_delete_work(slug)
 ```
 
 Soft delete: the row + folder stay, status flips to `deleted`. List endpoints filter them out.
+
+---
+
+## `POST /api/works/{slug}/reveal`
+
+```
+Browser ──► Router (works.py)
+                │
+                ├─► WorkStore.get_work(slug)              ← 404 if missing
+                ├─► paths.work_dir(slug).mkdir(exist_ok)  ← idempotent
+                └─► open_in_file_browser(target)
+                                            ╔════════════════╗
+                                            ║ Finder/Files/… ║
+                                            ╚════════════════╝
+                204 No Content
+```
+
+Slug → path is server-computed (defends against path injection); the work must exist before we'll pop a Finder window. `mkdir(exist_ok=True)` makes reveal usable even on freshly-created works whose folder hasn't been written by anything yet. OS-level errors map to 500.
 
 ---
 
@@ -270,7 +294,53 @@ Both adapters use the same outgoing-queue + pump pattern so synchronous SDK call
 
 ---
 
+## `POST /api/agents/{slug}/detach`
+
+```
+Browser ──► Router (agents.py) ──► commands.detach.execute(workstore, supervisor, worktrees, req)
+                                       │
+                                       ├─► WorkStore.get_work_slug_for_agent(slug)   ← 404 AgentNotFound
+                                       ├─► validate resumable (status + session_id)  ← 409 AgentNotResumable
+                                       ├─► await supervisor.stop_agent(slug)         ← cancel SDK task, drain queue
+                                       ├─► WorkStore.set_agent_status(slug, "detached")
+                                       └─► spawn user terminal with the CLI resume command (best-effort)
+                                                                              ╔══════════╗
+                                                                              ║ terminal ║
+                                                                              ╚══════════╝
+                                       returns DetachResponse{command, launched}
+```
+
+The terminal launch is best-effort — when it can't fire (Linux without a detected emulator, sandboxing, etc.) `launched=False` and the response still carries the resume command string so the FE can copy-to-clipboard. After detach the agent's WS will close; reconnecting later picks the resume path (Case B) once the user re-attaches in-app.
+
+---
+
+## `POST /api/agents/{slug}/reveal`
+
+```
+Browser ──► Router (agents.py)
+                │
+                ├─► WorkStore.get_work_slug_for_agent(slug)        ← 404 if unknown
+                ├─► WorkStore.list_agents_for_work(work_slug)      ← locate Agent for folder field
+                ├─► resolve worktree path (or agent.folder fallback if no worktree was provisioned)
+                └─► open_in_file_browser(target)
+                204 No Content
+```
+
+Symmetric with the work-level reveal but targets the dir where the adapter's CLI actually runs — handy when poking at the agent's working tree. The 404 fires from either lookup (slug not registered, or registered but the agent row vanished mid-call). OS-level errors map to 500.
+
+---
+
 ## Connections
+
+### `GET /api/connections/types`
+
+```
+Browser ──► Router (connections.py)
+                │
+                └─► return list(DESCRIPTORS.values())
+```
+
+Static descriptor list (per-source form fields, doc URL, glyph, `verifiable` / `context_fetchable` flags). No persistence touched. The FE uses `context_fetchable` to filter the agent-context picker — picking a non-fetchable type would 422 at agent creation.
 
 ### `GET /api/connections`
 
@@ -338,6 +408,44 @@ Browser ──► Router ──► ConnectionStore.verify(slug)
 ```
 
 `verify` is a per-type pure function (`infrastructure/connections/verify.py`); it lives behind a port so tests can stub it.
+
+---
+
+## Projects
+
+Project is metadata-only — no filesystem state, no children. The store is a thin SQL repo behind the `ProjectStore` port. Connections are referenced by slug (`default_jira_conn`, `default_sentry_conn`), not by id, so the project payload is portable.
+
+### `GET /api/projects`
+
+```
+Browser ──► Router (projects.py) ──► commands.list_all.execute(projectstore)
+                                          │
+                                          └─► ProjectStore.list_projects()  (SQLite)
+                                     Router maps each to ProjectSummary
+```
+
+No soft-delete today; everything in the table is live. Pinned ordering is a presentation concern handled by the FE.
+
+### `POST /api/projects`
+
+```
+Browser ──► Router ──► commands.create.execute(projectstore, req)
+                            │
+                            └─► ProjectStore.create_project(req)
+                                    └─► repo.add_project(project)  ← assigns id + slug (PRJ-NNN)
+                       Router formats ProjectDetail
+```
+
+SQL-only flow; no FS write. `default_jira_conn` / `default_sentry_conn` are validated at the connection-layer when a Work is later attached, not here — the project create accepts any slug strings.
+
+### `GET /api/projects/{slug}`
+
+```
+Browser ──► Router ──► commands.get.execute(projectstore, slug)
+                            │
+                            └─► ProjectStore.get_project(slug) → ProjectRecord | None
+                       Router formats ProjectDetail (or 404)
+```
 
 ---
 
