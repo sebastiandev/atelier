@@ -49,6 +49,7 @@
 - Root launch scripts support `ATELIER_FRONTEND_PORT`, `ATELIER_BACKEND_PORT`, `ATELIER_FRONTEND_HOST`, and `ATELIER_BACKEND_HOST` overrides.
 - `scripts/install-launcher.sh` (macOS / Linux) and `scripts/install-launcher.ps1` (Windows) generate a thin desktop launcher that calls `dev.sh`. Templates and pre-built icons live under `scripts/launchers/`; generated artifacts (`Atelier.app`, `atelier.desktop`, `Atelier.bat` + `.lnk` shortcuts) install into the OS-standard locations (`~/Applications`, `~/.local/share/applications`, `%LOCALAPPDATA%\Atelier`). Re-run the installer after moving the repo.
 - `scripts/launchers/icons/build-icons.sh` regenerates `.icns` / `.png` / `.ico` from `atelier-app-icon.svg` (qlmanage + iconutil + ImageMagick — macOS host). Re-run after the SVG changes.
+- `scripts/wipe.sh` is a destructive cleanup: `wipe.sh all` empties every work + project (DB + `~/Atelier/works/` + `~/Atelier/projects/`); `wipe.sh work WRK-NNN` and `wipe.sh project PRJ-NNN` are scoped variants. Connections (DB rows + keychain) and schema_version are preserved. Stop the backend before running. Confirms unless `-y`.
 
 ## Notes
 
