@@ -128,6 +128,14 @@ class CompleteWorkResponse(BaseModel):
     depend on prior state). The FE uses this for the success toast."""
 
 
+class MoveWorkRequest(BaseModel):
+    """Body for POST /works/{slug}/project — re-parent a work."""
+
+    project_slug: str | None = None
+    """``null`` moves the work to Loose (no project). A non-null slug
+    must reference an existing project (422 otherwise)."""
+
+
 class JiraConfigSchema(BaseModel):
     type: Literal["jira"]
     url: str = Field(min_length=1)

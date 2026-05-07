@@ -49,6 +49,18 @@ class WorkStore(Protocol):
 
     def update_work(self, req: UpdateWorkRequest) -> WorkRecord: ...
 
+    def move_work_to_project(
+        self, work_slug: str, project_slug: str | None
+    ) -> WorkRecord:
+        """Re-parent a work to a different project (or to ``None`` for Loose).
+
+        Updates the SQL row and rewrites ``work.json`` so reconcile won't
+        revert the change on next startup. Validation that the target
+        project exists is the caller's responsibility — the WorkStore
+        port has no direct view of ProjectStore.
+        """
+        ...
+
     def soft_delete_work(self, work_slug: str) -> None: ...
 
     def add_agent_to_work(self, req: AddAgentRequest) -> Agent: ...

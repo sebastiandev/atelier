@@ -142,6 +142,26 @@ Slug → path is server-computed (defends against path injection); the work must
 
 ---
 
+## `POST /api/works/{slug}/project`
+
+```
+Browser ──► Router (works.py) ──► commands.move_to_project.execute(workstore, projectstore, req)
+                                       │
+                                       ├─► WorkStore.get_work(slug)              ← 404 WorkNotFound
+                                       ├─► if project_slug != null:
+                                       │     ProjectStore.get_project(slug)      ← 422 ProjectNotFound
+                                       └─► WorkStore.move_work_to_project(work, project)
+                                              │
+                                              ├─► repo.upsert_work(existing)  (project_slug field)
+                                              └─► files.write_work_json(...)  (FS catches up)
+                                       returns WorkRecord
+                                  Router formats WorkDetail
+```
+
+Body: ``{"project_slug": "PRJ-NNN" | null}``. ``null`` re-parents to Loose (a first-class state, not a degenerate one). The route's a dedicated POST rather than a PATCH field because PATCH treats ``None`` as "leave alone" — which collides with the explicit "set to None for Loose" intent. Both DB and ``work.json`` are updated so reconcile sees them in sync on next startup.
+
+---
+
 ## `POST /api/works/{slug}/complete`
 
 ```

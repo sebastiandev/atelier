@@ -12,10 +12,12 @@ import {
   getProject,
   getWork,
   listAgents,
+  listProjects,
   revealAgent,
   revealWork,
 } from "./api";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
+import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
 import { useClosedStore } from "./state/closed";
 import { useTweaksStore } from "./state/tweaks";
@@ -35,6 +37,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
   const [completeOpen, setCompleteOpen] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  // Projects list for the move picker — fetched lazily when the dialog
+  // opens so the WorkView doesn't pay the cost on every mount.
+  const [allProjects, setAllProjects] = useState<ProjectSummary[] | null>(null);
   // Transient banner for the detach flow — fades out after 4s. Used both
   // for "launched in Terminal" success and "couldn't launch — command
   // copied to clipboard" fallback. One slot is plenty: detaches happen
@@ -208,14 +214,31 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         </span>
         <div className="spacer" />
         {work.status === "active" && (
-          <button
-            className="btn-ghost-sm"
-            type="button"
-            onClick={() => setCompleteOpen(true)}
-            title="Mark this work as complete (stops agents, removes worktrees, keeps transcripts)"
-          >
-            ✓ Complete work
-          </button>
+          <>
+            <button
+              className="btn-ghost-sm"
+              type="button"
+              onClick={() => {
+                if (allProjects === null) {
+                  listProjects()
+                    .then(setAllProjects)
+                    .catch(() => setAllProjects([]));
+                }
+                setMoveOpen(true);
+              }}
+              title="Move this work to a different project"
+            >
+              Move…
+            </button>
+            <button
+              className="btn-ghost-sm"
+              type="button"
+              onClick={() => setCompleteOpen(true)}
+              title="Mark this work as complete (stops agents, removes worktrees, keeps transcripts)"
+            >
+              ✓ Complete work
+            </button>
+          </>
         )}
         {work.status === "completed" && (
           <span className="chip chip-completed" title="This work is completed">
@@ -253,6 +276,26 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             // of the default Active filter but is still reachable from the
             // project page or via the Completed pill.
             window.location.assign("/");
+          }}
+        />
+      )}
+
+      {moveOpen && allProjects !== null && (
+        <MoveWorkDialog
+          work={work}
+          projects={allProjects}
+          onClose={() => setMoveOpen(false)}
+          onMoved={(updated) => {
+            setWork(updated);
+            // Re-fetch the project for the breadcrumb (or clear it for Loose).
+            if (updated.project_slug) {
+              getProject(updated.project_slug)
+                .then(setProject)
+                .catch(() => setProject(null));
+            } else {
+              setProject(null);
+            }
+            setMoveOpen(false);
           }}
         />
       )}

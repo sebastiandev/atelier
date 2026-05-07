@@ -93,6 +93,22 @@ export function completeWork(slug: string): Promise<CompleteWorkResponse> {
   );
 }
 
+/**
+ * Re-parent a work to a different project. Pass `null` to make the work
+ * Loose (no project). 404 if the work is unknown; 422 if the target
+ * project doesn't exist.
+ */
+export function moveWorkToProject(
+  slug: string,
+  projectSlug: string | null,
+): Promise<WorkDetail> {
+  return fetch(`/api/works/${slug}/project`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ project_slug: projectSlug }),
+  }).then((r) => jsonOrThrow<WorkDetail>(r));
+}
+
 export type Persona = "architect" | "developer" | "product" | "ux" | "writer";
 export type AgentStatus =
   | "idle"

@@ -114,6 +114,22 @@ class WorkStoreService:
                 self._files.write_brief(req.work_slug, req.description)
         return WorkRecord(work=existing, contexts=new_contexts)
 
+    def move_work_to_project(
+        self, work_slug: str, project_slug: str | None
+    ) -> WorkRecord:
+        with self._lock:
+            existing = self._require_work(work_slug)
+            data = self._files.read_work_json(work_slug)
+            contexts = deserialize_contexts(data) if data is not None else []
+
+            existing.project_slug = project_slug
+            self._repo.upsert_work(existing)
+            # Re-write work.json so reconcile sees the new project on startup.
+            self._files.write_work_json(
+                work_slug, serialize_work_record(existing, contexts)
+            )
+        return WorkRecord(work=existing, contexts=contexts)
+
     def soft_delete_work(self, work_slug: str) -> None:
         with self._lock:
             existing = self._require_work(work_slug)

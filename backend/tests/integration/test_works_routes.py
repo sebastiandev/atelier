@@ -333,6 +333,55 @@ def test_complete_returns_409_when_already_completed(app_client: TestClient) -> 
     assert app_client.post("/api/works/WRK-001/complete").status_code == 409
 
 
+# ---------------------------------------------------------------------------
+# Move to project
+# ---------------------------------------------------------------------------
+
+
+def _new_project(name: str = "Atelier", glyph: str = "AT") -> dict[str, object]:
+    return {"name": name, "description": "", "glyph": glyph, "color": 250}
+
+
+def test_move_reparents_work_to_target_project(app_client: TestClient) -> None:
+    app_client.post("/api/projects", json=_new_project())
+    app_client.post("/api/projects", json=_new_project(name="Side", glyph="SI"))
+    app_client.post("/api/works", json={**_new_work(), "project_slug": "PRJ-002"})
+
+    res = app_client.post(
+        "/api/works/WRK-001/project", json={"project_slug": "PRJ-001"}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["project_slug"] == "PRJ-001"
+
+    # GET reflects the move.
+    assert app_client.get("/api/works/WRK-001").json()["project_slug"] == "PRJ-001"
+
+
+def test_move_to_loose_sets_project_slug_null(app_client: TestClient) -> None:
+    app_client.post("/api/projects", json=_new_project())
+    app_client.post("/api/works", json={**_new_work(), "project_slug": "PRJ-001"})
+
+    res = app_client.post("/api/works/WRK-001/project", json={"project_slug": None})
+    assert res.status_code == 200
+    assert res.json()["project_slug"] is None
+
+
+def test_move_returns_404_for_unknown_work(app_client: TestClient) -> None:
+    app_client.post("/api/projects", json=_new_project())
+    res = app_client.post(
+        "/api/works/WRK-999/project", json={"project_slug": "PRJ-001"}
+    )
+    assert res.status_code == 404
+
+
+def test_move_returns_422_for_unknown_target_project(app_client: TestClient) -> None:
+    app_client.post("/api/works", json=_new_work())
+    res = app_client.post(
+        "/api/works/WRK-001/project", json={"project_slug": "PRJ-404"}
+    )
+    assert res.status_code == 422
+
+
 def test_create_response_includes_iso_timestamp(app_client: TestClient) -> None:
     body = app_client.post("/api/works", json=_new_work()).json()
     # Pydantic serializes datetime to ISO-8601 string.

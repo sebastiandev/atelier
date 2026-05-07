@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from src.application.http.schemas import (
     CompleteWorkResponse,
     ContextSchema,
+    MoveWorkRequest,
     NewWorkRequest,
     PatchWorkRequest,
     WorkDetail,
@@ -24,6 +25,7 @@ from src.domain.commands.works import (
     create,
     get,
     list_all,
+    move_to_project,
     soft_delete,
     update,
 )
@@ -132,6 +134,34 @@ def delete_work_endpoint(work_slug: str, workstore: WorkStoreDep) -> None:
         soft_delete.execute(workstore, work_slug)
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+
+@router.post("/works/{work_slug}/project", response_model=WorkDetail)
+def move_work_to_project_endpoint(
+    work_slug: str,
+    payload: MoveWorkRequest,
+    workstore: WorkStoreDep,
+    projectstore: ProjectStoreDep,
+    settings: SettingsDep,
+) -> WorkDetail:
+    """Re-parent a work to a different project, or to Loose
+    (``project_slug: null``). Validates the target project exists when
+    one is supplied; missing target → 422. Returns the updated detail."""
+    try:
+        record = move_to_project.execute(
+            workstore,
+            projectstore,
+            move_to_project.MoveWorkToProjectRequest(
+                work_slug=work_slug, project_slug=payload.project_slug
+            ),
+        )
+    except move_to_project.WorkNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except move_to_project.ProjectNotFound as e:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        ) from e
+    return _to_detail(record, WorkspacePaths(workspace_root=settings.workspace_root))
 
 
 @router.post("/works/{work_slug}/complete", response_model=CompleteWorkResponse)
