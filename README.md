@@ -124,3 +124,7 @@ The codebase has its own developer docs in [`docs/`](docs/):
 | [`api-flows.md`](docs/api-flows.md) | Sequence diagrams per endpoint |
 
 For AI assistants working on the codebase, see [`CLAUDE.md`](CLAUDE.md).
+
+## License
+
+[MIT](LICENSE) — use it, fork it, ship it. Attribution appreciated, not required beyond what the license itself asks for.
