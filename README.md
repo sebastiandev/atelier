@@ -9,6 +9,10 @@
   history, without losing your place when you switch to the terminal.
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="Atelier workspace — projects and latest work" width="1100">
+</p>
+
 ---
 
 ## Why
@@ -35,6 +39,10 @@ page"* — and watch them in parallel. Each tile is one agent, streaming live.
 Pin tiles to a rail when you want them out of the way; bring them back without
 losing the conversation.
 
+<p align="center">
+  <img src="docs/screenshots/agents.png" alt="Two agents (Architect and Developer) streaming in parallel inside a Work unit" width="1100">
+</p>
+
 ### Multi-provider
 
 Claude (via the SDK) and Amp (via the CLI) are both first-class. Pick a
@@ -49,12 +57,20 @@ the agent over. Work in the CLI as long as you want. When you're done, the
 agent reattaches in Atelier with the full transcript intact — including
 everything that happened in the terminal.
 
+<p align="center">
+  <img src="docs/screenshots/agent_details.png" alt="Agent header — provider pill (claude · opus-4-7), CONNECTED status, worktree path, detach / maximize / CLI / close controls" width="1100">
+</p>
+
 ### Source-backed context
 
 Plug in your Jira, Sentry, or Honeycomb credentials once. Pull a ticket, an
 error, or a trace into an agent's starting context — Atelier fetches the full
 payload and renders it as a context file the agent reads on its first turn.
 Add more context mid-session without restarting.
+
+<p align="center">
+  <img src="docs/screenshots/new_agent.png" alt="Launch new agent dialog — persona picker, provider picker (Claude / Amp), initial goal, context attachments (Text / URL / File / Jira / Sentry)" width="700">
+</p>
 
 ### Per-agent git worktrees
 
@@ -74,6 +90,14 @@ exactly where it left off.
 Long-running effort? Wrap a set of Work units in a **Project** with a glyph
 and a hue. Per-project default connections, filtered work feeds, and a
 project home page that scopes everything to that effort.
+
+<p align="center">
+  <img src="docs/screenshots/project.png" alt="Project page — Atelier project header with active/completed counts and a Support Codex work card" width="1100">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/new_project.png" alt="New project dialog — name, glyph, color picker, optional default Jira / Sentry connections" width="540">
+</p>
 
 ## Quick start
 
