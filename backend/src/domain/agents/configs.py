@@ -68,15 +68,20 @@ class AmpPermissionMode(str, Enum):
     allow the agent to ask** — denying or stopping a turn is independent
     of this setting.
 
-    - ``DEFAULT`` — conservative auto-allow list (Read/Grep/Glob/Edit/
-      Write/etc.); Bash gated through the bridge → permission UI.
+    - ``DEFAULT`` — Bash gated through the bridge → permission UI; a
+      conservative list of common tools (Read/Grep/Glob/edit_file/
+      create_file/etc.) auto-allowed; everything else auto-allows too,
+      because Amp's stream-json mode has no path to surface ``ask`` to
+      our UI. The allowlist is documentation, not enforcement.
     - ``ALLOW_ALL`` — ``--dangerously-allow-all`` on the CLI. No prompts,
-      no gating. Fastest, riskiest. Equivalent to the pre-permission UI
-      behaviour.
+      no gating, including Bash. Fastest, riskiest.
     - ``CUSTOM`` — the user supplies a list of tool names to auto-allow;
       Bash always stays gated through the bridge regardless of the list
       (otherwise the user could disable shell gating, defeating the
-      reason this knob exists).
+      reason this knob exists). Same caveat as DEFAULT: tools outside
+      the list still run — there's no fail-closed mode short of
+      ``--dangerously-allow-all``-but-inverse, which the CLI doesn't
+      offer.
     """
 
     DEFAULT = "default"
@@ -99,12 +104,12 @@ AMP_DEFAULT_AUTO_ALLOWED_TOOLS: tuple[str, ...] = (
 """Tools auto-allowed by ``AmpPermissionMode.DEFAULT``.
 
 Read-only research + the Amp tools the agent uses in normal flow that
-aren't shell. Everything not on this list AND not on the user's CUSTOM
-list defaults to the CLI's ``ask`` behaviour, which would hang because
-the CLI has no TTY — so we ALWAYS pass an explicit rule for every tool
-the agent might use. If a brand-new Amp tool appears and isn't here,
-the user will see a hang and we add it (failing closed beats silent
-auto-allow)."""
+aren't shell. The list is *informational*: under Neo, anything outside
+it (and outside Bash, which is bridge-gated) also auto-runs because
+the CLI defaults un-matched tools to allow and stream-json mode has no
+path to surface ``ask`` to our UI. Keep this list close to the actual
+tool surface so the future "delegate everything through a generic
+bridge" path (using ``amp tools use``) has the right starting set."""
 
 
 @dataclass(frozen=True, kw_only=True)

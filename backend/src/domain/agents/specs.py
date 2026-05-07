@@ -167,9 +167,13 @@ class AmpSpec:
         "Allow / Allow always / Deny prompt. Amp doesn't expose a real-time "
         "permission callback, so Atelier gates Bash through a delegate "
         "shim — the agent can still request approval for shell commands "
-        "regardless of which mode you pick. Edit/Write/Read aren't gateable "
-        "on Amp today; the safest mode auto-allows them along with the "
-        "other read tools."
+        "regardless of which mode you pick. Heads up: every other tool "
+        "(Edit / Write / Read / web fetches / MCP / anything new Amp "
+        "ships) auto-runs without a prompt — the Amp CLI's stream mode "
+        "has no path to surface a permission request to the UI today. "
+        "If you need finer-grained gating across all tools, the "
+        "Claude Code provider offers it; on Amp, the only knob is "
+        "ALLOW_ALL (which also skips Bash gating)."
     )
 
     def describe(self) -> ProviderDescriptor:

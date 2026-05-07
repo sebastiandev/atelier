@@ -277,10 +277,12 @@ class AmpAdapter:
           no socket. Old pre-permission behaviour. Maximum risk, zero
           friction.
         - ``DEFAULT`` / ``CUSTOM``: ``dangerously_allow_all=False`` plus an
-          explicit allowlist. Bash → delegate to bridge; everything on the
-          mode's allow-list → allow. Anything not in either bucket would
-          hit the CLI's default ``ask`` (which hangs without a TTY) — so
-          we err on the side of including a generous allowlist.
+          explicit rule list. Bash → delegate to bridge; allowlisted tools
+          → allow; ``*`` → allow as a catch-all (matches Amp's post-Neo
+          default for un-matched tools — set explicitly so the contract
+          is visible). The UI surfaces this trade-off in the Permissions
+          section: only Bash is user-prompted; all other tools, including
+          new/MCP ones, auto-run.
         """
         opts: dict[str, object] = {
             "cwd": str(self._config.common.workdir),
@@ -415,11 +417,14 @@ async def _close_writer(writer: asyncio.StreamWriter) -> None:
 def _build_permissions(allowed_tools: tuple[str, ...]) -> list[Permission]:
     """Permission rules for the Amp CLI.
 
-    Bash → delegate to our bridge (gated by Atelier's prompt UI).
-    Each tool in ``allowed_tools`` → allow. The Amp CLI's default for
-    un-listed tools is ``ask``, which hangs on a non-interactive
-    subprocess — so the caller must include every tool the agent might
-    use, or the agent will block on the first un-listed call.
+    Bash → delegate to our bridge (gated by Atelier's prompt UI). Each
+    tool in ``allowed_tools`` → allow. A trailing ``*`` → allow rule
+    mirrors Amp's post-Neo default for un-matched tools (anything new /
+    MCP-provided / not on our allowlist auto-runs); we set it
+    explicitly so behaviour stays stable if the CLI's implicit default
+    ever moves again. Stream-json mode has no path to surface ``ask``
+    to our UI — only ``delegate`` does — so we don't try to gate
+    anything beyond Bash here.
 
     ``"Bash"`` in ``allowed_tools`` is silently dropped: the user must
     not be able to disable shell gating from the UI. (Defeating that
@@ -433,6 +438,7 @@ def _build_permissions(allowed_tools: tuple[str, ...]) -> list[Permission]:
         if tool == "Bash":
             continue
         rules.append(Permission(tool=tool, action="allow"))
+    rules.append(Permission(tool="*", action="allow"))
     return rules
 
 
