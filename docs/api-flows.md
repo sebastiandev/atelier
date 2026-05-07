@@ -142,6 +142,30 @@ Slug → path is server-computed (defends against path injection); the work must
 
 ---
 
+## `POST /api/works/{slug}/complete`
+
+```
+Browser ──► Router (works.py) ──► commands.complete.execute(workstore, supervisor, worktrees, req)
+                                       │
+                                       ├─► WorkStore.get_work(slug)             ← 404 WorkNotFound
+                                       ├─► validate status == "active"          ← 409 WorkNotActive
+                                       ├─► WorkStore.list_agents_for_work(slug)
+                                       ├─► for each agent:
+                                       │     await supervisor.stop_agent(slug)  ← idempotent
+                                       ├─► for each agent:
+                                       │     worktree_manager.remove(work_slug, agent_slug)
+                                       │                              ╔════════════╗
+                                       │                              ║ git worktree║
+                                       │                              ╚════════════╝
+                                       └─► WorkStore.update_work(status="completed")
+                                       returns CompleteWorkResult{work_slug, agent_count}
+                                  Router formats CompleteWorkResponse
+```
+
+Status flips **last** so a crash mid-cleanup doesn't leave the work parading as "completed" while supervisor tasks or worktrees still hang on. Both `stop_agent` and `worktree.remove` are idempotent — replays after a partial run are safe. **Preserved**: `~/Atelier/works/<slug>/` (transcripts, agent.json, brief.md, handoff docs). **Removed**: per-agent git worktrees (scratch space). The completed work stays reachable through the Completed filter / project page.
+
+---
+
 ## `GET /api/works/{slug}/agents`
 
 ```

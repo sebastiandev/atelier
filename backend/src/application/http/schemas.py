@@ -117,6 +117,17 @@ class DetachResponse(BaseModel):
     when the FE should copy ``command`` to the clipboard instead."""
 
 
+class CompleteWorkResponse(BaseModel):
+    """Result of POSTing /works/{slug}/complete."""
+
+    work_slug: str
+
+    agent_count: int
+    """How many agents were on the work. All had their supervisor task
+    stopped and worktree removed (both idempotent — actual side effects
+    depend on prior state). The FE uses this for the success toast."""
+
+
 class JiraConfigSchema(BaseModel):
     type: Literal["jira"]
     url: str = Field(min_length=1)

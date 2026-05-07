@@ -11,6 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import (
+    CompleteWorkResponse,
     ContextSchema,
     NewWorkRequest,
     PatchWorkRequest,
@@ -18,15 +19,24 @@ from src.application.http.schemas import (
     WorkSummary,
 )
 from src.domain.commands.projects import get as projects_get
-from src.domain.commands.works import create, get, list_all, soft_delete, update
+from src.domain.commands.works import (
+    complete,
+    create,
+    get,
+    list_all,
+    soft_delete,
+    update,
+)
 from src.domain.models import Context, Work
 from src.domain.projectstore.ports import ProjectStore
+from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.dtos import (
     CreateWorkRequest,
     UpdateWorkRequest,
     WorkRecord,
 )
 from src.domain.workstore.ports import WorkStore
+from src.domain.worktrees import WorktreeManager
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 from src.settings import Settings
@@ -47,9 +57,19 @@ def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
 
 
+def get_supervisor(request: Request) -> AgentSupervisorService:
+    return request.app.state.supervisor  # type: ignore[no-any-return]
+
+
+def get_worktree_manager(request: Request) -> WorktreeManager:
+    return request.app.state.worktree_manager  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
+SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
+WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
 
 
 @router.get("/works", response_model=list[WorkSummary])
@@ -112,6 +132,32 @@ def delete_work_endpoint(work_slug: str, workstore: WorkStoreDep) -> None:
         soft_delete.execute(workstore, work_slug)
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+
+@router.post("/works/{work_slug}/complete", response_model=CompleteWorkResponse)
+async def complete_work_endpoint(
+    work_slug: str,
+    workstore: WorkStoreDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+) -> CompleteWorkResponse:
+    """Mark a Work as completed: stop running agents, remove their git
+    worktrees, flip the Work's status to ``completed``. Transcripts and
+    the work folder under ``~/Atelier/works/<slug>/`` are preserved."""
+    try:
+        result = await complete.execute(
+            workstore,
+            supervisor,
+            worktree_manager,
+            complete.CompleteWorkRequest(work_slug=work_slug),
+        )
+    except complete.WorkNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except complete.WorkNotActive as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    return CompleteWorkResponse(
+        work_slug=result.work_slug, agent_count=result.agent_count
+    )
 
 
 @router.post("/works/{work_slug}/reveal", status_code=status.HTTP_204_NO_CONTENT)

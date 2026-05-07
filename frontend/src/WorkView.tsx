@@ -15,6 +15,7 @@ import {
   revealAgent,
   revealWork,
 } from "./api";
+import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
 import { useClosedStore } from "./state/closed";
 import { useTweaksStore } from "./state/tweaks";
@@ -33,6 +34,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [error, setError] = useState<string | null>(null);
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
+  const [completeOpen, setCompleteOpen] = useState(false);
   // Transient banner for the detach flow — fades out after 4s. Used both
   // for "launched in Terminal" success and "couldn't launch — command
   // copied to clipboard" fallback. One slot is plenty: detaches happen
@@ -205,6 +207,21 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           {work.name}
         </span>
         <div className="spacer" />
+        {work.status === "active" && (
+          <button
+            className="btn-ghost-sm"
+            type="button"
+            onClick={() => setCompleteOpen(true)}
+            title="Mark this work as complete (stops agents, removes worktrees, keeps transcripts)"
+          >
+            ✓ Complete work
+          </button>
+        )}
+        {work.status === "completed" && (
+          <span className="chip chip-completed" title="This work is completed">
+            completed
+          </span>
+        )}
         <button
           className="folder-pill mono"
           type="button"
@@ -225,6 +242,20 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         <TweaksToggle />
         <ThemeToggle />
       </header>
+
+      {completeOpen && (
+        <CompleteWorkDialog
+          work={work}
+          agentCount={agents.length}
+          onClose={() => setCompleteOpen(false)}
+          onCompleted={(_count) => {
+            // Navigate back to the workspace; the completed work falls out
+            // of the default Active filter but is still reachable from the
+            // project page or via the Completed pill.
+            window.location.assign("/");
+          }}
+        />
+      )}
 
       <div className="work-body">
         <aside className="left-rail">

@@ -75,6 +75,24 @@ export function revealWork(slug: string): Promise<void> {
   });
 }
 
+export type CompleteWorkResponse = {
+  work_slug: string;
+  // Number of agents on the work; the backend stopped each + removed each
+  // worktree. Used by the FE for the success toast.
+  agent_count: number;
+};
+
+/**
+ * Mark a work as complete: backend stops running agents, removes their git
+ * worktrees, flips the work's status to "completed". Transcripts and the
+ * work folder are preserved.
+ */
+export function completeWork(slug: string): Promise<CompleteWorkResponse> {
+  return fetch(`/api/works/${slug}/complete`, { method: "POST" }).then((r) =>
+    jsonOrThrow<CompleteWorkResponse>(r),
+  );
+}
+
 export type Persona = "architect" | "developer" | "product" | "ux" | "writer";
 export type AgentStatus =
   | "idle"

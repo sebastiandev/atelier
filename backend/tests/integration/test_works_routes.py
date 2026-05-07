@@ -305,6 +305,34 @@ def test_reveal_404_for_unknown_work(app_client: TestClient) -> None:
     assert app_client.post("/api/works/WRK-404/reveal").status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# Complete
+# ---------------------------------------------------------------------------
+
+
+def test_complete_flips_status_and_returns_agent_count(app_client: TestClient) -> None:
+    app_client.post("/api/works", json=_new_work())
+
+    res = app_client.post("/api/works/WRK-001/complete")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["work_slug"] == "WRK-001"
+    assert body["agent_count"] == 0  # no agents on a freshly-created work
+
+    detail = app_client.get("/api/works/WRK-001").json()
+    assert detail["status"] == "completed"
+
+
+def test_complete_returns_404_for_unknown_work(app_client: TestClient) -> None:
+    assert app_client.post("/api/works/WRK-404/complete").status_code == 404
+
+
+def test_complete_returns_409_when_already_completed(app_client: TestClient) -> None:
+    app_client.post("/api/works", json=_new_work())
+    assert app_client.post("/api/works/WRK-001/complete").status_code == 200
+    assert app_client.post("/api/works/WRK-001/complete").status_code == 409
+
+
 def test_create_response_includes_iso_timestamp(app_client: TestClient) -> None:
     body = app_client.post("/api/works", json=_new_work()).json()
     # Pydantic serializes datetime to ISO-8601 string.
