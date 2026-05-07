@@ -11,17 +11,21 @@ frontend/src/
 ├── App.tsx              # path-based router (no router lib)
 ├── Home.tsx             # /
 ├── WorkView.tsx         # /works/<slug>
+├── ProjectScreen.tsx    # /projects/<slug>
 ├── AgentView.tsx        # /agents/<slug> — wraps AgentTile in page mode
 ├── Connections.tsx      # /connections — CRUD UI for ConnectionStore
 ├── AgentTile.tsx        # the unit; "page" or "tile" mode
-├── NewWorkDialog.tsx    # POST /api/works
+├── NewWorkDialog.tsx    # POST /api/works (with optional project picker)
+├── NewProjectDialog.tsx # POST /api/projects (name + glyph + 7-swatch hue + default conns)
 ├── NewAgentDialog.tsx   # POST /api/works/<slug>/agents
 ├── MarkdownText.tsx     # react-markdown + remark-gfm + shiki wrapper
 ├── useAgentStream.ts    # WS hook with replay + reconnect backoff
 ├── state/               # narrow Zustand stores (frontend-local concerns)
 │   ├── theme.ts         # dark/light/ansi cycle, persisted
+│   ├── tweaks.ts        # accent hue + layout choice
 │   └── closed.ts        # per-work set of agents pinned to the rail (closed)
 ├── ThemeToggle.tsx      # sun/moon button driving useThemeStore
+├── TweaksPanel.tsx      # accent hue slider + layout segmented control
 ├── connectionFields.ts  # per-source form schema (CONNECTION_FIELDS)
 ├── api.ts               # typed fetch wrappers + types + persona constants
 └── styles.css           # tokens + every component style (one file, by design)
@@ -33,11 +37,46 @@ State: Zustand for frontend-local presentation concerns (see [State](#state)).
 
 Hand-rolled in `App.tsx`. Path prefix → component. We don't ship a router because:
 
-- Two route patterns total (`/agents/<slug>`, `/works/<slug>`) plus the home.
+- Four route patterns total (`/agents/<slug>`, `/works/<slug>`, `/projects/<slug>`, `/connections`) plus the home.
 - No nested routes, no parameterized search, no transitions.
 - Adding `react-router` would be more code than the router itself.
 
 If routing grows beyond ~5 patterns, swap it in.
+
+## Projects
+
+Projects are an **optional** grouping above Work. The whole feature is data-light by design — Project is metadata (name, glyph, single OKLCH hue, optional default Jira/Sentry connection slugs), not a workspace.
+
+- **Home** (`Home.tsx`) renders a Projects card grid above a flat Latest-work list. Each card shows a glyph, a big proj-color active-count, the 3 most-recent works (status icon + slug + title; row clicks navigate to the work and `e.stopPropagation()` so the card click doesn't fire), connection pills derived from the project's defaults, and an `Open ›` arrow. The card itself is a `<div role="button">` (not an `<a>`) because the recent rows inside are anchors and nested anchor is invalid HTML — clicking the card calls `window.location.assign("/projects/<slug>")` programmatically. A peer LooseCard (no glyph color, no conn pills, no arrow) shows works with no project; clicking it filters the latest list to loose-only.
+- **Latest work** has its own filter pills (All / per-project tinted via `--proj-h` / Loose with count) and a Tiles/List view toggle (default **list**, persisted under `localStorage["atelier:home:view"]`). The pills are independent of card-click navigation — clicking a project pill scopes the list without leaving Home; clicking a project card opens the project page.
+- **`ProjectScreen.tsx`** at `/projects/<slug>`: hero with a `linear-gradient(180deg, --proj-soft, transparent)` wash + 3px tinted top bar (`.proj-hero-bar`), 56×56 glyph (panel-bg + proj-line border + proj-color text), 24px name, slug + description, `+ New work in {Project}` CTA on the right. Below the hero: meta grid (ID, Default connections with conn-pills + a small ↗ to /connections, Active count in proj-color, Completed count in proj-color), `home-tabs`-style Active/Completed strip, right-aligned Tiles | List toggle (default **tiles**, persisted per-project under `atelier:project:{slug}:view`). Tiles renders the existing `.work-card` grid with a "Start new work in {Project}" tile first; List renders the flat `.work-list`.
+- **`NewWorkDialog`** accepts `projects`, `presetProjectSlug`, `lockProjectSlug` props. On Home it seeds the picker from the active filter; on Project pages it sets `lockProjectSlug=true` so the picker is disabled. Selecting a project tints the modal via `--proj-h`.
+- **`WorkView`** breadcrumb adds a project crumb when `work.project_slug` is set: `Workspace › [glyph] {Project} › WRK-...`. The project crumb is a real link to `/projects/{slug}`.
+
+### Per-project color tokens
+
+Cards / chips / pills set `--proj-h` (hue 0–360) inline via `style`. The token system in `styles.css` derives the rest:
+
+```css
+[style*="--proj-h"] {
+  --proj-bg:   oklch(0.62 0.18 var(--proj-h));         /* solid: glyph + dot */
+  --proj-soft: oklch(0.62 0.18 var(--proj-h) / 0.14);  /* card top bar wash, chip bg */
+  --proj-line: oklch(0.62 0.18 var(--proj-h) / 0.4);   /* chip border, hover line */
+}
+[data-theme="dark"] [style*="--proj-h"],
+[data-theme="ansi"] [style*="--proj-h"] {
+  --proj-soft: oklch(0.62 0.18 var(--proj-h) / 0.20);
+  --proj-line: oklch(0.62 0.18 var(--proj-h) / 0.5);
+}
+```
+
+Loose work uses the neutral tokens (`--bg-2`, `--line`, `--fg-3`) so the same shell renders without project styling.
+
+## Topbar shape (shared)
+
+Home, Project, Work, Agent, and Connections all share the same chrome — brand on far-left, tools on far-right, divider at the bottom. WorkView's `.wv-topbar` is the canonical look. Home and Project sit inside `.home` (no max-width; `padding: 0 2.25rem 3rem`); the topbar uses `margin: 0 -2.25rem 1.5rem` to break out of the side padding and go edge-to-edge, picking up `.wv-topbar`'s elevated background. Same negative-margin trick on `.proj-hero` for the gradient bleed. The `:has(+ .proj-hero)` rule on the topbar drops its bottom margin so the project hero's tinted bar sits flush.
+
+Project crumb pattern: `← Workspace` (`btn-ghost-sm` button, links to `/`) followed by a `crumbs` span with `/ [glyph chip] {Name}`. WorkView extends with another `/ {WRK-slug}` and a folder-pill on the right.
 
 ## AgentTile — modes
 
@@ -47,6 +86,26 @@ If routing grows beyond ~5 patterns, swap it in.
 - `mode="tile"` (inside `WorkView`'s canvas): no fixed height, persona pip + agent name in header, persona-tinted top border via `--p-color`/`--p-soft`, maximize toggle that sets `position: fixed; inset: 1.5rem`.
 
 The mode is a structural switch, not a theming switch. Splitting into two components would duplicate the streaming logic; one component with a mode prop is right while behavior is 95% shared. If divergence grows past the textarea + header, split.
+
+### Header layout — 3-cell grid
+
+`AgentTile` header is a CSS grid with `grid-template-columns: 1fr auto 1fr`:
+
+- **Left** cell: persona pip + status dot + h2 title. h2 truncates with `text-overflow: ellipsis` so long names don't push the meta off-center.
+- **Center** cell: `agent-slug` (mono) + `provider-pill` (`amp · rush`) + `conn-status` (`CONNECTED`) + a `folder-pill mono` showing `shortenPath(worktreePath)` (clickable to reveal the worktree in Finder). Center stays horizontally centered regardless of how wide the title or controls clusters get; the 1fr columns absorb the slack equally.
+- **Right** cell: `tile-controls` wrapper with handoff / maximize / detach / close buttons. Buttons are 26×26 with 15×15 SVG glyphs; controlled by `.tile-controls .tile-ctl` so the meta/folder pill in the center stays at default sizing.
+
+The standalone worktree-icon button (formerly between conn-status and tile-controls) was removed — the folder pill is itself the reveal affordance. `shortenPath` is exported from `WorkView.tsx` for reuse.
+
+## View-toggle pattern
+
+`Tiles | List` segmented control used on both Project and Home. Implementation pattern:
+
+- Two `.view-toggle-btn` siblings inside a `.view-toggle` flex container with a 1px border and a 1px divider between buttons.
+- Default per surface: Project = **tiles**, Home = **list** (chronological feed reads faster as rows).
+- Persistence keys: `atelier:project:{slug}:view` per project; `atelier:home:view` site-wide. Read on mount via a dedicated `readPersistedView(slug?)` helper that handles private-mode failures and falls back to the surface default.
+- The `.proj-tabs` container variant adds `margin-left: auto; margin-bottom: 0.5rem` to keep the toggle aligned with the underlined tabs above; on Home (where neighbours are pills, not underlined tabs) the toggle uses the base `align-self: center` only.
+- Button padding is tuned to `3px 9px` (matches `.filter-pill`) so toggle and pills sit on the same baseline when they share a row.
 
 ## `useAgentStream`
 

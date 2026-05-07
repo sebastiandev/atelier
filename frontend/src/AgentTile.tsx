@@ -25,6 +25,7 @@ import {
   type PermissionDecision,
   useAgentStream,
 } from "./useAgentStream";
+import { shortenPath } from "./WorkView";
 
 const COMPOSER_MAX_HEIGHT = 200;
 
@@ -265,35 +266,37 @@ export function AgentTile({
   return (
     <div className={tileClass} data-persona={persona}>
       <header>
-        {persona && <span className="persona-pip">{PERSONA_GLYPH[persona]}</span>}
-        <span className="status-dot" data-status={dotStatus} />
-        <h2>{title}</h2>
-        {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}
-        {provider && model && (
-          <span
-            className="provider-pill mono"
-            data-provider={shortProvider(provider)}
-            title={`Provider: ${provider} · Model: ${model}`}
-          >
-            {shortProvider(provider)} · {shortModel(model)}
-          </span>
-        )}
-        <span className="conn-status" data-conn-status={status}>{status}</span>
-        {onRevealWorktree && (
-          <button
-            type="button"
-            className="tile-ctl"
-            title={
-              worktreePath
-                ? `Open worktree in finder — ${worktreePath}`
-                : "Open worktree in finder"
-            }
-            onClick={onRevealWorktree}
-          >
-            <WorktreeIcon />
-          </button>
-        )}
-        <div className="tile-controls">
+        <div className="tile-header-left">
+          {persona && <span className="persona-pip">{PERSONA_GLYPH[persona]}</span>}
+          <span className="status-dot" data-status={dotStatus} />
+          <h2>{title}</h2>
+        </div>
+        <div className="tile-header-meta">
+          {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}
+          {provider && model && (
+            <span
+              className="provider-pill mono"
+              data-provider={shortProvider(provider)}
+              title={`Provider: ${provider} · Model: ${model}`}
+            >
+              {shortProvider(provider)} · {shortModel(model)}
+            </span>
+          )}
+          <span className="conn-status" data-conn-status={status}>{status}</span>
+          {worktreePath && (
+            <button
+              type="button"
+              className="folder-pill mono"
+              title={`Open worktree in finder — ${worktreePath}`}
+              onClick={onRevealWorktree}
+              disabled={!onRevealWorktree}
+            >
+              {shortenPath(worktreePath)}
+            </button>
+          )}
+        </div>
+        <div className="tile-header-right">
+          <div className="tile-controls">
           <button
             type="button"
             className="tile-ctl"
@@ -333,6 +336,7 @@ export function AgentTile({
           >
             <CloseIcon />
           </button>
+          </div>
         </div>
       </header>
       {isStopped && (
@@ -456,37 +460,6 @@ function HandoffIcon() {
         strokeWidth="1.4"
         fill="none"
         strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-function WorktreeIcon() {
-  // Folder-tree glyph: a vertical stem on the left with two short
-  // branches reaching to a top and bottom folder. Communicates "this
-  // opens a per-agent worktree dir under the work tree" — distinct
-  // from a plain folder icon, which we'd use for the work-level dir.
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
-      <path
-        d="M2.5 3.5 v9 M2.5 5.5 h2.5 M2.5 11 h2.5"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        fill="none"
-        strokeLinecap="round"
-      />
-      <path
-        d="M5 4 h2 l1 1 h3 v3 h-6 z"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        fill="none"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M5 9.5 h2 l1 1 h3 v3 h-6 z"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        fill="none"
         strokeLinejoin="round"
       />
     </svg>

@@ -152,6 +152,46 @@ works_table = Table(
     Column("description", String, nullable=False),
     Column("status", String, nullable=False),
     Column("created_at", UTCDateTime, nullable=False),
+    # Optional grouping link. Slug rather than int PK so work.json stays
+    # self-contained — same convention as connection refs in contexts.
+    # ON DELETE SET NULL: deleting a project demotes its works to "loose".
+    Column(
+        "project_slug",
+        String,
+        ForeignKey("projects.slug", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
+)
+
+
+projects_table = Table(
+    "projects",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("slug", String, unique=True, nullable=False, index=True),
+    Column("name", String, nullable=False),
+    Column("description", String, nullable=False),
+    Column("glyph", String, nullable=False),
+    # OKLCH hue 0–360. Stored as int; CSS exposes as --proj-h on cards/chips.
+    Column("color", Integer, nullable=False),
+    Column("pinned", Boolean, nullable=False, default=False),
+    # Default Jira/Sentry connections — referenced by slug so they survive
+    # int-id renumbering across DB rebuilds. ON DELETE SET NULL: deleting a
+    # connection clears the project default rather than dangling.
+    Column(
+        "default_jira_conn",
+        String,
+        ForeignKey("connections.slug", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column(
+        "default_sentry_conn",
+        String,
+        ForeignKey("connections.slug", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("created_at", UTCDateTime, nullable=False),
 )
 
 
@@ -304,6 +344,7 @@ __all__ = [
     "connections_table",
     "handoffs_table",
     "metadata",
+    "projects_table",
     "schema_version_table",
     "transcript_cursor_table",
     "works_table",

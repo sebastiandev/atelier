@@ -4,13 +4,23 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.application.http.routes import agents, connections, health, providers, works
+from src.application.http.routes import (
+    agents,
+    connections,
+    health,
+    projects,
+    providers,
+    works,
+)
 from src.application.ws import agents as ws_agents
 from src.domain.connections import ConnectionStoreService
+from src.domain.projectstore import ProjectStoreService
+from src.domain.projectstore import reconcile as reconcile_projects
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore import WorkStoreService, reconcile
 from src.infrastructure.connections import KeyringSecretStore, fetch_context, verify
 from src.infrastructure.database import (
+    SqlProjectRepository,
     SqlWorkRepository,
     configure_mappings,
     create_database_engine,
@@ -19,6 +29,7 @@ from src.infrastructure.database import (
 )
 from src.infrastructure.database.connection_repository import SqlConnectionRepository
 from src.infrastructure.filesystem import (
+    FsProjectFiles,
     FsTranscriptLog,
     FsWorkspaceFiles,
     WorkspacePaths,
@@ -54,6 +65,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         repo = SqlWorkRepository(session_factory)
         files = FsWorkspaceFiles(paths)
         transcript_log = FsTranscriptLog(paths)
+
+        # Projects reconcile FIRST: works carry a project_slug FK, and the
+        # work-side reconcile would fail FK validation if a referenced
+        # project hadn't been inserted yet.
+        project_repo = SqlProjectRepository(session_factory)
+        project_files = FsProjectFiles(paths)
+        reconcile_projects(project_repo, project_files)
+        projectstore = ProjectStoreService(project_repo, project_files)
+
         reconcile(repo, files)
 
         connection_repo = SqlConnectionRepository(session_factory)
@@ -80,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.workstore = workstore
+        app.state.projectstore = projectstore
         app.state.supervisor = supervisor
         app.state.connection_store = connection_store
         app.state.worktree_manager = worktree_manager
@@ -91,6 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Atelier", version="0.1.0", lifespan=lifespan)
     app.include_router(health.router, prefix="/api")
+    app.include_router(projects.router, prefix="/api")
     app.include_router(works.router, prefix="/api")
     app.include_router(agents.router, prefix="/api")
     app.include_router(providers.router, prefix="/api")

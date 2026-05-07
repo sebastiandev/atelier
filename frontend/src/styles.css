@@ -139,10 +139,27 @@ body {
 /* Home ------------------------------------------------------------------- */
 
 .home {
-  max-width: 1120px;
-  margin: 0 auto;
-  padding: 0 1.5rem 3rem;
+  /* Full-width container — matches WorkView so the workspace gets the
+     same horizontal real estate everywhere. Side padding hugs the
+     body content; the topbar and other full-bleed elements break out
+     with a negative horizontal margin (see `.home > .wv-topbar` and
+     `.proj-hero` below). */
+  padding: 0 2.25rem 3rem;
   line-height: 1.5;
+}
+
+/* Topbar lives inside .home but renders edge-to-edge like WorkView's,
+   so cancel the .home side padding with a negative margin. The topbar
+   carries its own internal inset (`.wv-topbar { padding: 0.65rem 1rem }`),
+   so brand + tools still sit ~16px from the screen edge. */
+.home > .wv-topbar {
+  margin: 0 -2.25rem 1.5rem;
+}
+/* When the project hero follows the topbar, drop the topbar's bottom
+   margin so the hero's 3px tinted bar sits flush below the topbar
+   border instead of floating over a strip of body bg. */
+.home > .wv-topbar:has(+ .proj-hero) {
+  margin-bottom: 0;
 }
 
 .topbar {
@@ -426,6 +443,23 @@ body {
   height: 6px;
   border-radius: 50%;
   background: var(--good);
+  animation: status-pulse 1.6s infinite;
+}
+
+/* Generic status dot — same shape as the chip dot but works outside a
+   chip context (work rows, project-card recent lists, etc.). Only the
+   `.live` variant pulses; idle/completed dots stay still. */
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  flex-shrink: 0;
+}
+.dot.live {
+  background: var(--good);
+  color: var(--good);
   animation: status-pulse 1.6s infinite;
 }
 
@@ -717,8 +751,14 @@ body {
   box-shadow: 0 0 0 2px var(--p-soft, rgba(74, 158, 255, 0.18));
 }
 
+/* Three-section header: title group on the left, metadata centered,
+   controls on the right. CSS grid with `1fr auto 1fr` keeps the meta
+   cluster horizontally centered regardless of how wide the title or
+   controls clusters get; if the meta gets too wide it just pushes the
+   1fr columns smaller without falling out of center. */
 .agent-tile header {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 0.6rem;
   padding: 0.65rem 0.85rem;
@@ -729,8 +769,30 @@ body {
   margin: 0;
   font-size: 13.5px;
   font-weight: 600;
-  flex: 1;
   letter-spacing: -0.01em;
+}
+.agent-tile header .tile-header-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.agent-tile header .tile-header-left h2 {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.agent-tile header .tile-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-self: center;
+}
+.agent-tile header .tile-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  justify-self: end;
 }
 .agent-tile header .agent-slug {
   font-size: 10.5px;
@@ -787,6 +849,17 @@ body {
   align-items: center;
   gap: 1px;
   margin-left: 0.25rem;
+}
+/* Slightly larger hit/visual size for the right-cluster controls
+   (handoff, maximize, detach, close) — the SVG glyphs are 13×13 by
+   default but read tiny next to the meta cluster. */
+.tile-controls .tile-ctl {
+  width: 26px;
+  height: 26px;
+}
+.tile-controls .tile-ctl svg {
+  width: 15px;
+  height: 15px;
 }
 .tile-ctl {
   display: inline-flex;
@@ -2011,6 +2084,9 @@ h5.md-h {
   color: var(--muted);
   text-decoration: none;
   font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
 .crumb-link:hover {
   color: var(--fg);
@@ -2484,3 +2560,736 @@ h5.md-h {
 [data-theme="ansi"] .verify-pill.err { color: var(--ansi-red);   background: oklch(0.74 0.17  25 / 0.12); border-color: oklch(0.74 0.17  25 / 0.35); }
 
 [data-theme="ansi"] .brand-mark { background: var(--accent); }
+
+/* ===========================================================================
+   Projects — optional grouping above Work.
+
+   Each project has a single OKLCH hue (stored as int 0–360). Cards and chips
+   set --proj-h inline; the derived ramp below tints background, glyph
+   square, soft wash, and border line with one variable change. Loose work
+   uses the neutral tokens so the same shell renders without styling.
+   =========================================================================== */
+
+[style*="--proj-h"] {
+  --proj-bg:   oklch(0.62 0.18 var(--proj-h));
+  --proj-soft: oklch(0.62 0.18 var(--proj-h) / 0.14);
+  --proj-line: oklch(0.62 0.18 var(--proj-h) / 0.4);
+  --proj-fg:   oklch(0.98 0.01 var(--proj-h));
+}
+[data-theme="dark"] [style*="--proj-h"],
+[data-theme="ansi"] [style*="--proj-h"] {
+  --proj-soft: oklch(0.62 0.18 var(--proj-h) / 0.20);
+  --proj-line: oklch(0.62 0.18 var(--proj-h) / 0.5);
+}
+
+.proj-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  margin-bottom: 1.75rem;
+}
+.proj-section-hd {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.proj-section-hd .spacer {
+  flex: 1;
+}
+
+.proj-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 0.85rem;
+}
+
+.proj-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.95rem 1rem;
+  padding-top: 1.05rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  min-height: 130px;
+  overflow: hidden;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+.proj-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: var(--proj-bg, var(--line));
+}
+.proj-card:hover {
+  border-color: var(--proj-line, var(--fg-3));
+  background: var(--bg-2);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-1);
+}
+.proj-card.selected {
+  border-color: var(--proj-line, var(--accent-line));
+  box-shadow: 0 0 0 1px var(--proj-line, var(--accent-line)), var(--shadow-1);
+}
+.proj-card.loose {
+  --proj-bg: var(--fg-4);
+  --proj-line: var(--line);
+}
+.proj-card.create {
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  color: var(--muted);
+  background: transparent;
+}
+.proj-card.create::before { display: none; }
+.proj-card.create:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+.proj-card.create .plus {
+  font-size: 22px;
+  line-height: 1;
+  margin-bottom: 0.2rem;
+}
+
+.pc-hd {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+.pc-glyph {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border-radius: 8px;
+  background: var(--proj-soft, var(--bg-2));
+  color: var(--proj-bg, var(--fg-2));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.pc-glyph.loose {
+  background: var(--bg-2);
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 18px;
+  font-weight: 400;
+}
+.pc-titlewrap {
+  flex: 1;
+  min-width: 0;
+}
+.pc-name {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pc-id {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  margin-top: 0.1rem;
+}
+.pc-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+.pc-count-num {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--proj-bg, var(--fg-2));
+  line-height: 1;
+}
+.pc-count-sub {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--fg-3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.proj-card.loose .pc-count-num {
+  color: var(--fg-2);
+}
+.pc-desc {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pc-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line-soft);
+}
+.pc-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--fg-2);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background 120ms ease;
+}
+.pc-recent-row:hover {
+  background: var(--bg-2);
+}
+.pc-recent-row .mono {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-3);
+  flex-shrink: 0;
+}
+.pc-recent-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-2);
+}
+.pc-recent-empty {
+  padding: 4px 2px;
+  font-size: 11.5px;
+}
+
+/* Project card footer — connection pills + Open arrow. */
+.pc-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-top: 0.4rem;
+  margin-top: auto;
+}
+.pc-open {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.proj-card:hover .pc-open {
+  color: var(--proj-bg, var(--accent));
+}
+
+/* Source connection pills (JI, SE, HC). Reused in project cards + hero. */
+.conn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--fg-2);
+}
+.conn-pill[data-source="jira"] {
+  color: oklch(0.72 0.16 245);
+  border-color: oklch(0.72 0.16 245 / 0.45);
+  background: oklch(0.72 0.16 245 / 0.10);
+}
+.conn-pill[data-source="sentry"] {
+  color: oklch(0.72 0.16 25);
+  border-color: oklch(0.72 0.16 25 / 0.45);
+  background: oklch(0.72 0.16 25 / 0.10);
+}
+.conn-pill[data-source="honeycomb"] {
+  color: oklch(0.78 0.15 75);
+  border-color: oklch(0.78 0.15 75 / 0.45);
+  background: oklch(0.78 0.15 75 / 0.10);
+}
+
+/* Project chip used inside WorkCards (and later, latest-work rows). */
+.proj-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--proj-soft, var(--bg-2));
+  border: 1px solid var(--proj-line, var(--line));
+  color: var(--fg-2);
+  font-size: 11px;
+  white-space: nowrap;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proj-chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--proj-bg, var(--fg-4));
+}
+
+/* Active project filter banner above the work grid. */
+.proj-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.85rem;
+  background: var(--proj-soft, var(--bg-2));
+  border: 1px solid var(--proj-line, var(--line));
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+.proj-filter .label {
+  color: var(--muted);
+}
+.proj-filter button {
+  background: transparent;
+  border: none;
+  color: var(--fg-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+  margin-left: auto;
+}
+.proj-filter button:hover {
+  color: var(--fg);
+}
+
+/* Latest-work section header — title on left, filter pills on right. */
+.latest-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.latest-hd {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+}
+.latest-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-2);
+}
+.latest-title .count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.latest-pills {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+.filter-pill:hover {
+  border-color: var(--fg-3);
+  color: var(--fg);
+}
+.filter-pill.active {
+  background: var(--proj-soft, var(--accent-soft));
+  border-color: var(--proj-line, var(--accent-line));
+  color: var(--fg);
+}
+.filter-pill-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--proj-bg, var(--fg-4));
+  color: var(--proj-fg, white);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.filter-pill .count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-3);
+}
+
+/* Flat list of work rows (replaces the tabbed grid on Home). */
+.work-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--panel);
+}
+.work-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.95rem;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--fg);
+  text-decoration: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: background 120ms ease;
+}
+.work-row:last-child {
+  border-bottom: none;
+}
+.work-row:hover {
+  background: var(--bg-2);
+}
+.work-row.create {
+  color: var(--muted);
+  font-size: 13px;
+}
+.work-row.create:hover {
+  color: var(--fg);
+}
+.work-row-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--muted);
+}
+.work-row-status.completed {
+  color: var(--good);
+}
+.work-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.work-row-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.work-row-id {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.work-row-title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.work-row-meta {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 11px;
+  color: var(--muted);
+}
+.work-row-empty {
+  padding: 1.4rem 1rem;
+  color: var(--muted);
+  text-align: center;
+  font-size: 12.5px;
+}
+
+/* New-work dialog project picker chips. */
+.proj-pick-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.proj-pick-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+.proj-pick-chip:hover:not(:disabled) {
+  border-color: var(--fg-3);
+  color: var(--fg);
+}
+.proj-pick-chip.active {
+  background: var(--proj-soft, var(--accent-soft));
+  border-color: var(--proj-line, var(--accent-line));
+  color: var(--fg);
+}
+.proj-pick-chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.proj-pick-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--proj-bg, var(--fg-4));
+  color: var(--proj-fg, white);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* Project detail screen hero — full-bleed gradient that fades to
+   transparent so the screen reads as "tinted" without going opaque. */
+.proj-hero {
+  position: relative;
+  margin: 0 -2.25rem 1.25rem;       /* break out of the .home padding for full-bleed */
+  padding: 1.75rem 2.25rem 1.25rem;
+  background: linear-gradient(180deg, var(--proj-soft, transparent) 0%, transparent 100%);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+.proj-hero-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--proj-bg, var(--accent));
+  opacity: 0.85;
+}
+.proj-hero-body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.proj-hero-l {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+.proj-glyph-xl {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--proj-line, var(--line));
+  color: var(--proj-bg, var(--fg-2));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.proj-hero-name {
+  margin: 0.25rem 0 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.proj-hero-desc {
+  margin-top: 0.25rem;
+  font-size: 13px;
+  color: var(--fg-2);
+  line-height: 1.5;
+  max-width: 560px;
+}
+.proj-hero-cta {
+  flex-shrink: 0;
+}
+.proj-hero-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem 1.5rem;
+  margin: 1.25rem 0 0;
+}
+.proj-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.proj-meta-lbl {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.proj-meta-val {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proj-meta-num {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--proj-bg, var(--fg));
+  letter-spacing: -0.01em;
+}
+.proj-defaults {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.btn-icon-sm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 11px;
+}
+.btn-icon-sm:hover {
+  border-color: var(--fg-3);
+  color: var(--fg);
+}
+
+/* Project tabs row: same look as home-tabs but with the view-toggle
+   parked on the right of the same baseline. */
+.proj-tabs {
+  display: flex;
+  align-items: center;
+}
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  align-self: center;
+}
+/* Used in project-screen .home-tabs row, where the surrounding tabs
+   carry a margin-bottom to leave room for the underline indicator;
+   keep the toggle on the same baseline. */
+.proj-tabs .view-toggle {
+  margin-left: auto;
+  margin-bottom: 0.5rem;
+}
+.view-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 3px 9px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.view-toggle-btn + .view-toggle-btn {
+  border-left: 1px solid var(--line);
+}
+.view-toggle-btn:hover {
+  color: var(--fg);
+}
+.view-toggle-btn.active {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+
+/* New Project dialog: 7-swatch hue picker. */
+.swatch-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  background: oklch(0.62 0.18 var(--swatch-h));
+  transition: transform 120ms ease;
+}
+.swatch:hover {
+  transform: scale(1.05);
+}
+.swatch.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--bg);
+}

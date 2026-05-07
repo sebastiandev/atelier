@@ -9,16 +9,17 @@ Python 3.11, `uv`-managed venv at `backend/.venv`, FastAPI on `127.0.0.1:8001`.
 ```
 backend/src/
 ├── application/        # FastAPI: routes, ws, lifespan
-│   ├── http/routes/    # works, agents, connections, providers, health
+│   ├── http/routes/    # works, agents, connections, providers, projects, health
 │   ├── http/schemas.py # Pydantic wire types
 │   └── ws/agents.py    # /api/agents/{slug}/stream
 ├── domain/             # framework-free
 │   ├── agents/         # configs, specs, ports, events, system_prompt
-│   ├── commands/       # works/, agents/, connections/ — execute() per use case
+│   ├── commands/       # works/, agents/, connections/, projects/ — execute() per use case
 │   ├── connections/    # ConnectionStore + service + ports
 │   ├── supervisor/     # AgentSupervisorService — async, single-subscriber
 │   ├── worktrees/      # WorktreeManager port
 │   ├── workstore/      # WorkStore + reconcile
+│   ├── projectstore/   # ProjectStore + reconcile (mirrors workstore shape)
 │   └── models.py       # plain dataclasses
 └── infrastructure/     # SA mapping, filesystem, agent SDK adapters, git worktrees, keyring, HTTP verifier
 ```
@@ -259,9 +260,12 @@ The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib
 ```
 ~/Atelier/
 ├── atelier.db                  ← SQLite (queryable cache)
+├── projects/
+│   └── <project_slug>/         ← canonical project metadata
+│       └── project.json
 └── works/
-    └── <work_slug>/            ← canonical metadata
-        ├── work.json
+    └── <work_slug>/            ← canonical work metadata
+        ├── work.json           ← carries optional project_slug
         ├── brief.md
         └── agents/
             └── <agent_slug>/
@@ -274,9 +278,22 @@ The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib
                     └── jira-ENG-3421.md
 ```
 
-**Filesystem is canonical.** SQLite is treated as a derived index. The `WorkStoreService` writes DB first then FS within a service-level `threading.RLock`; a crash between the two leaves an orphan DB row, and startup `reconcile` (`domain/workstore/reconcile.py`) repairs it: delete DB rows whose FS dir is gone; restore DB rows from `work.json`/`agent.json` if the FS has them but DB doesn't; FS wins on any field conflict.
+**Filesystem is canonical.** SQLite is treated as a derived index. The `WorkStoreService` and `ProjectStoreService` each write DB first then FS within a service-level `threading.RLock`; a crash between the two leaves an orphan DB row, and startup `reconcile` (`domain/workstore/reconcile.py`, `domain/projectstore/reconcile.py`) repairs it: delete DB rows whose FS dir is gone; restore DB rows from `work.json` / `project.json` / `agent.json` if the FS has them but DB doesn't; FS wins on any field conflict.
 
-`reconcile(repo, files)` runs in the FastAPI lifespan startup hook. The reconcile invariant is the AC for STORY-005 — see `tests/integration/test_workstore_e2e.py` for the round-trip guarantees.
+**Reconcile order matters.** `reconcile_projects(repo, files)` runs **before** `reconcile_works` in the FastAPI lifespan startup hook because `works.project_slug` is a slug FK to `projects.slug`; if a work's project hasn't been inserted yet, the work upsert violates the FK. The order is fixed in `main.py`'s lifespan (look for the comment "Projects reconcile FIRST"). Same rule will apply to any future cross-store reference.
+
+The reconcile invariant is the AC for STORY-005 — see `tests/integration/test_workstore_e2e.py` for the round-trip guarantees. Project-side reconcile is unit-tested with stubs in `domain/projectstore/reconcile.py`.
+
+## ProjectStore
+
+`domain/projectstore/` mirrors `workstore/`'s shape: `ProjectStore` is the public port; `ProjectRepository` and `ProjectFiles` decompose it into testable pieces. There is no transcript-log analogue because Projects own no children today — they're optional grouping metadata, not workspaces.
+
+- **Slugs:** `PRJ-{id:03d}` allocated post-flush, same two-flush placeholder pattern as Work / Connection (`SqlProjectRepository.add_project`).
+- **Work → Project link:** `Work.project_slug` is a nullable `str` on the dataclass and a TEXT FK column on the SQL side (`ON DELETE SET NULL`). Optional by design — works without a project are first-class "loose work", not a hidden bucket.
+- **Defaults:** `Project.default_jira_conn` / `default_sentry_conn` hold connection slugs; FK to `connections.slug`. Read-through at use-time, not denormalised onto Works — editing a project's defaults later is reflected in any work created under it.
+- **Routes:** `GET /api/projects`, `POST /api/projects`, `GET /api/projects/{slug}`. PATCH/DELETE are implemented at the service + DTO layer (`PatchProjectRequest`, `update_project`, `delete_project`) but not yet routed.
+
+`POST /api/works` accepts an optional `project_slug`. The route validates it against `ProjectStore` and returns 422 if unknown — same shape as connection-context validation in agent-create.
 
 ## Contexts pipeline
 

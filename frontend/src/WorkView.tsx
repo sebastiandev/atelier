@@ -4,10 +4,12 @@ import { AgentTile } from "./AgentTile";
 import {
   type AgentSummary,
   type CreateAgentPayload,
+  type ProjectSummary,
   type WorkDetail,
   PERSONA_GLYPH,
   createAgent,
   detachAgent,
+  getProject,
   getWork,
   listAgents,
   revealAgent,
@@ -26,6 +28,7 @@ const NO_CLOSED: readonly string[] = [];
 
 export function WorkView({ workSlug }: { workSlug: string }) {
   const [work, setWork] = useState<WorkDetail | null>(null);
+  const [project, setProject] = useState<ProjectSummary | null>(null);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
@@ -49,6 +52,18 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         setWork(w);
         setAgents(a);
         if (a.length > 0) setFocusedSlug(a[0].slug);
+        // Fetch the project lazily so the breadcrumb can render its name
+        // and tint without a second mount cycle. Failure is silent — the
+        // crumb just falls back to the slug.
+        if (w.project_slug) {
+          getProject(w.project_slug)
+            .then((p) => {
+              if (!cancelled) setProject(p);
+            })
+            .catch(() => {});
+        } else {
+          setProject(null);
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -162,6 +177,27 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           ← Workspace
         </a>
         <span className="crumbs">
+          {work.project_slug && (
+            <>
+              <span className="sep">/</span>
+              <a
+                className="crumb-link"
+                href={`/projects/${work.project_slug}`}
+                style={
+                  project
+                    ? { ["--proj-h" as string]: String(project.color) }
+                    : undefined
+                }
+              >
+                {project ? (
+                  <span className="filter-pill-glyph" aria-hidden="true">
+                    {project.glyph}
+                  </span>
+                ) : null}
+                {project?.name ?? work.project_slug}
+              </a>
+            </>
+          )}
           <span className="sep">/</span>
           <span className="now mono">{work.slug}</span>
         </span>
@@ -339,7 +375,7 @@ function RailSection({
   );
 }
 
-function shortenPath(p: string): string {
+export function shortenPath(p: string): string {
   if (!p) return "";
   // Substitute ``$HOME/...`` → ``~/...`` for display when we can detect
   // home from the path. Backend sends absolute paths; FE has no env var

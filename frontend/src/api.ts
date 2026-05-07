@@ -10,6 +10,9 @@ export type WorkSummary = {
   // tree. Shown in the WorkView header pill; clicking it triggers
   // ``revealWork`` to open the folder in the OS file browser.
   atelier_path: string;
+  // Optional grouping. ``null`` is "loose work". Resolve to a Project
+  // record via ``listProjects()``.
+  project_slug: string | null;
 };
 
 export type ContextEntry = {
@@ -26,6 +29,8 @@ export type CreateWorkPayload = {
   name: string;
   description: string;
   contexts?: ContextEntry[];
+  // Omit (or pass null) to create loose work.
+  project_slug?: string | null;
 };
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -307,4 +312,73 @@ export function verifyConnection(slug: string): Promise<VerifyResponse> {
   return fetch(`/api/connections/${slug}/verify`, { method: "POST" }).then((r) =>
     jsonOrThrow<VerifyResponse>(r),
   );
+}
+
+// ---------------------------------------------------------------------------
+// Projects
+// ---------------------------------------------------------------------------
+
+export type ProjectSummary = {
+  slug: string;
+  name: string;
+  description: string;
+  // 1–2 char monogram derived from name on create; user-overridable later.
+  glyph: string;
+  // OKLCH hue 0–360. CSS exposes via --proj-h on cards/chips so a single
+  // hue tints background, glyph bg, soft wash, and border line.
+  color: number;
+  pinned: boolean;
+  default_jira_conn: string | null;
+  default_sentry_conn: string | null;
+  created_at: string;
+};
+
+// Reserved for future fields specific to the detail view; today equals Summary.
+export type ProjectDetail = ProjectSummary;
+
+export type CreateProjectPayload = {
+  name: string;
+  description?: string;
+  glyph: string;
+  color: number;
+  pinned?: boolean;
+  default_jira_conn?: string | null;
+  default_sentry_conn?: string | null;
+};
+
+export function listProjects(): Promise<ProjectSummary[]> {
+  return fetch("/api/projects").then((r) => jsonOrThrow<ProjectSummary[]>(r));
+}
+
+export function getProject(slug: string): Promise<ProjectDetail> {
+  return fetch(`/api/projects/${slug}`).then((r) => jsonOrThrow<ProjectDetail>(r));
+}
+
+export function createProject(payload: CreateProjectPayload): Promise<ProjectDetail> {
+  return fetch("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ...payload,
+      description: payload.description ?? "",
+    }),
+  }).then((r) => jsonOrThrow<ProjectDetail>(r));
+}
+
+/**
+ * Derive a 1–2 character monogram from a project name. Used by the New
+ * Project dialog to seed the glyph field — user can override before save.
+ * "Acme Web" → "AW", "Platform" → "PL", "design-system" → "DS".
+ */
+export function deriveGlyph(name: string): string {
+  const words = name
+    .trim()
+    .split(/[\s\-_/]+/)
+    .filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) {
+    const w = words[0];
+    return (w.length >= 2 ? w.slice(0, 2) : w).toUpperCase();
+  }
+  return (words[0][0] + words[1][0]).toUpperCase();
 }

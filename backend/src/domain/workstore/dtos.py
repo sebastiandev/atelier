@@ -25,6 +25,9 @@ class CreateWorkRequest:
     name: str
     description: str
     contexts: list[Context] = field(default_factory=list)
+    # Optional grouping. ``None`` is "loose work" — first-class, not a
+    # hidden bucket. Validated by the route layer (project must exist).
+    project_slug: str | None = None
 
 
 @dataclass(frozen=True)

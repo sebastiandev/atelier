@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { AgentView } from "./AgentView";
 import { Connections } from "./Connections";
 import { Home } from "./Home";
+import { ProjectScreen } from "./ProjectScreen";
 import { useThemeStore } from "./state/theme";
 import { useTweaksStore } from "./state/tweaks";
 import { TweaksPanel } from "./TweaksPanel";
@@ -29,6 +30,10 @@ function RouteView({ path }: { path: string }) {
   if (path.startsWith("/works/")) {
     const slug = path.slice("/works/".length).split("/")[0];
     if (slug) return <WorkView workSlug={slug} />;
+  }
+  if (path.startsWith("/projects/")) {
+    const slug = path.slice("/projects/".length).split("/")[0];
+    if (slug) return <ProjectScreen projectSlug={slug} />;
   }
   if (path === "/connections") {
     return <Connections />;

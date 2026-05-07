@@ -84,6 +84,12 @@ class Work:
     operates in lives on the Agent entity — agents in the same Work can
     target different repos (e.g. a frontend-repo agent + a backend-repo
     agent collaborating on one cross-cutting task).
+
+    ``project_slug`` is the optional grouping link. Slug rather than int
+    PK so work.json (FS-canonical) stays self-contained and human-readable
+    — same precedent as ``Context.conn_id``. ON DELETE SET NULL at the SQL
+    level: deleting a project demotes its works to "loose" rather than
+    cascading.
     """
 
     id: int | None = None
@@ -91,6 +97,36 @@ class Work:
     name: str
     description: str
     status: WorkStatus
+    created_at: datetime
+    project_slug: str | None = None
+
+
+@dataclass(kw_only=True)
+class Project:
+    """Optional grouping above Work. Pure metadata — owns no folders.
+
+    Works that share a project inherit its color (a single OKLCH hue) for
+    visual grouping in the UI and pull default Jira/Sentry connections at
+    use-time (read-through, not denormalized onto the Work). Works without
+    a project ("loose work") remain first-class.
+
+    ``glyph`` is a 1–2-character monogram derived from ``name`` on create
+    by the FE; persisted so the user can override later.
+    ``color`` is an OKLCH hue 0–360, exposed to CSS as ``--proj-h``.
+    Default-connection fields hold connection slugs (e.g. ``"con-3"``);
+    the FK is to ``connections.slug`` so deleting a connection sets the
+    field to NULL rather than dangling.
+    """
+
+    id: int | None = None
+    slug: str | None = None
+    name: str
+    description: str
+    glyph: str
+    color: int
+    pinned: bool = False
+    default_jira_conn: str | None = None
+    default_sentry_conn: str | None = None
     created_at: datetime
 
 
@@ -198,6 +234,7 @@ __all__ = [
     "Handoff",
     "HandoffTargetDialog",
     "Persona",
+    "Project",
     "Provider",
     "Work",
     "WorkStatus",

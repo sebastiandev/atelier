@@ -66,6 +66,7 @@ class WorkStoreService:
                 description=req.description,
                 status="active",
                 created_at=self._clock(),
+                project_slug=req.project_slug,
             )
             work = self._repo.add_work(work)
             slug = _require_slug(work)

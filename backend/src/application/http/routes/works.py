@@ -17,8 +17,10 @@ from src.application.http.schemas import (
     WorkDetail,
     WorkSummary,
 )
+from src.domain.commands.projects import get as projects_get
 from src.domain.commands.works import create, get, list_all, soft_delete, update
 from src.domain.models import Context, Work
+from src.domain.projectstore.ports import ProjectStore
 from src.domain.workstore.dtos import (
     CreateWorkRequest,
     UpdateWorkRequest,
@@ -37,11 +39,16 @@ def get_workstore(request: Request) -> WorkStore:
     return request.app.state.workstore  # type: ignore[no-any-return]
 
 
+def get_projectstore(request: Request) -> ProjectStore:
+    return request.app.state.projectstore  # type: ignore[no-any-return]
+
+
 def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
 
 
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
+ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 
 
@@ -56,8 +63,17 @@ def list_works_endpoint(
 
 @router.post("/works", response_model=WorkDetail, status_code=status.HTTP_201_CREATED)
 def create_work_endpoint(
-    payload: NewWorkRequest, workstore: WorkStoreDep, settings: SettingsDep
+    payload: NewWorkRequest,
+    workstore: WorkStoreDep,
+    projectstore: ProjectStoreDep,
+    settings: SettingsDep,
 ) -> WorkDetail:
+    if payload.project_slug is not None:
+        if projects_get.execute(projectstore, payload.project_slug) is None:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"project not found: {payload.project_slug}",
+            )
     record = create.execute(workstore, _to_create_request(payload))
     return _to_detail(record, WorkspacePaths(workspace_root=settings.workspace_root))
 
@@ -126,6 +142,7 @@ def _to_create_request(payload: NewWorkRequest) -> CreateWorkRequest:
         name=payload.name,
         description=payload.description,
         contexts=[_to_domain_context(c) for c in payload.contexts],
+        project_slug=payload.project_slug,
     )
 
 
@@ -160,6 +177,7 @@ def _to_summary(work: Work, paths: WorkspacePaths) -> WorkSummary:
         status=work.status,
         created_at=work.created_at,
         atelier_path=str(paths.work_dir(slug)),
+        project_slug=work.project_slug,
     )
 
 

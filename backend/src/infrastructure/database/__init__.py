@@ -20,12 +20,14 @@ from src.infrastructure.database.migrations import (
     initialize_database,
 )
 from src.infrastructure.database.session import create_session_factory, session_scope
+from src.infrastructure.database.project_repository import SqlProjectRepository
 from src.infrastructure.database.tables import (
     agents_table,
     artifacts_table,
     connections_table,
     handoffs_table,
     metadata,
+    projects_table,
     schema_version_table,
     transcript_cursor_table,
     works_table,
@@ -35,6 +37,7 @@ from src.infrastructure.database.work_repository import SqlWorkRepository
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "SchemaMismatchError",
+    "SqlProjectRepository",
     "SqlWorkRepository",
     "agents_table",
     "artifacts_table",
@@ -47,6 +50,7 @@ __all__ = [
     "initialize_database",
     "mapper_registry",
     "metadata",
+    "projects_table",
     "schema_version_table",
     "session_scope",
     "temp_engine_for_path",

@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type Connection,
   type ConnectionType,
   type ContextEntry,
   type CreateWorkPayload,
+  type ProjectSummary,
   listConnections,
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
@@ -13,17 +14,38 @@ import { ContextRow } from "./ContextRow";
 type Props = {
   onClose: () => void;
   onCreate: (payload: CreateWorkPayload) => Promise<void>;
+  projects?: ProjectSummary[];
+  // When opened from a project-scoped context, seed the picker. ``null``
+  // is "Loose"; ``undefined`` leaves the picker free.
+  presetProjectSlug?: string | null;
+  // True when the project context is mandatory (e.g. opened from a
+  // project detail screen). Disables the picker so the user can't
+  // accidentally retarget the work elsewhere.
+  lockProjectSlug?: boolean;
 };
 
-export function NewWorkDialog({ onClose, onCreate }: Props) {
+export function NewWorkDialog({
+  onClose,
+  onCreate,
+  projects = [],
+  presetProjectSlug,
+  lockProjectSlug = false,
+}: Props) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [contexts, setContexts] = useState<ContextEntry[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [projectSlug, setProjectSlug] = useState<string | null>(
+    presetProjectSlug ?? null,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const { descriptors } = useConnectionDescriptors();
+  const selectedProject = useMemo(
+    () => projects.find((p) => p.slug === projectSlug) ?? null,
+    [projects, projectSlug],
+  );
   // Filter to types whose backend fetcher actually works — picking a
   // non-fetchable type would 422 at agent creation time. ``descriptors``
   // is null while loading; render no buttons until it arrives.
@@ -71,6 +93,7 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
       name: name.trim(),
       description: desc.trim(),
       contexts: contexts.filter((c) => c.value.trim() || c.conn_id),
+      project_slug: projectSlug,
     };
     setSubmitting(true);
     setError(null);
@@ -84,10 +107,23 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
 
   return (
     <div className="scrim" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        style={
+          selectedProject
+            ? { ["--proj-h" as string]: String(selectedProject.color) }
+            : undefined
+        }
+      >
         <div className="modal-hd">
           <div>
-            <h3>New work</h3>
+            <h3>
+              New work
+              {selectedProject ? <span className="hint"> in {selectedProject.name}</span> : null}
+            </h3>
             <div className="sub">
               Define the goal and any constraints. You'll spawn agents in the next view.
             </div>
@@ -98,6 +134,49 @@ export function NewWorkDialog({ onClose, onCreate }: Props) {
         </div>
 
         <div className="modal-bd">
+          {projects.length > 0 && (
+            <div className="field">
+              <span className="label">
+                Project
+                {lockProjectSlug && (
+                  <span className="hint"> · locked to current scope</span>
+                )}
+              </span>
+              <div className="proj-pick-row">
+                <button
+                  type="button"
+                  className={"proj-pick-chip" + (projectSlug == null ? " active" : "")}
+                  onClick={() => !lockProjectSlug && setProjectSlug(null)}
+                  disabled={lockProjectSlug && projectSlug != null}
+                >
+                  Loose
+                </button>
+                {projects.map((p) => (
+                  <button
+                    key={p.slug}
+                    type="button"
+                    className={"proj-pick-chip" + (projectSlug === p.slug ? " active" : "")}
+                    style={{ ["--proj-h" as string]: String(p.color) }}
+                    onClick={() => !lockProjectSlug && setProjectSlug(p.slug)}
+                    disabled={lockProjectSlug && projectSlug !== p.slug}
+                  >
+                    <span className="proj-pick-glyph mono">{p.glyph}</span>
+                    {p.name}
+                  </button>
+                ))}
+              </div>
+              {selectedProject &&
+                (selectedProject.default_jira_conn || selectedProject.default_sentry_conn) && (
+                  <span className="hint">
+                    {selectedProject.default_jira_conn && "Jira prefilled"}
+                    {selectedProject.default_jira_conn && selectedProject.default_sentry_conn && " · "}
+                    {selectedProject.default_sentry_conn && "Sentry prefilled"}{" "}
+                    from project defaults
+                  </span>
+                )}
+            </div>
+          )}
+
           <label className="field">
             <span className="label">Name</span>
             <input

@@ -46,6 +46,16 @@ class WorkspacePaths:
     def work_json(self, work_slug: str) -> Path:
         return self.work_dir(work_slug) / "work.json"
 
+    def projects_dir(self) -> Path:
+        return self.workspace_root / "projects"
+
+    def project_dir(self, project_slug: str) -> Path:
+        _validate_slug(project_slug)
+        return self.projects_dir() / project_slug
+
+    def project_json(self, project_slug: str) -> Path:
+        return self.project_dir(project_slug) / "project.json"
+
     def brief(self, work_slug: str) -> Path:
         return self.work_dir(work_slug) / "brief.md"
 

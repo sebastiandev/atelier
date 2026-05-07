@@ -30,6 +30,9 @@ class NewWorkRequest(BaseModel):
     name: str = Field(min_length=1)
     description: str
     contexts: list[ContextSchema] = Field(default_factory=list)
+    # Optional. Omit for "loose work". Validated as an existing project at
+    # the route layer — the FK enforces it again at insert time.
+    project_slug: str | None = None
 
 
 class PatchWorkRequest(BaseModel):
@@ -51,6 +54,10 @@ class WorkSummary(BaseModel):
     # peeking at the canonical filesystem state. Not the agent workdir
     # (that's per-agent and lives on the Agent entity).
     atelier_path: str
+    # Optional grouping link. ``null`` is "loose work" — first-class, not
+    # a hidden bucket. Frontend resolves slug → name/glyph/color via the
+    # /api/projects payload.
+    project_slug: str | None = None
 
 
 class WorkDetail(WorkSummary):
@@ -162,6 +169,54 @@ class VerifyResponse(BaseModel):
     error: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
+
+
+class NewProjectRequest(BaseModel):
+    name: str = Field(min_length=1)
+    description: str = ""
+    # 1–2 char monogram. FE derives it from name; required on the wire so
+    # the backend doesn't have to know the FE's derivation rules.
+    glyph: str = Field(min_length=1, max_length=2)
+    # OKLCH hue 0–360 (inclusive lower, exclusive upper); enforced wider
+    # than the prototype's 7-swatch palette so future palette tweaks don't
+    # need a schema bump.
+    color: int = Field(ge=0, le=360)
+    pinned: bool = False
+    default_jira_conn: str | None = None
+    default_sentry_conn: str | None = None
+
+
+class PatchProjectRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+    glyph: str | None = Field(default=None, min_length=1, max_length=2)
+    color: int | None = Field(default=None, ge=0, le=360)
+    pinned: bool | None = None
+    default_jira_conn: str | None = None
+    default_sentry_conn: str | None = None
+
+
+class ProjectSummary(BaseModel):
+    slug: str
+    name: str
+    description: str
+    glyph: str
+    color: int
+    pinned: bool
+    default_jira_conn: str | None = None
+    default_sentry_conn: str | None = None
+    created_at: datetime
+
+
+class ProjectDetail(ProjectSummary):
+    """Reserved for future fields specific to the detail view (counts of
+    active/completed work, recent items, etc.). Today it equals Summary.
+    """
+
+
 __all__ = [
     "AgentSummary",
     "ConnectionRead",
@@ -169,9 +224,13 @@ __all__ = [
     "DetachResponse",
     "NewAgentRequest",
     "NewConnectionRequest",
+    "NewProjectRequest",
     "NewWorkRequest",
     "PatchConnectionRequest",
+    "PatchProjectRequest",
     "PatchWorkRequest",
+    "ProjectDetail",
+    "ProjectSummary",
     "VerifyResponse",
     "WorkDetail",
     "WorkSummary",

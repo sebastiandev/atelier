@@ -24,7 +24,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 
 
 class SchemaMismatchError(RuntimeError):
@@ -112,6 +112,26 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
                 text("ALTER TABLE agents ADD COLUMN parent_session_id TEXT")
             )
             existing = 6
+        if existing == 6:
+            # v6 → v7: introduce Projects (optional grouping above Work)
+            # and the Work→Project soft FK. Both directions of the new
+            # graph are by slug — works.project_slug → projects.slug,
+            # projects.default_{jira,sentry}_conn → connections.slug —
+            # so on-disk JSON stays self-contained and DB rebuilds via
+            # reconcile don't have to remap int ids.
+            #
+            # The ``projects`` table itself is created by the
+            # ``metadata.create_all`` call above (it's new, so create_all
+            # picks it up); only the ``works.project_slug`` column needs
+            # a hand-rolled ALTER because ``works`` already exists and
+            # create_all skips existing tables.
+            conn.execute(
+                text(
+                    "ALTER TABLE works ADD COLUMN project_slug TEXT "
+                    "REFERENCES projects(slug) ON DELETE SET NULL"
+                )
+            )
+            existing = 7
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

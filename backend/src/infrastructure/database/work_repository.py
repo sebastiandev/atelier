@@ -65,6 +65,7 @@ class SqlWorkRepository:
                 existing.description = work.description
                 existing.status = work.status
                 existing.created_at = work.created_at
+                existing.project_slug = work.project_slug
         return work
 
     def delete_work(self, work_slug: str) -> None:

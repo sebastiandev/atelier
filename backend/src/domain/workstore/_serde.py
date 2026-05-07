@@ -20,6 +20,7 @@ def serialize_work_record(work: Work, contexts: list[Context]) -> dict[str, Any]
         "description": work.description,
         "status": work.status,
         "created_at": work.created_at.isoformat(),
+        "project_slug": work.project_slug,
         "contexts": [_serialize_context(c) for c in contexts],
     }
 
@@ -32,6 +33,7 @@ def deserialize_work_record(data: dict[str, Any]) -> tuple[Work, list[Context]]:
         description=data["description"],
         status=data["status"],
         created_at=datetime.fromisoformat(data["created_at"]),
+        project_slug=data.get("project_slug"),
     )
     return work, deserialize_contexts(data)
 

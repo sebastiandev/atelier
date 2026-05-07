@@ -36,15 +36,15 @@ export const useThemeStore = create<ThemeState>()(
     }),
     {
       name: "atelier:theme",
-      version: 2,
-      // v1 persisted Theme = "dark" | "light" only; any other value lands
-      // here on hydration. Coerce unknown values back to ansi (the new
-      // default) instead of letting `data-theme` end up bogus.
-      migrate: (state) => {
-        const t = (state as { theme?: unknown } | null)?.theme;
-        const valid = t === "light" || t === "dark" || t === "ansi";
-        return { theme: valid ? (t as Theme) : "ansi" };
-      },
+      // v3 force-resets every persisted preference to ansi. v2 introduced
+      // ansi as the default for fresh installs but left existing users on
+      // their persisted dark/light. The 2026-05-07 design pass made ansi
+      // the canonical look — bumping the version pushes the reset to
+      // every browser without dropping the rest of localStorage.
+      // Users who actually preferred dark or light can re-toggle once
+      // (preference re-persists under the new version key).
+      version: 3,
+      migrate: () => ({ theme: "ansi" as Theme }),
     },
   ),
 );
