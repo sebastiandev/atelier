@@ -2,11 +2,14 @@ import type { ReactNode } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+import { DragHandleContext } from "./dragHandleContext";
+
 /**
- * Canvas cell wrapped with @dnd-kit/sortable so the whole tile can be
- * dragged to a new position. The drag handle lives in the top-left
- * corner — only listening on the grip lets the user click into the
- * composer and transcript without triggering a drag.
+ * Canvas cell wrapped with @dnd-kit/sortable. The cell itself has no
+ * built-in drag handle — instead it provides drag attributes + listeners
+ * via context so AgentTile's <header> becomes the drag activator. The
+ * 6px PointerSensor activation distance (set in WorkView) keeps clicks
+ * on header buttons from triggering a drag.
  *
  * Position transitions are driven by the CSS transform from useSortable;
  * the tile content (children) is unaware that any reordering is going on.
@@ -57,37 +60,9 @@ export function SortableCanvasCell({
       onMouseDown={onFocus}
       style={style}
     >
-      <button
-        type="button"
-        className="canvas-cell-grip"
-        aria-label={`Reorder ${agentSlug}`}
-        title="Drag to reorder"
-        {...attributes}
-        {...listeners}
-      >
-        <GripIcon />
-      </button>
-      {children}
+      <DragHandleContext.Provider value={{ attributes, listeners }}>
+        {children}
+      </DragHandleContext.Provider>
     </div>
-  );
-}
-
-function GripIcon() {
-  // 12-viewBox SVG — same convention as the rest of the app's icons.
-  return (
-    <svg
-      viewBox="0 0 12 12"
-      width="12"
-      height="12"
-      fill="currentColor"
-      aria-hidden="true"
-    >
-      <circle cx="4" cy="3" r="1" />
-      <circle cx="4" cy="6" r="1" />
-      <circle cx="4" cy="9" r="1" />
-      <circle cx="8" cy="3" r="1" />
-      <circle cx="8" cy="6" r="1" />
-      <circle cx="8" cy="9" r="1" />
-    </svg>
   );
 }

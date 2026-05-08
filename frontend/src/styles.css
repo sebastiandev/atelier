@@ -2171,40 +2171,28 @@ h5.md-h {
   width: 100%;
 }
 
-/* Drag grip — top-left of the cell. Hidden until the cell is hovered so
-   the tile chrome stays clean; appears as a small dot-grid the user can
-   grab to reorder. Pointer-only (avoid double-binding to keyboard nav). */
-.canvas-cell-grip {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--fg-3);
+/* Drag handle — the AgentTile <header> when mounted in a sortable
+   canvas cell. The whole header is grabbable; the 6px PointerSensor
+   activation distance keeps clicks on header buttons (handoff, max,
+   detach, close, worktree pill) firing as clicks rather than drags.
+   Pointer-only — keyboard reorder isn't wired today; a follow-up can
+   add a KeyboardSensor + setActivatorNodeRef when needed. */
+.tile-drag-header {
   cursor: grab;
-  opacity: 0;
-  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
-  z-index: 2;
   touch-action: none;
 }
-.canvas-cell:hover > .canvas-cell-grip,
-.canvas-cell-grip:focus-visible {
-  opacity: 1;
-}
-.canvas-cell-grip:hover {
-  color: var(--fg-1);
-  background: var(--bg-elev);
-  border-color: var(--line);
-}
-.canvas-cell-grip:active {
+.tile-drag-header:active {
   cursor: grabbing;
+}
+/* Buttons and other interactive children inside the draggable header
+   need their own cursor — otherwise they inherit the grab cursor and
+   look unclickable. */
+.tile-drag-header button,
+.tile-drag-header a,
+.tile-drag-header input,
+.tile-drag-header select,
+.tile-drag-header textarea {
+  cursor: pointer;
 }
 
 .canvas-empty {

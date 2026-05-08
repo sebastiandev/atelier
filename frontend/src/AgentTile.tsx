@@ -17,6 +17,7 @@ import {
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
+import { useDragHandle } from "./dragHandleContext";
 import { MarkdownText } from "./MarkdownText";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
@@ -109,6 +110,9 @@ export function AgentTile({
     sendPermission,
     pendingPermissions,
   } = useAgentStream(agentSlug);
+  // Provided by SortableCanvasCell when the tile is mounted on the
+  // WorkView canvas; absent on the standalone /agents/{slug} page.
+  const dragHandle = useDragHandle();
 
   // Bump the work's rail revision when this agent's stream surfaces an
   // ``artifact_recorded`` event so the Artifacts section refetches. We
@@ -300,7 +304,11 @@ export function AgentTile({
 
   return (
     <div className={tileClass} data-persona={persona}>
-      <header>
+      <header
+        className={dragHandle ? "tile-drag-header" : undefined}
+        {...(dragHandle?.attributes ?? {})}
+        {...(dragHandle?.listeners ?? {})}
+      >
         <div className="tile-header-left">
           {persona && <span className="persona-pip">{PERSONA_GLYPH[persona]}</span>}
           <span className="status-dot" data-status={dotStatus} />
