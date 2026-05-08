@@ -21,6 +21,7 @@ agent cannot forge attribution to a different agent.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -28,6 +29,15 @@ from typing import Any, cast
 from src.domain.models import Artifact, ArtifactType
 from src.domain.workstore.dtos import RecordArtifactRequest
 from src.domain.workstore.ports import WorkStore
+
+# How long to wait for a doc-type artifact's file to appear on disk
+# before failing validation. Claude can emit Write and record_doc as
+# parallel tool uses in the same assistant turn — the Write executes
+# milliseconds after we see the record_doc tool use, so the tracker
+# would otherwise reject paths that are about to exist. 500ms covers
+# the long tail; the success case returns immediately.
+_DOC_PATH_WAIT_SECONDS = 0.5
+_DOC_PATH_POLL_INTERVAL = 0.05
 
 # Per-type allowed status values. Free-text would bypass the visual-
 # vocabulary contract: the FE renders these as typed status pills.
@@ -88,8 +98,17 @@ def record_artifact(
         raise InvalidMarker(
             f"doc path escapes the agent's worktree: {rel_path}"
         ) from exc
-    if not candidate.is_file():
-        raise InvalidMarker(f"doc path does not exist: {rel_path}")
+    if not _wait_for_file(candidate, _DOC_PATH_WAIT_SECONDS):
+        # Phrase the error so a re-reading agent self-corrects on its
+        # next turn: spell out the contract (file must exist before
+        # the marker), so the obvious recovery is "Write the file,
+        # then call record_doc again".
+        raise InvalidMarker(
+            f"doc path does not exist at {rel_path!r}. "
+            "record_doc requires the file to already be on disk in "
+            "your working directory — call Write/Edit to create it "
+            "first, then re-emit this marker."
+        )
     return workstore.record_artifact(
         RecordArtifactRequest(
             work_slug=work_slug,
@@ -100,6 +119,27 @@ def record_artifact(
             doc_path=str(candidate),
         )
     )
+
+
+def _wait_for_file(path: Path, timeout_seconds: float) -> bool:
+    """Poll for ``path`` to exist as a file, up to ``timeout_seconds``.
+
+    Returns True the moment the file appears (typically the first poll),
+    False if the deadline elapses. Used by the doc-type tracker because
+    Claude can emit Write and record_doc as parallel tool uses in the
+    same turn — the file write completes a beat after our validation
+    runs, and rejecting on the first miss would cause spurious errors.
+
+    Sync + sleeps; the supervisor calls the tracker via
+    ``asyncio.to_thread`` so the event loop stays responsive.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if path.is_file():
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_DOC_PATH_POLL_INTERVAL)
 
 
 def _require_type(payload: dict[str, Any]) -> ArtifactType:

@@ -99,7 +99,9 @@ _JIRA_DESCRIPTION = (
 
 _DOC_DESCRIPTION = (
     "Record a document artifact (e.g. design doc, ADR) you authored in "
-    "this work's directory. The file must already exist on disk."
+    "this work's directory. The file MUST already exist on disk — call "
+    "Write/Edit to create it, then call this tool with the path. "
+    "Atelier validates the file is present before recording."
 )
 
 

@@ -182,6 +182,33 @@ def test_doc_rejects_nonexistent_path(tmp_path: Path) -> None:
         )
 
 
+def test_doc_tolerates_file_appearing_mid_wait(tmp_path: Path) -> None:
+    """Race: Claude can emit Write and record_doc as parallel tool uses
+    in the same turn — the file write completes a beat after we see the
+    record_doc tool use. The tracker polls briefly so the file lands
+    before we fail validation."""
+    import threading
+
+    target = tmp_path / "hello.md"
+
+    def write_after_delay() -> None:
+        # 100ms is well under the 500ms tracker wait but enough that
+        # the first poll will miss the file.
+        threading.Event().wait(0.1)
+        target.write_text("hello")
+
+    store = _RecorderStore()
+    threading.Thread(target=write_after_delay, daemon=True).start()
+    record_artifact(
+        "WRK-001",
+        "agt-7",
+        {"type": "doc", "path": "hello.md", "title": "Hello"},
+        workstore=store,  # type: ignore[arg-type]
+        resolve_workdir=lambda _w, _a: tmp_path,
+    )
+    assert store.calls[0].doc_path == str(target.resolve())
+
+
 def test_doc_rejects_path_escape_via_dotdot(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside.md"
     outside.write_text("nope")

@@ -186,7 +186,7 @@ async def execute(
 
     common = CommonAgentConfig(
         workdir=workdir,
-        system_prompt=render_system_prompt(req.persona, req.role),
+        system_prompt=render_system_prompt(req.persona, req.role, workdir=workdir),
     )
     config = SPECS[req.provider].build(common, req.model, req.options)
     adapter = build_adapter(config, settings)

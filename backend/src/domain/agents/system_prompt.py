@@ -8,6 +8,8 @@ Walking-skeleton template — intentionally minimal. Persona-specific
 prompt engineering is its own future story.
 """
 
+from pathlib import Path
+
 from src.domain.models import Persona
 
 # Marker convention taught to every launched agent. Two paths land in the
@@ -47,11 +49,29 @@ Atelier ignores any agent identifier in the payload — attribution is
 stamped by the supervisor."""
 
 
-def render_system_prompt(persona: Persona, role: str) -> str:
+def render_system_prompt(
+    persona: Persona, role: str, *, workdir: Path | None = None
+) -> str:
+    # Telling the agent its working directory explicitly is load-bearing:
+    # without it, models routinely write files to $HOME (or wherever they
+    # default) instead of the workdir, then pass a relative path to
+    # record_doc that the tracker resolves against a different location.
+    # The CLI may inject some env info too, but this line is the
+    # authoritative source for "where am I working".
+    workdir_block = (
+        f"Working directory: {workdir}\n"
+        f"Create and edit files inside this directory; ALL paths you "
+        f"pass to tools (Write, Edit, atelier__record_doc, etc.) should "
+        f"be relative to this directory unless the task explicitly tells "
+        f"you to use an absolute path.\n\n"
+        if workdir is not None
+        else ""
+    )
     return (
         f"You are an Atelier {persona} agent.\n"
         f"Role: {role}.\n"
         f"Stay in character and focus on the work assigned to you.\n\n"
+        f"{workdir_block}"
         f"{_ARTIFACT_MARKER_GUIDE}"
     )
 
