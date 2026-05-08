@@ -66,6 +66,38 @@ export function NewWorkDialog({
       .catch(() => setConnections([]));
   }, []);
 
+  // Seed context rows from the selected project's default Jira / Sentry
+  // connection slugs. Track the last-seeded rows in a ref so a project
+  // change drops the previous prefill before applying the new one — this
+  // keeps the user's manually-added rows intact while letting them flip
+  // projects without orphan defaults piling up. Trade-off: a manually-
+  // edited prefill row is treated as still-seeded (we filter by type +
+  // conn_id) and gets removed on switch; that's fine — switching projects
+  // means the user wanted those defaults gone anyway.
+  const lastSeededRef = useRef<ContextEntry[]>([]);
+  const projectJira = selectedProject?.default_jira_conn ?? null;
+  const projectSentry = selectedProject?.default_sentry_conn ?? null;
+  useEffect(() => {
+    const seeded: ContextEntry[] = [];
+    if (projectJira) {
+      seeded.push({ type: "jira", value: "", conn_id: projectJira });
+    }
+    if (projectSentry) {
+      seeded.push({ type: "sentry", value: "", conn_id: projectSentry });
+    }
+    setContexts((prev) => {
+      const previous = lastSeededRef.current;
+      const without = prev.filter(
+        (c) =>
+          !previous.some(
+            (p) => p.type === c.type && p.conn_id === c.conn_id,
+          ),
+      );
+      return [...without, ...seeded];
+    });
+    lastSeededRef.current = seeded;
+  }, [projectJira, projectSentry]);
+
   function addContext(type: ConnectionType) {
     setContexts((prev) => [...prev, { type, value: "", conn_id: null }]);
   }

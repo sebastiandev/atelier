@@ -385,6 +385,21 @@ export type CreateProjectPayload = {
   default_sentry_conn?: string | null;
 };
 
+/**
+ * Partial update — every field is optional. Backend leaves untouched
+ * fields alone (None = "don't change" semantics). To clear a default
+ * connection today, pick a different one — clear-to-null is a follow-up.
+ */
+export type PatchProjectPayload = {
+  name?: string;
+  description?: string;
+  glyph?: string;
+  color?: number;
+  pinned?: boolean;
+  default_jira_conn?: string | null;
+  default_sentry_conn?: string | null;
+};
+
 export function listProjects(): Promise<ProjectSummary[]> {
   return fetch("/api/projects").then((r) => jsonOrThrow<ProjectSummary[]>(r));
 }
@@ -402,6 +417,31 @@ export function createProject(payload: CreateProjectPayload): Promise<ProjectDet
       description: payload.description ?? "",
     }),
   }).then((r) => jsonOrThrow<ProjectDetail>(r));
+}
+
+export function patchProject(
+  slug: string,
+  payload: PatchProjectPayload,
+): Promise<ProjectDetail> {
+  return fetch(`/api/projects/${slug}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<ProjectDetail>(r));
+}
+
+/**
+ * Delete a project. Attached works are demoted to "loose" (project_slug
+ * → null) by the backend's ON DELETE SET NULL FK rule. The project's
+ * filesystem dir is removed best-effort.
+ */
+export function deleteProject(slug: string): Promise<void> {
+  return fetch(`/api/projects/${slug}`, { method: "DELETE" }).then(async (r) => {
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`${r.status} ${r.statusText}: ${body}`);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

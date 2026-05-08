@@ -11,12 +11,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import (
     NewProjectRequest,
+    PatchProjectRequest,
     ProjectDetail,
     ProjectSummary,
 )
-from src.domain.commands.projects import create, get, list_all
+from src.domain.commands.projects import create, delete, get, list_all, update
 from src.domain.models import Project
-from src.domain.projectstore.dtos import CreateProjectRequest, ProjectRecord
+from src.domain.projectstore.dtos import (
+    CreateProjectRequest,
+    ProjectRecord,
+    UpdateProjectRequest,
+)
 from src.domain.projectstore.ports import ProjectStore
 
 router = APIRouter()
@@ -58,8 +63,50 @@ def get_project_endpoint(
     return _to_detail(record)
 
 
+@router.patch("/projects/{project_slug}", response_model=ProjectDetail)
+def patch_project_endpoint(
+    project_slug: str,
+    payload: PatchProjectRequest,
+    projectstore: ProjectStoreDep,
+) -> ProjectDetail:
+    try:
+        record = update.execute(
+            projectstore, _to_update_request(project_slug, payload)
+        )
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return _to_detail(record)
+
+
+@router.delete(
+    "/projects/{project_slug}", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_project_endpoint(
+    project_slug: str, projectstore: ProjectStoreDep
+) -> None:
+    try:
+        delete.execute(projectstore, project_slug)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+
 def _to_create_request(payload: NewProjectRequest) -> CreateProjectRequest:
     return CreateProjectRequest(
+        name=payload.name,
+        description=payload.description,
+        glyph=payload.glyph,
+        color=payload.color,
+        pinned=payload.pinned,
+        default_jira_conn=payload.default_jira_conn,
+        default_sentry_conn=payload.default_sentry_conn,
+    )
+
+
+def _to_update_request(
+    project_slug: str, payload: PatchProjectRequest
+) -> UpdateProjectRequest:
+    return UpdateProjectRequest(
+        project_slug=project_slug,
         name=payload.name,
         description=payload.description,
         glyph=payload.glyph,

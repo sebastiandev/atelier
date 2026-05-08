@@ -8,6 +8,7 @@ import {
   getProject,
   listWorks,
 } from "./api";
+import { EditProjectDialog } from "./EditProjectDialog";
 import { NewWorkDialog } from "./NewWorkDialog";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
@@ -45,6 +46,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
   const [tab, setTab] = useState<Tab>("active");
   const [view, setView] = useState<View>(() => readPersistedView(projectSlug));
   const [workDialogOpen, setWorkDialogOpen] = useState(false);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
 
   async function refresh() {
     try {
@@ -157,12 +159,21 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
               )}
             </div>
           </div>
-          <button
-            className="btn primary proj-hero-cta"
-            onClick={() => setWorkDialogOpen(true)}
-          >
-            + New work in {project.name}
-          </button>
+          <div className="proj-hero-actions">
+            <button
+              className="btn"
+              onClick={() => setEditDialogOpen(true)}
+              title="Edit name, glyph, color, default connections"
+            >
+              Edit
+            </button>
+            <button
+              className="btn primary proj-hero-cta"
+              onClick={() => setWorkDialogOpen(true)}
+            >
+              + New work in {project.name}
+            </button>
+          </div>
         </div>
         <dl className="proj-hero-meta">
           <div className="proj-meta-item">
@@ -319,6 +330,21 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           projects={[project]}
           presetProjectSlug={project.slug}
           lockProjectSlug
+        />
+      )}
+
+      {editDialogOpen && (
+        <EditProjectDialog
+          project={project}
+          onClose={() => setEditDialogOpen(false)}
+          onSaved={(updated) => {
+            setProject(updated);
+            setEditDialogOpen(false);
+          }}
+          onDeleted={() => {
+            // No project on screen any more — drop back to the workspace.
+            window.location.href = "/";
+          }}
         />
       )}
     </div>

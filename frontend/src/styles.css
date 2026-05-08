@@ -3296,6 +3296,11 @@ h5.md-h {
 .proj-hero-cta {
   flex-shrink: 0;
 }
+.proj-hero-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
 .proj-hero-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
