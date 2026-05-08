@@ -1,5 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  rectSortingStrategy,
+} from "@dnd-kit/sortable";
+
 import { AgentTile } from "./AgentTile";
 import {
   type AgentSummary,
@@ -24,6 +36,7 @@ import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { HandoffDialog } from "./HandoffDialog";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
+import { SortableCanvasCell } from "./SortableCanvasCell";
 import {
   applyAgentOrder,
   useAgentOrderStore,
@@ -79,6 +92,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     (s) => s.byWork[workSlug],
   );
   const layout = useTweaksStore((s) => s.layout);
+
+  // 6px activation distance keeps clicks on the grip from firing a drag —
+  // matches @dnd-kit's recommended threshold and feels right with the
+  // 22×22 grip target.
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
 
   // Apply the user-controlled override (handoff insertions, future drag
   // reorder) on top of the backend's creation order. The result drives
@@ -235,10 +255,22 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const canvasAgents = orderedAgents.filter(
     (a) => !closedSlugs.includes(a.slug),
   );
-  // STORY-024 implements the actual freeform drag for "windows"; until
-  // then we render windows-mode as tiles so the layout choice persists
-  // and the radio thumb sits correctly.
-  const effectiveLayout = layout === "windows" ? "tiles" : layout;
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    // canvasAgents is what the user sees; closed agents stay in their
+    // override slot but aren't on the canvas. Persist the FULL ordered
+    // set (canvas + closed) so re-opening a closed tile restores its
+    // prior slot rather than dumping it at the end.
+    const fullOrder = orderedAgents.map((a) => a.slug);
+    const fromIdx = fullOrder.indexOf(active.id as string);
+    const toIdx = fullOrder.indexOf(over.id as string);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const next = [...fullOrder];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    useAgentOrderStore.getState().setOrder(workSlug, next);
+  }
   const cols =
     canvasAgents.length <= 1
       ? 1
@@ -439,61 +471,69 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             </button>
           </div>
 
-          <div className="canvas" data-cols={cols} data-layout={effectiveLayout}>
-            {agents.length === 0 && (
-              <div className="canvas-empty">
-                <div className="em-title">No agents on the canvas</div>
-                <div className="em-sub">Launch one with the “+ New agent” button above.</div>
-              </div>
-            )}
-            {agents.length > 0 && canvasAgents.length === 0 && (
-              <div className="canvas-empty">
-                <div className="em-title">All agents closed</div>
-                <div className="em-sub">Click any rail entry to reopen.</div>
-              </div>
-            )}
-            {canvasAgents.map((a) => (
-              <div
-                key={a.slug}
-                ref={(el) => {
-                  if (el) tileRefs.current.set(a.slug, el);
-                  else tileRefs.current.delete(a.slug);
-                }}
-                className={"canvas-cell" + (focusedSlug === a.slug ? " focused" : "")}
-                data-persona={a.persona}
-                onMouseDown={() => setFocusedSlug(a.slug)}
+          <DndContext sensors={dragSensors} onDragEnd={handleDragEnd}>
+            <div className="canvas" data-cols={cols} data-layout={layout}>
+              {agents.length === 0 && (
+                <div className="canvas-empty">
+                  <div className="em-title">No agents on the canvas</div>
+                  <div className="em-sub">Launch one with the “+ New agent” button above.</div>
+                </div>
+              )}
+              {agents.length > 0 && canvasAgents.length === 0 && (
+                <div className="canvas-empty">
+                  <div className="em-title">All agents closed</div>
+                  <div className="em-sub">Click any rail entry to reopen.</div>
+                </div>
+              )}
+              <SortableContext
+                items={canvasAgents.map((a) => a.slug)}
+                strategy={rectSortingStrategy}
               >
-                <AgentTile
-                  agentSlug={a.slug}
-                  workSlug={workSlug}
-                  mode="tile"
-                  persona={a.persona}
-                  agentName={a.name}
-                  provider={a.provider}
-                  model={a.model}
-                  worktreePath={a.worktree_path}
-                  onClose={() => {
-                    closeAgent(workSlug, a.slug);
-                    if (focusedSlug === a.slug) setFocusedSlug(null);
-                  }}
-                  onDetach={() => {
-                    void handleDetach(a.slug);
-                  }}
-                  onHandoff={() => setHandoffSource(a)}
-                  onRevealWorktree={() => {
-                    // Best-effort reveal — same fallback shape as the
-                    // work-level pill: copy the path on backend
-                    // failure so the user can paste it into a terminal.
-                    revealAgent(a.slug).catch(() => {
-                      navigator.clipboard
-                        ?.writeText(a.worktree_path)
-                        .catch(() => {});
-                    });
-                  }}
-                />
-              </div>
-            ))}
-          </div>
+                {canvasAgents.map((a) => (
+                  <SortableCanvasCell
+                    key={a.slug}
+                    agentSlug={a.slug}
+                    persona={a.persona}
+                    focused={focusedSlug === a.slug}
+                    onFocus={() => setFocusedSlug(a.slug)}
+                    registerRef={(el) => {
+                      if (el) tileRefs.current.set(a.slug, el);
+                      else tileRefs.current.delete(a.slug);
+                    }}
+                  >
+                    <AgentTile
+                      agentSlug={a.slug}
+                      workSlug={workSlug}
+                      mode="tile"
+                      persona={a.persona}
+                      agentName={a.name}
+                      provider={a.provider}
+                      model={a.model}
+                      worktreePath={a.worktree_path}
+                      onClose={() => {
+                        closeAgent(workSlug, a.slug);
+                        if (focusedSlug === a.slug) setFocusedSlug(null);
+                      }}
+                      onDetach={() => {
+                        void handleDetach(a.slug);
+                      }}
+                      onHandoff={() => setHandoffSource(a)}
+                      onRevealWorktree={() => {
+                        // Best-effort reveal — same fallback shape as the
+                        // work-level pill: copy the path on backend
+                        // failure so the user can paste it into a terminal.
+                        revealAgent(a.slug).catch(() => {
+                          navigator.clipboard
+                            ?.writeText(a.worktree_path)
+                            .catch(() => {});
+                        });
+                      }}
+                    />
+                  </SortableCanvasCell>
+                ))}
+              </SortableContext>
+            </div>
+          </DndContext>
         </div>
       </div>
       {agentDialogOpen && (

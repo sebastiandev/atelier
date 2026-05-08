@@ -39,6 +39,12 @@ type AgentOrderState = {
     newSlug: string,
     currentOrder: string[],
   ) => void;
+  /**
+   * Replace the work's order outright. Used by tile-reorder drag to
+   * persist the new arrangement after a drop. Caller passes the full
+   * ordered list of slugs as it should now appear.
+   */
+  setOrder: (workSlug: string, ordered: string[]) => void;
 };
 
 export const useAgentOrderStore = create<AgentOrderState>()(
@@ -62,6 +68,10 @@ export const useAgentOrderStore = create<AgentOrderState>()(
                 ];
           return { byWork: { ...state.byWork, [workSlug]: next } };
         }),
+      setOrder: (workSlug, ordered) =>
+        set((state) => ({
+          byWork: { ...state.byWork, [workSlug]: ordered },
+        })),
     }),
     { name: "atelier:agent-order" },
   ),

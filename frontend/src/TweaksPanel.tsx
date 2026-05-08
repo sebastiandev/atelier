@@ -122,8 +122,8 @@ export function TweaksPanel() {
         <div className="twk-sect">Agent layout</div>
         <LayoutRadio value={layout} onChange={setLayout} />
         <div className="twk-hint">
-          Tiles snap into a responsive grid. Columns flow horizontally. Windows float free
-          (drag coming in a follow-up).
+          Tiles snap into a responsive grid; columns flow horizontally.
+          Drag a tile by its grip in the top-left to reorder.
         </div>
 
         <div className="twk-foot">
@@ -145,7 +145,6 @@ export function TweaksPanel() {
 const LAYOUT_OPTS: { value: CanvasLayout; label: string }[] = [
   { value: "tiles", label: "Tiles" },
   { value: "columns", label: "Columns" },
-  { value: "windows", label: "Windows" },
 ];
 
 function LayoutRadio({

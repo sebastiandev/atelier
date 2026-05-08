@@ -11,13 +11,15 @@ import { persist } from "zustand/middleware";
  * decoupled — they're hardcoded sage + purple, not driven by this hue.
  *
  * `layout` controls how `WorkView` arranges its agent tiles. STORY-024
- * makes "windows" actually freeform-drag; until then it falls back to
- * "tiles" with a hint in the panel.
+ * landed drag-to-reorder on the existing layouts and dropped the
+ * freeform-drag "windows" mode — the migration below maps any persisted
+ * "windows" value back to "tiles" so the layout choice survives the
+ * removal cleanly.
  *
  * `panelOpen` is intentionally NOT persisted — the user opens the panel
  * to tweak something, not to leave it floating across reloads.
  */
-export type CanvasLayout = "tiles" | "columns" | "windows";
+export type CanvasLayout = "tiles" | "columns";
 
 const DEFAULTS = {
   accentHue: 250,
@@ -50,9 +52,20 @@ export const useTweaksStore = create<TweaksState>()(
     }),
     {
       name: "atelier:tweaks",
-      version: 1,
+      version: 2,
       // Only persist tweak values, not panel-open transient state.
       partialize: (s) => ({ accentHue: s.accentHue, layout: s.layout }),
+      // v1 → v2: drop the "windows" layout option (replaced by tile-
+      // reorder drag in STORY-024). Map any persisted "windows" back
+      // to the default so reload doesn't show a broken layout.
+      migrate: (persisted, version) => {
+        const p = persisted as { accentHue?: number; layout?: string } | null;
+        if (!p) return p;
+        if (version < 2 && p.layout === "windows") {
+          return { ...p, layout: "tiles" };
+        }
+        return p;
+      },
     },
   ),
 );
