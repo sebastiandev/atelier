@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AgentTile } from "./AgentTile";
 import {
   type AgentSummary,
   type ArtifactSummary,
   type CreateAgentPayload,
+  type HandoffSummary,
   type ProjectSummary,
   type WorkDetail,
   PERSONA_GLYPH,
@@ -20,8 +21,13 @@ import {
   revealWork,
 } from "./api";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
+import { HandoffDialog } from "./HandoffDialog";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
+import {
+  applyAgentOrder,
+  useAgentOrderStore,
+} from "./state/agentOrder";
 import {
   selectWorkRevision,
   useArtifactsRefresh,
@@ -44,6 +50,14 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [error, setError] = useState<string | null>(null);
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
+  // When the new-agent dialog is opened from the handoff flow, we
+  // pre-fill it with the source agent's slug + folder + the freshly
+  // generated handoff doc as initial goal. Null in the regular flow.
+  const [agentDialogPrefill, setAgentDialogPrefill] = useState<{
+    forkFromAgent: { slug: string; name: string; folder: string };
+    initialGoal: string;
+  } | null>(null);
+  const [handoffSource, setHandoffSource] = useState<AgentSummary | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   // Projects list for the move picker — fetched lazily when the dialog
@@ -61,7 +75,24 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const closedSlugs = useClosedStore((s) => s.byWork[workSlug] ?? NO_CLOSED);
   const closeAgent = useClosedStore((s) => s.close);
   const restoreAgent = useClosedStore((s) => s.restore);
+  const agentOrderOverride = useAgentOrderStore(
+    (s) => s.byWork[workSlug],
+  );
   const layout = useTweaksStore((s) => s.layout);
+
+  // Apply the user-controlled override (handoff insertions, future drag
+  // reorder) on top of the backend's creation order. The result drives
+  // both the rail and the canvas so they always stay in sync.
+  const orderedAgents = useMemo(() => {
+    const slugToAgent = new Map(agents.map((a) => [a.slug, a]));
+    const ordered = applyAgentOrder(
+      agentOrderOverride,
+      agents.map((a) => a.slug),
+    );
+    return ordered
+      .map((slug) => slugToAgent.get(slug))
+      .filter((a): a is AgentSummary => a !== undefined);
+  }, [agents, agentOrderOverride]);
 
   // Refetch on revision bump (an agent emitted artifact_recorded) AND on
   // mount / workSlug change. Initial fetch is the same call so we don't
@@ -133,7 +164,18 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   async function handleCreateAgent(payload: CreateAgentPayload) {
     const created = await createAgent(workSlug, payload);
     const next = await refreshAgents();
+    // If the new agent was forked from a source, position it
+    // immediately after that source in the rail/canvas. Capture the
+    // current rendered order so the override stores a complete order
+    // rather than a sparse anchor+new pair.
+    if (payload.fork_from_agent) {
+      const currentOrder = orderedAgents.map((a) => a.slug);
+      useAgentOrderStore
+        .getState()
+        .insertAfter(workSlug, payload.fork_from_agent, created.slug, currentOrder);
+    }
     setAgentDialogOpen(false);
+    setAgentDialogPrefill(null);
     setFocusedSlug(created.slug);
     requestAnimationFrame(() => {
       const el = tileRefs.current.get(created.slug);
@@ -190,7 +232,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     return <div className="work-loading hint">Loading…</div>;
   }
 
-  const canvasAgents = agents.filter((a) => !closedSlugs.includes(a.slug));
+  const canvasAgents = orderedAgents.filter(
+    (a) => !closedSlugs.includes(a.slug),
+  );
   // STORY-024 implements the actual freeform drag for "windows"; until
   // then we render windows-mode as tiles so the layout choice persists
   // and the radio thumb sits correctly.
@@ -331,13 +375,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
       <div className="work-body">
         <aside className="left-rail">
-          <RailSection title="Active agents" count={agents.length}>
-            {agents.length === 0 && (
+          <RailSection title="Active agents" count={orderedAgents.length}>
+            {orderedAgents.length === 0 && (
               <div className="hint" style={{ padding: "4px 8px" }}>
                 None on the canvas. Launch one via the API.
               </div>
             )}
-            {agents.map((a) => {
+            {orderedAgents.map((a) => {
               const isClosed = closedSlugs.includes(a.slug);
               const isDetached = a.status === "detached";
               const tooltip = isDetached
@@ -435,6 +479,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   onDetach={() => {
                     void handleDetach(a.slug);
                   }}
+                  onHandoff={() => setHandoffSource(a)}
                   onRevealWorktree={() => {
                     // Best-effort reveal — same fallback shape as the
                     // work-level pill: copy the path on backend
@@ -455,9 +500,33 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         <NewAgentDialog
           workSlug={work.slug}
           workName={work.name}
-          onClose={() => setAgentDialogOpen(false)}
+          onClose={() => {
+            setAgentDialogOpen(false);
+            setAgentDialogPrefill(null);
+          }}
           onCreate={async (payload) => {
             await handleCreateAgent(payload);
+          }}
+          forkFromAgent={agentDialogPrefill?.forkFromAgent}
+          initialGoal={agentDialogPrefill?.initialGoal}
+        />
+      )}
+      {handoffSource && (
+        <HandoffDialog
+          workSlug={workSlug}
+          source={handoffSource}
+          onClose={() => setHandoffSource(null)}
+          onHandoffReady={(handoff: HandoffSummary) => {
+            setAgentDialogPrefill({
+              forkFromAgent: {
+                slug: handoffSource.slug,
+                name: handoffSource.name,
+                folder: handoffSource.folder,
+              },
+              initialGoal: handoff.doc_text,
+            });
+            setHandoffSource(null);
+            setAgentDialogOpen(true);
           }}
         />
       )}

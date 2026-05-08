@@ -40,6 +40,7 @@ from src.infrastructure.filesystem import (
     WorkspacePaths,
 )
 from src.infrastructure.git import GitWorktreeManager
+from src.infrastructure.summarizer import build_summarizer
 from src.settings import Settings, get_settings
 
 
@@ -143,6 +144,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.supervisor = supervisor
         app.state.connection_store = connection_store
         app.state.worktree_manager = worktree_manager
+        # Surfaced for the handoff route (reads the source agent's NDJSON
+        # to build the doc). Same instance the supervisor writes through.
+        app.state.transcript_log = transcript_log
+        # Anthropic-backed when an API key is set, structural fallback
+        # otherwise — keeps the handoff feature usable offline.
+        app.state.summarizer = build_summarizer(resolved.anthropic_api_key)
         try:
             yield
         finally:

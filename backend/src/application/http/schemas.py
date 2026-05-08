@@ -84,6 +84,10 @@ class NewAgentRequest(BaseModel):
     # for ``provider`` validates the contents; unknown keys are rejected.
     options: dict[str, Any] = Field(default_factory=dict)
     contexts: list[ContextSchema] = Field(default_factory=list)
+    # When set, fork the worktree from this existing agent in the same
+    # work — new agent inherits source's uncommitted state in detached
+    # HEAD. Used by the handoff flow.
+    fork_from_agent: str | None = None
 
 
 class AgentSummary(BaseModel):
@@ -257,14 +261,35 @@ class ArtifactSummary(BaseModel):
     doc_path: str | None = None
 
 
+class NewHandoffRequest(BaseModel):
+    """Caller picks the source agent; target is fixed to "new-agent" for v1."""
+
+    source_agent_slug: str = Field(min_length=1)
+
+
+class HandoffSummary(BaseModel):
+    """Persisted Handoff row + the doc body so the FE can pre-fill the
+    NewAgentDialog without a follow-up fetch."""
+
+    slug: str
+    source_agent_slug: str
+    doc_path: str
+    doc_text: str
+    created_at: datetime
+    target_agent_slug: str | None = None
+    target_dialog: Literal["new-agent"] | None = None
+
+
 __all__ = [
     "AgentSummary",
     "ArtifactSummary",
     "ConnectionRead",
     "ContextSchema",
     "DetachResponse",
+    "HandoffSummary",
     "NewAgentRequest",
     "NewConnectionRequest",
+    "NewHandoffRequest",
     "NewProjectRequest",
     "NewWorkRequest",
     "PatchConnectionRequest",

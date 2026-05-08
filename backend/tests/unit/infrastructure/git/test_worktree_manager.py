@@ -54,6 +54,65 @@ def test_ensure_creates_worktree_under_workspace_root(
     assert (workdir / "README.md").read_text() == "hello\n"
 
 
+def test_ensure_forked_inherits_uncommitted_state(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """The forked agent starts at the source agent's HEAD (detached) AND
+    inherits its modified + untracked-not-gitignored files."""
+    source_workdir = manager.ensure("WRK-001", "agt-1", repo)
+    # Source agent makes uncommitted changes + an untracked file.
+    (source_workdir / "README.md").write_text("modified by agt-1\n")
+    (source_workdir / "scratch.md").write_text("untracked draft\n")
+    # And a gitignored file we should NOT see in the fork.
+    (source_workdir / ".gitignore").write_text("ignored.bin\n")
+    (source_workdir / "ignored.bin").write_bytes(b"DO NOT COPY")
+
+    forked = manager.ensure_forked("WRK-001", "agt-2", "agt-1", repo)
+
+    # New worktree exists under the workspace root and is detached
+    # (no auto-branch created).
+    assert forked.exists()
+    assert (forked / ".git").is_file()
+    head = subprocess.run(
+        ["git", "symbolic-ref", "-q", "HEAD"],
+        cwd=str(forked),
+        capture_output=True,
+        text=True,
+    )
+    # symbolic-ref returns non-zero when HEAD is detached — exactly what
+    # we want for "no auto-branch".
+    assert head.returncode != 0
+
+    # Inherited the source's uncommitted modifications.
+    assert (forked / "README.md").read_text() == "modified by agt-1\n"
+    # Inherited the untracked-not-gitignored file too.
+    assert (forked / "scratch.md").read_text() == "untracked draft\n"
+    # Did NOT inherit gitignored bulk.
+    assert not (forked / "ignored.bin").exists()
+
+
+def test_ensure_forked_is_idempotent(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    manager.ensure("WRK-001", "agt-1", repo)
+    a = manager.ensure_forked("WRK-001", "agt-2", "agt-1", repo)
+    b = manager.ensure_forked("WRK-001", "agt-2", "agt-1", repo)
+    assert a == b
+
+
+def test_ensure_forked_for_non_git_source_falls_back_to_copy(
+    manager: GitWorktreeManager, tmp_path: Path
+) -> None:
+    """Non-git source folders don't have worktrees — we copy instead."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "notes.md").write_text("just files\n")
+
+    forked = manager.ensure_forked("WRK-001", "agt-2", "agt-1", plain)
+    assert forked.exists()
+    assert (forked / "notes.md").read_text() == "just files\n"
+
+
 def test_ensure_two_agents_get_two_worktrees(
     manager: GitWorktreeManager, repo: Path
 ) -> None:

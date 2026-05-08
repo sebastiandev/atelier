@@ -1971,6 +1971,42 @@ h5.md-h {
   white-space: nowrap;
 }
 
+/* Workdir picker (NewAgentDialog, handoff flow) -------------------------- */
+
+.workdir-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.workdir-pick-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-1);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.45;
+}
+.workdir-pick-opt:hover {
+  border-color: var(--accent-line);
+}
+.workdir-pick-opt input[type="radio"] {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+.workdir-pick-opt > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.workdir-pick-opt strong {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
 /* Artifacts rail rows ---------------------------------------------------- */
 
 .rail-arti {

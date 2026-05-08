@@ -26,6 +26,16 @@ type Props = {
   workName: string;
   onClose: () => void;
   onCreate: (payload: CreateAgentPayload) => Promise<void>;
+  /** Set when the dialog is opened from the handoff flow (or any other
+   *  flow that wants the new agent to inherit a sibling's working state).
+   *  Adds a "Workdir" picker above the folder field; when "Continue from
+   *  {source}" is selected, the create payload includes
+   *  ``fork_from_agent`` so the supervisor calls ``ensure_forked``. */
+  forkFromAgent?: { slug: string; name: string; folder: string };
+  /** Pre-fills the optional-goal textarea. Used by the handoff flow to
+   *  drop the freshly-generated handoff doc into the new agent's first
+   *  context. The user can edit before submitting. */
+  initialGoal?: string;
 };
 
 const SIMPLE_TYPES: { id: SimpleContextType; label: string }[] = [
@@ -36,7 +46,14 @@ const SIMPLE_TYPES: { id: SimpleContextType; label: string }[] = [
 
 const CUSTOM_PERSONA_PLACEHOLDER: Persona = "developer";
 
-export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props) {
+export function NewAgentDialog({
+  workSlug,
+  workName,
+  onClose,
+  onCreate,
+  forkFromAgent,
+  initialGoal,
+}: Props) {
   const [providers, setProviders] = useState<ProviderDescriptor[] | null>(null);
   const [providersError, setProvidersError] = useState<string | null>(null);
 
@@ -49,11 +66,16 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
   const [model, setModel] = useState<string | null>(null);
   const [options, setOptions] = useState<Record<string, string>>({});
 
+  // "fork" only available when forkFromAgent is supplied; "fresh" is the
+  // baseline and the only choice in the regular new-agent flow.
+  const [workdirMode, setWorkdirMode] = useState<"fresh" | "fork">(
+    forkFromAgent ? "fork" : "fresh",
+  );
+
   // Folder + recents (per-work first, then global). Default to the first
   // candidate so the common "same folder as last time" case is one click.
-  // Select the raw slices — the derivation builds a fresh array each
-  // call and would trip Zustand's Object.is snapshot check if used as
-  // the selector itself (infinite re-render).
+  // When forking, default to the source agent's folder — the worktree
+  // manager needs the same source repo to provision the forked checkout.
   const folderRecentsByWork = useFolderRecentsStore(
     (s) => s.byWork[workSlug] ?? NO_FOLDERS,
   );
@@ -63,9 +85,11 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
     () => deriveFolderCandidates(folderRecentsByWork, folderRecentsGlobal),
     [folderRecentsByWork, folderRecentsGlobal],
   );
-  const [folder, setFolder] = useState(() => folderCandidates[0] ?? "");
+  const [folder, setFolder] = useState(
+    () => forkFromAgent?.folder ?? folderCandidates[0] ?? "",
+  );
 
-  const [goal, setGoal] = useState("");
+  const [goal, setGoal] = useState(initialGoal ?? "");
   const [contexts, setContexts] = useState<ContextEntry[]>([]);
   const [connections, setConnections] = useState<Connection[]>([]);
   const { descriptors: connectionDescriptors } = useConnectionDescriptors();
@@ -189,6 +213,9 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
     if (Object.keys(options).length > 0) {
       payload.options = options;
     }
+    if (forkFromAgent && workdirMode === "fork") {
+      payload.fork_from_agent = forkFromAgent.slug;
+    }
     // Prepend the optional initial-goal textarea as a synthesized text
     // context so the agent's first-message points at it the same way
     // any user-added text context would. Same wire shape as if the user
@@ -297,6 +324,49 @@ export function NewAgentDialog({ workSlug, workName, onClose, onCreate }: Props)
               onChange={(e) => setName(e.target.value)}
             />
           </label>
+
+          {forkFromAgent && (
+            <div className="field">
+              <span className="label">Workdir</span>
+              <div className="workdir-pick">
+                <label className="workdir-pick-opt">
+                  <input
+                    type="radio"
+                    name="workdir-mode"
+                    value="fork"
+                    checked={workdirMode === "fork"}
+                    onChange={() => setWorkdirMode("fork")}
+                  />
+                  <span>
+                    <strong>Continue from {forkFromAgent.name}</strong>
+                    <span className="hint">
+                      {" "}
+                      · forks {forkFromAgent.name}'s worktree at its current
+                      HEAD with all uncommitted changes carried over (detached
+                      HEAD, no auto-branch)
+                    </span>
+                  </span>
+                </label>
+                <label className="workdir-pick-opt">
+                  <input
+                    type="radio"
+                    name="workdir-mode"
+                    value="fresh"
+                    checked={workdirMode === "fresh"}
+                    onChange={() => setWorkdirMode("fresh")}
+                  />
+                  <span>
+                    <strong>Fresh worktree</strong>
+                    <span className="hint">
+                      {" "}
+                      · clean checkout of the source folder; loses{" "}
+                      {forkFromAgent.name}'s uncommitted work
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </div>
+          )}
 
           <label className="field">
             <span className="label">Working folder</span>

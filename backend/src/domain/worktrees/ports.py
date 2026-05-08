@@ -32,6 +32,24 @@ class WorktreeManager(Protocol):
         base_ref: str = "HEAD",
     ) -> Path: ...
 
+    def ensure_forked(
+        self,
+        work_slug: str,
+        new_agent_slug: str,
+        source_agent_slug: str,
+        source: Path,
+    ) -> Path:
+        """Provision a new worktree by forking from an existing agent's
+        worktree. The new worktree starts at the source agent's HEAD
+        commit (in detached HEAD — no auto-branch) and inherits the
+        source's uncommitted + untracked-not-gitignored files. Source
+        and new worktree are independent thereafter — both can keep
+        working without colliding.
+
+        For non-git source folders, falls back to a recursive directory
+        copy (the simpler model — no branch concerns)."""
+        ...
+
     def remove(self, work_slug: str, agent_slug: str) -> None: ...
 
     def sweep_orphans(self, work_slug: str, live_agent_slugs: set[str]) -> None: ...

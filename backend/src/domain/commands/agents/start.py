@@ -59,6 +59,12 @@ class StartAgentRequest:
     folder: Path
     options: dict[str, object]
     contexts: tuple[Context, ...] = ()
+    # Slug of an existing agent in the same work whose worktree the new
+    # agent should fork from. None (default) provisions a fresh worktree
+    # off ``folder``'s base ref. Used by the handoff flow so the new
+    # agent inherits the source's uncommitted work without sharing the
+    # working dir.
+    fork_from_agent: str | None = None
 
 
 class WorkNotFound(ValueError):
@@ -162,11 +168,21 @@ async def execute(
         else None
     )
 
-    workdir = worktree_manager.ensure(
-        work_slug=req.work_slug,
-        agent_slug=agent.slug,
-        source=req.folder,
-    )
+    if req.fork_from_agent is not None:
+        # Inherit the source agent's working state into a fresh,
+        # independent worktree (detached HEAD; no auto-branch).
+        workdir = worktree_manager.ensure_forked(
+            work_slug=req.work_slug,
+            new_agent_slug=agent.slug,
+            source_agent_slug=req.fork_from_agent,
+            source=req.folder,
+        )
+    else:
+        workdir = worktree_manager.ensure(
+            work_slug=req.work_slug,
+            agent_slug=agent.slug,
+            source=req.folder,
+        )
 
     common = CommonAgentConfig(
         workdir=workdir,

@@ -133,6 +133,12 @@ class StubRepository:
         self.handoffs[handoff.slug] = handoff
         return handoff
 
+    def list_handoffs_for_work(self, work_slug: str) -> list[Handoff]:
+        work = self.works.get(work_slug)
+        if work is None or work.id is None:
+            return []
+        return [h for h in self.handoffs.values() if h.work_id == work.id]
+
 
 class StubFiles:
     def __init__(self) -> None:

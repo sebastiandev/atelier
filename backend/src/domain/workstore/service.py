@@ -336,6 +336,11 @@ class WorkStoreService:
             )
             return self._repo.add_handoff(handoff)
 
+    def list_handoffs_for_work(self, work_slug: str) -> list[Handoff]:
+        with self._lock:
+            self._require_work(work_slug)
+            return self._repo.list_handoffs_for_work(work_slug)
+
     def _require_work(self, work_slug: str) -> Work:
         work = self._repo.get_work_by_slug(work_slug)
         if work is None or work.status == "deleted":

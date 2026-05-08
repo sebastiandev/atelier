@@ -103,6 +103,7 @@ async def create_agent(
             Context(type=c.type, value=c.value, conn_id=c.conn_id)
             for c in payload.contexts
         ),
+        fork_from_agent=payload.fork_from_agent,
     )
     try:
         agent = await start.execute(

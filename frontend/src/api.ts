@@ -193,6 +193,10 @@ export type CreateAgentPayload = {
   folder: string;
   options?: Record<string, string>;
   contexts?: ContextEntry[];
+  // When set, fork the worktree from this existing agent in the same
+  // work — new agent inherits source's uncommitted state in detached
+  // HEAD. Used by the handoff flow.
+  fork_from_agent?: string | null;
 };
 
 export function listProviders(): Promise<ProviderDescriptor[]> {
@@ -485,6 +489,39 @@ export function revealArtifact(slug: string): Promise<void> {
       }
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Handoffs
+// ---------------------------------------------------------------------------
+
+export type HandoffSummary = {
+  slug: string;
+  source_agent_slug: string;
+  doc_path: string;
+  // Markdown body — pre-fetched so the FE can pre-fill the NewAgentDialog
+  // without a follow-up GET.
+  doc_text: string;
+  created_at: string;
+  target_agent_slug: string | null;
+  target_dialog: "new-agent" | null;
+};
+
+/**
+ * Generate a handoff doc summarizing the source agent's recent transcript.
+ * Synchronous: the request blocks for the duration of the LLM call (a
+ * few seconds typically; 60s timeout). The returned summary's doc_text
+ * is what the FE pre-fills the NewAgentDialog with.
+ */
+export function createHandoff(
+  workSlug: string,
+  sourceAgentSlug: string,
+): Promise<HandoffSummary> {
+  return fetch(`/api/works/${workSlug}/handoffs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source_agent_slug: sourceAgentSlug }),
+  }).then((r) => jsonOrThrow<HandoffSummary>(r));
 }
 
 /**

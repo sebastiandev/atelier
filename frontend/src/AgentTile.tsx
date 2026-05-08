@@ -60,6 +60,11 @@ type AgentTileProps = {
    *  toast on the launch result). When omitted, the detach button is
    *  hidden — the parent didn't wire it for this surface. */
   onDetach?: () => void;
+  /** Open the handoff flow with this tile's agent as the source. The
+   *  parent (WorkView) generates the handoff doc + opens NewAgentDialog
+   *  pre-filled. When omitted (e.g. standalone /agents/{slug} mount),
+   *  the handoff button is hidden. */
+  onHandoff?: () => void;
   /** Open the agent's worktree (or source folder fallback) in the OS
    *  file browser. The path is shown in the tooltip so the user can
    *  also copy it from there. When omitted, the folder button is
@@ -92,6 +97,7 @@ export function AgentTile({
   model,
   onClose,
   onDetach,
+  onHandoff,
   onRevealWorktree,
   worktreePath,
 }: AgentTileProps) {
@@ -326,14 +332,16 @@ export function AgentTile({
         </div>
         <div className="tile-header-right">
           <div className="tile-controls">
-          <button
-            type="button"
-            className="tile-ctl"
-            title="Hand off to new agent — coming in Sprint 3"
-            disabled
-          >
-            <HandoffIcon />
-          </button>
+          {onHandoff && (
+            <button
+              type="button"
+              className="tile-ctl"
+              title="Hand off to a new agent — generates a checkpoint doc and forks this agent's worktree"
+              onClick={onHandoff}
+            >
+              <HandoffIcon />
+            </button>
+          )}
           <button
             type="button"
             className="tile-ctl"

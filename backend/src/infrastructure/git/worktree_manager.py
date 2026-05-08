@@ -77,6 +77,60 @@ class GitWorktreeManager:
                 raise
         return target
 
+    def ensure_forked(
+        self,
+        work_slug: str,
+        new_agent_slug: str,
+        source_agent_slug: str,
+        source: Path,
+    ) -> Path:
+        """Provision a new agent's worktree as a fork of an existing
+        agent's worktree. See ``WorktreeManager.ensure_forked``.
+
+        Git source: ``worktree add --detach`` at the source agent's HEAD
+        + an overlay of the source's modified + untracked-not-gitignored
+        files. ``--detach`` means no auto-branch — the new agent starts
+        in detached HEAD and the user names a branch when they're ready.
+
+        Non-git source: falls back to a plain recursive copy (a non-git
+        agent's "workdir" is the source folder itself, so this gives the
+        new agent a clean copy alongside).
+        """
+        target = self._worktree_path(work_slug, new_agent_slug)
+        source_worktree = self._worktree_path(work_slug, source_agent_slug)
+
+        if not _is_git_repo(source):
+            # Non-git: source agent uses ``source`` directly. Copy the
+            # whole tree to the new agent's slot.
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                return target
+            shutil.copytree(source, target)
+            return target
+
+        if target.exists() and (target / ".git").exists():
+            return target
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        # If the source agent never got a worktree (e.g. a non-git fork
+        # path that later became git), fall back to plain ensure().
+        if not source_worktree.exists():
+            return self.ensure(work_slug, new_agent_slug, source)
+
+        source_head = _run_git(
+            source_worktree, "rev-parse", "HEAD"
+        ).stdout.strip()
+        _run_git(
+            source,
+            "worktree",
+            "add",
+            "--detach",
+            str(target),
+            source_head,
+        )
+        _overlay_working_state(source_worktree, target)
+        return target
+
     def remove(self, work_slug: str, agent_slug: str) -> None:
         target = self._worktree_path(work_slug, agent_slug)
         if not target.exists():
@@ -156,6 +210,28 @@ class GitWorktreeManager:
         # The source repo is two parents up from .git/worktrees/<name>.
         source = gitdir.parent.parent.parent
         return source if source.exists() else None
+
+
+def _overlay_working_state(src: Path, dst: Path) -> None:
+    """Copy src's modified-vs-HEAD and untracked-not-gitignored files onto
+    dst. dst is already at src's HEAD (provisioned via
+    ``git worktree add --detach``), so this only needs to overlay the
+    delta — keeps the fork fast even when src has node_modules.
+    """
+    modified = _run_git(src, "diff", "HEAD", "--name-only", "-z").stdout
+    untracked = _run_git(
+        src, "ls-files", "-o", "--exclude-standard", "-z"
+    ).stdout
+    paths = [p for p in (modified + untracked).split("\0") if p]
+    for rel in paths:
+        src_file = src / rel
+        if not src_file.exists() or not src_file.is_file():
+            # Could be a file deleted in src's working tree (modified
+            # diff includes deletions) or a directory; skip both.
+            continue
+        dst_file = dst / rel
+        dst_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_file, dst_file)
 
 
 def _is_git_repo(path: Path) -> bool:

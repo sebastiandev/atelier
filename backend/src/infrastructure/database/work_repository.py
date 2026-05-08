@@ -24,6 +24,7 @@ from src.domain.models import Agent, Artifact, Handoff, Work
 from src.infrastructure.database.tables import (
     agents_table,
     artifacts_table,
+    handoffs_table,
     works_table,
 )
 
@@ -247,6 +248,21 @@ class SqlWorkRepository:
             assert handoff.id is not None
             handoff.slug = f"hnd-{handoff.id}"
         return handoff
+
+    def list_handoffs_for_work(self, work_slug: str) -> list[Handoff]:
+        with self._txn() as session:
+            work_id = session.execute(
+                select(works_table.c.id).where(works_table.c.slug == work_slug)
+            ).scalar_one_or_none()
+            if work_id is None:
+                return []
+            return list(
+                session.execute(
+                    select(Handoff)
+                    .where(handoffs_table.c.work_id == work_id)
+                    .order_by(handoffs_table.c.created_at.asc())
+                ).scalars()
+            )
 
 
 def _placeholder_slug() -> str:

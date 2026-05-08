@@ -6,6 +6,7 @@ that lives behind the WorkStore port.
 """
 
 import subprocess
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -14,11 +15,18 @@ from src.application.http.schemas import (
     ArtifactSummary,
     CompleteWorkResponse,
     ContextSchema,
+    HandoffSummary,
     MoveWorkRequest,
+    NewHandoffRequest,
     NewWorkRequest,
     PatchWorkRequest,
     WorkDetail,
     WorkSummary,
+)
+from src.domain.agents.handoffs import (
+    BuildHandoffRequest,
+    Summarizer,
+    build_handoff,
 )
 from src.domain.commands.projects import get as projects_get
 from src.domain.commands.works import (
@@ -31,7 +39,7 @@ from src.domain.commands.works import (
     soft_delete,
     update,
 )
-from src.domain.models import Artifact, Context, Work
+from src.domain.models import Artifact, Context, Handoff, Work
 from src.domain.projectstore.ports import ProjectStore
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.dtos import (
@@ -39,7 +47,7 @@ from src.domain.workstore.dtos import (
     UpdateWorkRequest,
     WorkRecord,
 )
-from src.domain.workstore.ports import WorkStore
+from src.domain.workstore.ports import TranscriptLog, WorkStore
 from src.domain.worktrees import WorktreeManager
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
@@ -69,11 +77,21 @@ def get_worktree_manager(request: Request) -> WorktreeManager:
     return request.app.state.worktree_manager  # type: ignore[no-any-return]
 
 
+def get_summarizer(request: Request) -> Summarizer:
+    return request.app.state.summarizer  # type: ignore[no-any-return]
+
+
+def get_transcript_log(request: Request) -> TranscriptLog:
+    return request.app.state.transcript_log  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
 WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
+SummarizerDep = Annotated[Summarizer, Depends(get_summarizer)]
+TranscriptLogDep = Annotated[TranscriptLog, Depends(get_transcript_log)]
 
 
 @router.get("/works", response_model=list[WorkSummary])
@@ -130,6 +148,61 @@ def list_work_artifacts_endpoint(
     agents = workstore.list_agents_for_work(work_slug)
     agent_slug_by_id = {a.id: a.slug for a in agents if a.id is not None}
     return [_to_artifact_summary(a, agent_slug_by_id) for a in artifacts]
+
+
+@router.post(
+    "/works/{work_slug}/handoffs",
+    response_model=HandoffSummary,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_handoff_endpoint(
+    work_slug: str,
+    payload: NewHandoffRequest,
+    workstore: WorkStoreDep,
+    transcript_log: TranscriptLogDep,
+    summarizer: SummarizerDep,
+) -> HandoffSummary:
+    """Generate a handoff doc summarizing the source agent's recent
+    transcript. v1: target is always "new-agent" (the FE pre-fills the
+    NewAgentDialog with the doc text). The summarizer is synchronous —
+    the route blocks for the duration of the LLM call (typically a few
+    seconds; 60s timeout)."""
+    try:
+        handoff = build_handoff(
+            BuildHandoffRequest(
+                work_slug=work_slug,
+                source_agent_slug=payload.source_agent_slug,
+            ),
+            workstore=workstore,
+            transcript_log=transcript_log,
+            summarizer=summarizer,
+            clock=lambda: datetime.now(UTC),
+        )
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    agents = workstore.list_agents_for_work(work_slug)
+    agent_slug_by_id = {a.id: a.slug for a in agents if a.id is not None}
+    return _to_handoff_summary(
+        handoff, agent_slug_by_id, source_slug=payload.source_agent_slug
+    )
+
+
+@router.get(
+    "/works/{work_slug}/handoffs",
+    response_model=list[HandoffSummary],
+)
+def list_work_handoffs_endpoint(
+    work_slug: str, workstore: WorkStoreDep
+) -> list[HandoffSummary]:
+    try:
+        handoffs = workstore.list_handoffs_for_work(work_slug)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    agents = workstore.list_agents_for_work(work_slug)
+    agent_slug_by_id = {a.id: a.slug for a in agents if a.id is not None}
+    return [
+        _to_handoff_summary(h, agent_slug_by_id) for h in handoffs
+    ]
 
 
 @router.patch("/works/{work_slug}", response_model=WorkDetail)
@@ -290,6 +363,44 @@ def _to_detail(record: WorkRecord, paths: WorkspacePaths) -> WorkDetail:
     return WorkDetail(
         **summary.model_dump(),
         contexts=[_to_schema_context(c) for c in record.contexts],
+    )
+
+
+def _to_handoff_summary(
+    handoff: Handoff,
+    agent_slug_by_id: dict[int, str | None],
+    *,
+    source_slug: str | None = None,
+) -> HandoffSummary:
+    if handoff.slug is None:
+        raise RuntimeError("persisted Handoff has no slug")
+    # Source slug is always known by id; the create endpoint passes the
+    # request's source_agent_slug too because the agent might have been
+    # deleted by the time we resolve (defensive — the workstore would
+    # have errored earlier if the source were truly missing).
+    resolved_source = (
+        agent_slug_by_id.get(handoff.source_agent_id) or source_slug or ""
+    )
+    target_slug = (
+        agent_slug_by_id.get(handoff.target_agent_id)
+        if handoff.target_agent_id is not None
+        else None
+    )
+    doc_text = ""
+    try:
+        doc_text = handoff.doc_path.read_text()
+    except OSError:
+        # Doc missing on disk is an integrity issue but the row is still
+        # surfacable; FE just sees an empty body.
+        pass
+    return HandoffSummary(
+        slug=handoff.slug,
+        source_agent_slug=resolved_source,
+        doc_path=str(handoff.doc_path),
+        doc_text=doc_text,
+        created_at=handoff.created_at,
+        target_agent_slug=target_slug,
+        target_dialog=handoff.target_dialog,
     )
 
 
