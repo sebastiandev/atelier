@@ -86,11 +86,11 @@ export function HandoffDialog({
             </div>
           </div>
           <div className="hint">
-            Atelier will read up to the last 200 events of {source.name}'s
-            transcript and hand them to the summariser. The new agent
-            inherits {source.name}'s uncommitted work via a forked worktree
-            (detached HEAD; no auto-branch). {source.name} stays alive — close
-            it manually once you're done.
+            Atelier hands {source.name}'s entire transcript to the summariser
+            (capped to roughly 200K tokens — older events drop first if you
+            hit the limit). The new agent inherits {source.name}'s uncommitted
+            work via a forked worktree (detached HEAD; no auto-branch).{" "}
+            {source.name} stays alive — close it manually once you're done.
           </div>
           {error && <div className="form-error">{error}</div>}
         </div>

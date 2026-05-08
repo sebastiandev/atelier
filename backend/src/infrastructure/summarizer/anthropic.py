@@ -118,7 +118,7 @@ def _format_prompt(
         transcript_lines.append(_event_to_line(ev))
     return (
         f"{header}"
-        f"Transcript (last {len(events)} events, oldest first):\n\n"
+        f"Transcript ({len(events)} events, oldest first):\n\n"
         + "\n".join(transcript_lines)
     )
 

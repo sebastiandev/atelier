@@ -19,6 +19,7 @@ an event-stream side-effect.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,10 +29,14 @@ from src.domain.models import Handoff
 from src.domain.workstore.dtos import RecordHandoffRequest
 from src.domain.workstore.ports import TranscriptLog, WorkStore
 
-# Cap the summarizer's input. 200 events covers a typical session
-# without blowing the context window. If the source has a longer history,
-# we keep the most recent slice — older events are usually superseded.
-TRANSCRIPT_EVENT_CAP = 200
+# Cap the summarizer's input by serialized size, not event count — a
+# session of 50 huge tool results matters more than 50 status pings.
+# 750K chars ≈ 200K tokens at ~3.75 chars/token, which sits comfortably
+# under the 200K-token context window of the smallest mainstream model
+# we'd target for summarization. Headroom covers the system prompt and
+# the model's response. We tail the cap (keep most recent events) since
+# they're the most informative for the next agent.
+TRANSCRIPT_CHAR_CAP = 750_000
 
 
 @dataclass(frozen=True)
@@ -69,8 +74,9 @@ def build_handoff(
 
     Steps:
       1. Resolve source agent (404 → ValueError).
-      2. Read last ``TRANSCRIPT_EVENT_CAP`` events from disk via the
-         transcript log port.
+      2. Read the source agent's full transcript via the log port and
+         tail-trim to ``TRANSCRIPT_CHAR_CAP`` of serialized payload —
+         the entire conversation goes to the summarizer when it fits.
       3. Call the summarizer with (events, context).
       4. Persist via ``WorkStore.record_handoff`` — the workstore writes
          the file via WorkspaceFiles and inserts the SQL row inside its
@@ -92,14 +98,14 @@ def build_handoff(
     if source is None:
         raise ValueError(f"source agent not found: {req.source_agent_slug}")
 
-    events = list(
-        transcript_log.read_from_cursor(req.work_slug, req.source_agent_slug, 0)
+    events = _trim_to_char_cap(
+        list(
+            transcript_log.read_from_cursor(
+                req.work_slug, req.source_agent_slug, 0
+            )
+        ),
+        TRANSCRIPT_CHAR_CAP,
     )
-    # Tail the cap — most-recent events are the most informative for the
-    # next agent. ``read_from_cursor`` returns in seq order so a slice from
-    # the end gives us the last N.
-    if len(events) > TRANSCRIPT_EVENT_CAP:
-        events = events[-TRANSCRIPT_EVENT_CAP:]
 
     doc_text = summarizer(
         events,
@@ -212,6 +218,29 @@ def structural_summarizer(
     return "\n".join(lines)
 
 
+def _trim_to_char_cap(
+    events: list[dict[str, Any]], cap: int
+) -> list[dict[str, Any]]:
+    """Keep the tail of ``events`` whose total serialized size is ≤ ``cap``.
+
+    Walk from the end backwards, accumulating events until the next one
+    would push us over. Always include at least one event so a single
+    huge final event still produces a (truncated by the LLM if needed)
+    summary rather than an empty input. Reverse at the end so callers
+    receive seq-order.
+    """
+    selected: list[dict[str, Any]] = []
+    total = 0
+    for ev in reversed(events):
+        size = len(json.dumps(ev, ensure_ascii=False))
+        if total + size > cap and selected:
+            break
+        selected.append(ev)
+        total += size
+    selected.reverse()
+    return selected
+
+
 def _path_from_tool_call(event: dict[str, Any]) -> str | None:
     """Best-effort path extraction from a ToolCall event. Looks at the
     common ``path`` / ``file_path`` argument keys used by the Edit/Write/
@@ -234,7 +263,7 @@ def _truncate(text: str, limit: int) -> str:
 
 
 __all__ = [
-    "TRANSCRIPT_EVENT_CAP",
+    "TRANSCRIPT_CHAR_CAP",
     "BuildHandoffRequest",
     "Summarizer",
     "SummaryContext",

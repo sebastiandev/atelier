@@ -172,7 +172,9 @@ def test_build_handoff_writes_via_workstore_and_returns_row() -> None:
     assert workstore.recorded[0].doc_filename == "agt-1-handoff-20260508-123045.md"
 
 
-def test_build_handoff_caps_transcript_at_200_events() -> None:
+def test_build_handoff_passes_full_transcript_when_under_cap() -> None:
+    """Short conversations send every event to the summarizer — the cap
+    only kicks in for genuinely large transcripts."""
     workstore = _Workstore()
     events = [
         {"type": "user_input", "text": str(i), "seq": i, "ts": "x"}
@@ -187,11 +189,54 @@ def test_build_handoff_caps_transcript_at_200_events() -> None:
         summarizer=_summarizer_recording(captured),
         clock=lambda: datetime(2026, 5, 8, tzinfo=UTC),
     )
-    fed_events = captured["events"]
-    assert len(fed_events) == 200
-    # Tail-cap: oldest kept event is the most recent 200 (seq >= 300).
-    assert fed_events[0]["seq"] == 300
-    assert fed_events[-1]["seq"] == 499
+    assert len(captured["events"]) == 500
+
+
+def test_build_handoff_tail_trims_to_char_cap() -> None:
+    """When the transcript exceeds TRANSCRIPT_CHAR_CAP, the tail is kept
+    (most recent events) and the head is dropped."""
+    from src.domain.agents.handoffs import TRANSCRIPT_CHAR_CAP
+
+    workstore = _Workstore()
+    # Each event ~10K serialized chars; 100 events ≈ 1M chars > 750K cap.
+    big_text = "x" * 10_000
+    events = [
+        {"type": "user_input", "text": big_text, "seq": i, "ts": "x"}
+        for i in range(100)
+    ]
+    log = _TranscriptLog(events)
+    captured: dict[str, Any] = {}
+    build_handoff(
+        BuildHandoffRequest(work_slug="WRK-001", source_agent_slug="agt-1"),
+        workstore=workstore,
+        transcript_log=log,
+        summarizer=_summarizer_recording(captured),
+        clock=lambda: datetime(2026, 5, 8, tzinfo=UTC),
+    )
+    fed = captured["events"]
+    # Some events were dropped from the head — the most recent ones survive.
+    assert len(fed) < 100
+    assert fed[-1]["seq"] == 99
+    # Total payload sits under the cap.
+    total = sum(len(str(e)) for e in fed)
+    assert total <= TRANSCRIPT_CHAR_CAP
+
+
+def test_build_handoff_keeps_at_least_one_event_when_single_event_exceeds_cap() -> None:
+    """A single huge event still produces a (truncated) summary input
+    rather than feeding the summarizer an empty list."""
+    workstore = _Workstore()
+    huge = {"type": "user_input", "text": "y" * 2_000_000, "seq": 1, "ts": "x"}
+    log = _TranscriptLog([huge])
+    captured: dict[str, Any] = {}
+    build_handoff(
+        BuildHandoffRequest(work_slug="WRK-001", source_agent_slug="agt-1"),
+        workstore=workstore,
+        transcript_log=log,
+        summarizer=_summarizer_recording(captured),
+        clock=lambda: datetime(2026, 5, 8, tzinfo=UTC),
+    )
+    assert len(captured["events"]) == 1
 
 
 def test_build_handoff_rejects_unknown_work() -> None:
