@@ -15,6 +15,7 @@ from claude_agent_sdk import (
 )
 
 from src.domain.agents import (
+    ArtifactMarker,
     Error,
     MessageComplete,
     StatusChange,
@@ -80,6 +81,53 @@ def test_tool_use_block_maps_to_tool_call() -> None:
     assert event.tool_id == "t-1"
     assert event.name == "bash"
     assert event.arguments == {"cmd": "ls"}
+
+
+def test_atelier_record_pr_tool_use_emits_artifact_marker_then_tool_call() -> None:
+    """The artifact-recording tools produce an ArtifactMarker for the
+    supervisor's tracker AND a regular ToolCall so the chat shows the
+    agent's exact invocation."""
+    events = list(
+        _convert(
+            _assistant(
+                ToolUseBlock(
+                    id="t-1",
+                    name="mcp__atelier__record_pr",
+                    input={
+                        "url": "https://github.com/x/y/pull/3",
+                        "title": "Add foo",
+                        "status": "open",
+                    },
+                )
+            )
+        )
+    )
+    assert len(events) == 2
+    marker, call = events
+    assert isinstance(marker, ArtifactMarker)
+    assert marker.payload == {
+        "type": "pr",
+        "url": "https://github.com/x/y/pull/3",
+        "title": "Add foo",
+        "status": "open",
+    }
+    assert isinstance(call, ToolCall)
+    assert call.name == "mcp__atelier__record_pr"
+
+
+def test_unrelated_mcp_tool_does_not_emit_artifact_marker() -> None:
+    [event] = list(
+        _convert(
+            _assistant(
+                ToolUseBlock(
+                    id="t-1",
+                    name="mcp__filesystem__read_file",
+                    input={"path": "x.txt"},
+                )
+            )
+        )
+    )
+    assert isinstance(event, ToolCall)
 
 
 def test_tool_result_block_string_content() -> None:

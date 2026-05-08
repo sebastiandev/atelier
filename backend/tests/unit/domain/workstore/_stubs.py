@@ -117,6 +117,15 @@ class StubRepository:
         self.artifacts[artifact.slug] = artifact
         return artifact
 
+    def list_artifacts_for_work(self, work_slug: str) -> list[Artifact]:
+        work = self.works.get(work_slug)
+        if work is None or work.id is None:
+            return []
+        return [a for a in self.artifacts.values() if a.work_id == work.id]
+
+    def get_artifact_by_slug(self, slug: str) -> Artifact | None:
+        return self.artifacts.get(slug)
+
     def add_handoff(self, handoff: Handoff) -> Handoff:
         handoff.id = self._next_handoff_id
         self._next_handoff_id += 1

@@ -305,6 +305,14 @@ class WorkStoreService:
             )
             return self._repo.add_artifact(artifact)
 
+    def list_artifacts_for_work(self, work_slug: str) -> list[Artifact]:
+        with self._lock:
+            self._require_work(work_slug)
+            return self._repo.list_artifacts_for_work(work_slug)
+
+    def get_artifact_by_slug(self, slug: str) -> Artifact | None:
+        return self._repo.get_artifact_by_slug(slug)
+
     def record_handoff(self, req: RecordHandoffRequest) -> Handoff:
         with self._lock:
             parent = self._require_work(req.work_slug)

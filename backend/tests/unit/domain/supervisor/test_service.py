@@ -15,11 +15,13 @@ import pytest
 from src.domain.agents import (
     AgentEvent,
     AgentStartContext,
+    ArtifactMarker,
     MessageComplete,
     MessageDelta,
     SessionEstablished,
     StatusChange,
 )
+from src.domain.models import Artifact
 from src.domain.supervisor import SUBSCRIBER_QUEUE_MAX, AgentSupervisorService
 from src.infrastructure.agents import StubAgentAdapter
 from tests.unit.domain.workstore._stubs import StubTranscriptLog
@@ -615,6 +617,110 @@ def test_lazy_register_does_not_start_pump_until_send_input() -> None:
     assert [e["seq"] for e in events] == [1, 2, 3, 4, 5, 6]
     assert events[-1]["type"] == "status_change"
     assert inputs == ["wake up"]
+
+
+# ---------------------------------------------------------------------------
+# ArtifactMarker dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_artifact_marker_invokes_recorder_and_emits_artifact_recorded() -> None:
+    """When an adapter emits ArtifactMarker, the supervisor calls the
+    injected recorder and then publishes a synthetic ``artifact_recorded``
+    event into the same transcript stream."""
+
+    captured: list[tuple[str, str, dict[str, Any]]] = []
+
+    def recorder(work: str, agent: str, payload: dict[str, Any]) -> Artifact:
+        captured.append((work, agent, payload))
+        return Artifact(
+            id=1,
+            slug="art-1",
+            work_id=1,
+            agent_id=1,
+            type="pr",
+            title=payload["title"],
+            status=payload["status"],
+            created_at=UTC_NOW,
+            url=payload.get("url"),
+        )
+
+    async def run() -> list[dict[str, Any]]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log, record_artifact=recorder)
+        marker = ArtifactMarker(
+            ts=UTC_NOW,
+            payload={
+                "type": "pr",
+                "url": "https://x/1",
+                "title": "Add foo",
+                "status": "open",
+            },
+        )
+        adapter = StubAgentAdapter([marker])
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.shutdown()
+        return log.events[("WRK-001", "agt-1")]
+
+    events = _run(run())
+    assert captured == [
+        (
+            "WRK-001",
+            "agt-1",
+            {
+                "type": "pr",
+                "url": "https://x/1",
+                "title": "Add foo",
+                "status": "open",
+            },
+        )
+    ]
+    assert [e["type"] for e in events] == ["artifact_marker", "artifact_recorded"]
+    recorded = events[1]
+    assert recorded["artifact"]["slug"] == "art-1"
+    assert recorded["artifact"]["title"] == "Add foo"
+
+
+def test_artifact_marker_validation_failure_emits_error_event() -> None:
+    """A ``ValueError`` from the recorder surfaces as an ``error`` event in
+    the transcript — the marker itself is still durable on disk."""
+
+    def recorder(_w: str, _a: str, _p: dict[str, Any]) -> Artifact:
+        raise ValueError("missing 'title'")
+
+    async def run() -> list[dict[str, Any]]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log, record_artifact=recorder)
+        marker = ArtifactMarker(ts=UTC_NOW, payload={"type": "pr"})
+        adapter = StubAgentAdapter([marker])
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.shutdown()
+        return log.events[("WRK-001", "agt-1")]
+
+    events = _run(run())
+    types = [e["type"] for e in events]
+    assert types == ["artifact_marker", "error"]
+    assert "missing 'title'" in events[1]["message"]
+
+
+def test_artifact_marker_without_recorder_is_passthrough() -> None:
+    """If no recorder is wired, the marker still flows through the normal
+    transcript pipeline; the supervisor is just a relay."""
+
+    async def run() -> list[dict[str, Any]]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log)  # no recorder
+        marker = ArtifactMarker(ts=UTC_NOW, payload={"type": "pr"})
+        adapter = StubAgentAdapter([marker])
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.shutdown()
+        return log.events[("WRK-001", "agt-1")]
+
+    events = _run(run())
+    assert [e["type"] for e in events] == ["artifact_marker"]
 
 
 def test_lazy_register_calls_adapter_start_with_context() -> None:

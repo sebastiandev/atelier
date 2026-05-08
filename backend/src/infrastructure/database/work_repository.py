@@ -218,6 +218,27 @@ class SqlWorkRepository:
             artifact.slug = f"art-{artifact.id}"
         return artifact
 
+    def list_artifacts_for_work(self, work_slug: str) -> list[Artifact]:
+        with self._txn() as session:
+            work_id = session.execute(
+                select(works_table.c.id).where(works_table.c.slug == work_slug)
+            ).scalar_one_or_none()
+            if work_id is None:
+                return []
+            return list(
+                session.execute(
+                    select(Artifact)
+                    .where(artifacts_table.c.work_id == work_id)
+                    .order_by(artifacts_table.c.created_at.asc())
+                ).scalars()
+            )
+
+    def get_artifact_by_slug(self, slug: str) -> Artifact | None:
+        with self._txn() as session:
+            return session.execute(
+                select(Artifact).where(artifacts_table.c.slug == slug)
+            ).scalar_one_or_none()
+
     def add_handoff(self, handoff: Handoff) -> Handoff:
         with self._txn() as session:
             handoff.slug = _placeholder_slug()

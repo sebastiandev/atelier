@@ -404,6 +404,49 @@ export function createProject(payload: CreateProjectPayload): Promise<ProjectDet
   }).then((r) => jsonOrThrow<ProjectDetail>(r));
 }
 
+// ---------------------------------------------------------------------------
+// Artifacts
+// ---------------------------------------------------------------------------
+
+export type ArtifactType = "pr" | "jira" | "doc";
+
+export type ArtifactSummary = {
+  slug: string;
+  type: ArtifactType;
+  title: string;
+  // Per-type enum from the backend tracker — pr: open|draft|merged|closed,
+  // jira: todo|in_progress|in_review|done|blocked, doc: draft|published.
+  status: string;
+  created_at: string;
+  // The agent that emitted the marker, if attribution was supplied.
+  agent_slug: string | null;
+  url: string | null;
+  repo: string | null;
+  // Absolute path on disk, for doc-type artifacts; click → revealArtifact.
+  doc_path: string | null;
+};
+
+export function listArtifacts(workSlug: string): Promise<ArtifactSummary[]> {
+  return fetch(`/api/works/${workSlug}/artifacts`).then((r) =>
+    jsonOrThrow<ArtifactSummary[]>(r),
+  );
+}
+
+/**
+ * Open a doc-type artifact's underlying file in the OS file browser.
+ * 404 if the slug is unknown; 422 if the artifact isn't a doc.
+ */
+export function revealArtifact(slug: string): Promise<void> {
+  return fetch(`/api/artifacts/${slug}/reveal`, { method: "POST" }).then(
+    async (r) => {
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        throw new Error(`${r.status} ${r.statusText}: ${body}`);
+      }
+    },
+  );
+}
+
 /**
  * Derive a 1–2 character monogram from a project name. Used by the New
  * Project dialog to seed the glyph field — user can override before save.

@@ -1,5 +1,6 @@
 """Agent boundary: AgentAdapter port, AgentConfig hierarchy, AgentEvent union."""
 
+from src.domain.agents.artifacts import InvalidMarker, record_artifact
 from src.domain.agents.configs import (
     AMP_DEFAULT_AUTO_ALLOWED_TOOLS,
     AgentConfig,
@@ -69,6 +70,7 @@ __all__ = [
     "CommonAgentConfig",
     "EnumOption",
     "Error",
+    "InvalidMarker",
     "MessageComplete",
     "MessageDelta",
     "PermissionDecision",
@@ -89,6 +91,7 @@ __all__ = [
     "TurnMetrics",
     "UserAction",
     "parse_user_action",
+    "record_artifact",
     "render_agent_contexts",
     "render_system_prompt",
 ]

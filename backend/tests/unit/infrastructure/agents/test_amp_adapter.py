@@ -33,6 +33,7 @@ from src.domain.agents import (
     AgentStartContext,
     AmpAgentConfig,
     AmpMode,
+    ArtifactMarker,
     CommonAgentConfig,
     Error,
     MessageComplete,
@@ -134,6 +135,37 @@ def test_assistant_tool_use_maps_to_tool_call() -> None:
     assert event.tool_id == "t-1"
     assert event.name == "bash"
     assert event.arguments == {"cmd": "ls"}
+
+
+def test_atelier_record_jira_tool_use_emits_artifact_marker_then_tool_call() -> None:
+    """The artifact-recording tools produce an ArtifactMarker for the
+    supervisor's tracker AND a regular ToolCall."""
+    events = list(
+        _convert(
+            _assistant(
+                ToolUseContent(
+                    id="t-1",
+                    name="mcp__atelier__record_jira",
+                    input={
+                        "url": "https://j/X-1",
+                        "title": "Implement bar",
+                        "status": "in_progress",
+                    },
+                )
+            )
+        )
+    )
+    assert len(events) == 2
+    marker, call = events
+    assert isinstance(marker, ArtifactMarker)
+    assert marker.payload == {
+        "type": "jira",
+        "url": "https://j/X-1",
+        "title": "Implement bar",
+        "status": "in_progress",
+    }
+    assert isinstance(call, ToolCall)
+    assert call.name == "mcp__atelier__record_jira"
 
 
 def test_multi_block_assistant_yields_in_order() -> None:

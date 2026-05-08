@@ -11,6 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import (
+    ArtifactSummary,
     CompleteWorkResponse,
     ContextSchema,
     MoveWorkRequest,
@@ -25,11 +26,12 @@ from src.domain.commands.works import (
     create,
     get,
     list_all,
+    list_artifacts,
     move_to_project,
     soft_delete,
     update,
 )
-from src.domain.models import Context, Work
+from src.domain.models import Artifact, Context, Work
 from src.domain.projectstore.ports import ProjectStore
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.dtos import (
@@ -112,6 +114,22 @@ def get_work_endpoint(
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"work not found: {work_slug}")
     return _to_detail(record, WorkspacePaths(workspace_root=settings.workspace_root))
+
+
+@router.get(
+    "/works/{work_slug}/artifacts",
+    response_model=list[ArtifactSummary],
+)
+def list_work_artifacts_endpoint(
+    work_slug: str, workstore: WorkStoreDep
+) -> list[ArtifactSummary]:
+    try:
+        artifacts = list_artifacts.execute(workstore, work_slug)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    agents = workstore.list_agents_for_work(work_slug)
+    agent_slug_by_id = {a.id: a.slug for a in agents if a.id is not None}
+    return [_to_artifact_summary(a, agent_slug_by_id) for a in artifacts]
 
 
 @router.patch("/works/{work_slug}", response_model=WorkDetail)
@@ -272,6 +290,29 @@ def _to_detail(record: WorkRecord, paths: WorkspacePaths) -> WorkDetail:
     return WorkDetail(
         **summary.model_dump(),
         contexts=[_to_schema_context(c) for c in record.contexts],
+    )
+
+
+def _to_artifact_summary(
+    artifact: Artifact, agent_slug_by_id: dict[int, str | None]
+) -> ArtifactSummary:
+    if artifact.slug is None:
+        raise RuntimeError("persisted Artifact has no slug")
+    agent_slug = (
+        agent_slug_by_id.get(artifact.agent_id)
+        if artifact.agent_id is not None
+        else None
+    )
+    return ArtifactSummary(
+        slug=artifact.slug,
+        type=artifact.type,
+        title=artifact.title,
+        status=artifact.status,
+        created_at=artifact.created_at,
+        agent_slug=agent_slug,
+        url=artifact.url,
+        repo=artifact.repo,
+        doc_path=artifact.doc_path,
     )
 
 

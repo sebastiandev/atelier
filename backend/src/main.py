@@ -1,11 +1,14 @@
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 
 from src.application.http.routes import (
     agents,
+    artifacts,
     connections,
     health,
     projects,
@@ -13,7 +16,9 @@ from src.application.http.routes import (
     works,
 )
 from src.application.ws import agents as ws_agents
+from src.domain.agents import record_artifact
 from src.domain.connections import ConnectionStoreService
+from src.domain.models import Artifact
 from src.domain.projectstore import ProjectStoreService
 from src.domain.projectstore import reconcile as reconcile_projects
 from src.domain.supervisor import AgentSupervisorService
@@ -87,8 +92,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # set is left over from a previous run that crashed before
         # tear-down or a soft-deleted work. Run once per work_slug.
         workstore = WorkStoreService(repo, files, transcript_log)
+
+        # Resolve an agent's actual working directory. Mirrors the agents
+        # route helper: the per-agent worktree if provisioned, the source
+        # folder otherwise. Used by the artifact tracker to validate
+        # doc-type paths exist before recording.
+        def _resolve_workdir(work_slug: str, agent_slug: str) -> Path:
+            candidate = paths.worktree_dir(work_slug, agent_slug)
+            if candidate.exists():
+                return candidate
+            agent = next(
+                (
+                    a
+                    for a in workstore.list_agents_for_work(work_slug)
+                    if a.slug == agent_slug
+                ),
+                None,
+            )
+            if agent is None:
+                raise ValueError(f"agent not found: {agent_slug}")
+            return agent.folder
+
+        def _track_artifact(
+            work_slug: str, agent_slug: str, payload: dict[str, Any]
+        ) -> Artifact:
+            return record_artifact(
+                work_slug,
+                agent_slug,
+                payload,
+                workstore=workstore,
+                resolve_workdir=_resolve_workdir,
+            )
+
         supervisor = AgentSupervisorService(
-            transcript_log, workstore.set_agent_session_id
+            transcript_log,
+            workstore.set_agent_session_id,
+            record_artifact=_track_artifact,
         )
         for work in workstore.list_works():
             if work.slug is None:
@@ -117,6 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(agents.router, prefix="/api")
     app.include_router(providers.router, prefix="/api")
     app.include_router(connections.router, prefix="/api")
+    app.include_router(artifacts.router, prefix="/api")
     app.include_router(ws_agents.router, prefix="/api")
     return app
 

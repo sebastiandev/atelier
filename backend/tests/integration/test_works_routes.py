@@ -425,3 +425,59 @@ def test_reconcile_keeps_deleted_state_in_db_after_restart(
             work = session.execute(select(Work)).scalar_one()
             assert work.status == "deleted"
         engine2.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Artifacts
+# ---------------------------------------------------------------------------
+
+
+def test_list_artifacts_returns_empty_for_new_work(app_client: TestClient) -> None:
+    app_client.post("/api/works", json=_new_work())
+    res = app_client.get("/api/works/WRK-001/artifacts")
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+def test_list_artifacts_returns_recorded_rows(app_client: TestClient) -> None:
+    """Recording via the workstore (the path the supervisor takes) shows up
+    in the list endpoint, ordered by creation time."""
+    from src.domain.workstore.dtos import RecordArtifactRequest
+
+    app_client.post("/api/works", json=_new_work())
+    workstore = app_client.app.state.workstore
+
+    workstore.record_artifact(
+        RecordArtifactRequest(
+            work_slug="WRK-001",
+            type="pr",
+            title="Add foo",
+            status="open",
+            url="https://github.com/x/y/pull/1",
+            repo="x/y",
+        )
+    )
+    workstore.record_artifact(
+        RecordArtifactRequest(
+            work_slug="WRK-001",
+            type="jira",
+            title="Implement bar",
+            status="in_progress",
+            url="https://j.example/X-7",
+        )
+    )
+
+    res = app_client.get("/api/works/WRK-001/artifacts")
+    assert res.status_code == 200
+    body = res.json()
+    assert [a["type"] for a in body] == ["pr", "jira"]
+    assert body[0]["slug"] == "art-1"
+    assert body[0]["url"] == "https://github.com/x/y/pull/1"
+    assert body[0]["repo"] == "x/y"
+    assert body[1]["status"] == "in_progress"
+    # No agent attribution was supplied — agent_slug is null.
+    assert body[0]["agent_slug"] is None
+
+
+def test_list_artifacts_404_for_unknown_work(app_client: TestClient) -> None:
+    assert app_client.get("/api/works/WRK-404/artifacts").status_code == 404

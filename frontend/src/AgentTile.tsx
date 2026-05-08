@@ -19,6 +19,7 @@ import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { MarkdownText } from "./MarkdownText";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
+import { useArtifactsRefresh } from "./state/artifactsRefresh";
 import {
   type AgentEvent,
   type PendingPermission,
@@ -43,6 +44,10 @@ function isSimpleType(type: string): type is SimpleContextType {
 
 type AgentTileProps = {
   agentSlug: string;
+  /** Set when mounted under a WorkView so artifact_recorded events bump
+   *  the work's rail revision. Standalone /agents/{slug} mounts can
+   *  omit it — there's no rail to refresh. */
+  workSlug?: string;
   mode?: "page" | "tile";
   persona?: Persona;
   agentName?: string;
@@ -79,6 +84,7 @@ type AgentTileProps = {
  */
 export function AgentTile({
   agentSlug,
+  workSlug,
   mode = "page",
   persona,
   agentName,
@@ -97,6 +103,29 @@ export function AgentTile({
     sendPermission,
     pendingPermissions,
   } = useAgentStream(agentSlug);
+
+  // Bump the work's rail revision when this agent's stream surfaces an
+  // ``artifact_recorded`` event so the Artifacts section refetches. We
+  // track the highest seq we've notified on so reopen-from-closed (which
+  // replays from cursor 0) doesn't double-bump for events the rail has
+  // already shown. Top-level rather than inside another effect because
+  // the rail-revision write must be commit-time, not render-time.
+  const lastArtifactSeqRef = useRef(0);
+  useEffect(() => {
+    if (!workSlug) return;
+    let highest = lastArtifactSeqRef.current;
+    let bumped = false;
+    for (const ev of events) {
+      if (ev.type === "artifact_recorded" && ev.seq > lastArtifactSeqRef.current) {
+        bumped = true;
+        if (ev.seq > highest) highest = ev.seq;
+      }
+    }
+    if (bumped) {
+      lastArtifactSeqRef.current = highest;
+      useArtifactsRefresh.getState().bump(workSlug);
+    }
+  }, [events, workSlug]);
   const [draft, setDraft] = useState("");
   // Optimistic "thinking" between Send and the first status_change event
   // back from the adapter, so the dot reacts instantly.

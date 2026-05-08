@@ -47,12 +47,15 @@ from claude_agent_sdk import (
     ThinkingBlock,
     ToolResultBlock,
     ToolUseBlock,
+    create_sdk_mcp_server,
+    tool,
 )
 
 from src.domain.agents import (
     AgentAdapter,
     AgentEvent,
     AgentStartContext,
+    ArtifactMarker,
     ClaudeAgentConfig,
     ClaudeEffort,
     Error,
@@ -66,6 +69,15 @@ from src.domain.agents import (
     ToolCall,
     ToolResult,
     TurnMetrics,
+)
+from src.infrastructure.agents.atelier_mcp_tools import (
+    MCP_SERVER_NAME,
+    TOOL_DESCRIPTIONS,
+    TOOL_RECORD_DOC,
+    TOOL_RECORD_JIRA,
+    TOOL_RECORD_PR,
+    TOOL_SCHEMAS,
+    marker_payload_for_tool,
 )
 from src.infrastructure.agents.factory import build_adapter
 from src.settings import Settings
@@ -269,14 +281,37 @@ class ClaudeCodeAdapter:
             await self._client.disconnect()
 
     def _build_options(self) -> ClaudeAgentOptions:
+        # Atelier's artifact-recording tools — registered as an in-process
+        # MCP server. Auto-allowed: they're side-effect-free from the SDK's
+        # POV (the actual recording is triggered by the supervisor on the
+        # ArtifactMarker the adapter emits when it sees the tool use).
+        artifact_tools = [
+            tool(
+                name,
+                TOOL_DESCRIPTIONS[name],
+                TOOL_SCHEMAS[name],
+            )(_artifact_tool_handler)
+            for name in (TOOL_RECORD_PR, TOOL_RECORD_JIRA, TOOL_RECORD_DOC)
+        ]
+        artifact_server = create_sdk_mcp_server(
+            name=MCP_SERVER_NAME, tools=artifact_tools
+        )
+
         kwargs: dict[str, Any] = {
             "model": self._config.model.value,
             "system_prompt": self._config.common.system_prompt,
             "cwd": str(self._config.common.workdir),
             "permission_mode": self._config.permission_mode.value,
-            # Conservative auto-allow list (read-only research tools).
-            # Anything outside this set flows through ``can_use_tool``.
-            "allowed_tools": list(self._config.allowed_tools),
+            # Conservative auto-allow list (read-only research tools) plus
+            # the artifact tools — those are trusted Atelier-internal hooks
+            # and must never prompt the user.
+            "allowed_tools": [
+                *self._config.allowed_tools,
+                f"mcp__{MCP_SERVER_NAME}__{TOOL_RECORD_PR}",
+                f"mcp__{MCP_SERVER_NAME}__{TOOL_RECORD_JIRA}",
+                f"mcp__{MCP_SERVER_NAME}__{TOOL_RECORD_DOC}",
+            ],
+            "mcp_servers": {MCP_SERVER_NAME: artifact_server},
             "can_use_tool": self._can_use_tool,
         }
         if self._config.thinking_effort is not ClaudeEffort.OFF:
@@ -284,6 +319,24 @@ class ClaudeCodeAdapter:
         if self._resume_session_id is not None:
             kwargs["resume"] = self._resume_session_id
         return ClaudeAgentOptions(**kwargs)
+
+
+async def _artifact_tool_handler(_args: dict[str, Any]) -> dict[str, Any]:
+    """In-process MCP tool body for ``record_pr/jira/doc``.
+
+    The actual recording is driven by the supervisor when it sees the
+    ``ArtifactMarker`` event the adapter emits alongside this tool use —
+    this handler is just the obligatory MCP acknowledgement so the SDK
+    can return a tool_result to the model.
+    """
+    return {
+        "content": [
+            {
+                "type": "text",
+                "text": "Artifact will be recorded by Atelier.",
+            }
+        ]
+    }
 
 
 def _convert(msg: object, *, model: str | None = None) -> Iterable[AgentEvent]:
@@ -300,6 +353,12 @@ def _convert(msg: object, *, model: str | None = None) -> Iterable[AgentEvent]:
             elif isinstance(block, ThinkingBlock):
                 yield ThinkingComplete(ts=now, text=block.thinking)
             elif isinstance(block, ToolUseBlock):
+                # Atelier artifact-tool calls produce a marker on the side;
+                # the regular ToolCall still flows through so the user sees
+                # the agent's exact invocation in the chat transcript.
+                payload = marker_payload_for_tool(block.name, dict(block.input))
+                if payload is not None:
+                    yield ArtifactMarker(ts=now, payload=payload)
                 yield ToolCall(
                     ts=now,
                     tool_id=block.id,

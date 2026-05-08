@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { AgentTile } from "./AgentTile";
 import {
   type AgentSummary,
+  type ArtifactSummary,
   type CreateAgentPayload,
   type ProjectSummary,
   type WorkDetail,
@@ -12,13 +13,19 @@ import {
   getProject,
   getWork,
   listAgents,
+  listArtifacts,
   listProjects,
   revealAgent,
+  revealArtifact,
   revealWork,
 } from "./api";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
+import {
+  selectWorkRevision,
+  useArtifactsRefresh,
+} from "./state/artifactsRefresh";
 import { useClosedStore } from "./state/closed";
 import { useTweaksStore } from "./state/tweaks";
 import { ThemeToggle } from "./ThemeToggle";
@@ -33,6 +40,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [work, setWork] = useState<WorkDetail | null>(null);
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
@@ -41,6 +49,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   // Projects list for the move picker — fetched lazily when the dialog
   // opens so the WorkView doesn't pay the cost on every mount.
   const [allProjects, setAllProjects] = useState<ProjectSummary[] | null>(null);
+  const artifactsRevision = useArtifactsRefresh((s) =>
+    selectWorkRevision(s, workSlug),
+  );
   // Transient banner for the detach flow — fades out after 4s. Used both
   // for "launched in Terminal" success and "couldn't launch — command
   // copied to clipboard" fallback. One slot is plenty: detaches happen
@@ -51,6 +62,24 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const closeAgent = useClosedStore((s) => s.close);
   const restoreAgent = useClosedStore((s) => s.restore);
   const layout = useTweaksStore((s) => s.layout);
+
+  // Refetch on revision bump (an agent emitted artifact_recorded) AND on
+  // mount / workSlug change. Initial fetch is the same call so we don't
+  // need a separate effect.
+  useEffect(() => {
+    let cancelled = false;
+    listArtifacts(workSlug)
+      .then((rows) => {
+        if (!cancelled) setArtifacts(rows);
+      })
+      .catch(() => {
+        // Silent: rail just shows the previous list (or empty on first
+        // mount). Errors surface via the work-fetch effect below.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workSlug, artifactsRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -341,6 +370,17 @@ export function WorkView({ workSlug }: { workSlug: string }) {
               );
             })}
           </RailSection>
+
+          <RailSection title="Artifacts" count={artifacts.length}>
+            {artifacts.length === 0 && (
+              <div className="hint" style={{ padding: "4px 8px" }}>
+                None tracked yet. Agents will report PRs and tickets here.
+              </div>
+            )}
+            {artifacts.map((a) => (
+              <ArtifactRow key={a.slug} artifact={a} />
+            ))}
+          </RailSection>
         </aside>
 
         <div className="canvas-wrap">
@@ -381,6 +421,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
               >
                 <AgentTile
                   agentSlug={a.slug}
+                  workSlug={workSlug}
                   mode="tile"
                   persona={a.persona}
                   agentName={a.name}
@@ -426,6 +467,64 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         </div>
       )}
     </div>
+  );
+}
+
+// Per-type two-letter glyph for the rail row's left badge. Mirrors the
+// design prototype's ``ArtifactRow`` (PR / JI / DC).
+const ARTIFACT_TYPE_LABEL: Record<ArtifactSummary["type"], string> = {
+  pr: "PR",
+  jira: "JI",
+  doc: "DC",
+};
+
+// Status values that resolve to a "good" chip color (everything else
+// renders as the neutral / info chip via the cascade in styles.css).
+const ARTIFACT_GOOD_STATUSES = new Set(["merged", "done", "published"]);
+
+function ArtifactRow({ artifact }: { artifact: ArtifactSummary }) {
+  const isClickable =
+    (artifact.type === "doc" && artifact.doc_path) ||
+    (artifact.type !== "doc" && artifact.url);
+  const handleClick = () => {
+    if (artifact.type === "doc") {
+      if (artifact.doc_path) {
+        // Fire and forget — backend logs failure server-side; the row
+        // stays visible either way. If we ever get a "reveal failed"
+        // toast slot, surface it here.
+        void revealArtifact(artifact.slug).catch(() => {});
+      }
+      return;
+    }
+    if (artifact.url) {
+      window.open(artifact.url, "_blank", "noopener,noreferrer");
+    }
+  };
+  const statusClass = ARTIFACT_GOOD_STATUSES.has(artifact.status)
+    ? "chip good"
+    : "chip info";
+  const subtitle =
+    artifact.agent_slug ?? (artifact.repo ?? artifact.url ?? "");
+  return (
+    <button
+      type="button"
+      className="rail-arti"
+      title={artifact.title}
+      onClick={isClickable ? handleClick : undefined}
+      data-clickable={isClickable ? "true" : undefined}
+    >
+      <div className="arti-ico" data-type={artifact.type}>
+        {ARTIFACT_TYPE_LABEL[artifact.type] ?? "AR"}
+      </div>
+      <div className="rail-arti-meta">
+        <div className="rail-arti-title">{artifact.title}</div>
+        <div className="rail-arti-id mono">
+          {artifact.slug}
+          {subtitle ? ` · ${subtitle}` : ""}
+        </div>
+      </div>
+      <span className={statusClass}>{artifact.status}</span>
+    </button>
   );
 }
 

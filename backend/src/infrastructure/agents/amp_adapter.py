@@ -92,6 +92,7 @@ from amp_sdk import (
     create_user_message,
     execute,
 )
+from amp_sdk.types import MCPConfig
 
 from src.domain.agents import (
     AMP_DEFAULT_AUTO_ALLOWED_TOOLS,
@@ -100,6 +101,7 @@ from src.domain.agents import (
     AgentStartContext,
     AmpAgentConfig,
     AmpPermissionMode,
+    ArtifactMarker,
     Error,
     MessageComplete,
     PermissionDecision,
@@ -110,6 +112,10 @@ from src.domain.agents import (
     ToolCall,
     ToolResult,
     TurnMetrics,
+)
+from src.infrastructure.agents.atelier_mcp_tools import (
+    MCP_SERVER_NAME,
+    marker_payload_for_tool,
 )
 from src.infrastructure.agents.factory import build_adapter
 from src.settings import Settings
@@ -287,6 +293,11 @@ class AmpAdapter:
         opts: dict[str, object] = {
             "cwd": str(self._config.common.workdir),
             "mode": self._config.mode.value,
+            # Atelier's artifact-recording tools are exposed via a
+            # subprocess MCP server Amp spawns alongside its CLI. The
+            # tool body is a no-op acknowledgement; the side-effect is
+            # driven by ArtifactMarker emission in ``_convert``.
+            "mcp_config": _build_atelier_mcp_config(),
         }
         if self._resume_thread_id is not None:
             opts["continue_thread"] = self._resume_thread_id
@@ -414,6 +425,28 @@ async def _close_writer(writer: asyncio.StreamWriter) -> None:
         pass
 
 
+def _build_atelier_mcp_config() -> MCPConfig:
+    """The MCP config Amp uses to spawn Atelier's artifact-tool server.
+
+    Spawned via the same Python interpreter as the running backend so the
+    server module resolves through Atelier's editable install. Each agent
+    gets its own short-lived subprocess; no shared state to worry about.
+    """
+    return MCPConfig.model_validate(
+        {
+            "servers": {
+                MCP_SERVER_NAME: {
+                    "command": sys.executable,
+                    "args": [
+                        "-m",
+                        "src.infrastructure.agents.atelier_mcp_server",
+                    ],
+                }
+            }
+        }
+    )
+
+
 def _build_permissions(allowed_tools: tuple[str, ...]) -> list[Permission]:
     """Permission rules for the Amp CLI.
 
@@ -483,6 +516,13 @@ def _convert(msg: StreamMessage, *, model: str | None = None) -> Iterable[AgentE
             if isinstance(asst_block, TextContent):
                 yield MessageComplete(ts=now, text=asst_block.text)
             elif isinstance(asst_block, ToolUseContent):
+                # Atelier artifact tools produce a marker on the side; the
+                # ToolCall still flows so the chat shows the agent's call.
+                payload = marker_payload_for_tool(
+                    asst_block.name, dict(asst_block.input)
+                )
+                if payload is not None:
+                    yield ArtifactMarker(ts=now, payload=payload)
                 yield ToolCall(
                     ts=now,
                     tool_id=asst_block.id,

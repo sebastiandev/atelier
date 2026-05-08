@@ -99,12 +99,15 @@ from src.domain.agents import (
     AgentAdapter,
     AgentEvent,
     AgentStartContext,
+    ArtifactMarker,
     PermissionDecisionValue,
     SessionEstablished,
 )
+from src.domain.models import Artifact
 from src.domain.workstore.ports import TranscriptLog
 
 SetSessionIdFn = Callable[[str, str], None]
+RecordArtifactFn = Callable[[str, str, dict[str, Any]], Artifact]
 
 _log = logging.getLogger(__name__)
 
@@ -174,6 +177,7 @@ class AgentSupervisorService:
         self,
         transcript_log: TranscriptLog,
         set_session_id: SetSessionIdFn = lambda _slug, _sid: None,
+        record_artifact: RecordArtifactFn | None = None,
     ) -> None:
         self._transcript_log = transcript_log
         # Called when an adapter emits SessionEstablished — the supervisor
@@ -181,6 +185,12 @@ class AgentSupervisorService:
         # can be resumed on the next reconnect. Default is a no-op so
         # tests that only exercise event flow don't need a workstore.
         self._set_session_id = set_session_id
+        # Called when an adapter emits ArtifactMarker — sync callable
+        # injected at boot. None (default) means the supervisor still
+        # writes the marker to disk and fans it out, but doesn't persist
+        # an Artifact row. Tests that don't care about artifact recording
+        # leave it unset.
+        self._record_artifact = record_artifact
         self._states: dict[str, _AgentState] = {}
         self._registry_lock = asyncio.Lock()
 
@@ -367,7 +377,12 @@ class AgentSupervisorService:
                     await asyncio.to_thread(
                         self._set_session_id, state.agent_slug, event.session_id
                     )
+                # Marker hits disk via _publish FIRST so a downstream
+                # validation failure still leaves a durable record of
+                # what the agent emitted.
                 await self._publish(state, _event_to_dict(event))
+                if isinstance(event, ArtifactMarker) and self._record_artifact:
+                    await self._record_marker(state, event)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -408,6 +423,50 @@ class AgentSupervisorService:
                 sub.kicked.set()
                 state.subscriber = None
 
+    async def _record_marker(
+        self, state: _AgentState, event: ArtifactMarker
+    ) -> None:
+        if self._record_artifact is None:
+            return
+        try:
+            artifact = await asyncio.to_thread(
+                self._record_artifact,
+                state.work_slug,
+                state.agent_slug,
+                event.payload,
+            )
+        except ValueError as exc:
+            await self._publish(
+                state,
+                {
+                    "type": "error",
+                    "ts": datetime.now(UTC).isoformat(),
+                    "message": f"invalid artifact marker: {exc}",
+                },
+            )
+            return
+        except Exception as exc:
+            _log.exception(
+                "artifact tracker failed for agent=%s", state.agent_slug
+            )
+            await self._publish(
+                state,
+                {
+                    "type": "error",
+                    "ts": datetime.now(UTC).isoformat(),
+                    "message": f"artifact tracker error: {exc!r}",
+                },
+            )
+            return
+        await self._publish(
+            state,
+            {
+                "type": "artifact_recorded",
+                "ts": datetime.now(UTC).isoformat(),
+                "artifact": _artifact_to_dict(artifact),
+            },
+        )
+
     def _require_state(self, agent_slug: str) -> _AgentState:
         state = self._states.get(agent_slug)
         if state is None:
@@ -420,6 +479,19 @@ def _event_to_dict(event: AgentEvent) -> dict[str, Any]:
     d = dataclasses.asdict(event)
     d["ts"] = event.ts.isoformat()
     return d
+
+
+def _artifact_to_dict(artifact: Artifact) -> dict[str, Any]:
+    return {
+        "slug": artifact.slug,
+        "type": artifact.type,
+        "title": artifact.title,
+        "status": artifact.status,
+        "created_at": artifact.created_at.isoformat(),
+        "url": artifact.url,
+        "repo": artifact.repo,
+        "doc_path": artifact.doc_path,
+    }
 
 
 __all__ = ["SUBSCRIBER_QUEUE_MAX", "AgentSubscription", "AgentSupervisorService"]

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from src.domain.models import (
     AgentStatus,
+    ArtifactType,
     ContextType,
     Persona,
     Provider,
@@ -242,8 +243,23 @@ class ProjectDetail(ProjectSummary):
     """
 
 
+class ArtifactSummary(BaseModel):
+    """Artifact row, projected for the rail."""
+
+    slug: str
+    type: ArtifactType
+    title: str
+    status: str
+    created_at: datetime
+    agent_slug: str | None = None
+    url: str | None = None
+    repo: str | None = None
+    doc_path: str | None = None
+
+
 __all__ = [
     "AgentSummary",
+    "ArtifactSummary",
     "ConnectionRead",
     "ContextSchema",
     "DetachResponse",
