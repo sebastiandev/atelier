@@ -62,8 +62,8 @@ everything that happened in the terminal.
 </p>
 
 <p align="center">
-  <video src="docs/screenshots/detach_agent_video.mp4" controls muted width="900">
-    Detach flow demo (your browser couldn't play this inline — open the file from the repo).
+  <video src="https://github.com/user-attachments/assets/97d23025-be69-4fcd-94da-e7209c7e7423" controls muted width="900">
+    Detach flow demo — your browser couldn't play this inline.
   </video>
 </p>
 
