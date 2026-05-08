@@ -61,6 +61,12 @@ everything that happened in the terminal.
   <img src="docs/screenshots/agent_details.png" alt="Agent header — provider pill (claude · opus-4-7), CONNECTED status, worktree path, detach / maximize / CLI / close controls" width="1100">
 </p>
 
+<p align="center">
+  <video src="docs/screenshots/detach_agent_video.mov" controls muted width="900">
+    Detach flow demo (your browser couldn't play this inline — open the file from the repo).
+  </video>
+</p>
+
 ### Source-backed context
 
 Plug in your Jira, Sentry, or Honeycomb credentials once. Pull a ticket, an
