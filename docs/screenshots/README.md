@@ -10,7 +10,7 @@ overwriting an existing PNG keeps the README references intact.
 | `home.png` | Hero, top of README | Workspace home — projects + latest work tiles |
 | `agents.png` | "One workspace, many agents" | A Work unit canvas with two agents streaming in parallel |
 | `agent_details.png` | "Detach to CLI, come back seamlessly" | Agent header close-up — provider pill, CONNECTED status, worktree path, detach/maximize/CLI/close controls |
-| `detach_agent_video.mov` | "Detach to CLI, come back seamlessly" | End-to-end detach flow video — click detach, terminal opens with the resume command, work in the CLI, re-attach in Atelier |
+| `detach_agent_video.mp4` | "Detach to CLI, come back seamlessly" | End-to-end detach flow video — click detach, terminal opens with the resume command, work in the CLI, re-attach in Atelier |
 | `new_agent.png` | "Source-backed context" | Launch-new-agent dialog with persona/provider picker + context attachments |
 | `project.png` | "Optional projects" | Project detail page (PRJ-001 Atelier) with active/completed counts |
 | `new_project.png` | "Optional projects" | New-project dialog with name/glyph/color/default-connection fields |
