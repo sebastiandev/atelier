@@ -114,6 +114,18 @@ export function AgentTile({
   // WorkView canvas; absent on the standalone /agents/{slug} page.
   const dragHandle = useDragHandle();
 
+  // A single subtle hint slot in the tile header replaces native
+  // tooltips on the header's buttons + pills. Buttons set it via
+  // mouseenter, clear via mouseleave — single predictable location for
+  // hover descriptions, no positioning headaches, no native ~700ms delay.
+  const [hint, setHint] = useState<string | null>(null);
+  const hintHandlers = (text: string) => ({
+    onMouseEnter: () => setHint(text),
+    onMouseLeave: () => setHint((current) => (current === text ? null : current)),
+    onFocus: () => setHint(text),
+    onBlur: () => setHint((current) => (current === text ? null : current)),
+  });
+
   // Bump the work's rail revision when this agent's stream surfaces an
   // ``artifact_recorded`` event so the Artifacts section refetches. We
   // track the highest seq we've notified on so reopen-from-closed (which
@@ -320,7 +332,7 @@ export function AgentTile({
             <span
               className="provider-pill mono"
               data-provider={shortProvider(provider)}
-              title={`Provider: ${provider} · Model: ${model}`}
+              {...hintHandlers(`Provider: ${provider} · Model: ${model}`)}
             >
               {shortProvider(provider)} · {shortModel(model)}
             </span>
@@ -330,22 +342,30 @@ export function AgentTile({
             <button
               type="button"
               className="folder-pill mono"
-              title={`Open worktree in finder — ${worktreePath}`}
+              aria-label={`Reveal worktree — ${worktreePath}`}
               onClick={onRevealWorktree}
               disabled={!onRevealWorktree}
+              {...hintHandlers(`Reveal in Finder · ${worktreePath}`)}
             >
               {shortenPath(worktreePath)}
             </button>
           )}
         </div>
         <div className="tile-header-right">
+          <span
+            className={"tile-hint" + (hint ? " visible" : "")}
+            aria-hidden="true"
+          >
+            {hint}
+          </span>
           <div className="tile-controls">
           {onHandoff && (
             <button
               type="button"
               className="tile-ctl"
-              title="Hand off to a new agent — generates a checkpoint doc and forks this agent's worktree"
+              aria-label="Hand off to a new agent"
               onClick={onHandoff}
+              {...hintHandlers("Hand off · checkpoint doc + forked worktree")}
             >
               <HandoffIcon />
             </button>
@@ -353,8 +373,9 @@ export function AgentTile({
           <button
             type="button"
             className="tile-ctl"
-            title={maximized ? "Restore (Shift+Esc / Cmd+Esc)" : "Maximize"}
+            aria-label={maximized ? "Restore" : "Maximize"}
             onClick={() => setMaximized((m) => !m)}
+            {...hintHandlers(maximized ? "Restore" : "Maximize")}
           >
             {maximized ? <RestoreIcon /> : <MaxIcon />}
           </button>
@@ -362,8 +383,9 @@ export function AgentTile({
             <button
               type="button"
               className="tile-ctl"
-              title="Detach to terminal — opens the CLI mid-conversation, closes this tile to the rail"
+              aria-label="Detach to terminal"
               onClick={onDetach}
+              {...hintHandlers("Detach to CLI")}
             >
               <DetachIcon />
             </button>
@@ -371,13 +393,12 @@ export function AgentTile({
           <button
             type="button"
             className="tile-ctl"
-            title={
-              onClose
-                ? "Close — pins to sidebar; reopen any time to resume"
-                : "Close unavailable in this view"
-            }
+            aria-label={onClose ? "Close" : "Close unavailable"}
             onClick={onClose}
             disabled={!onClose}
+            {...hintHandlers(
+              onClose ? "Close · pins to sidebar" : "Close unavailable",
+            )}
           >
             <CloseIcon />
           </button>

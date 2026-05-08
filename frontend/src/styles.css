@@ -2069,9 +2069,16 @@ h5.md-h {
 }
 .rail-arti .rail-arti-title {
   font-size: 12px;
+  line-height: 1.35;
+  /* Allow up to two lines so longer artifact titles aren't truncated
+     mid-word; -webkit-line-clamp handles the ellipsis when over two
+     lines. Standard ``line-clamp`` is also accepted by modern engines
+     but the prefixed form has wider support. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .rail-arti .rail-arti-id {
   font-size: 10.5px;
@@ -2169,6 +2176,33 @@ h5.md-h {
 }
 .canvas-cell .agent-tile {
   width: 100%;
+}
+
+/* Tile-header hint slot --------------------------------------------------
+
+   Single subtle text slot to the left of the right-cluster buttons.
+   Each header button (and the worktree / provider pills) sets it via
+   mouseenter/focus and clears on leave — one predictable location for
+   hover descriptions, no native ~700ms delay, no per-button positioning.
+
+   Fixed width keeps the buttons stable: hovering doesn't shift them
+   left/right. Long hints get ellipsis. ``aria-hidden`` because the same
+   text is also on each control's ``aria-label`` for screen readers. */
+.tile-hint {
+  width: 240px;
+  font-size: 11px;
+  color: var(--fg-3);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: 0.4rem;
+  opacity: 0;
+  transition: opacity 90ms ease;
+  pointer-events: none;
+}
+.tile-hint.visible {
+  opacity: 1;
 }
 
 /* Drag handle — the AgentTile <header> when mounted in a sortable

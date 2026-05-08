@@ -114,6 +114,33 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       .filter((a): a is AgentSummary => a !== undefined);
   }, [agents, agentOrderOverride]);
 
+  // N → new agent. Mirrors the workspace-level shortcuts (W = new work,
+  // P = new project). Suppressed while a modal is open, when any chord
+  // modifier is held, and inside editable fields so typing "n" in the
+  // composer doesn't pop the dialog.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (
+        agentDialogOpen ||
+        completeOpen ||
+        moveOpen ||
+        handoffSource !== null
+      )
+        return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable)
+        return;
+      if (e.key === "n" || e.key === "N") {
+        e.preventDefault();
+        setAgentDialogOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [agentDialogOpen, completeOpen, moveOpen, handoffSource]);
+
   // Refetch on revision bump (an agent emitted artifact_recorded) AND on
   // mount / workSlug change. Initial fetch is the same call so we don't
   // need a separate effect.
@@ -467,7 +494,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             </div>
             <div className="spacer" />
             <button className="btn primary" onClick={() => setAgentDialogOpen(true)}>
-              + New agent
+              + New agent <span className="kbd">N</span>
             </button>
           </div>
 
