@@ -1018,6 +1018,29 @@ body {
 
 /* Transcript ------------------------------------------------------------- */
 
+/* Load-older affordance — appears at the top of the transcript when the
+   visible-events cap is hiding earlier history. Pill style + neutral
+   color so it reads as a control rather than transcript content. The
+   AgentTile preserves scroll position when the user clicks, so the
+   row that was visible stays in the same on-screen spot. */
+.transcript-load-older {
+  align-self: center;
+  margin: 0.25rem 0 0.5rem;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--fg-3);
+  background: var(--bg-elev, var(--bg-1));
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 90ms ease, border-color 90ms ease;
+}
+.transcript-load-older:hover {
+  color: var(--fg-1);
+  border-color: var(--accent-line);
+}
+
 .transcript {
   flex: 1;
   overflow-y: auto;

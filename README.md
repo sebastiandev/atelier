@@ -41,7 +41,7 @@ A quick tour of the surface area:
 - [Artifact detection](#artifact-detection) — PRs, Jira tickets, docs surface on a rail
 - [Re-organize the canvas](#re-organize-the-canvas) — drag tiles into the order you want
 - [Maximize a tile](#maximize-a-tile) — zoom one agent to fill the canvas
-- [Keyboard shortcuts](#keyboard-shortcuts) — one-key flows for the common moves
+- [Agent shortcuts](#agent-shortcuts) — per-tile toolbar: detach, hand off, maximize, close
 - [Source-backed context](#source-backed-context) — Jira / Sentry / Honeycomb on first turn
 - [Per-agent git worktrees](#per-agent-git-worktrees) — automatic, isolated
 - [Persistent everything](#persistent-everything) — transcripts on disk, conversations resume
@@ -71,10 +71,6 @@ process, opens your terminal with the provider's resume command, and hands
 the agent over. Work in the CLI as long as you want. When you're done, the
 agent reattaches in Atelier with the full transcript intact — including
 everything that happened in the terminal.
-
-<p align="center">
-  <img src="docs/screenshots/agent_details.png" alt="Agent header — provider pill (claude · opus-4-7), CONNECTED status, worktree path, detach / maximize / CLI / close controls" width="1100">
-</p>
 
 <p align="center">
   <video src="https://github.com/user-attachments/assets/97d23025-be69-4fcd-94da-e7209c7e7423" controls muted width="900">
@@ -132,17 +128,17 @@ Cmd+Esc restores the multi-tile layout.
   </video>
 </p>
 
-### Keyboard shortcuts
+### Agent shortcuts
 
-Atelier surfaces a small set of one-key shortcuts so you can drive the
-common flows without reaching for the mouse. From the workspace, **W**
-opens new work and **P** opens new project. Inside a Work unit, **N**
-opens new agent. Inside a live tile, **Esc** stops the agent's current
-turn — same semantics as the CLI.
+Atelier surfaces a small set of actions in the agent toolbar:
+ - **Detach** — detach the agent to the CLI
+ - **Hand off** — hand off to a new agent
+ - **Maximize** — zoom the agent to fill the canvas
+ - **Close** — pin the agent to the rail
 
 <p align="center">
   <video src="https://github.com/user-attachments/assets/636842d7-bf2e-49a7-ab70-338a6f5b4b2f" controls muted width="900">
-    Keyboard shortcuts demo — your browser couldn't play this inline.
+    Agent shortcuts demo — your browser couldn't play this inline.
   </video>
 </p>
 

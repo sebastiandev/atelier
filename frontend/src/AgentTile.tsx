@@ -2,10 +2,20 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+
+// Render the most recent N events of a transcript by default. Long-lived
+// agents accumulate thousands of events (every status change, every
+// MessageDelta, every tool call/result), and rendering them all bloats
+// the DOM until scrolling and selection lag noticeably. The cap keeps
+// the working set bounded; the user can expand by 500 at a time when
+// they want to scroll into history.
+const TRANSCRIPT_CAP_INITIAL = 500;
+const TRANSCRIPT_CAP_STEP = 500;
 
 import {
   type Connection,
@@ -174,12 +184,65 @@ export function AgentTile({
   const transcriptRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const units = useMemo(() => groupEvents(events), [events]);
+  // Cap the rendered slice so multi-thousand-event transcripts don't
+  // blow the DOM. Default holds the last 500 events; "Load older"
+  // expands the cap by another 500 each click. Reset on agent change
+  // so reopening a different agent always starts at the cap.
+  const [visibleCap, setVisibleCap] = useState(TRANSCRIPT_CAP_INITIAL);
+  useEffect(() => {
+    setVisibleCap(TRANSCRIPT_CAP_INITIAL);
+  }, [agentSlug]);
+  const visibleEvents = useMemo(
+    () => events.slice(-visibleCap),
+    [events, visibleCap],
+  );
+  const olderEventCount = events.length - visibleEvents.length;
+
+  const units = useMemo(() => groupEvents(visibleEvents), [visibleEvents]);
   const agentStatus = useMemo(() => latestStatus(events), [events]);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
 
+  // When the user clicks "Load older", capture the pre-expansion scroll
+  // metrics so we can restore their reading position after React commits
+  // the bigger slice — without this, new content prepended above pushes
+  // their view down by the height of the just-mounted nodes. The ref is
+  // the cross-effect signal: useLayoutEffect restores scrollTop, then
+  // the auto-scroll effect below sees the ref and skips one cycle so it
+  // doesn't yank the user back to the bottom.
+  const pendingScrollRestoreRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
+
+  function handleLoadOlder() {
+    const el = transcriptRef.current;
+    if (el) {
+      pendingScrollRestoreRef.current = {
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      };
+    }
+    setVisibleCap((c) => c + TRANSCRIPT_CAP_STEP);
+  }
+
+  useLayoutEffect(() => {
+    const pending = pendingScrollRestoreRef.current;
+    if (!pending) return;
+    const el = transcriptRef.current;
+    if (el) {
+      el.scrollTop =
+        el.scrollHeight - pending.scrollHeight + pending.scrollTop;
+    }
+    // Leave the ref set; the auto-scroll effect below clears it after
+    // skipping one round.
+  }, [visibleCap]);
+
   // Auto-scroll to bottom on new content.
   useEffect(() => {
+    if (pendingScrollRestoreRef.current !== null) {
+      pendingScrollRestoreRef.current = null;
+      return;
+    }
     const el = transcriptRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [units.length, lastUnitText(units)]);
@@ -411,6 +474,18 @@ export function AgentTile({
         </div>
       )}
       <div className="transcript" ref={transcriptRef}>
+        {olderEventCount > 0 && (
+          <button
+            type="button"
+            className="transcript-load-older"
+            onClick={handleLoadOlder}
+          >
+            Load {Math.min(TRANSCRIPT_CAP_STEP, olderEventCount)} older
+            {olderEventCount > TRANSCRIPT_CAP_STEP
+              ? ` · ${olderEventCount} hidden`
+              : ""}
+          </button>
+        )}
         {units.map((unit) => (
           <Unit key={unit.key} unit={unit} />
         ))}
