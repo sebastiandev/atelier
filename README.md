@@ -244,4 +244,20 @@ For AI assistants working on the codebase, see [`CLAUDE.md`](CLAUDE.md).
 
 ## License
 
-[MIT](LICENSE) — use it, fork it, ship it. Attribution appreciated, not required beyond what the license itself asks for.
+[Functional Source License, Version 1.1, Apache 2.0 Future License](LICENSE)
+(FSL-1.1-ALv2). Plain English: use it, fork it, modify it, run it at work,
+build on top of it. The one thing you can't do is package it as a competing
+commercial product or hosted service. Two years after each release, the
+matching version automatically converts to Apache 2.0 — fully permissive
+from there on.
+
+Quick guide:
+
+- Personal use, internal company use, consulting / professional services
+  using Atelier — **fine**.
+- Forks, modifications, contributions back — **fine**.
+- "Atelier Cloud" or a paid managed service that competes with Atelier —
+  **not allowed** during the FSL window.
+
+If you want to do something that feels close to that line, open an issue
+and we'll talk.
