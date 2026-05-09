@@ -175,6 +175,14 @@ export type ProviderTextField = {
   visible_when?: [string, string] | null;
 };
 
+export type ModelMeta = {
+  context_window: number | null;
+  input_per_mtok: number | null;
+  output_per_mtok: number | null;
+  cache_read_per_mtok: number | null;
+  cache_write_per_mtok: number | null;
+};
+
 export type ProviderDescriptor = {
   name: string;
   label: string;
@@ -182,6 +190,7 @@ export type ProviderDescriptor = {
   options: Record<string, ProviderField>;
   text_options?: Record<string, ProviderTextField>;
   advanced_intro?: string | null;
+  model_meta?: Record<string, ModelMeta>;
 };
 
 export type CreateAgentPayload = {

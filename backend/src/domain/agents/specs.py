@@ -69,6 +69,24 @@ class TextOption:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ModelMeta:
+    """Per-primary-value pricing + context window, for cost / ctx% display.
+
+    Keyed in ``ProviderDescriptor.model_meta`` by the primary-field value
+    (model id for Claude, mode for Amp). Any field may be ``None`` when
+    the provider doesn't expose a stable mapping — Amp modes route to
+    different underlying models without a public price, so their entries
+    are blank and the UI shows "—" rather than a guess.
+    """
+
+    context_window: int | None = None
+    input_per_mtok: float | None = None
+    output_per_mtok: float | None = None
+    cache_read_per_mtok: float | None = None
+    cache_write_per_mtok: float | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class ProviderDescriptor:
     name: Provider
     label: str
@@ -82,6 +100,11 @@ class ProviderDescriptor:
     # Amp permission picker uses this to clarify that the agent can
     # still ask for permission regardless of the auto-allow list.
     advanced_intro: str | None = None
+    # Optional pricing + context-window metadata, keyed by the primary
+    # field's value. Empty dict is a valid response — providers may
+    # legitimately have nothing to say (e.g. Amp's mode → underlying
+    # model mapping isn't public).
+    model_meta: dict[str, ModelMeta] = field(default_factory=dict)
 
 
 class Spec(Protocol):
@@ -107,6 +130,47 @@ def _reject_unknown(provider: Provider, options: dict[str, Any], allowed: set[st
         )
 
 
+_CLAUDE_MODEL_META: dict[str, ModelMeta] = {
+    # Anthropic public list pricing per million tokens (USD). Cache write
+    # ≈ 1.25× input, cache read ≈ 0.10× input — encoded explicitly here
+    # so the FE doesn't have to derive it.
+    #
+    # The ``[1m]`` Opus variant uses the same per-token rates as the
+    # 200k tier; Anthropic's actual pricing carries a surcharge above
+    # 200k input tokens which a flat ``ModelMeta`` can't represent. The
+    # cost rollup will under-count for very long prompts on the 1M tier
+    # — acceptable for the at-a-glance indicator we surface.
+    ClaudeModel.OPUS_4_7_1M.value: ModelMeta(
+        context_window=1_000_000,
+        input_per_mtok=15.0,
+        output_per_mtok=75.0,
+        cache_read_per_mtok=1.50,
+        cache_write_per_mtok=18.75,
+    ),
+    ClaudeModel.OPUS_4_7.value: ModelMeta(
+        context_window=200_000,
+        input_per_mtok=15.0,
+        output_per_mtok=75.0,
+        cache_read_per_mtok=1.50,
+        cache_write_per_mtok=18.75,
+    ),
+    ClaudeModel.SONNET_4_6.value: ModelMeta(
+        context_window=200_000,
+        input_per_mtok=3.0,
+        output_per_mtok=15.0,
+        cache_read_per_mtok=0.30,
+        cache_write_per_mtok=3.75,
+    ),
+    ClaudeModel.HAIKU_4_5.value: ModelMeta(
+        context_window=200_000,
+        input_per_mtok=1.0,
+        output_per_mtok=5.0,
+        cache_read_per_mtok=0.10,
+        cache_write_per_mtok=1.25,
+    ),
+}
+
+
 class ClaudeSpec:
     name: ClassVar[Provider] = "claude-code"
     label: ClassVar[str] = "Claude Code (Anthropic)"
@@ -120,7 +184,7 @@ class ClaudeSpec:
             primary_field=EnumOption(
                 label="Model",
                 values=_enum_values(ClaudeModel),
-                default=ClaudeModel.OPUS_4_7.value,
+                default=ClaudeModel.OPUS_4_7_1M.value,
             ),
             options={
                 "thinking_effort": EnumOption(
@@ -140,6 +204,7 @@ class ClaudeSpec:
                     ],
                 ),
             },
+            model_meta=dict(_CLAUDE_MODEL_META),
         )
 
     def build(
@@ -178,6 +243,11 @@ class AmpSpec:
 
     def describe(self) -> ProviderDescriptor:
         default_csv = ", ".join(AMP_DEFAULT_AUTO_ALLOWED_TOOLS)
+        # Amp routes each mode to an underlying model that isn't part of
+        # Amp's public surface — pricing + context window aren't stable
+        # enough to encode here. Empty ``ModelMeta`` per mode makes the
+        # key set explicit while telling the FE "no numbers to display".
+        amp_meta = {mode.value: ModelMeta() for mode in AmpMode}
         return ProviderDescriptor(
             name=self.name,
             label=self.label,
@@ -211,6 +281,7 @@ class AmpSpec:
                 ),
             },
             advanced_intro=self._AMP_ADVANCED_INTRO,
+            model_meta=amp_meta,
         )
 
     def build(
@@ -248,6 +319,7 @@ __all__ = [
     "AmpSpec",
     "ClaudeSpec",
     "EnumOption",
+    "ModelMeta",
     "ProviderDescriptor",
     "Spec",
     "TextOption",

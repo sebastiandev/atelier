@@ -32,3 +32,40 @@ def test_amp_descriptor_has_mode_selector(app_client: TestClient) -> None:
         "custom",
     ]
     assert "Permissions decide" in amp["advanced_intro"]
+
+
+def test_claude_descriptor_exposes_model_meta(app_client: TestClient) -> None:
+    """FE reads pricing + context window from ``model_meta``; verify the
+    wire format is exactly what AgentTile's TurnMetricsBar expects."""
+    response = app_client.get("/api/providers")
+    claude = next(p for p in response.json() if p["name"] == "claude-code")
+    meta = claude["model_meta"]
+    assert set(meta.keys()) == {
+        "claude-opus-4-7[1m]",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5",
+    }
+    opus = meta["claude-opus-4-7"]
+    assert opus["context_window"] == 200_000
+    assert opus["input_per_mtok"] == 15.0
+    assert opus["output_per_mtok"] == 75.0
+    assert opus["cache_read_per_mtok"] == 1.5
+    assert opus["cache_write_per_mtok"] == 18.75
+    opus_1m = meta["claude-opus-4-7[1m]"]
+    assert opus_1m["context_window"] == 1_000_000
+    # 1M variant uses the same flat per-token rates today; the surcharge
+    # above 200k input tokens isn't modeled. See `_CLAUDE_MODEL_META`.
+    assert opus_1m["input_per_mtok"] == 15.0
+    assert opus_1m["output_per_mtok"] == 75.0
+
+
+def test_amp_descriptor_model_meta_is_blank(app_client: TestClient) -> None:
+    response = app_client.get("/api/providers")
+    amp = next(p for p in response.json() if p["name"] == "amp")
+    meta = amp["model_meta"]
+    assert set(meta.keys()) == {"smart", "rush", "deep", "large"}
+    smart = meta["smart"]
+    assert smart["context_window"] is None
+    assert smart["input_per_mtok"] is None
+    assert smart["output_per_mtok"] is None

@@ -49,6 +49,43 @@ def test_claude_describe_lists_models_and_options() -> None:
     assert desc.options["thinking_effort"].default == ClaudeEffort.OFF.value
 
 
+def test_claude_describe_includes_model_meta() -> None:
+    desc = ClaudeSpec().describe()
+    assert set(desc.model_meta.keys()) == {m.value for m in ClaudeModel}
+    opus = desc.model_meta[ClaudeModel.OPUS_4_7.value]
+    assert opus.context_window == 200_000
+    assert opus.input_per_mtok == 15.0
+    assert opus.output_per_mtok == 75.0
+    assert opus.cache_read_per_mtok == 1.50
+    assert opus.cache_write_per_mtok == 18.75
+    opus_1m = desc.model_meta[ClaudeModel.OPUS_4_7_1M.value]
+    assert opus_1m.context_window == 1_000_000
+    assert opus_1m.input_per_mtok == 15.0
+    assert opus_1m.output_per_mtok == 75.0
+    sonnet = desc.model_meta[ClaudeModel.SONNET_4_6.value]
+    assert sonnet.input_per_mtok == 3.0
+    assert sonnet.output_per_mtok == 15.0
+    haiku = desc.model_meta[ClaudeModel.HAIKU_4_5.value]
+    assert haiku.input_per_mtok == 1.0
+    assert haiku.output_per_mtok == 5.0
+
+
+def test_claude_describe_defaults_to_opus_1m() -> None:
+    desc = ClaudeSpec().describe()
+    assert desc.primary_field.default == ClaudeModel.OPUS_4_7_1M.value
+    assert ClaudeModel.OPUS_4_7_1M.value in desc.primary_field.values
+
+
+def test_claude_build_accepts_1m_opus() -> None:
+    config = ClaudeSpec().build(
+        _common(), ClaudeModel.OPUS_4_7_1M.value, options={}
+    )
+    assert config.model is ClaudeModel.OPUS_4_7_1M
+    # The string the SDK receives keeps the ``[1m]`` suffix — that's the
+    # CLI's opt-in for the 1M extended-context tier.
+    assert config.model.value == "claude-opus-4-7[1m]"
+
+
 def test_claude_build_with_defaults() -> None:
     config = ClaudeSpec().build(_common(), ClaudeModel.OPUS_4_7.value, options={})
     assert isinstance(config, ClaudeAgentConfig)
@@ -106,6 +143,21 @@ def test_amp_describe_lists_modes_and_permission_mode() -> None:
         "permission_mode",
         "custom",
     )
+
+
+def test_amp_describe_model_meta_is_blank_per_mode() -> None:
+    """Amp routes modes to underlying models without public pricing —
+    each mode gets a blank ``ModelMeta`` so the FE knows the keys exist
+    but won't render numbers. Once Amp publishes a stable mapping, fill
+    these in (and the FE will start showing cost/ctx automatically)."""
+    desc = AmpSpec().describe()
+    assert set(desc.model_meta.keys()) == {m.value for m in AmpMode}
+    for meta in desc.model_meta.values():
+        assert meta.context_window is None
+        assert meta.input_per_mtok is None
+        assert meta.output_per_mtok is None
+        assert meta.cache_read_per_mtok is None
+        assert meta.cache_write_per_mtok is None
 
 
 def test_amp_build_with_default() -> None:

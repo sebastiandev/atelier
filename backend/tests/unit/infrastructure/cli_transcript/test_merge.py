@@ -141,14 +141,19 @@ def _claude_user_line(text: str, ts: str, **extra: Any) -> str:
     )
 
 
-def _claude_assistant_line(blocks: list[dict[str, Any]], ts: str) -> str:
-    return json.dumps(
-        {
-            "type": "assistant",
-            "timestamp": ts,
-            "message": {"role": "assistant", "content": blocks},
-        }
-    )
+def _claude_assistant_line(
+    blocks: list[dict[str, Any]],
+    ts: str,
+    *,
+    usage: dict[str, Any] | None = None,
+    model: str | None = None,
+) -> str:
+    message: dict[str, Any] = {"role": "assistant", "content": blocks}
+    if usage is not None:
+        message["usage"] = usage
+    if model is not None:
+        message["model"] = model
+    return json.dumps({"type": "assistant", "timestamp": ts, "message": message})
 
 
 def _claude_housekeeping_line(ts: str) -> str:
@@ -488,3 +493,114 @@ def test_amp_merge_with_count_at_end_yields_nothing(
         "amp", "T-foo", Path("/x"), {"provider": "amp", "message_count": 2}
     )
     assert events == []
+
+
+# ---------------------------------------------------------------------------
+# Usage → turn_metrics translation
+#
+# CLI-side turns bypass our adapters, so the live ``turn_metrics`` emit
+# pathway never fires for them. The merge must reconstruct a turn_metrics
+# event from each assistant message's ``usage`` so the FE's session cost
+# + context % counters cover the detached period.
+# ---------------------------------------------------------------------------
+
+
+def test_claude_merge_emits_turn_metrics_from_assistant_usage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    cwd = Path("/x")
+    _write_claude_session(
+        tmp_path,
+        cwd,
+        "sess",
+        [
+            _claude_assistant_line(
+                [{"type": "text", "text": "ok"}],
+                "2026-05-05T11:00:01Z",
+                model="claude-opus-4-7",
+                usage={
+                    "input_tokens": 1200,
+                    "output_tokens": 340,
+                    "cache_read_input_tokens": 5_000,
+                    "cache_creation_input_tokens": 800,
+                },
+            ),
+        ],
+    )
+    events = merge_cli_transcript(
+        "claude-code",
+        "sess",
+        cwd,
+        {"provider": "claude-code", "anchor_ts": "2026-05-05T10:00:00Z"},
+    )
+    assert [e["type"] for e in events] == ["message_complete", "turn_metrics"]
+    metrics = events[1]
+    assert metrics["input_tokens"] == 1200
+    assert metrics["output_tokens"] == 340
+    assert metrics["cache_read_input_tokens"] == 5_000
+    assert metrics["cache_creation_input_tokens"] == 800
+    assert metrics["model"] == "claude-opus-4-7"
+    # CLI export carries no wall-clock; duration is reported as zero.
+    assert metrics["duration_ms"] == 0
+
+
+def test_claude_merge_skips_turn_metrics_when_usage_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Older sessions or partial exports may omit ``usage`` entirely.
+    Don't synthesise a zeroed-out metrics event — that would skew the
+    cost rollup downward. Just emit the content blocks."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    cwd = Path("/x")
+    _write_claude_session(
+        tmp_path,
+        cwd,
+        "sess",
+        [
+            _claude_assistant_line(
+                [{"type": "text", "text": "ok"}],
+                "2026-05-05T11:00:01Z",
+                # no usage / no model
+            ),
+        ],
+    )
+    events = merge_cli_transcript(
+        "claude-code",
+        "sess",
+        cwd,
+        {"provider": "claude-code", "anchor_ts": "2026-05-05T10:00:00Z"},
+    )
+    assert [e["type"] for e in events] == ["message_complete"]
+
+
+def test_amp_merge_emits_turn_metrics_from_assistant_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Amp's ``threads export`` uses the same Anthropic shape on assistant
+    messages — usage lives at ``message.usage``, model at ``message.model``."""
+    payload = _amp_export_payload(
+        "T-foo",
+        [
+            {
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": {
+                    "input_tokens": 50,
+                    "output_tokens": 10,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                },
+            },
+        ],
+    )
+    _install_fake_amp(monkeypatch, stdout=payload)
+    events = merge_cli_transcript(
+        "amp", "T-foo", Path("/x"), {"provider": "amp", "message_count": 0}
+    )
+    assert [e["type"] for e in events] == ["message_complete", "turn_metrics"]
+    metrics = events[1]
+    assert metrics["input_tokens"] == 50
+    assert metrics["output_tokens"] == 10
+    assert metrics["model"] == "claude-sonnet-4-6"

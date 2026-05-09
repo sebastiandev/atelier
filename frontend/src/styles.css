@@ -1359,6 +1359,14 @@ h5.md-h {
 .turn-metrics-sep {
   opacity: 0.5;
 }
+.turn-metrics-ctx.is-warn {
+  color: var(--warn);
+  font-weight: 500;
+}
+.turn-metrics-ctx.is-danger {
+  color: var(--danger);
+  font-weight: 600;
+}
 
 /* Permission prompts (above composer) ----------------------------------- */
 

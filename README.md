@@ -45,6 +45,7 @@ A quick tour of the surface area:
 - [Source-backed context](#source-backed-context) — Jira / Sentry / Honeycomb on first turn
 - [Per-agent git worktrees](#per-agent-git-worktrees) — automatic, isolated
 - [Persistent everything](#persistent-everything) — transcripts on disk, conversations resume
+- [Token + cost rollup](#token--cost-rollup) — context %, session spend, per-tile
 - [Projects](#projects) — optional grouping with shared defaults
 
 ### One workspace, many agents
@@ -165,6 +166,17 @@ Close a tile, restart the backend, reboot your machine — the transcripts are
 on disk (one NDJSON per agent), the SQL index gets reconciled against them on
 startup, and the next time you open the agent the conversation picks up
 exactly where it left off.
+
+### Token + cost rollup
+
+Each agent tile shows a per-turn rollup at the bottom: turn duration, tokens
+this turn, **context % used** of the model's window, and **running session
+cost**. Context turns orange at 60% and red at 85% so you know when to compact
+or hand off before the next turn squeezes the prompt. Pricing and window come
+from the backend's provider spec, so they stay correct as new models are
+added — and Opus 4.7 ships with the 1M extended-context tier as the default.
+Detached turns count too: when an agent comes back from CLI, the merge pulls
+usage off each assistant message so the cost rollup never has gaps.
 
 ### Projects
 

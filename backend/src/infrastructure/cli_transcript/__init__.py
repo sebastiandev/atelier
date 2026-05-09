@@ -169,9 +169,7 @@ def _translate_claude_entry(entry: dict[str, Any], ts: str) -> list[dict[str, An
         # housekeeping: permission-mode, file-history-snapshot, attachment
         return []
     message = entry.get("message") or {}
-    role = message.get("role")
-    content = message.get("content")
-    return _translate_anthropic_message(role, content, ts)
+    return _translate_anthropic_message(message, ts)
 
 
 # ---------------------------------------------------------------------------
@@ -186,9 +184,7 @@ def _merge_amp(thread: dict[str, Any], cursor: dict[str, Any]) -> list[dict[str,
         if not isinstance(msg, dict):
             continue
         ts = _amp_message_ts(msg)
-        events.extend(
-            _translate_anthropic_message(msg.get("role"), msg.get("content"), ts)
-        )
+        events.extend(_translate_anthropic_message(msg, ts))
     return events
 
 
@@ -205,13 +201,56 @@ def _amp_message_ts(msg: dict[str, Any]) -> str:
 
 
 def _translate_anthropic_message(
-    role: str | None, content: Any, ts: str
+    message: dict[str, Any], ts: str
 ) -> list[dict[str, Any]]:
+    role = message.get("role")
+    content = message.get("content")
     if role == "user":
         return _translate_user_content(content, ts)
     if role == "assistant":
-        return _translate_assistant_content(content, ts)
+        events = _translate_assistant_content(content, ts)
+        # CLI-side turns don't reach our adapters, so the live
+        # ``turn_metrics`` emit pathway is bypassed. Pull ``usage`` off
+        # the assistant message ourselves so the FE's session-cost +
+        # ctx% counters cover the detached period too. ``duration_ms``
+        # is 0 because the merged source doesn't carry wall-clock; only
+        # token usage is reconstructable from the export.
+        rollup = _assistant_turn_metrics(message, ts)
+        if rollup is not None:
+            events.append(rollup)
+        return events
     return []
+
+
+def _assistant_turn_metrics(
+    message: dict[str, Any], ts: str
+) -> dict[str, Any] | None:
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return {
+        "type": "turn_metrics",
+        "ts": ts,
+        "duration_ms": 0,
+        "input_tokens": _usage_int(usage, "input_tokens"),
+        "output_tokens": _usage_int(usage, "output_tokens"),
+        "cache_read_input_tokens": _usage_int(usage, "cache_read_input_tokens"),
+        "cache_creation_input_tokens": _usage_int(
+            usage, "cache_creation_input_tokens"
+        ),
+        "model": message.get("model"),
+    }
+
+
+def _usage_int(usage: dict[str, Any], key: str) -> int:
+    value = usage.get(key)
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return 0
 
 
 def _translate_user_content(content: Any, ts: str) -> list[dict[str, Any]]:

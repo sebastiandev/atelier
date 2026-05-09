@@ -21,6 +21,7 @@ import {
   type Connection,
   type ConnectionType,
   type ContextEntry,
+  type ModelMeta,
   PERSONA_GLYPH,
   type Persona,
   listConnections,
@@ -29,6 +30,7 @@ import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { useDragHandle } from "./dragHandleContext";
 import { MarkdownText } from "./MarkdownText";
+import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
 import {
@@ -201,6 +203,9 @@ export function AgentTile({
   const units = useMemo(() => groupEvents(visibleEvents), [visibleEvents]);
   const agentStatus = useMemo(() => latestStatus(events), [events]);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
+  const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
+  const { byName: providersByName } = useProviderDescriptors();
+  const modelMeta = lookupModelMeta(providersByName, provider, model);
 
   // When the user clicks "Load older", capture the pre-expansion scroll
   // metrics so we can restore their reading position after React commits
@@ -490,7 +495,13 @@ export function AgentTile({
           <Unit key={unit.key} unit={unit} />
         ))}
       </div>
-      {lastMetrics && <TurnMetricsBar metrics={lastMetrics} />}
+      {lastMetrics && (
+        <TurnMetricsBar
+          metrics={lastMetrics}
+          session={sessionTotals}
+          meta={modelMeta}
+        />
+      )}
       {pendingPermissions.length > 0 && (
         <div className="permission-prompts">
           {pendingPermissions.map((p) => (
@@ -901,6 +912,30 @@ function latestMetrics(events: AgentEvent[]): TurnRollup | null {
   return null;
 }
 
+type SessionTotals = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+};
+
+function sessionMetrics(events: AgentEvent[]): SessionTotals {
+  const totals: SessionTotals = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+  };
+  for (const ev of events) {
+    if (ev.type !== "turn_metrics") continue;
+    totals.inputTokens += numberField(ev, "input_tokens");
+    totals.outputTokens += numberField(ev, "output_tokens");
+    totals.cacheReadTokens += numberField(ev, "cache_read_input_tokens");
+    totals.cacheCreationTokens += numberField(ev, "cache_creation_input_tokens");
+  }
+  return totals;
+}
+
 function numberField(ev: AgentEvent, key: string): number {
   const value = ev[key];
   return typeof value === "number" ? value : 0;
@@ -922,7 +957,15 @@ function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
-function TurnMetricsBar({ metrics }: { metrics: TurnRollup }) {
+function TurnMetricsBar({
+  metrics,
+  session,
+  meta,
+}: {
+  metrics: TurnRollup;
+  session: SessionTotals;
+  meta: ModelMeta | null;
+}) {
   // Total tokens charged on the response side: input + cached lookups
   // count toward the prompt; output is what the model wrote. We surface
   // their sum because that's the "cost-shaped" number users care about
@@ -932,19 +975,95 @@ function TurnMetricsBar({ metrics }: { metrics: TurnRollup }) {
     metrics.outputTokens +
     metrics.cacheReadTokens +
     metrics.cacheCreationTokens;
-  const tooltip =
-    `Duration: ${formatDuration(metrics.durationMs)}\n` +
-    `Input: ${metrics.inputTokens.toLocaleString()}\n` +
-    `Output: ${metrics.outputTokens.toLocaleString()}\n` +
-    `Cache read: ${metrics.cacheReadTokens.toLocaleString()}\n` +
-    `Cache write: ${metrics.cacheCreationTokens.toLocaleString()}`;
+  // Context %: the prompt side of the most recent turn (input +
+  // cache_read + cache_creation) over the model's context window.
+  // Output doesn't count — it's not part of the prompt the next turn
+  // has to fit. Anything above 60% is a hint to compact / clear.
+  const promptTokens =
+    metrics.inputTokens + metrics.cacheReadTokens + metrics.cacheCreationTokens;
+  const ctxPct =
+    meta?.context_window && meta.context_window > 0
+      ? (promptTokens / meta.context_window) * 100
+      : null;
+  const ctxLevel = ctxLevelFor(ctxPct);
+  const sessionCost = computeSessionCost(session, meta);
+  const tooltipLines = [
+    `Duration: ${formatDuration(metrics.durationMs)}`,
+    `Input: ${metrics.inputTokens.toLocaleString()}`,
+    `Output: ${metrics.outputTokens.toLocaleString()}`,
+    `Cache read: ${metrics.cacheReadTokens.toLocaleString()}`,
+    `Cache write: ${metrics.cacheCreationTokens.toLocaleString()}`,
+  ];
+  if (ctxPct !== null && meta?.context_window) {
+    tooltipLines.push(
+      `Context: ${promptTokens.toLocaleString()} / ${meta.context_window.toLocaleString()} (${ctxPct.toFixed(1)}%)`,
+    );
+  }
+  if (sessionCost !== null) {
+    tooltipLines.push(
+      `Session: ${formatTokens(
+        session.inputTokens +
+          session.outputTokens +
+          session.cacheReadTokens +
+          session.cacheCreationTokens,
+      )} tokens · ${formatCost(sessionCost)}`,
+    );
+  }
   return (
-    <div className="turn-metrics" title={tooltip}>
+    <div className="turn-metrics" title={tooltipLines.join("\n")}>
       <span className="turn-metrics-item">{formatDuration(metrics.durationMs)}</span>
       <span className="turn-metrics-sep">·</span>
       <span className="turn-metrics-item">↓ {formatTokens(totalTokens)} tokens</span>
+      {ctxPct !== null && (
+        <>
+          <span className="turn-metrics-sep">·</span>
+          <span className={`turn-metrics-item turn-metrics-ctx ${ctxLevel}`}>
+            ctx {ctxPct.toFixed(0)}%
+          </span>
+        </>
+      )}
+      {sessionCost !== null && (
+        <>
+          <span className="turn-metrics-sep">·</span>
+          <span className="turn-metrics-item">{formatCost(sessionCost)}</span>
+        </>
+      )}
     </div>
   );
+}
+
+function ctxLevelFor(pct: number | null): string {
+  if (pct === null) return "";
+  if (pct >= 85) return "is-danger";
+  if (pct >= 60) return "is-warn";
+  return "";
+}
+
+function computeSessionCost(
+  session: SessionTotals,
+  meta: ModelMeta | null,
+): number | null {
+  if (!meta) return null;
+  // Only emit a cost when at least the input+output rates are known.
+  // Cache-write/read fall back to input/output respectively when the
+  // provider hasn't broken them out — keeps the number well-defined for
+  // any provider that publishes the basics.
+  if (meta.input_per_mtok === null || meta.output_per_mtok === null) return null;
+  const cacheWriteRate = meta.cache_write_per_mtok ?? meta.input_per_mtok;
+  const cacheReadRate = meta.cache_read_per_mtok ?? meta.input_per_mtok;
+  return (
+    (session.inputTokens / 1_000_000) * meta.input_per_mtok +
+    (session.outputTokens / 1_000_000) * meta.output_per_mtok +
+    (session.cacheCreationTokens / 1_000_000) * cacheWriteRate +
+    (session.cacheReadTokens / 1_000_000) * cacheReadRate
+  );
+}
+
+function formatCost(usd: number): string {
+  if (usd < 0.01) return "<$0.01";
+  if (usd < 1) return `$${usd.toFixed(2)}`;
+  if (usd < 100) return `$${usd.toFixed(2)}`;
+  return `$${Math.round(usd).toLocaleString()}`;
 }
 
 function shortProvider(provider: string): string {
