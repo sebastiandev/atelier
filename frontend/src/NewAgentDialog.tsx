@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { FolderPickerDialog } from "./FolderPickerDialog";
+
 import {
   type Connection,
   type ConnectionType,
@@ -101,6 +103,7 @@ export function NewAgentDialog({
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -370,13 +373,24 @@ export function NewAgentDialog({
 
           <label className="field">
             <span className="label">Working folder</span>
-            <input
-              className="input"
-              list={`folder-recents-${workSlug}`}
-              placeholder="/Users/you/code/some-repo"
-              value={folder}
-              onChange={(e) => setFolder(e.target.value)}
-            />
+            <div className="folder-input-row">
+              <input
+                className="input"
+                list={`folder-recents-${workSlug}`}
+                placeholder="/Users/you/code/some-repo"
+                value={folder}
+                onChange={(e) => setFolder(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn-icon folder-input-pick"
+                onClick={() => setPickerOpen(true)}
+                aria-label="Browse for folder"
+                title="Browse"
+              >
+                <FolderIcon />
+              </button>
+            </div>
             {folderCandidates.length > 0 && (
               <datalist id={`folder-recents-${workSlug}`}>
                 {folderCandidates.map((f) => (
@@ -569,7 +583,35 @@ export function NewAgentDialog({
           </button>
         </div>
       </div>
+      {pickerOpen && (
+        <FolderPickerDialog
+          initialPath={folder.trim() || null}
+          onCancel={() => setPickerOpen(false)}
+          onPick={(picked) => {
+            setFolder(picked);
+            setPickerOpen(false);
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M1.5 3.5h3l1 1h5v5a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-6Z" />
+    </svg>
   );
 }
 

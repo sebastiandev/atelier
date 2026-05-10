@@ -190,7 +190,7 @@ class ClaudeSpec:
                 "thinking_effort": EnumOption(
                     label="Thinking effort",
                     values=_enum_values(ClaudeEffort),
-                    default=ClaudeEffort.OFF.value,
+                    default=ClaudeEffort.XHIGH.value,
                 ),
                 "permission_mode": EnumOption(
                     label="Permission mode",

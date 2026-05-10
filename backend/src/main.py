@@ -10,6 +10,7 @@ from src.application.http.routes import (
     agents,
     artifacts,
     connections,
+    fs,
     health,
     projects,
     providers,
@@ -164,6 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(providers.router, prefix="/api")
     app.include_router(connections.router, prefix="/api")
     app.include_router(artifacts.router, prefix="/api")
+    app.include_router(fs.router, prefix="/api")
     app.include_router(ws_agents.router, prefix="/api")
     return app
 

@@ -46,7 +46,7 @@ def test_claude_describe_lists_models_and_options() -> None:
     assert ClaudeModel.OPUS_4_7.value in desc.primary_field.values
     assert "thinking_effort" in desc.options
     assert "permission_mode" in desc.options
-    assert desc.options["thinking_effort"].default == ClaudeEffort.OFF.value
+    assert desc.options["thinking_effort"].default == ClaudeEffort.XHIGH.value
 
 
 def test_claude_describe_includes_model_meta() -> None:

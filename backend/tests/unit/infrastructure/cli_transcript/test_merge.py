@@ -543,6 +543,10 @@ def test_claude_merge_emits_turn_metrics_from_assistant_usage(
     assert metrics["model"] == "claude-opus-4-7"
     # CLI export carries no wall-clock; duration is reported as zero.
     assert metrics["duration_ms"] == 0
+    # Each merged assistant message is one API call (CLI exports are
+    # per-call, not aggregated like ResultMessage), so last_prompt_tokens
+    # equals input + cache_read + cache_creation directly.
+    assert metrics["last_prompt_tokens"] == 1200 + 5_000 + 800
 
 
 def test_claude_merge_skips_turn_metrics_when_usage_absent(

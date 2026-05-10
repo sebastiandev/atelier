@@ -258,6 +258,9 @@ class AmpAdapter:
         opts = self._build_amp_options()
         options = AmpOptions.model_validate(opts)
         model = self._config.mode.value
+        # Track the prompt size of the latest sub-call for ctx% — see
+        # ``TurnMetrics`` doc + the same comment in claude_code_adapter.
+        last_prompt_tokens = 0
         try:
             async for msg in self._executor(self._prompt_iter(), options):
                 sid = getattr(msg, "session_id", None)
@@ -266,8 +269,15 @@ class AmpAdapter:
                     await self._outgoing.put(
                         SessionEstablished(ts=datetime.now(UTC), session_id=sid)
                     )
-                for ev in _convert(msg, model=model):
+                per_call = _assistant_prompt_tokens(msg)
+                if per_call is not None:
+                    last_prompt_tokens = per_call
+                for ev in _convert(
+                    msg, model=model, last_prompt_tokens=last_prompt_tokens
+                ):
                     await self._outgoing.put(ev)
+                if isinstance(msg, ResultMessage | ErrorResultMessage):
+                    last_prompt_tokens = 0
         except Exception as e:
             await self._outgoing.put(Error(ts=datetime.now(UTC), message=str(e)))
             await self._outgoing.put(
@@ -488,11 +498,21 @@ def _structured_input_from_argv(argv: list[Any]) -> dict[str, Any]:
     return {"argv": [str(a) for a in argv]}
 
 
-def _convert(msg: StreamMessage, *, model: str | None = None) -> Iterable[AgentEvent]:
+def _convert(
+    msg: StreamMessage,
+    *,
+    model: str | None = None,
+    last_prompt_tokens: int = 0,
+) -> Iterable[AgentEvent]:
     """Map an Amp StreamMessage onto our AgentEvent union.
 
     ``model`` lets the adapter stamp per-turn metrics with the
     user-selected mode (Amp's "primary selector" — smart/rush/deep/large).
+
+    ``last_prompt_tokens`` is the prompt size of the last AssistantMessage
+    in the turn — passed in by the pump so emitted ``TurnMetrics`` carry
+    an honest "current context size" alongside the cumulative-for-cost
+    counts from ``ResultMessage.usage``.
     """
     now = datetime.now(UTC)
     if isinstance(msg, SystemMessage):
@@ -532,17 +552,20 @@ def _convert(msg: StreamMessage, *, model: str | None = None) -> Iterable[AgentE
         return
     if isinstance(msg, ErrorResultMessage):
         yield Error(ts=now, message=msg.error or "(unknown error)")
-        yield from _metrics_from_result(msg, now, model)
+        yield from _metrics_from_result(msg, now, model, last_prompt_tokens)
         yield StatusChange(ts=now, status="idle")
         return
     if isinstance(msg, ResultMessage):
-        yield from _metrics_from_result(msg, now, model)
+        yield from _metrics_from_result(msg, now, model, last_prompt_tokens)
         yield StatusChange(ts=now, status="idle")
         return
 
 
 def _metrics_from_result(
-    msg: ResultMessage | ErrorResultMessage, now: datetime, model: str | None
+    msg: ResultMessage | ErrorResultMessage,
+    now: datetime,
+    model: str | None,
+    last_prompt_tokens: int,
 ) -> Iterable[TurnMetrics]:
     usage = msg.usage
     yield TurnMetrics(
@@ -552,7 +575,26 @@ def _metrics_from_result(
         output_tokens=usage.output_tokens if usage else 0,
         cache_read_input_tokens=usage.cache_read_input_tokens if usage else 0,
         cache_creation_input_tokens=usage.cache_creation_input_tokens if usage else 0,
+        last_prompt_tokens=last_prompt_tokens,
         model=model,
+    )
+
+
+def _assistant_prompt_tokens(msg: StreamMessage) -> int | None:
+    """Same idea as the Claude helper: pull the per-call prompt size out
+    of an Amp ``AssistantMessage``. The Amp SDK wraps the Anthropic
+    Message under ``msg.message`` and exposes ``usage`` there with the
+    standard input / cache_read / cache_creation breakdown."""
+    if not isinstance(msg, AssistantMessage):
+        return None
+    details = getattr(msg, "message", None)
+    usage = getattr(details, "usage", None) if details is not None else None
+    if usage is None:
+        return None
+    return (
+        int(getattr(usage, "input_tokens", 0) or 0)
+        + int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        + int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     )
 
 

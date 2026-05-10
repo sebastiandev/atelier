@@ -24,7 +24,10 @@ from src.domain.agents import (
     ToolResult,
     TurnMetrics,
 )
-from src.infrastructure.agents.claude_code_adapter import _convert
+from src.infrastructure.agents.claude_code_adapter import (
+    _assistant_prompt_tokens,
+    _convert,
+)
 
 
 def _assistant(*blocks: object) -> AssistantMessage:
@@ -221,3 +224,49 @@ def test_result_message_metrics_carry_usage_and_model() -> None:
     assert metrics.cache_read_input_tokens == 20
     assert metrics.cache_creation_input_tokens == 5
     assert metrics.model == "claude-opus-4-7"
+    # Without the pump's tracking, ``_convert`` defaults to 0; the pump
+    # passes the real value when it has one — exercised below.
+    assert metrics.last_prompt_tokens == 0
+
+
+def test_assistant_prompt_tokens_sums_input_and_caches() -> None:
+    msg = AssistantMessage(
+        content=[],
+        model="claude-opus-4-7",
+        parent_tool_use_id=None,
+        error=None,
+        usage={
+            "input_tokens": 200,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 12_000,
+            "cache_creation_input_tokens": 800,
+        },
+        message_id="m-1",
+        stop_reason=None,
+        session_id="s-1",
+        uuid="u-1",
+    )
+    # Output is excluded — it isn't part of the prompt the model had to fit.
+    assert _assistant_prompt_tokens(msg) == 13_000
+
+
+def test_assistant_prompt_tokens_returns_none_when_no_usage() -> None:
+    msg = _assistant(TextBlock(text="ok"))
+    assert _assistant_prompt_tokens(msg) is None
+
+
+def test_assistant_prompt_tokens_returns_none_for_non_assistant() -> None:
+    assert _assistant_prompt_tokens(_result()) is None
+
+
+def test_convert_propagates_last_prompt_tokens_onto_turn_metrics() -> None:
+    """Caller (the pump) tracks the latest AssistantMessage prompt size
+    and passes it into ``_convert`` for the ResultMessage iteration —
+    that's how ctx% gets a non-inflated number out of the cumulative
+    ResultMessage.usage."""
+    msg = _result()
+    [metrics, _idle] = list(
+        _convert(msg, model="claude-opus-4-7", last_prompt_tokens=124_700)
+    )
+    assert isinstance(metrics, TurnMetrics)
+    assert metrics.last_prompt_tokens == 124_700

@@ -43,7 +43,11 @@ from src.domain.agents import (
     ToolResult,
     TurnMetrics,
 )
-from src.infrastructure.agents.amp_adapter import AmpAdapter, _convert
+from src.infrastructure.agents.amp_adapter import (
+    AmpAdapter,
+    _assistant_prompt_tokens,
+    _convert,
+)
 
 
 def _start_context() -> AgentStartContext:
@@ -219,6 +223,42 @@ def test_result_metrics_carry_usage_and_model() -> None:
     assert metrics.cache_read_input_tokens == 10
     assert metrics.cache_creation_input_tokens == 3
     assert metrics.model == "rush"
+    # Pump-tracked value isn't passed in this direct ``_convert`` call, so
+    # the field defaults to 0; pump propagation is verified below.
+    assert metrics.last_prompt_tokens == 0
+
+
+def test_assistant_prompt_tokens_pulls_from_message_usage() -> None:
+    msg = AssistantMessage(
+        session_id="s-1",
+        message=_AssistantMessageDetails(
+            content=[],
+            usage=Usage(
+                input_tokens=180,
+                output_tokens=40,
+                cache_read_input_tokens=11_500,
+                cache_creation_input_tokens=320,
+            ),
+        ),
+    )
+    # Output excluded; the rest sums to the prompt size for that call.
+    assert _assistant_prompt_tokens(msg) == 12_000
+
+
+def test_assistant_prompt_tokens_returns_none_without_usage() -> None:
+    assert _assistant_prompt_tokens(_assistant(TextContent(text="hi"))) is None
+    assert _assistant_prompt_tokens(_result_ok()) is None
+
+
+def test_convert_propagates_last_prompt_tokens_onto_amp_metrics() -> None:
+    msg = ResultMessage(
+        session_id="s-1", result="done", duration_ms=10, num_turns=1
+    )
+    [metrics, _idle] = list(
+        _convert(msg, model="smart", last_prompt_tokens=98_400)
+    )
+    assert isinstance(metrics, TurnMetrics)
+    assert metrics.last_prompt_tokens == 98_400
 
 
 # --- Lifecycle tests with a fake executor ----------------------------------

@@ -228,16 +228,21 @@ def _assistant_turn_metrics(
     usage = message.get("usage")
     if not isinstance(usage, dict):
         return None
+    input_tokens = _usage_int(usage, "input_tokens")
+    cache_read = _usage_int(usage, "cache_read_input_tokens")
+    cache_create = _usage_int(usage, "cache_creation_input_tokens")
     return {
         "type": "turn_metrics",
         "ts": ts,
         "duration_ms": 0,
-        "input_tokens": _usage_int(usage, "input_tokens"),
+        "input_tokens": input_tokens,
         "output_tokens": _usage_int(usage, "output_tokens"),
-        "cache_read_input_tokens": _usage_int(usage, "cache_read_input_tokens"),
-        "cache_creation_input_tokens": _usage_int(
-            usage, "cache_creation_input_tokens"
-        ),
+        "cache_read_input_tokens": cache_read,
+        "cache_creation_input_tokens": cache_create,
+        # Each merged message is one API call (CLI exports are per-call,
+        # not aggregated like ResultMessage), so the prompt size for ctx%
+        # is exactly this call's input + cache lookups.
+        "last_prompt_tokens": input_tokens + cache_read + cache_create,
         "model": message.get("model"),
     }
 

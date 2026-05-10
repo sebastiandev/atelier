@@ -203,6 +203,12 @@ class ClaudeCodeAdapter:
                 return
             assert isinstance(text, str)
             await self._outgoing.put(StatusChange(ts=datetime.now(UTC), status="thinking"))
+            # Track the prompt size of the latest sub-call within this
+            # turn. ResultMessage.usage is cumulative across every sub-
+            # call (so it's right for cost) but inflated for ctx%; the
+            # last AssistantMessage's per-call usage is what reflects
+            # the actual current context size. See ``TurnMetrics`` doc.
+            last_prompt_tokens = 0
             try:
                 await self._client.query(text)
                 async for msg in self._client.receive_response():
@@ -212,8 +218,16 @@ class ClaudeCodeAdapter:
                         await self._outgoing.put(
                             SessionEstablished(ts=datetime.now(UTC), session_id=sid)
                         )
-                    for ev in _convert(msg, model=self._config.model.value):
+                    per_call = _assistant_prompt_tokens(msg)
+                    if per_call is not None:
+                        last_prompt_tokens = per_call
+                    for ev in _convert(
+                        msg,
+                        model=self._config.model.value,
+                        last_prompt_tokens=last_prompt_tokens,
+                    ):
                         await self._outgoing.put(ev)
+                last_prompt_tokens = 0
             except Exception as e:
                 await self._outgoing.put(Error(ts=datetime.now(UTC), message=str(e)))
                 await self._outgoing.put(
@@ -339,11 +353,22 @@ async def _artifact_tool_handler(_args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _convert(msg: object, *, model: str | None = None) -> Iterable[AgentEvent]:
+def _convert(
+    msg: object,
+    *,
+    model: str | None = None,
+    last_prompt_tokens: int = 0,
+) -> Iterable[AgentEvent]:
     """Map a Claude SDK Message onto our AgentEvent union.
 
     ``model`` lets the adapter stamp the per-turn metrics with its own
     configured model id; the SDK doesn't echo it on ResultMessage.
+
+    ``last_prompt_tokens`` is the prompt size of the last AssistantMessage
+    in the turn (caller tracks this across messages). It rides along on
+    the emitted ``TurnMetrics`` so the FE has an honest "current context
+    size" number — ``ResultMessage.usage`` itself is cumulative across
+    sub-calls and inflates ctx% by the number of tool-uses in a turn.
     """
     now = datetime.now(UTC)
     if isinstance(msg, AssistantMessage):
@@ -388,9 +413,31 @@ def _convert(msg: object, *, model: str | None = None) -> Iterable[AgentEvent]:
             cache_creation_input_tokens=int(
                 usage.get("cache_creation_input_tokens", 0) or 0
             ),
+            last_prompt_tokens=last_prompt_tokens,
             model=model,
         )
         yield StatusChange(ts=now, status="idle")
+
+
+def _assistant_prompt_tokens(msg: object) -> int | None:
+    """Pull ``input + cache_read + cache_creation`` from an AssistantMessage's
+    usage, or ``None`` if ``msg`` isn't an AssistantMessage / has no usage.
+
+    This is the prompt size for that single API call — the value we want
+    for ctx%. The SDK's ``AssistantMessage.usage`` is the standard
+    Anthropic per-request shape, so summing the three categories gives
+    the actual prompt size that round-tripped to the model.
+    """
+    if not isinstance(msg, AssistantMessage):
+        return None
+    usage = getattr(msg, "usage", None)
+    if not isinstance(usage, dict):
+        return None
+    return (
+        int(usage.get("input_tokens", 0) or 0)
+        + int(usage.get("cache_read_input_tokens", 0) or 0)
+        + int(usage.get("cache_creation_input_tokens", 0) or 0)
+    )
 
 
 def _session_id_of(msg: object) -> str | None:

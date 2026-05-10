@@ -161,7 +161,24 @@ class TurnMetrics:
     these immediately before the trailing ``StatusChange("idle")`` so
     consumers can render "8m 42s · ↓ 32.9k tokens" the way the Claude
     Code CLI does. Adapters whose SDK doesn't expose a field leave it
-    at its default (zero / None)."""
+    at its default (zero / None).
+
+    Two distinct flavours of "tokens" live on this event:
+
+    - ``input_tokens`` / ``output_tokens`` / ``cache_*_input_tokens`` are
+      the **cumulative** counts across every model sub-call in this turn
+      (a turn that runs 20 tool-uses makes 20 API calls and the SDK's
+      ``ResultMessage`` aggregates their usage). These are what
+      consumers sum across turns to compute session **cost** — that
+      sum equals what Anthropic actually billed.
+
+    - ``last_prompt_tokens`` is the prompt size of the **last** model
+      call in the turn — the closest stand-in we have for "current
+      context size" right before the model said its final thing. This
+      is what consumers use for **context %** display. Without this
+      separation, ctx% would inflate by the number of sub-calls (each
+      replays the full context from cache).
+    """
 
     type: Literal["turn_metrics"] = "turn_metrics"
     ts: datetime
@@ -170,6 +187,7 @@ class TurnMetrics:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    last_prompt_tokens: int = 0
     model: str | None = None
 
 

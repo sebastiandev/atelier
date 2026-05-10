@@ -212,6 +212,31 @@ export function listProviders(): Promise<ProviderDescriptor[]> {
   return fetch("/api/providers").then((r) => jsonOrThrow<ProviderDescriptor[]>(r));
 }
 
+export type FolderEntry = {
+  name: string;
+  is_dir: boolean;
+  is_hidden: boolean;
+};
+
+export type FolderListing = {
+  path: string;
+  parent: string | null;
+  entries: FolderEntry[];
+};
+
+export function listFolder(
+  path?: string | null,
+  showHidden: boolean = false,
+): Promise<FolderListing> {
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (showHidden) params.set("show_hidden", "true");
+  const qs = params.toString();
+  return fetch(`/api/fs/list${qs ? `?${qs}` : ""}`).then((r) =>
+    jsonOrThrow<FolderListing>(r),
+  );
+}
+
 export function createAgent(
   workSlug: string,
   payload: CreateAgentPayload,

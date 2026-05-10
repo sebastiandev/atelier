@@ -40,10 +40,19 @@ class ClaudeModel(str, Enum):
 
 
 class ClaudeEffort(str, Enum):
+    """Thinking effort levels accepted by the Claude Agent SDK / CLI.
+
+    Mirrors the Claude Code CLI's ``/effort`` ladder so users coming from
+    the CLI see the same set of choices in Atelier's new-agent dialog.
+    Higher tiers grant the model a larger thinking-token budget at the
+    cost of latency + tokens billed.
+    """
+
     OFF = "off"
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+    XHIGH = "xhigh"
     MAX = "max"
 
 

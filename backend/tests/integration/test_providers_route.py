@@ -16,7 +16,11 @@ def test_claude_descriptor_includes_thinking_effort(app_client: TestClient) -> N
     claude = next(p for p in response.json() if p["name"] == "claude-code")
     assert claude["primary_field"]["label"] == "Model"
     assert "thinking_effort" in claude["options"]
-    assert claude["options"]["thinking_effort"]["default"] == "off"
+    # Dialog pre-selects the highest-but-one tier (matches Claude Code CLI's
+    # default ``/effort`` setting). Build-time fallback when no value is sent
+    # is still "off" — see test_claude_build_with_defaults.
+    assert claude["options"]["thinking_effort"]["default"] == "xhigh"
+    assert "xhigh" in claude["options"]["thinking_effort"]["values"]
 
 
 def test_amp_descriptor_has_mode_selector(app_client: TestClient) -> None:

@@ -660,6 +660,130 @@ body {
   max-width: 640px;
 }
 
+/* Folder input row (text field + browse button) ------------------------ */
+
+.folder-input-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+.folder-input-row .input {
+  flex: 1;
+  min-width: 0;
+}
+.folder-input-pick {
+  flex: 0 0 auto;
+  width: 2.1rem;
+  height: 2.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Folder picker dialog ------------------------------------------------- */
+
+.folder-picker-bd {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 320px;
+}
+.folder-picker-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  font-size: 12.5px;
+  color: var(--fg-2);
+}
+.folder-picker-crumbs .crumb {
+  background: transparent;
+  border: 0;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.folder-picker-crumbs .crumb:hover {
+  background: var(--bg-elev);
+  color: var(--fg);
+}
+.folder-picker-crumbs .crumb + .crumb::before {
+  content: "/";
+  margin-right: 4px;
+  opacity: 0.4;
+}
+.folder-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow-y: auto;
+  max-height: 360px;
+  background: var(--bg);
+}
+.folder-picker-empty {
+  padding: 0.6rem 0.8rem;
+  font-size: 13px;
+  color: var(--fg-3);
+  font-style: italic;
+}
+.folder-picker-row + .folder-picker-row {
+  border-top: 1px solid var(--border);
+}
+.folder-picker-row.is-highlight {
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+.folder-picker-row.is-hidden .folder-picker-name {
+  opacity: 0.6;
+}
+.folder-picker-row-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.folder-picker-row-btn:disabled {
+  cursor: default;
+  color: var(--fg-3);
+}
+.folder-picker-row.is-file .folder-picker-name {
+  color: var(--fg-3);
+}
+.folder-picker-glyph {
+  width: 0.8rem;
+  text-align: center;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+.folder-picker-row.is-dir .folder-picker-glyph {
+  color: var(--accent);
+}
+.folder-picker-name {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.folder-picker-ft {
+  align-items: center;
+}
+.folder-picker-hidden-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 12.5px;
+  color: var(--fg-2);
+  cursor: pointer;
+}
+
 .persona-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -761,6 +885,11 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  /* Tile width depends on the canvas grid (and on the tile being
+     standalone vs. side-by-side), not the viewport — so reflow uses a
+     container query instead of a media query. The narrow-tile rules
+     live further down under ``@container`` blocks. */
+  container-type: inline-size;
 }
 .agent-tile.mode-page {
   height: 100vh;
@@ -831,6 +960,7 @@ body {
   font-size: 10.5px;
   color: var(--muted);
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 .agent-tile header .conn-status {
   font-size: 10.5px;
@@ -860,6 +990,61 @@ body {
   color: oklch(0.74 0.12 285);
   border-color: color-mix(in oklch, oklch(0.74 0.12 285) 30%, transparent);
 }
+
+/* Header layout reflows in two tiers as the tile narrows so the user
+   always sees every piece of metadata + every button. Tile width
+   depends on the canvas grid + viewport; the @container queries fire
+   off the tile's own inline size, not the viewport. */
+
+/* Tier 2 — laptop-solo / half-canvas (~480–720px tile width). Identity
+   + buttons stay together on the top row; the meta cluster
+   (provider/model · status · worktree) drops to a second row and
+   wraps if it still doesn't fit on one line. */
+@container (max-width: 720px) {
+  .agent-tile header {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "left right"
+      "meta meta";
+    row-gap: 0.4rem;
+  }
+  .agent-tile header .tile-header-left  { grid-area: left; }
+  .agent-tile header .tile-header-right { grid-area: right; }
+  .agent-tile header .tile-header-meta {
+    grid-area: meta;
+    justify-self: stretch;
+    flex-wrap: wrap;
+    row-gap: 0.3rem;
+  }
+  .agent-tile header .folder-pill {
+    /* Stop the path pill from monopolising the row. ``min-width: 0`` lets
+       it shrink past intrinsic content size; the inner ``shortenPath``
+       text already truncates with ellipsis-like middle elision. */
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+/* Tier 3 — really narrow tile (≤480px). Buttons get their own row so
+   they can't be clipped, and the meta cluster's third row gives every
+   pill room to breathe. The button row anchors left (toolbar feel)
+   with the hint trailing to the right via flex-reverse — keeps the
+   hover hint readable without crowding the buttons. */
+@container (max-width: 480px) {
+  .agent-tile header {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "left"
+      "right"
+      "meta";
+    row-gap: 0.35rem;
+  }
+  .agent-tile header .tile-header-right {
+    justify-self: start;
+    flex-direction: row-reverse;
+  }
+}
+
 .persona-pip {
   display: inline-flex;
   align-items: center;
@@ -1876,6 +2061,11 @@ h5.md-h {
   background: var(--bg);
   color: var(--muted);
   font-size: 11px;
+  /* Never break the path inside its own pill — let the parent shrink
+     us and the text ellipsize cleanly instead. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .work-body {
