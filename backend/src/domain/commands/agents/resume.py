@@ -36,6 +36,7 @@ from src.domain.models import Agent, AgentStatus
 from src.domain.workstore.dtos import WorkRecord
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
+from src.domain.sharedfolders.ports import ShareProvisioner, SharedFolderStore
 from src.infrastructure.agents import build_adapter
 from src.infrastructure.cli_transcript import merge_cli_transcript
 from src.settings import Settings
@@ -58,6 +59,8 @@ async def execute(
     workstore: WorkStore,
     supervisor: AgentSupervisorService,
     worktree_manager: WorktreeManager,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
     settings: Settings,
     req: ResumeAgentRequest,
 ) -> Agent:
@@ -87,9 +90,24 @@ async def execute(
         source=agent.folder,
     )
 
+    # Re-mount shared folders in case the user added shares since the
+    # agent's last start. Idempotent — existing correctly-targeted
+    # symlinks are left alone; conflicts are logged + skipped.
+    from src.domain.commands.agents.start import _mount_project_shares
+
+    mounted_shares = _mount_project_shares(
+        sharestore=sharestore,
+        provisioner=share_provisioner,
+        project_slug=record.work.project_slug,
+        work_slug=req.work_slug,
+        agent_slug=req.agent_slug,
+    )
+
     common = CommonAgentConfig(
         workdir=workdir,
-        system_prompt=render_system_prompt(agent.persona, agent.role),
+        system_prompt=render_system_prompt(
+            agent.persona, agent.role, workdir=workdir, shares=mounted_shares
+        ),
     )
     config = SPECS[agent.provider].build(common, agent.model, {})
     adapter = build_adapter(config, settings)

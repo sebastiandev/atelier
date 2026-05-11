@@ -9,13 +9,22 @@ Idempotent: `configure_mappings()` may be called multiple times safely.
 
 from sqlalchemy.orm import registry
 
-from src.domain.models import Agent, Artifact, Connection, Handoff, Project, Work
+from src.domain.models import (
+    Agent,
+    Artifact,
+    Connection,
+    Handoff,
+    Project,
+    SharedFolder,
+    Work,
+)
 from src.infrastructure.database.tables import (
     agents_table,
     artifacts_table,
     connections_table,
     handoffs_table,
     projects_table,
+    shared_folders_table,
     works_table,
 )
 
@@ -41,5 +50,6 @@ def configure_mappings() -> None:
     mapper_registry.map_imperatively(Artifact, artifacts_table)
     mapper_registry.map_imperatively(Connection, connections_table)
     mapper_registry.map_imperatively(Handoff, handoffs_table)
+    mapper_registry.map_imperatively(SharedFolder, shared_folders_table)
 
     _configured = True

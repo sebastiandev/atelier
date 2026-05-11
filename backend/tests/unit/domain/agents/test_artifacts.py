@@ -48,8 +48,8 @@ class _RecorderStore:
         raise AssertionError(f"tracker should not call {name!r} on the store")
 
 
-def _resolve_workdir(_work: str, _agent: str) -> Path:
-    return Path("/never-used")
+def _resolve_allowed_roots(_work: str, _agent: str) -> list[Path]:
+    return [Path("/never-used")]
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ def test_pr_happy_path_with_required_fields() -> None:
             "repo": "x/y",
         },
         workstore=store,  # type: ignore[arg-type]
-        resolve_workdir=_resolve_workdir,
+        resolve_allowed_roots=_resolve_allowed_roots,
     )
     assert artifact.type == "pr"
     assert artifact.url == "https://github.com/x/y/pull/3"
@@ -86,7 +86,7 @@ def test_pr_status_defaults_to_open() -> None:
         "agt-7",
         {"type": "pr", "url": "https://x/1", "title": "t"},
         workstore=store,  # type: ignore[arg-type]
-        resolve_workdir=_resolve_workdir,
+        resolve_allowed_roots=_resolve_allowed_roots,
     )
     assert store.calls[0].status == "open"
 
@@ -98,7 +98,7 @@ def test_pr_rejects_invalid_status() -> None:
             "agt-7",
             {"type": "pr", "url": "https://x/1", "title": "t", "status": "wat"},
             workstore=_RecorderStore(),  # type: ignore[arg-type]
-            resolve_workdir=_resolve_workdir,
+            resolve_allowed_roots=_resolve_allowed_roots,
         )
 
 
@@ -109,7 +109,7 @@ def test_pr_rejects_missing_url() -> None:
             "agt-7",
             {"type": "pr", "title": "t"},
             workstore=_RecorderStore(),  # type: ignore[arg-type]
-            resolve_workdir=_resolve_workdir,
+            resolve_allowed_roots=_resolve_allowed_roots,
         )
 
 
@@ -125,7 +125,7 @@ def test_jira_requires_explicit_status() -> None:
             "agt-7",
             {"type": "jira", "url": "https://j/X-1", "title": "t"},
             workstore=_RecorderStore(),  # type: ignore[arg-type]
-            resolve_workdir=_resolve_workdir,
+            resolve_allowed_roots=_resolve_allowed_roots,
         )
 
 
@@ -141,7 +141,7 @@ def test_jira_rejects_pr_status_value() -> None:
                 "status": "merged",
             },
             workstore=_RecorderStore(),  # type: ignore[arg-type]
-            resolve_workdir=_resolve_workdir,
+            resolve_allowed_roots=_resolve_allowed_roots,
         )
 
 
@@ -157,15 +157,15 @@ def test_doc_records_resolved_path_when_file_exists(tmp_path: Path) -> None:
 
     store = _RecorderStore()
 
-    def resolver(_w: str, _a: str) -> Path:
-        return tmp_path
+    def resolver(_w: str, _a: str) -> list[Path]:
+        return [tmp_path]
 
     record_artifact(
         "WRK-001",
         "agt-7",
         {"type": "doc", "path": "docs/design.md", "title": "Design"},
         workstore=store,  # type: ignore[arg-type]
-        resolve_workdir=resolver,
+        resolve_allowed_roots=resolver,
     )
     assert store.calls[0].doc_path == str(real.resolve())
     assert store.calls[0].status == "draft"
@@ -178,7 +178,7 @@ def test_doc_rejects_nonexistent_path(tmp_path: Path) -> None:
             "agt-7",
             {"type": "doc", "path": "missing.md", "title": "x"},
             workstore=_RecorderStore(),  # type: ignore[arg-type]
-            resolve_workdir=lambda _w, _a: tmp_path,
+            resolve_allowed_roots=lambda _w, _a: [tmp_path],
         )
 
 
@@ -204,9 +204,49 @@ def test_doc_tolerates_file_appearing_mid_wait(tmp_path: Path) -> None:
         "agt-7",
         {"type": "doc", "path": "hello.md", "title": "Hello"},
         workstore=store,  # type: ignore[arg-type]
-        resolve_workdir=lambda _w, _a: tmp_path,
+        resolve_allowed_roots=lambda _w, _a: [tmp_path],
     )
     assert store.calls[0].doc_path == str(target.resolve())
+
+
+def test_doc_accepts_path_under_a_shared_folder_root(tmp_path: Path) -> None:
+    """Marker validator now accepts doc paths that resolve under any of
+    the registered roots — worktree first, plus the project's shared
+    folders. Useful for plans/notes the agent drops in a shared dir."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    share = tmp_path / "share"
+    share.mkdir()
+    (share / "plan.md").write_text("# plan")
+
+    store = _RecorderStore()
+    record_artifact(
+        "WRK-001",
+        "agt-7",
+        {"type": "doc", "path": str(share / "plan.md"), "title": "Plan"},
+        workstore=store,  # type: ignore[arg-type]
+        resolve_allowed_roots=lambda _w, _a: [worktree, share],
+    )
+    assert store.calls[0].doc_path == str((share / "plan.md").resolve())
+
+
+def test_doc_rejects_path_outside_all_roots(tmp_path: Path) -> None:
+    """A path under no allowed root is rejected, even if the file
+    exists. Defends against an agent recording a doc anywhere on disk."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "leak.md").write_text("nope")
+
+    with pytest.raises(InvalidMarker, match="escapes"):
+        record_artifact(
+            "WRK-001",
+            "agt-7",
+            {"type": "doc", "path": str(elsewhere / "leak.md"), "title": "x"},
+            workstore=_RecorderStore(),  # type: ignore[arg-type]
+            resolve_allowed_roots=lambda _w, _a: [worktree],
+        )
 
 
 def test_doc_rejects_path_escape_via_dotdot(tmp_path: Path) -> None:
@@ -219,7 +259,7 @@ def test_doc_rejects_path_escape_via_dotdot(tmp_path: Path) -> None:
                 "agt-7",
                 {"type": "doc", "path": "../outside.md", "title": "x"},
                 workstore=_RecorderStore(),  # type: ignore[arg-type]
-                resolve_workdir=lambda _w, _a: tmp_path,
+                resolve_allowed_roots=lambda _w, _a: [tmp_path],
             )
     finally:
         outside.unlink(missing_ok=True)
@@ -237,7 +277,7 @@ def test_unknown_type_is_rejected() -> None:
             "agt-7",
             {"type": "release", "title": "x"},
             workstore=_RecorderStore(),  # type: ignore[arg-type]
-            resolve_workdir=_resolve_workdir,
+            resolve_allowed_roots=_resolve_allowed_roots,
         )
 
 
@@ -248,7 +288,7 @@ def test_missing_title_rejected() -> None:
             "agt-7",
             {"type": "pr", "url": "https://x"},
             workstore=_RecorderStore(),  # type: ignore[arg-type]
-            resolve_workdir=_resolve_workdir,
+            resolve_allowed_roots=_resolve_allowed_roots,
         )
 
 
@@ -267,7 +307,7 @@ def test_payload_attribution_is_ignored() -> None:
             "work_slug": "WRK-other",
         },
         workstore=store,  # type: ignore[arg-type]
-        resolve_workdir=_resolve_workdir,
+        resolve_allowed_roots=_resolve_allowed_roots,
     )
     req = store.calls[0]
     assert req.work_slug == "WRK-001"

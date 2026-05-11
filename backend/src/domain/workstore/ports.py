@@ -65,6 +65,13 @@ class WorkStore(Protocol):
 
     def add_agent_to_work(self, req: AddAgentRequest) -> Agent: ...
 
+    def delete_agent(self, agent_slug: str) -> None:
+        """Remove an agent end-to-end: workspace dir (transcript, agent.json,
+        contexts) + DB row. Caller is responsible for stopping the supervisor
+        and removing any per-agent worktree first — this method only handles
+        what the workstore owns."""
+        ...
+
     def render_agent_contexts(
         self,
         work_slug: str,
@@ -188,6 +195,10 @@ class WorkspaceFiles(Protocol):
 
     def ensure_work_dir(self, work_slug: str) -> None: ...
     def ensure_agent_dir(self, work_slug: str, agent_slug: str) -> None: ...
+    def remove_agent_dir(self, work_slug: str, agent_slug: str) -> None:
+        """Recursively remove the agent's workspace dir (transcript, agent.json,
+        contexts/). Idempotent — missing dir is a no-op."""
+        ...
 
     def write_work_json(self, work_slug: str, data: dict[str, Any]) -> None: ...
     def read_work_json(self, work_slug: str) -> dict[str, Any] | None: ...

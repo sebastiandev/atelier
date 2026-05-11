@@ -34,14 +34,24 @@ from src.domain.agents import (
 )
 from src.domain.connections import ConnectionStore
 from src.domain.models import Agent, Context, Persona, Provider
+from src.domain.sharedfolders.dtos import ShareSummary
+from src.domain.sharedfolders.ports import (
+    MountConflict,
+    ShareProvisioner,
+    SharedFolderStore,
+)
 from src.domain.workstore.dtos import AddAgentRequest
 from src.domain.workstore.ports import WorkStore
-from src.domain.worktrees import WorktreeManager
+from src.domain.worktrees import WorktreeManager, WorktreeProvisionFailed
 from src.infrastructure.agents import build_adapter
 from src.settings import Settings
 
 if TYPE_CHECKING:
     from src.domain.supervisor import AgentSupervisorService
+
+import logging
+
+_log = logging.getLogger(__name__)
 
 # Context types whose body must be fetched from an external connection
 # at start time. Anything else is rendered inline by the renderer.
@@ -90,6 +100,8 @@ async def execute(
     supervisor: AgentSupervisorService,
     worktree_manager: WorktreeManager,
     connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
     settings: Settings,
     req: StartAgentRequest,
 ) -> Agent:
@@ -168,38 +180,131 @@ async def execute(
         else None
     )
 
-    if req.fork_from_agent is not None:
-        # Inherit the source agent's working state into a fresh,
-        # independent worktree (detached HEAD; no auto-branch).
-        workdir = worktree_manager.ensure_forked(
-            work_slug=req.work_slug,
-            new_agent_slug=agent.slug,
-            source_agent_slug=req.fork_from_agent,
-            source=req.folder,
-        )
-    else:
-        workdir = worktree_manager.ensure(
+    # Past this point the agent row + workspace dir exist. If anything
+    # fails (worktree provisioning, supervisor registration), we roll
+    # back the whole creation so the user retries cleanly instead of
+    # being stuck with a zombie agent that can't be re-attached.
+    try:
+        if req.fork_from_agent is not None:
+            # Inherit the source agent's working state into a fresh,
+            # independent worktree (detached HEAD; no auto-branch).
+            workdir = worktree_manager.ensure_forked(
+                work_slug=req.work_slug,
+                new_agent_slug=agent.slug,
+                source_agent_slug=req.fork_from_agent,
+                source=req.folder,
+            )
+        else:
+            workdir = worktree_manager.ensure(
+                work_slug=req.work_slug,
+                agent_slug=agent.slug,
+                source=req.folder,
+            )
+
+        # Mount project-scoped shared folders into this worktree (if any).
+        # Refuse + warn on conflict — the share's symlink is skipped for
+        # this agent's worktree but other agents/shares continue to mount.
+        # See ``_bmad-output/stories/STORY-032.md`` § "Design notes".
+        mounted_shares = _mount_project_shares(
+            sharestore=sharestore,
+            provisioner=share_provisioner,
+            project_slug=record.work.project_slug,
             work_slug=req.work_slug,
             agent_slug=agent.slug,
-            source=req.folder,
         )
 
-    common = CommonAgentConfig(
-        workdir=workdir,
-        system_prompt=render_system_prompt(req.persona, req.role, workdir=workdir),
-    )
-    config = SPECS[req.provider].build(common, req.model, req.options)
-    adapter = build_adapter(config, settings)
-    context = AgentStartContext(
-        workdir=common.workdir,
-        model=req.model,
-        system_prompt=common.system_prompt,
-        session_id=agent.session_id,
-    )
-    await supervisor.register_agent(req.work_slug, agent.slug, adapter, context)
-    if first_message is not None:
-        await supervisor.send_input(agent.slug, first_message)
+        common = CommonAgentConfig(
+            workdir=workdir,
+            system_prompt=render_system_prompt(
+                req.persona, req.role, workdir=workdir, shares=mounted_shares
+            ),
+        )
+        config = SPECS[req.provider].build(common, req.model, req.options)
+        adapter = build_adapter(config, settings)
+        context = AgentStartContext(
+            workdir=common.workdir,
+            model=req.model,
+            system_prompt=common.system_prompt,
+            session_id=agent.session_id,
+        )
+        await supervisor.register_agent(req.work_slug, agent.slug, adapter, context)
+        if first_message is not None:
+            await supervisor.send_input(agent.slug, first_message)
+    except WorktreeProvisionFailed:
+        # Surfaceable upstream — keep stderr by re-raising. Roll back
+        # first so the user can immediately retry without a zombie row.
+        _rollback_agent(workstore, worktree_manager, req.work_slug, agent.slug)
+        raise
+    except Exception:
+        # Any other failure post-DB-insert (adapter build error, supervisor
+        # registration crash, send_input error). Roll back too — the
+        # alternative is a half-provisioned agent that can't be reused.
+        _rollback_agent(workstore, worktree_manager, req.work_slug, agent.slug)
+        raise
     return agent
+
+
+def _rollback_agent(
+    workstore: WorkStore,
+    worktree_manager: WorktreeManager,
+    work_slug: str,
+    agent_slug: str,
+) -> None:
+    """Best-effort cleanup of an agent that failed to provision. Both
+    calls are idempotent — safe to invoke even when the worktree never
+    materialised or the agent dir was never written. Failures here are
+    logged but never re-raised: the caller's original exception is the
+    one the user needs to see."""
+    try:
+        worktree_manager.remove(work_slug, agent_slug)
+    except Exception:  # noqa: BLE001 — best-effort housekeeping
+        _log.warning("rollback: worktree.remove failed for %s/%s", work_slug, agent_slug)
+    try:
+        workstore.delete_agent(agent_slug)
+    except Exception:  # noqa: BLE001 — best-effort housekeeping
+        _log.warning("rollback: workstore.delete_agent failed for %s", agent_slug)
+
+
+def _mount_project_shares(
+    *,
+    sharestore: SharedFolderStore,
+    provisioner: ShareProvisioner,
+    project_slug: str | None,
+    work_slug: str,
+    agent_slug: str,
+) -> list[ShareSummary]:
+    """Mount each project share into the agent's worktree as a symlink.
+
+    Idempotent — re-mounting an existing correctly-targeted symlink is
+    a no-op. Mount conflicts (existing dir/file at the path) are
+    logged and skipped; the share is omitted from the returned summary
+    so the agent's system prompt doesn't promise something the
+    filesystem doesn't deliver.
+    """
+    if project_slug is None:
+        return []
+    mounted: list[ShareSummary] = []
+    for share in sharestore.list_for_project(project_slug):
+        if share.slug is None:
+            continue
+        target = provisioner.share_canonical_path(project_slug, share.slug)
+        try:
+            provisioner.mount_in_worktree(
+                work_slug, agent_slug, share.mount_path, target
+            )
+        except MountConflict as exc:
+            _log.warning(
+                "share %s not mounted for %s/%s: %s",
+                share.slug,
+                work_slug,
+                agent_slug,
+                exc,
+            )
+            continue
+        mounted.append(
+            ShareSummary(name=share.name, mount_path=share.mount_path)
+        )
+    return mounted
 
 
 __all__ = [

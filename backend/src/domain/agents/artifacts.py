@@ -58,7 +58,7 @@ def record_artifact(
     payload: dict[str, Any],
     *,
     workstore: WorkStore,
-    resolve_workdir: Callable[[str, str], Path],
+    resolve_allowed_roots: Callable[[str, str], list[Path]],
 ) -> Artifact:
     artifact_type = _require_type(payload)
     title = _require_str(payload, "title")
@@ -89,15 +89,27 @@ def record_artifact(
         )
 
     rel_path = _require_str(payload, "path")
-    workdir = resolve_workdir(work_slug, agent_slug).resolve()
-    candidate = (workdir / rel_path).resolve()
-    # Reject paths that escape the agent's worktree (../../etc/passwd).
-    try:
-        candidate.relative_to(workdir)
-    except ValueError as exc:
+    roots = resolve_allowed_roots(work_slug, agent_slug)
+    if not roots:
         raise InvalidMarker(
-            f"doc path escapes the agent's worktree: {rel_path}"
-        ) from exc
+            "no allowed roots for this agent — cannot resolve doc path"
+        )
+    # Relative paths resolve against the first root (the agent's
+    # worktree). Absolute paths are accepted as-is so an agent can
+    # point at a shared folder via the symlink under ./shares/<mount>/
+    # OR directly via the canonical path.
+    primary = roots[0].resolve()
+    candidate = Path(rel_path)
+    candidate = (primary / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+    # Accept the path if its resolved real path falls inside ANY allowed
+    # root — worktree or one of the project's shared folders. Rejecting
+    # ``../../etc/passwd`` still works because /etc isn't a registered
+    # root.
+    real_roots = [r.resolve() for r in roots]
+    if not any(_is_inside(candidate, root) for root in real_roots):
+        raise InvalidMarker(
+            f"doc path escapes the agent's allowed roots: {rel_path}"
+        )
     if not _wait_for_file(candidate, _DOC_PATH_WAIT_SECONDS):
         # Phrase the error so a re-reading agent self-corrects on its
         # next turn: spell out the contract (file must exist before
@@ -119,6 +131,14 @@ def record_artifact(
             doc_path=str(candidate),
         )
     )
+
+
+def _is_inside(child: Path, parent: Path) -> bool:
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
 
 
 def _wait_for_file(path: Path, timeout_seconds: float) -> bool:

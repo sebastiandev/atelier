@@ -56,6 +56,18 @@ class WorkspacePaths:
     def project_json(self, project_slug: str) -> Path:
         return self.project_dir(project_slug) / "project.json"
 
+    def project_shared_dir(self, project_slug: str) -> Path:
+        """Parent dir of all the project's shared folders. Holds either
+        real subdirs (default-location shares) or symlinks (custom-
+        location shares)."""
+        return self.project_dir(project_slug) / "shared"
+
+    def project_share_dir(self, project_slug: str, share_slug: str) -> Path:
+        """Canonical path for one share. May resolve to a real dir or a
+        symlink to a user-chosen location elsewhere on disk."""
+        _validate_slug(share_slug)
+        return self.project_shared_dir(project_slug) / share_slug
+
     def brief(self, work_slug: str) -> Path:
         return self.work_dir(work_slug) / "brief.md"
 

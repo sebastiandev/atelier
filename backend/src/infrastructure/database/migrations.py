@@ -24,7 +24,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 
 
 class SchemaMismatchError(RuntimeError):
@@ -132,6 +132,14 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
                 )
             )
             existing = 7
+        if existing == 7:
+            # v7 → v8: introduce ``shared_folders`` — persistent, cross-
+            # agent folders scoped to a Project. Pure-add: the new
+            # ``shared_folders`` table is created by ``metadata.create_all``
+            # above (per the migration pattern, never call ``.create(conn)``
+            # for tables that ``create_all`` already handles). Nothing to
+            # ALTER; this step is a stamp-bump only.
+            existing = 8
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

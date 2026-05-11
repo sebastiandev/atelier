@@ -8,9 +8,11 @@ Walking-skeleton template — intentionally minimal. Persona-specific
 prompt engineering is its own future story.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from src.domain.models import Persona
+from src.domain.sharedfolders.dtos import ShareSummary
 
 # Marker convention taught to every launched agent. Two paths land in the
 # same supervisor pipeline:
@@ -50,7 +52,11 @@ stamped by the supervisor."""
 
 
 def render_system_prompt(
-    persona: Persona, role: str, *, workdir: Path | None = None
+    persona: Persona,
+    role: str,
+    *,
+    workdir: Path | None = None,
+    shares: Sequence[ShareSummary] = (),
 ) -> str:
     # Telling the agent its working directory explicitly is load-bearing:
     # without it, models routinely write files to $HOME (or wherever they
@@ -72,8 +78,27 @@ def render_system_prompt(
         f"Role: {role}.\n"
         f"Stay in character and focus on the work assigned to you.\n\n"
         f"{workdir_block}"
+        f"{_render_shares_block(shares)}"
         f"{_ARTIFACT_MARKER_GUIDE}"
     )
+
+
+def _render_shares_block(shares: Sequence[ShareSummary]) -> str:
+    """Tell the agent which shared folders exist inside its worktree and
+    what the contract is. Omitted when no shares — keeps the prompt
+    quiet for projects that don't use them."""
+    if not shares:
+        return ""
+    lines = ["Shared folders (persistent across agents in this project,"]
+    lines.append("edited concurrently — last writer wins):")
+    for share in shares:
+        lines.append(f'  - "{share.name}" at ./{share.mount_path}/')
+    lines.append(
+        "These paths are symlinks into shared storage; edits propagate "
+        "live to every agent that has the same share mounted. Don't "
+        "stomp other agents' in-flight edits."
+    )
+    return "\n".join(lines) + "\n\n"
 
 
 __all__ = ["render_system_prompt"]

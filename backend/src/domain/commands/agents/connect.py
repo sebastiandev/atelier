@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.domain.commands.agents import resume
+from src.domain.sharedfolders.ports import ShareProvisioner, SharedFolderStore
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
 from src.settings import Settings
@@ -53,6 +54,8 @@ async def execute(
     workstore: WorkStore,
     supervisor: AgentSupervisorService,
     worktree_manager: WorktreeManager,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
     settings: Settings,
     req: ConnectRequest,
 ) -> AsyncIterator[AgentSubscription]:
@@ -69,6 +72,8 @@ async def execute(
                 workstore,
                 supervisor,
                 worktree_manager,
+                sharestore,
+                share_provisioner,
                 settings,
                 resume.ResumeAgentRequest(
                     work_slug=history_work_slug, agent_slug=req.agent_slug

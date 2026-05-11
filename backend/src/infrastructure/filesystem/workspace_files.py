@@ -6,6 +6,7 @@ file so reconcile can skip it without raising.
 """
 
 import json
+import shutil
 from typing import Any
 
 from src.infrastructure.filesystem.atomic import atomic_write_json, atomic_write_text
@@ -21,6 +22,12 @@ class FsWorkspaceFiles:
 
     def ensure_agent_dir(self, work_slug: str, agent_slug: str) -> None:
         self._paths.agent_dir(work_slug, agent_slug).mkdir(parents=True, exist_ok=True)
+
+    def remove_agent_dir(self, work_slug: str, agent_slug: str) -> None:
+        # ``ignore_errors`` covers the "already gone" case + any race with
+        # a transcript reader holding the file open on Windows. The dir is
+        # always under the workspace root (slug validation in WorkspacePaths).
+        shutil.rmtree(self._paths.agent_dir(work_slug, agent_slug), ignore_errors=True)
 
     def write_work_json(self, work_slug: str, data: dict[str, Any]) -> None:
         atomic_write_json(self._paths.work_json(work_slug), data)

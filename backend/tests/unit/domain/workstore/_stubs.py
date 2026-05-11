@@ -157,6 +157,14 @@ class StubFiles:
     def ensure_agent_dir(self, work_slug: str, agent_slug: str) -> None:
         self.agent_dirs.add((work_slug, agent_slug))
 
+    def remove_agent_dir(self, work_slug: str, agent_slug: str) -> None:
+        self.agent_dirs.discard((work_slug, agent_slug))
+        self.agent_jsons.pop((work_slug, agent_slug), None)
+        self.context_indexes.pop((work_slug, agent_slug), None)
+        for key in list(self.context_files):
+            if key[0] == work_slug and key[1] == agent_slug:
+                self.context_files.pop(key, None)
+
     def write_work_json(self, work_slug: str, data: dict[str, Any]) -> None:
         self.work_jsons[work_slug] = data
 

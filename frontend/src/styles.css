@@ -660,6 +660,157 @@ body {
   max-width: 640px;
 }
 
+/* Shared folders section (project page) -------------------------------- */
+
+.shared-folders {
+  margin: 1.5rem 0 0;
+  padding: 1.2rem 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+}
+.shared-folders-hd {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+.shared-folders-hd h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.shared-folders-hd .count {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  font-weight: 400;
+  padding-left: 0.2rem;
+}
+.shared-folders-empty {
+  padding: 0.6rem 0;
+  font-size: 12.5px;
+  max-width: 56ch;
+  line-height: 1.55;
+}
+.shared-folders-list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+.shared-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.55rem 0.2rem;
+  border-bottom: 1px solid var(--border);
+}
+.shared-folder-glyph {
+  font-size: 16px;
+  flex: 0 0 auto;
+}
+.shared-folder-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.shared-folder-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+}
+.shared-folder-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+.shared-folder-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  font-size: 11px;
+  color: var(--fg-3);
+  min-width: 0;
+}
+.shared-folder-paths > * {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.shared-folder-real {
+  opacity: 0.7;
+}
+.shared-folder-actions {
+  position: relative;
+  flex: 0 0 auto;
+}
+.shared-folder-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 200px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 12px color-mix(in oklch, black 30%, transparent);
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  z-index: 5;
+}
+.shared-folder-menu .menu-item {
+  background: transparent;
+  border: 0;
+  padding: 0.4rem 0.7rem;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+.shared-folder-menu .menu-item:hover:not(:disabled) {
+  background: var(--bg-elev);
+}
+.shared-folder-menu .menu-item.danger {
+  color: var(--danger);
+}
+.shared-folder-menu .menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.share-loc-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  cursor: pointer;
+}
+.share-loc-opt input[type="radio"] {
+  margin-top: 0.2rem;
+}
+.share-loc-opt > span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 12.5px;
+}
+.share-loc-opt strong {
+  font-weight: 500;
+}
+
 /* Folder input row (text field + browse button) ------------------------ */
 
 .folder-input-row {
@@ -2192,6 +2343,82 @@ h5.md-h {
   white-space: nowrap;
 }
 
+/* Wrapper around the rail-agent button + kebab. The button keeps the
+   focused/minimized/detached classes so all the existing visual rules
+   above still apply; this row just adds a kebab gutter on the right. */
+.rail-agent-row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+.rail-agent-row .rail-agent {
+  flex: 1;
+  min-width: 0;
+}
+.rail-agent-kebab {
+  flex-shrink: 0;
+  width: 14px;
+  height: 22px;
+  align-self: center;
+  margin-left: 0;
+  margin-right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.75;
+  transition: opacity 100ms ease, background 100ms ease, color 100ms ease;
+}
+.rail-agent-row:hover .rail-agent-kebab,
+.rail-agent-row:focus-within .rail-agent-kebab {
+  opacity: 1;
+}
+.rail-agent-kebab:hover {
+  opacity: 1;
+  background: var(--bg);
+  color: var(--fg);
+}
+.rail-agent-menu {
+  position: absolute;
+  right: 4px;
+  top: calc(100% - 2px);
+  z-index: 10;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  min-width: 160px;
+}
+.rail-agent-menu .menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+}
+.rail-agent-menu .menu-item:hover {
+  background: var(--bg);
+}
+.rail-agent-menu .menu-item.danger {
+  color: var(--danger);
+}
+.rail-agent-menu .menu-item.danger:hover {
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+}
+
 /* Workdir picker (NewAgentDialog, handoff flow) -------------------------- */
 
 .workdir-pick {
@@ -2302,6 +2529,108 @@ h5.md-h {
   overflow: hidden;
 }
 .rail-arti .rail-arti-id {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Doc artifact: stack of chips on the right (location + git_state). */
+.rail-arti-chips {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.chip.arti-loc {
+  text-transform: lowercase;
+  letter-spacing: 0;
+  border-color: var(--line);
+  background: var(--bg-1);
+  color: var(--fg-2);
+}
+.chip.arti-loc-shared {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+/* Shared folders rail rows ---------------------------------------------- */
+
+.rail-hd-link {
+  margin-left: 0.35rem;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 12px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.rail-hd-link:hover {
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.rail-share {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.rail-share:hover {
+  background: var(--bg-elev);
+  border-color: var(--line);
+}
+.rail-share-glyph {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  border-radius: 5px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+}
+.rail-share-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.rail-share-name {
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.rail-share-badge {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 1.4;
+}
+.rail-share-mount {
   font-size: 10.5px;
   color: var(--muted);
   overflow: hidden;

@@ -21,12 +21,13 @@ from src.application.http.schemas import (
     DetachResponse,
     NewAgentRequest,
 )
-from src.domain.commands.agents import detach, list_for_work, start
+from src.domain.commands.agents import delete, detach, list_for_work, start
 from src.domain.connections import ConnectionStore, ContextFetchError
 from src.domain.models import Agent, Context
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import WorkStore
-from src.domain.worktrees import WorktreeManager
+from src.domain.worktrees import WorktreeManager, WorktreeProvisionFailed
+from src.domain.sharedfolders.ports import ShareProvisioner, SharedFolderStore
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 from src.settings import Settings
@@ -54,11 +55,21 @@ def get_connection_store(request: Request) -> ConnectionStore:
     return request.app.state.connection_store  # type: ignore[no-any-return]
 
 
+def get_sharestore(request: Request) -> SharedFolderStore:
+    return request.app.state.sharestore  # type: ignore[no-any-return]
+
+
+def get_share_provisioner(request: Request) -> ShareProvisioner:
+    return request.app.state.share_provisioner  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
 WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 ConnectionStoreDep = Annotated[ConnectionStore, Depends(get_connection_store)]
+ShareStoreDep = Annotated[SharedFolderStore, Depends(get_sharestore)]
+ShareProvisionerDep = Annotated[ShareProvisioner, Depends(get_share_provisioner)]
 
 
 @router.get("/works/{work_slug}/agents", response_model=list[AgentSummary])
@@ -85,6 +96,8 @@ async def create_agent(
     supervisor: SupervisorDep,
     worktree_manager: WorktreeDep,
     connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
     settings: SettingsDep,
 ) -> AgentSummary:
     req = start.StartAgentRequest(
@@ -111,6 +124,8 @@ async def create_agent(
             supervisor,
             worktree_manager,
             connection_store,
+            sharestore,
+            share_provisioner,
             settings,
             req,
         )
@@ -120,6 +135,15 @@ async def create_agent(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except ContextFetchError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
+    except WorktreeProvisionFailed as e:
+        # The agent row + workspace dir have already been rolled back
+        # by start.execute. Surface stderr so the FE toast tells the
+        # user *why* (e.g. "branch already exists / checked out at
+        # missing path"), not just "non-zero exit".
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Couldn't provision the agent's worktree: {e.stderr or e!s}",
+        ) from e
 
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
     return _to_summary(work_slug, agent, paths)
@@ -149,6 +173,27 @@ async def detach_agent(
     except detach.AgentNotResumable as e:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     return DetachResponse(command=result.command, launched=result.launched)
+
+
+@router.delete("/agents/{agent_slug}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent_endpoint(
+    agent_slug: str,
+    workstore: WorkStoreDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+) -> None:
+    """Permanently remove an agent: stop the supervisor task, remove the
+    per-agent git worktree, and wipe the workspace dir + DB row. The
+    parent work and its other agents are untouched."""
+    try:
+        await delete.execute(
+            workstore,
+            supervisor,
+            worktree_manager,
+            delete.DeleteAgentRequest(agent_slug=agent_slug),
+        )
+    except delete.AgentNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
 @router.post("/agents/{agent_slug}/reveal", status_code=status.HTTP_204_NO_CONTENT)

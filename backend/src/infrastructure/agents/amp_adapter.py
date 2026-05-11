@@ -67,7 +67,9 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import shutil
+import stat
 import sys
 import tempfile
 import uuid
@@ -166,6 +168,14 @@ class AmpAdapter:
         # in a 0700 tmpdir so the path itself is the secret.
         self._socket_dir: str | None = None
         self._socket_path: str | None = None
+        # Tiny shim shell script written into ``_socket_dir`` whose only
+        # job is to ``exec`` the Python interpreter + bridge module with
+        # whatever argv the CLI hands it. Amp's ``Permission(to=...)``
+        # is treated as a single executable path by Node's
+        # ``child_process.spawn`` — passing ``"python" "bridge.py"``
+        # as a quoted string trips ENOENT because the literal quotes
+        # land in the binary lookup. The shim sidesteps that.
+        self._bridge_wrapper_path: str | None = None
         self._server: asyncio.base_events.Server | None = None
         self._pump_task: asyncio.Task[None] | None = None
 
@@ -187,6 +197,17 @@ class AmpAdapter:
             self._server = await asyncio.start_unix_server(
                 self._handle_bridge_connection, path=self._socket_path
             )
+            # Materialise the shim that Amp's CLI will exec for every
+            # gated Bash call. Lives in the per-agent socket dir so it
+            # gets cleaned up automatically on close().
+            self._bridge_wrapper_path = os.path.join(self._socket_dir, "bridge.sh")
+            with open(self._bridge_wrapper_path, "w", encoding="utf-8") as f:
+                f.write(
+                    "#!/bin/sh\n"
+                    f"exec {shlex.quote(sys.executable)} "
+                    f'{shlex.quote(_BRIDGE_PATH)} "$@"\n'
+                )
+            os.chmod(self._bridge_wrapper_path, stat.S_IRWXU)
         self._started = True
 
     async def send_input(self, text: str) -> None:
@@ -321,7 +342,13 @@ class AmpAdapter:
         else:
             allowed = AMP_DEFAULT_AUTO_ALLOWED_TOOLS
         opts["dangerously_allow_all"] = False
-        opts["permissions"] = _build_permissions(allowed)
+        # ``self._bridge_wrapper_path`` is set in ``start()`` whenever
+        # we're not in ALLOW_ALL mode (the only mode that skips the
+        # bridge entirely), so this can't be None here.
+        assert self._bridge_wrapper_path is not None
+        opts["permissions"] = _build_permissions(
+            allowed, self._bridge_wrapper_path
+        )
         opts["env"] = {"ATELIER_PERMISSION_SOCKET": self._socket_path or ""}
         return opts
 
@@ -457,7 +484,9 @@ def _build_atelier_mcp_config() -> MCPConfig:
     )
 
 
-def _build_permissions(allowed_tools: tuple[str, ...]) -> list[Permission]:
+def _build_permissions(
+    allowed_tools: tuple[str, ...], bridge_cmd: str
+) -> list[Permission]:
     """Permission rules for the Amp CLI.
 
     Bash → delegate to our bridge (gated by Atelier's prompt UI). Each
@@ -469,11 +498,18 @@ def _build_permissions(allowed_tools: tuple[str, ...]) -> list[Permission]:
     to our UI — only ``delegate`` does — so we don't try to gate
     anything beyond Bash here.
 
+    ``bridge_cmd`` is the absolute path to a per-agent shim script that
+    exec's the Python interpreter + bridge module. Built by the adapter
+    in ``start()`` and threaded through here so Amp's
+    ``Permission(to=...)`` sees a single executable path — embedding a
+    shell-style ``"python" "bridge.py"`` in ``to`` breaks Node's
+    ``child_process.spawn`` (literal quotes land in the binary lookup
+    → ENOENT).
+
     ``"Bash"`` in ``allowed_tools`` is silently dropped: the user must
     not be able to disable shell gating from the UI. (Defeating that
     would defeat the entire reason this knob exists.)
     """
-    bridge_cmd = f'"{sys.executable}" "{_BRIDGE_PATH}"'
     rules: list[Permission] = [
         Permission(tool="Bash", action="delegate", to=bridge_cmd),
     ]

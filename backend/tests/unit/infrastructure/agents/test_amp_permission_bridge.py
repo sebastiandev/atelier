@@ -1,9 +1,16 @@
 """Round-trip tests for ``amp_permission_bridge.py``.
 
-The bridge is a standalone subprocess that the Amp CLI invokes in place
-of ``bash -c``. We exercise it end-to-end by spawning it as a child
-with a fake supervisor on the other end of a Unix socket — the same
-shape the production AmpAdapter wires.
+The bridge is a standalone subprocess that the Amp CLI invokes when a
+Bash tool call hits a ``delegate`` permission rule. Under the current
+Amp contract (observed in the 2026-05 binary):
+
+  * Amp spawns the delegate with NO argv beyond its own path
+  * tool input is written to stdin as a JSON line
+  * exit code drives the decision: 0 = allow, non-zero = reject
+
+We exercise the bridge end-to-end by spawning it with a fake supervisor
+on the other end of a Unix socket — the same shape the production
+AmpAdapter wires.
 """
 
 from __future__ import annotations
@@ -30,13 +37,12 @@ def test_bridge_exits_with_message_when_socket_env_missing() -> None:
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
             str(_BRIDGE),
-            "-c",
-            "echo hi",
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env={"PATH": os.environ.get("PATH", "")},
         )
-        _out, err = await proc.communicate()
+        _out, err = await proc.communicate(input=b'{"cmd": "echo hi"}')
         return proc.returncode or 0, err
 
     code, err = asyncio.run(run())
@@ -44,13 +50,12 @@ def test_bridge_exits_with_message_when_socket_env_missing() -> None:
     assert b"ATELIER_PERMISSION_SOCKET" in err
 
 
-def test_bridge_execs_bash_on_allow() -> None:
-    """On allow, the bridge ``execvp``s into bash. The tool result the
-    agent sees is whatever bash printed."""
+def test_bridge_exits_zero_on_allow_and_forwards_command_to_supervisor() -> None:
+    """On allow, the bridge exits 0 (Amp then runs the tool itself).
+    The supervisor sees the reconstructed bash argv so the prompt UI
+    can render the command the agent is about to run."""
 
-    async def run() -> tuple[int, bytes, bytes, dict | None]:
-        # macOS AF_UNIX limit (~104 chars) bites pytest's tmp_path; use
-        # a short tmpdir instead.
+    async def run() -> tuple[int, dict | None]:
         import shutil
         import tempfile
 
@@ -73,22 +78,22 @@ def test_bridge_execs_bash_on_allow() -> None:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 str(_BRIDGE),
-                "-c",
-                "echo allowed-output",
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={**os.environ, "ATELIER_PERMISSION_SOCKET": socket_path},
             )
-            out, err = await proc.communicate()
-            return proc.returncode or 0, out, err, received
+            _out, _err = await proc.communicate(
+                input=b'{"cmd": "echo allowed-output"}'
+            )
+            return proc.returncode or 0, received
         finally:
             server.close()
             await server.wait_closed()
             shutil.rmtree(sock_dir, ignore_errors=True)
 
-    code, out, _err, received = asyncio.run(run())
+    code, received = asyncio.run(run())
     assert code == 0
-    assert out.strip() == b"allowed-output"
     assert received == {"tool": "Bash", "argv": ["-c", "echo allowed-output"]}
 
 
@@ -113,13 +118,12 @@ def test_bridge_exits_nonzero_on_deny() -> None:
             proc = await asyncio.create_subprocess_exec(
                 sys.executable,
                 str(_BRIDGE),
-                "-c",
-                "echo blocked",
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={**os.environ, "ATELIER_PERMISSION_SOCKET": socket_path},
             )
-            _out, err = await proc.communicate()
+            _out, err = await proc.communicate(input=b'{"cmd": "echo blocked"}')
             return proc.returncode or 0, err
         finally:
             server.close()
@@ -127,21 +131,20 @@ def test_bridge_exits_nonzero_on_deny() -> None:
             shutil.rmtree(sock_dir, ignore_errors=True)
 
     code, err = asyncio.run(run())
-    assert code == 1
+    assert code != 0
     assert b"denied by user" in err
 
 
 def test_bridge_fails_closed_on_unreachable_socket(tmp_path: Path) -> None:
     """Socket env points to a non-existent path: bridge surfaces stderr,
-    exits non-zero. Amp will treat the missing tool result as a failure
-    and the agent gets the message."""
+    exits non-zero. Amp surfaces stderr as the tool result so the agent
+    sees the reason rather than a silent allow."""
 
     async def run() -> tuple[int, bytes]:
         proc = await asyncio.create_subprocess_exec(
             sys.executable,
             str(_BRIDGE),
-            "-c",
-            "echo never-runs",
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env={
@@ -149,9 +152,60 @@ def test_bridge_fails_closed_on_unreachable_socket(tmp_path: Path) -> None:
                 "ATELIER_PERMISSION_SOCKET": str(tmp_path / "does-not-exist.sock"),
             },
         )
-        _out, err = await proc.communicate()
+        _out, err = await proc.communicate(input=b'{"cmd": "echo never-runs"}')
         return proc.returncode or 0, err
 
     code, err = asyncio.run(run())
     assert code != 0
     assert b"cannot reach permission socket" in err
+
+
+def test_bridge_falls_back_to_json_dump_when_cmd_field_missing() -> None:
+    """If Amp's tool-input shape ever drifts (no ``cmd`` field), the
+    bridge encodes the whole input as a single argv token so the
+    prompt UI still shows something rather than rubber-stamping a
+    command the user can't see."""
+
+    async def run() -> tuple[int, dict | None]:
+        import shutil
+        import tempfile
+
+        sock_dir = tempfile.mkdtemp(prefix="amp-bridge-")
+        socket_path = os.path.join(sock_dir, "p.sock")
+        received: dict | None = None
+
+        async def handle(
+            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        ) -> None:
+            nonlocal received
+            line = await reader.readline()
+            received = json.loads(line.decode("utf-8").strip())
+            writer.write(b'{"decision":"allow"}\n')
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_unix_server(handle, path=socket_path)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                str(_BRIDGE),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={**os.environ, "ATELIER_PERMISSION_SOCKET": socket_path},
+            )
+            _out, _err = await proc.communicate(
+                input=b'{"shell_command": "ls -la", "cwd": "/tmp"}'
+            )
+            return proc.returncode or 0, received
+        finally:
+            server.close()
+            await server.wait_closed()
+            shutil.rmtree(sock_dir, ignore_errors=True)
+
+    code, received = asyncio.run(run())
+    assert code == 0
+    assert received is not None
+    assert received["tool"] == "Bash"
+    assert received["argv"][0] == "-c"
+    assert "shell_command" in received["argv"][1]

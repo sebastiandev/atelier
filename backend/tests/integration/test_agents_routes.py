@@ -768,3 +768,46 @@ def test_agent_summary_carries_worktree_path(
     assert fetched["worktree_path"] == tmp_workdir
     # The create response carries it too.
     assert agent["worktree_path"] == tmp_workdir
+
+
+# ---------------------------------------------------------------------------
+# REST: delete agent — wipes worktree, transcript, agent.json + DB row
+# ---------------------------------------------------------------------------
+
+
+def test_delete_agent_removes_row_and_workspace_dir(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    workspace_root: Path = app_client.app.state.settings.workspace_root
+    agent_dir = workspace_root / "works" / work["slug"] / "agents" / agent["slug"]
+    assert agent_dir.exists()
+
+    response = app_client.delete(f"/api/agents/{agent['slug']}")
+    assert response.status_code == 204
+
+    # Row is gone from the listing.
+    listing = app_client.get(f"/api/works/{work['slug']}/agents").json()
+    assert all(a["slug"] != agent["slug"] for a in listing)
+    # Agent dir wiped.
+    assert not agent_dir.exists()
+
+
+def test_delete_agent_404_for_unknown_slug(app_client: TestClient) -> None:
+    assert app_client.delete("/api/agents/agt-404").status_code == 404
+
+
+def test_delete_agent_leaves_siblings_untouched(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    work = _create_work(app_client)
+    target = _create_agent(app_client, work["slug"], tmp_workdir, name="Target")
+    sibling = _create_agent(app_client, work["slug"], tmp_workdir, name="Keeper")
+
+    assert app_client.delete(f"/api/agents/{target['slug']}").status_code == 204
+
+    listing = app_client.get(f"/api/works/{work['slug']}/agents").json()
+    remaining = [a["slug"] for a in listing]
+    assert target["slug"] not in remaining
+    assert sibling["slug"] in remaining

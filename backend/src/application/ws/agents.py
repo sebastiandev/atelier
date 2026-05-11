@@ -39,6 +39,8 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
     supervisor = websocket.app.state.supervisor
     worktree_manager = websocket.app.state.worktree_manager
     connection_store = websocket.app.state.connection_store
+    sharestore = websocket.app.state.sharestore
+    share_provisioner = websocket.app.state.share_provisioner
     settings = websocket.app.state.settings
 
     cursor = _parse_cursor(websocket.query_params.get("cursor"))
@@ -48,6 +50,8 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
             workstore,
             supervisor,
             worktree_manager,
+            sharestore,
+            share_provisioner,
             settings,
             connect.ConnectRequest(agent_slug=agent_slug, cursor=cursor),
         ) as sub:

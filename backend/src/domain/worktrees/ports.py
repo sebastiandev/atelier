@@ -23,6 +23,22 @@ from pathlib import Path
 from typing import Protocol
 
 
+class WorktreeProvisionFailed(RuntimeError):
+    """Raised when ``ensure``/``ensure_forked`` exhausted its self-heal
+    attempts and still couldn't produce a usable worktree.
+
+    Carries ``stderr`` so the application layer (route handler / WS
+    handler) can surface a meaningful message to the user instead of an
+    opaque non-zero-exit traceback. Typical causes: branch already
+    checked out elsewhere with a missing prunable worktree, locked git
+    index in the source repo, or a base ref that doesn't exist.
+    """
+
+    def __init__(self, message: str, *, stderr: str = "") -> None:
+        super().__init__(message)
+        self.stderr = stderr
+
+
 class WorktreeManager(Protocol):
     def ensure(
         self,

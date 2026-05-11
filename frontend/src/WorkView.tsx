@@ -19,6 +19,7 @@ import {
   type CreateAgentPayload,
   type HandoffSummary,
   type ProjectSummary,
+  type SharedFolderSummary,
   type WorkDetail,
   PERSONA_GLYPH,
   createAgent,
@@ -27,12 +28,14 @@ import {
   getWork,
   listAgents,
   listArtifacts,
+  listProjectShares,
   listProjects,
   revealAgent,
   revealArtifact,
   revealWork,
 } from "./api";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
+import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { HandoffDialog } from "./HandoffDialog";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
@@ -60,6 +63,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
+  const [shares, setShares] = useState<SharedFolderSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
@@ -71,6 +75,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     initialGoal: string;
   } | null>(null);
   const [handoffSource, setHandoffSource] = useState<AgentSummary | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AgentSummary | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   // Projects list for the move picker — fetched lazily when the dialog
@@ -124,7 +129,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         agentDialogOpen ||
         completeOpen ||
         moveOpen ||
-        handoffSource !== null
+        handoffSource !== null ||
+        deleteTarget !== null
       )
         return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -139,7 +145,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [agentDialogOpen, completeOpen, moveOpen, handoffSource]);
+  }, [agentDialogOpen, completeOpen, moveOpen, handoffSource, deleteTarget]);
 
   // Refetch on revision bump (an agent emitted artifact_recorded) AND on
   // mount / workSlug change. Initial fetch is the same call so we don't
@@ -176,8 +182,16 @@ export function WorkView({ workSlug }: { workSlug: string }) {
               if (!cancelled) setProject(p);
             })
             .catch(() => {});
+          listProjectShares(w.project_slug)
+            .then((s) => {
+              if (!cancelled) setShares(s);
+            })
+            .catch(() => {
+              if (!cancelled) setShares([]);
+            });
         } else {
           setProject(null);
+          setShares([]);
         }
       })
       .catch((e) => {
@@ -424,8 +438,12 @@ export function WorkView({ workSlug }: { workSlug: string }) {
               getProject(updated.project_slug)
                 .then(setProject)
                 .catch(() => setProject(null));
+              listProjectShares(updated.project_slug)
+                .then(setShares)
+                .catch(() => setShares([]));
             } else {
               setProject(null);
+              setShares([]);
             }
             setMoveOpen(false);
           }}
@@ -440,39 +458,48 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                 None on the canvas. Launch one via the API.
               </div>
             )}
-            {orderedAgents.map((a) => {
-              const isClosed = closedSlugs.includes(a.slug);
-              const isDetached = a.status === "detached";
-              const tooltip = isDetached
-                ? "Detached to CLI — click to re-attach (Atelier merges any CLI activity into the transcript)"
-                : isClosed
-                  ? "Closed — click to reopen"
-                  : undefined;
-              return (
-                <button
-                  key={a.slug}
-                  className={
-                    "rail-agent" +
-                    (focusedSlug === a.slug ? " focused" : "") +
-                    (isClosed ? " minimized" : "") +
-                    (isDetached ? " detached" : "")
-                  }
-                  data-persona={a.persona}
-                  onClick={() => focusAgent(a.slug)}
-                  title={tooltip}
-                >
-                  <span className="pip">{PERSONA_GLYPH[a.persona] ?? "AG"}</span>
-                  <span className="meta">
-                    <span className="name mono">{a.name}</span>
-                    <span className="role">
-                      {isDetached ? "in CLI · click to re-attach" : a.role}
-                    </span>
-                  </span>
-                  <span className="status-dot" data-status={a.status} />
-                </button>
-              );
-            })}
+            {orderedAgents.map((a) => (
+              <RailAgentRow
+                key={a.slug}
+                agent={a}
+                focused={focusedSlug === a.slug}
+                closed={closedSlugs.includes(a.slug)}
+                onFocus={() => focusAgent(a.slug)}
+                onDelete={() => setDeleteTarget(a)}
+              />
+            ))}
           </RailSection>
+
+          {work.project_slug && (
+            <RailSection
+              title="Shared folders"
+              count={shares.length}
+              hint={
+                project
+                  ? `Project ${project.name} — manage on project page`
+                  : undefined
+              }
+              hintHref={`/projects/${work.project_slug}`}
+            >
+              {shares.length === 0 && (
+                <div className="hint" style={{ padding: "4px 8px" }}>
+                  No shared folders for this project yet.
+                </div>
+              )}
+              {shares.map((s) => (
+                <ShareRailRow
+                  key={s.slug}
+                  share={s}
+                  onCopy={(path) => {
+                    void navigator.clipboard
+                      ?.writeText(path)
+                      .then(() => showToast(`Copied ${path}`))
+                      .catch(() => showToast(`Path: ${path}`));
+                  }}
+                />
+              ))}
+            </RailSection>
+          )}
 
           <RailSection title="Artifacts" count={artifacts.length}>
             {artifacts.length === 0 && (
@@ -578,6 +605,31 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           initialGoal={agentDialogPrefill?.initialGoal}
         />
       )}
+      {deleteTarget && (
+        <DeleteAgentDialog
+          agent={deleteTarget}
+          onClose={() => setDeleteTarget(null)}
+          onDeleted={() => {
+            const slug = deleteTarget.slug;
+            // Strip from local state immediately so the rail/canvas
+            // collapse without waiting for the refetch round-trip.
+            setAgents((curr) => curr.filter((x) => x.slug !== slug));
+            if (focusedSlug === slug) setFocusedSlug(null);
+            // Drop it from the closed-store so a new agent that
+            // happens to reuse the slug down the line doesn't inherit
+            // the previous "closed" flag (defensive — slugs are int-PK
+            // backed so reuse shouldn't happen, but state hygiene is
+            // cheap).
+            restoreAgent(workSlug, slug);
+            setDeleteTarget(null);
+            // Re-fetch in the background to pick up any side-effects
+            // (e.g. detach markers cleared, agent count on the work
+            // header). Errors here are silent — the optimistic strip
+            // already gave the user the right local picture.
+            void refreshAgents().catch(() => {});
+          }}
+        />
+      )}
       {handoffSource && (
         <HandoffDialog
           workSlug={workSlug}
@@ -636,9 +688,6 @@ function ArtifactRow({ artifact }: { artifact: ArtifactSummary }) {
       window.open(artifact.url, "_blank", "noopener,noreferrer");
     }
   };
-  const statusClass = ARTIFACT_GOOD_STATUSES.has(artifact.status)
-    ? "chip good"
-    : "chip info";
   const subtitle =
     artifact.agent_slug ?? (artifact.repo ?? artifact.url ?? "");
   return (
@@ -659,28 +708,212 @@ function ArtifactRow({ artifact }: { artifact: ArtifactSummary }) {
           {subtitle ? ` · ${subtitle}` : ""}
         </div>
       </div>
-      <span className={statusClass}>{artifact.status}</span>
+      <ArtifactStatusChips artifact={artifact} />
     </button>
   );
+}
+
+function ArtifactStatusChips({ artifact }: { artifact: ArtifactSummary }) {
+  // Doc artifacts get the new location + git-state chips; the original
+  // draft/published status is dropped from the rail because the derived
+  // chips carry the same intent more accurately.
+  if (artifact.type === "doc") {
+    return (
+      <span className="rail-arti-chips">
+        {artifact.location_kind && (
+          <span
+            className={`chip arti-loc arti-loc-${artifact.location_kind}`}
+            title={
+              artifact.location_kind === "worktree"
+                ? "Lives in the agent's git worktree"
+                : "Lives in a project shared folder"
+            }
+          >
+            {artifact.location_kind === "worktree" ? "worktree" : "shared"}
+          </span>
+        )}
+        {artifact.git_state && (
+          <span
+            className={
+              "chip " +
+              (artifact.git_state === "committed" ? "good" : "warn")
+            }
+            title={
+              artifact.git_state === "committed"
+                ? "File matches HEAD"
+                : "Working tree differs from HEAD"
+            }
+          >
+            {artifact.git_state}
+          </span>
+        )}
+      </span>
+    );
+  }
+  // PR / Jira keep the single status chip (open/merged/closed for PR,
+  // todo/in_progress/done/etc for Jira). Good-set drives the colour.
+  const statusClass = ARTIFACT_GOOD_STATUSES.has(artifact.status)
+    ? "chip good"
+    : "chip info";
+  return <span className={statusClass}>{artifact.status}</span>;
 }
 
 function RailSection({
   title,
   count,
   children,
+  hint,
+  hintHref,
 }: {
   title: string;
   count: number;
   children: React.ReactNode;
+  hint?: string;
+  hintHref?: string;
 }) {
   return (
     <div className="rail-section">
       <div className="rail-hd">
         <span>{title}</span>
         <span className="count mono">{count}</span>
+        {hint && hintHref && (
+          <a
+            className="rail-hd-link"
+            href={hintHref}
+            title={hint}
+            aria-label={hint}
+          >
+            ↗
+          </a>
+        )}
       </div>
       <div className="rail-section-body">{children}</div>
     </div>
+  );
+}
+
+function RailAgentRow({
+  agent,
+  focused,
+  closed,
+  onFocus,
+  onDelete,
+}: {
+  agent: AgentSummary;
+  focused: boolean;
+  closed: boolean;
+  onFocus: () => void;
+  onDelete: () => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // Outside-click closes the popover. Cheap event listener — no portal
+  // needed since the menu is positioned relative to the row.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handler = () => setMenuOpen(false);
+    window.addEventListener("click", handler);
+    return () => window.removeEventListener("click", handler);
+  }, [menuOpen]);
+
+  const isDetached = agent.status === "detached";
+  const tooltip = isDetached
+    ? "Detached to CLI — click to re-attach (Atelier merges any CLI activity into the transcript)"
+    : closed
+      ? "Closed — click to reopen"
+      : undefined;
+
+  return (
+    <div
+      className={
+        "rail-agent-row" +
+        (focused ? " focused" : "") +
+        (closed ? " minimized" : "") +
+        (isDetached ? " detached" : "")
+      }
+      data-persona={agent.persona}
+    >
+      <button
+        type="button"
+        className="rail-agent"
+        onClick={onFocus}
+        title={tooltip}
+      >
+        <span className="pip">{PERSONA_GLYPH[agent.persona] ?? "AG"}</span>
+        <span className="meta">
+          <span className="name mono">{agent.name}</span>
+          <span className="role">
+            {isDetached ? "in CLI · click to re-attach" : agent.role}
+          </span>
+        </span>
+        <span className="status-dot" data-status={agent.status} />
+      </button>
+      <button
+        type="button"
+        className="rail-agent-kebab"
+        aria-label={`More actions for ${agent.name}`}
+        title="More"
+        onClick={(e) => {
+          // Don't bubble into the row's focus handler; opening the
+          // menu shouldn't also re-focus the canvas tile.
+          e.stopPropagation();
+          setMenuOpen((v) => !v);
+        }}
+      >
+        ⋮
+      </button>
+      {menuOpen && (
+        <div
+          className="rail-agent-menu"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="menu-item danger"
+            onClick={() => {
+              setMenuOpen(false);
+              onDelete();
+            }}
+          >
+            Delete agent…
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShareRailRow({
+  share,
+  onCopy,
+}: {
+  share: SharedFolderSummary;
+  onCopy: (path: string) => void;
+}) {
+  const realPath = share.is_custom_location
+    ? share.real_path ?? share.canonical_path
+    : share.canonical_path;
+  return (
+    <button
+      type="button"
+      className="rail-share"
+      title={`Click to copy ${realPath}`}
+      onClick={() => onCopy(realPath)}
+    >
+      <span className="rail-share-glyph" aria-hidden>
+        📁
+      </span>
+      <span className="rail-share-meta">
+        <span className="rail-share-name">
+          {share.name}
+          {share.is_custom_location && (
+            <span className="rail-share-badge" title="Custom location">
+              custom
+            </span>
+          )}
+        </span>
+        <span className="rail-share-mount mono">./{share.mount_path}/</span>
+      </span>
+    </button>
   );
 }
 

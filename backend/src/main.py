@@ -14,6 +14,7 @@ from src.application.http.routes import (
     health,
     projects,
     providers,
+    shared_folders,
     works,
 )
 from src.application.ws import agents as ws_agents
@@ -22,6 +23,7 @@ from src.domain.connections import ConnectionStoreService
 from src.domain.models import Artifact
 from src.domain.projectstore import ProjectStoreService
 from src.domain.projectstore import reconcile as reconcile_projects
+from src.domain.sharedfolders import SharedFolderStoreService
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore import WorkStoreService, reconcile
 from src.infrastructure.connections import KeyringSecretStore, fetch_context, verify
@@ -34,12 +36,14 @@ from src.infrastructure.database import (
     initialize_database,
 )
 from src.infrastructure.database.connection_repository import SqlConnectionRepository
+from src.infrastructure.database.shared_folder_repository import SqlShareRepository
 from src.infrastructure.filesystem import (
     FsProjectFiles,
     FsTranscriptLog,
     FsWorkspaceFiles,
     WorkspacePaths,
 )
+from src.infrastructure.filesystem.share_provisioner import FsShareProvisioner
 from src.infrastructure.git import GitWorktreeManager
 from src.infrastructure.summarizer import build_summarizer
 from src.settings import Settings, get_settings
@@ -95,10 +99,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # tear-down or a soft-deleted work. Run once per work_slug.
         workstore = WorkStoreService(repo, files, transcript_log)
 
-        # Resolve an agent's actual working directory. Mirrors the agents
-        # route helper: the per-agent worktree if provisioned, the source
-        # folder otherwise. Used by the artifact tracker to validate
-        # doc-type paths exist before recording.
+        # Shared folders: project-scoped, persistent across agent
+        # worktrees. Provisioner owns the filesystem side (canonical
+        # dirs, external symlinks, worktree-side mounts); the service
+        # composes it with the SQL repository.
+        share_repo = SqlShareRepository(session_factory)
+        share_provisioner = FsShareProvisioner(paths)
+
+        def _resolve_project_id(slug: str) -> int | None:
+            project = project_repo.get_project_by_slug(slug)
+            return project.id if project is not None else None
+
+        sharestore = SharedFolderStoreService(
+            share_repo, share_provisioner, _resolve_project_id
+        )
+
+        # Resolve an agent's actual working directory. The per-agent
+        # worktree if provisioned, the source folder otherwise.
         def _resolve_workdir(work_slug: str, agent_slug: str) -> Path:
             candidate = paths.worktree_dir(work_slug, agent_slug)
             if candidate.exists():
@@ -115,6 +132,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise ValueError(f"agent not found: {agent_slug}")
             return agent.folder
 
+        # The full set of filesystem roots an agent is allowed to drop a
+        # doc artifact under: its worktree first (used to resolve
+        # relative paths), then every shared folder registered on the
+        # parent project. The validator accepts a doc path if its
+        # resolved real path lives inside any of these.
+        def _resolve_allowed_roots(work_slug: str, agent_slug: str) -> list[Path]:
+            roots: list[Path] = [_resolve_workdir(work_slug, agent_slug)]
+            record = workstore.get_work(work_slug)
+            project_slug = record.work.project_slug if record is not None else None
+            if project_slug is not None:
+                for share in sharestore.list_for_project(project_slug):
+                    # Custom-location shares: prefer the real path so we
+                    # match the symlink target. Default-location shares:
+                    # the canonical dir under the workspace.
+                    if share.real_path is not None:
+                        roots.append(share.real_path)
+                    else:
+                        roots.append(paths.project_share_dir(project_slug, share.slug))
+            return roots
+
         def _track_artifact(
             work_slug: str, agent_slug: str, payload: dict[str, Any]
         ) -> Artifact:
@@ -123,7 +160,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 agent_slug,
                 payload,
                 workstore=workstore,
-                resolve_workdir=_resolve_workdir,
+                resolve_allowed_roots=_resolve_allowed_roots,
             )
 
         supervisor = AgentSupervisorService(
@@ -145,6 +182,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.supervisor = supervisor
         app.state.connection_store = connection_store
         app.state.worktree_manager = worktree_manager
+        app.state.workspace_paths = paths
+        # Shared folders state for the routes + agent lifecycle hooks.
+        app.state.sharestore = sharestore
+        app.state.share_provisioner = share_provisioner
         # Surfaced for the handoff route (reads the source agent's NDJSON
         # to build the doc). Same instance the supervisor writes through.
         app.state.transcript_log = transcript_log
@@ -166,6 +207,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(connections.router, prefix="/api")
     app.include_router(artifacts.router, prefix="/api")
     app.include_router(fs.router, prefix="/api")
+    app.include_router(shared_folders.router, prefix="/api")
     app.include_router(ws_agents.router, prefix="/api")
     return app
 

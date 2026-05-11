@@ -27,6 +27,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from src.domain.worktrees.ports import WorktreeProvisionFailed
 from src.infrastructure.filesystem.paths import WorkspacePaths
 
 _log = logging.getLogger(__name__)
@@ -67,15 +68,56 @@ class GitWorktreeManager:
                 str(target),
                 base_ref,
             )
-        except subprocess.CalledProcessError as exc:
-            # If the branch already exists from a prior aborted launch,
-            # retry without -b — re-attaches to the existing branch.
-            stderr = (exc.stderr or "").lower()
-            if "already exists" in stderr:
+            return target
+        except subprocess.CalledProcessError as add_with_branch_exc:
+            stderr = (add_with_branch_exc.stderr or "").lower()
+            if "already exists" not in stderr:
+                # Some other failure (bad base ref, locked index, etc.)
+                # — surface it cleanly with stderr included.
+                raise WorktreeProvisionFailed(
+                    f"git worktree add failed for {work_slug}/{agent_slug}: "
+                    f"{_stderr(add_with_branch_exc)}",
+                    stderr=_stderr(add_with_branch_exc),
+                ) from add_with_branch_exc
+
+        # Branch existed — retry by attaching to it.
+        try:
+            _run_git(source, "worktree", "add", str(target), branch_name)
+            return target
+        except subprocess.CalledProcessError as attach_exc:
+            attach_stderr = _stderr(attach_exc)
+            # Common rot path: a previous worktree at the same target
+            # was wiped from disk (e.g. via wipe.sh) but not pruned from
+            # git's registry, so the branch is "checked out elsewhere"
+            # at a missing dir. Prune and retry once. After this,
+            # everything is real — surface failure with stderr.
+            _log.warning(
+                "git worktree add retry failed for %s/%s (%s); pruning + retrying",
+                work_slug,
+                agent_slug,
+                attach_stderr,
+            )
+            try:
+                _run_git(source, "worktree", "prune")
+            except subprocess.CalledProcessError as prune_exc:
+                # Prune failures are unusual but not fatal here — the
+                # next attempt will surface a clean error if attach
+                # still doesn't work.
+                _log.warning(
+                    "git worktree prune failed for %s: %s",
+                    source,
+                    _stderr(prune_exc),
+                )
+            try:
                 _run_git(source, "worktree", "add", str(target), branch_name)
-            else:
-                raise
-        return target
+                return target
+            except subprocess.CalledProcessError as final_exc:
+                raise WorktreeProvisionFailed(
+                    f"git worktree add failed for {work_slug}/{agent_slug} "
+                    f"(branch {branch_name} already exists and could not be "
+                    f"attached): {_stderr(final_exc)}",
+                    stderr=_stderr(final_exc),
+                ) from final_exc
 
     def ensure_forked(
         self,
@@ -133,12 +175,20 @@ class GitWorktreeManager:
 
     def remove(self, work_slug: str, agent_slug: str) -> None:
         target = self._worktree_path(work_slug, agent_slug)
-        if not target.exists():
+        source = self._source_for(target) if target.exists() else None
+        # If we only know the source via the live worktree, fish it out
+        # before the dir disappears. (target.exists() check above already
+        # populated source, but keep the guard for the not-exists path.)
+        if not target.exists() and not source:
+            # Nothing on disk to clean up. Still try to delete the branch
+            # in case a previous incomplete teardown left it behind. We
+            # need a source repo to do that; without one (rare — only
+            # happens for non-git source), there's nothing more to do.
             return
-        source = self._source_for(target)
         try:
             if source is not None:
                 _run_git(source, "worktree", "remove", str(target))
+                self._delete_atelier_branch(source, work_slug, agent_slug)
                 return
         except subprocess.CalledProcessError as exc:
             _log.warning(
@@ -151,6 +201,7 @@ class GitWorktreeManager:
         try:
             if source is not None:
                 _run_git(source, "worktree", "remove", "--force", str(target))
+                self._delete_atelier_branch(source, work_slug, agent_slug)
                 return
         except subprocess.CalledProcessError as exc:
             _log.warning(
@@ -168,6 +219,7 @@ class GitWorktreeManager:
                 _run_git(source, "worktree", "prune")
             except subprocess.CalledProcessError:
                 pass
+            self._delete_atelier_branch(source, work_slug, agent_slug)
 
     def sweep_orphans(self, work_slug: str, live_agent_slugs: set[str]) -> None:
         root = self._paths.workspace_root / "works" / work_slug / "worktrees"
@@ -181,6 +233,23 @@ class GitWorktreeManager:
             self.remove(work_slug, child.name)
 
     # -- internals ----------------------------------------------------
+
+    def _delete_atelier_branch(
+        self, source: Path, work_slug: str, agent_slug: str
+    ) -> None:
+        """Best-effort delete of the per-agent ``atelier/<work>/<agent>``
+        branch in the source repo after teardown. Without this, a future
+        agent that gets the same slug (after wipe + recreate) collides
+        with the leftover branch and fails to provision a worktree.
+
+        Failures are swallowed: the branch may legitimately not exist
+        (non-git source, manual cleanup, etc.) and we don't want a
+        teardown to error on housekeeping.
+        """
+        try:
+            _run_git(source, "branch", "-D", _branch_name(work_slug, agent_slug))
+        except subprocess.CalledProcessError:
+            pass
 
     def _worktree_path(self, work_slug: str, agent_slug: str) -> Path:
         return (

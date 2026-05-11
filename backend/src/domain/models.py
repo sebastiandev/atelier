@@ -131,6 +131,40 @@ class Project:
 
 
 @dataclass(kw_only=True)
+class SharedFolder:
+    """Persistent cross-agent folder scoped to a Project.
+
+    Bridges "uncommitted personal planning" content (BMAD outputs,
+    runbooks, scratch notes) across every agent in a project. Outlives
+    individual agent worktrees and is invisible to git — the third
+    bucket of agent context alongside source repo (committed) and
+    per-agent worktree (transient scratch).
+
+    Two paths matter:
+      - The **canonical** path is derived from project + slug:
+        ``<workspace>/projects/<PRJ>/shared/<share-slug>``. Agent
+        worktrees symlink into this path at ``mount_path``.
+      - The **real** path is where the data actually lives. ``None``
+        when same as canonical (default-location share). When custom
+        (adopted or new-with-custom-location), the canonical path is
+        itself a symlink to ``real_path``, so the OS chases it
+        transparently.
+
+    ``mount_path`` is the relative path inside each agent's worktree
+    where the share appears (e.g. ``_bmad-output/``). Immutable
+    post-creation; ``name`` is the user-editable display label.
+    """
+
+    id: int | None = None
+    slug: str | None = None
+    project_id: int
+    name: str
+    mount_path: str
+    real_path: Path | None = None
+    created_at: datetime
+
+
+@dataclass(kw_only=True)
 class Agent:
     """Agent meta + lifecycle. UI session state lives on the frontend.
 

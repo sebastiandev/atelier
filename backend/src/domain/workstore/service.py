@@ -139,6 +139,18 @@ class WorkStoreService:
             self._repo.upsert_work(existing)
             self._files.write_work_json(work_slug, serialize_work_record(existing, contexts))
 
+    def delete_agent(self, agent_slug: str) -> None:
+        with self._lock:
+            work_slug = self._repo.get_work_slug_for_agent(agent_slug)
+            if work_slug is None:
+                return
+            # FS first: a crash between the two leaves an orphan dir on
+            # disk (harmless, swept by the wipe script / manual cleanup)
+            # rather than a DB row pointing at deleted files (which would
+            # render as a broken rail entry until the next reconcile).
+            self._files.remove_agent_dir(work_slug, agent_slug)
+            self._repo.delete_agent(agent_slug)
+
     def add_agent_to_work(self, req: AddAgentRequest) -> Agent:
         with self._lock:
             parent = self._require_work(req.work_slug)

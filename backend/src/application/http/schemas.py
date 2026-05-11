@@ -259,6 +259,11 @@ class ArtifactSummary(BaseModel):
     url: str | None = None
     repo: str | None = None
     doc_path: str | None = None
+    # Doc-only enrichments, derived at list time. ``None`` for PR / Jira
+    # artifacts and for doc artifacts whose path no longer resolves
+    # under any known root (stale rows after a worktree wipe).
+    location_kind: str | None = None
+    git_state: str | None = None
 
 
 class NewHandoffRequest(BaseModel):

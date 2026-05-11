@@ -7,6 +7,7 @@ that lives behind the WorkStore port.
 
 import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -23,11 +24,13 @@ from src.application.http.schemas import (
     WorkDetail,
     WorkSummary,
 )
+from src.domain.agents.doc_state import classify_location, git_state
 from src.domain.agents.handoffs import (
     BuildHandoffRequest,
     Summarizer,
     build_handoff,
 )
+from src.domain.sharedfolders.ports import SharedFolderStore
 from src.domain.commands.projects import get as projects_get
 from src.domain.commands.works import (
     complete,
@@ -85,6 +88,10 @@ def get_transcript_log(request: Request) -> TranscriptLog:
     return request.app.state.transcript_log  # type: ignore[no-any-return]
 
 
+def get_sharestore(request: Request) -> SharedFolderStore:
+    return request.app.state.sharestore  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
@@ -92,6 +99,7 @@ SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
 WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
 SummarizerDep = Annotated[Summarizer, Depends(get_summarizer)]
 TranscriptLogDep = Annotated[TranscriptLog, Depends(get_transcript_log)]
+ShareStoreDep = Annotated[SharedFolderStore, Depends(get_sharestore)]
 
 
 @router.get("/works", response_model=list[WorkSummary])
@@ -139,7 +147,10 @@ def get_work_endpoint(
     response_model=list[ArtifactSummary],
 )
 def list_work_artifacts_endpoint(
-    work_slug: str, workstore: WorkStoreDep
+    work_slug: str,
+    workstore: WorkStoreDep,
+    sharestore: ShareStoreDep,
+    settings: SettingsDep,
 ) -> list[ArtifactSummary]:
     try:
         artifacts = list_artifacts.execute(workstore, work_slug)
@@ -147,7 +158,25 @@ def list_work_artifacts_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     agents = workstore.list_agents_for_work(work_slug)
     agent_slug_by_id = {a.id: a.slug for a in agents if a.id is not None}
-    return [_to_artifact_summary(a, agent_slug_by_id) for a in artifacts]
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    # Resolve the per-work share roots once — every doc artifact in the
+    # listing falls under either the agent's worktree or one of these.
+    record = workstore.get_work(work_slug)
+    project_slug = record.work.project_slug if record is not None else None
+    share_roots: list[Path] = []
+    if project_slug is not None:
+        for share in sharestore.list_for_project(project_slug):
+            share_roots.append(
+                share.real_path
+                if share.real_path is not None
+                else paths.project_share_dir(project_slug, share.slug)
+            )
+    return [
+        _to_artifact_summary(
+            a, agent_slug_by_id, paths=paths, share_roots=share_roots, work_slug=work_slug
+        )
+        for a in artifacts
+    ]
 
 
 @router.post(
@@ -405,7 +434,12 @@ def _to_handoff_summary(
 
 
 def _to_artifact_summary(
-    artifact: Artifact, agent_slug_by_id: dict[int, str | None]
+    artifact: Artifact,
+    agent_slug_by_id: dict[int, str | None],
+    *,
+    paths: WorkspacePaths | None = None,
+    share_roots: list[Path] | None = None,
+    work_slug: str | None = None,
 ) -> ArtifactSummary:
     if artifact.slug is None:
         raise RuntimeError("persisted Artifact has no slug")
@@ -414,6 +448,29 @@ def _to_artifact_summary(
         if artifact.agent_id is not None
         else None
     )
+    location_kind: str | None = None
+    git_state_value: str | None = None
+    # Doc-only enrichment. The worktree root is per-agent: the agent
+    # that recorded the doc is the canonical owner. We fall back to
+    # ``None`` when the agent has been deleted (FK SET NULL) so the
+    # artifact survives but loses its worktree binding.
+    if (
+        artifact.type == "doc"
+        and artifact.doc_path
+        and paths is not None
+        and work_slug is not None
+    ):
+        worktree: Path | None = None
+        if agent_slug is not None:
+            candidate = paths.worktree_dir(work_slug, agent_slug)
+            if candidate.exists():
+                worktree = candidate
+        location_kind = classify_location(
+            Path(artifact.doc_path),
+            worktree=worktree,
+            share_roots=share_roots or [],
+        )
+        git_state_value = git_state(Path(artifact.doc_path))
     return ArtifactSummary(
         slug=artifact.slug,
         type=artifact.type,
@@ -424,6 +481,8 @@ def _to_artifact_summary(
         url=artifact.url,
         repo=artifact.repo,
         doc_path=artifact.doc_path,
+        location_kind=location_kind,
+        git_state=git_state_value,
     )
 
 

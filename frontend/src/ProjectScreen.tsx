@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { EditProjectDialog } from "./EditProjectDialog";
 import { NewWorkDialog } from "./NewWorkDialog";
+import { SharedFoldersSection } from "./SharedFoldersSection";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
 
@@ -322,6 +323,11 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           )}
         </div>
       )}
+
+      <SharedFoldersSection
+        projectSlug={project.slug}
+        projectName={project.name}
+      />
 
       {workDialogOpen && (
         <NewWorkDialog

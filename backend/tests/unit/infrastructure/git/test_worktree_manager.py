@@ -204,3 +204,64 @@ def test_sweep_orphans_removes_worktrees_not_in_live_set(
 def test_sweep_orphans_on_empty_work_is_noop(manager: GitWorktreeManager) -> None:
     # Work has no worktrees dir yet — nothing to do.
     manager.sweep_orphans("WRK-404", live_agent_slugs=set())
+
+
+def test_remove_deletes_per_agent_atelier_branch(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """Without branch cleanup, a future agent that gets the same slug
+    after a wipe collides with the leftover branch and ``git worktree
+    add`` fails. ``remove`` should drop the branch on the way out."""
+    manager.ensure("WRK-001", "agt-1", repo)
+
+    # Branch was created by ensure().
+    branches_before = subprocess.run(
+        ["git", "branch", "--list", "atelier/WRK-001/agt-1"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "atelier/WRK-001/agt-1" in branches_before
+
+    manager.remove("WRK-001", "agt-1")
+
+    branches_after = subprocess.run(
+        ["git", "branch", "--list", "atelier/WRK-001/agt-1"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert branches_after.strip() == ""
+
+
+def test_ensure_self_heals_when_branch_lingers_after_dir_was_wiped(
+    manager: GitWorktreeManager, repo: Path, tmp_path: Path
+) -> None:
+    """Reproduces the wipe.sh aftermath: branch exists, git's worktree
+    registry still references a missing path. A naive retry would fail
+    with "branch is already checked out at <missing>" — the manager
+    should prune + retry and succeed."""
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+    # Simulate the wipe: blow away the worktree dir without telling git.
+    import shutil as _shutil
+
+    _shutil.rmtree(workdir)
+
+    # Sanity: git still thinks the worktree exists (it's "prunable").
+    listing = subprocess.run(
+        ["git", "worktree", "list"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "prunable" in listing
+
+    # Re-ensure should now self-heal: branch exists, prunable registry
+    # entry exists, so the first add fails, the fallback fails too, and
+    # the manager prunes + retries.
+    revived = manager.ensure("WRK-001", "agt-1", repo)
+    assert revived.exists()
+    assert (revived / ".git").exists()

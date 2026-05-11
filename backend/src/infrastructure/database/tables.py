@@ -290,6 +290,35 @@ handoffs_table = Table(
 )
 
 
+shared_folders_table = Table(
+    "shared_folders",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("slug", String, unique=True, nullable=False, index=True),
+    Column(
+        "project_id",
+        Integer,
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    # Display label — user-editable. Defaults to the mount path on
+    # creation but isn't tied to anything on disk.
+    Column("name", String, nullable=False),
+    # Relative path inside agent worktrees where this share appears.
+    # Validated against ``..``, leading ``/``, empty string at the
+    # application layer; immutable post-creation.
+    Column("mount_path", String, nullable=False),
+    # NULL when the share lives at its canonical
+    # <workspace>/projects/<PRJ>/shared/<share-slug>/ location;
+    # populated when the user pointed Atelier at an existing folder
+    # somewhere else, in which case the canonical path is a symlink to
+    # this real path.
+    Column("real_path", PathType, nullable=True),
+    Column("created_at", UTCDateTime, nullable=False),
+)
+
+
 connections_table = Table(
     "connections",
     metadata,
@@ -346,6 +375,7 @@ __all__ = [
     "metadata",
     "projects_table",
     "schema_version_table",
+    "shared_folders_table",
     "transcript_cursor_table",
     "works_table",
 ]

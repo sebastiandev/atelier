@@ -41,7 +41,18 @@ export type CreateWorkPayload = {
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText}: ${body}`);
+    // FastAPI conventionally returns `{"detail": "..."}` for HTTPException.
+    // Surface just the detail so dialogs/toasts show a readable message
+    // instead of the JSON wrapper. Fall back to the raw body for
+    // non-JSON or unexpected shapes.
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      if (typeof parsed?.detail === "string") detail = parsed.detail;
+    } catch {
+      // body wasn't JSON — leave detail as the raw text
+    }
+    throw new Error(`${res.status} ${res.statusText}: ${detail}`);
   }
   return res.json() as Promise<T>;
 }
@@ -144,6 +155,19 @@ export function listAgents(workSlug: string): Promise<AgentSummary[]> {
   );
 }
 
+/**
+ * Permanently remove an agent: stops the supervisor task, removes the
+ * per-agent worktree, wipes the workspace dir (transcript, agent.json,
+ * contexts) + DB row. The parent work and its siblings are untouched.
+ */
+export async function deleteAgent(agentSlug: string): Promise<void> {
+  const r = await fetch(`/api/agents/${agentSlug}`, { method: "DELETE" });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`Delete failed (${r.status}): ${detail}`);
+  }
+}
+
 export const PERSONA_GLYPH: Record<Persona, string> = {
   architect: "AR",
   developer: "DV",
@@ -235,6 +259,87 @@ export function listFolder(
   return fetch(`/api/fs/list${qs ? `?${qs}` : ""}`).then((r) =>
     jsonOrThrow<FolderListing>(r),
   );
+}
+
+// ─── Shared folders ────────────────────────────────────────────────────────
+
+export type SharedFolderSummary = {
+  slug: string;
+  name: string;
+  mount_path: string;
+  canonical_path: string;
+  real_path: string | null;
+  is_custom_location: boolean;
+  created_at: string;
+};
+
+export type CreateNewSharedFolderPayload = {
+  mode: "new";
+  name: string;
+  mount_path: string;
+  /** Absolute path. Omitted/null → default location under the project dir. */
+  location?: string | null;
+};
+
+export type CreateExistingSharedFolderPayload = {
+  mode: "existing";
+  name: string;
+  mount_path: string;
+  /** Absolute path of an existing folder to point Atelier at. */
+  location: string;
+};
+
+export type CreateSharedFolderPayload =
+  | CreateNewSharedFolderPayload
+  | CreateExistingSharedFolderPayload;
+
+export function listProjectShares(
+  projectSlug: string,
+): Promise<SharedFolderSummary[]> {
+  return fetch(`/api/projects/${projectSlug}/shares`).then((r) =>
+    jsonOrThrow<SharedFolderSummary[]>(r),
+  );
+}
+
+export function createProjectShare(
+  projectSlug: string,
+  payload: CreateSharedFolderPayload,
+): Promise<SharedFolderSummary> {
+  return fetch(`/api/projects/${projectSlug}/shares`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<SharedFolderSummary>(r));
+}
+
+export function renameProjectShare(
+  projectSlug: string,
+  shareSlug: string,
+  name: string,
+): Promise<SharedFolderSummary> {
+  return fetch(`/api/projects/${projectSlug}/shares/${shareSlug}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  }).then((r) => jsonOrThrow<SharedFolderSummary>(r));
+}
+
+/** Two flavours of removal:
+ *  - ``deleteData=false`` (default) → "stop sharing": remove the
+ *    Atelier-side registration + symlink, real folder untouched.
+ *  - ``deleteData=true`` → additionally wipe canonical contents.
+ *    Refused server-side for custom-location shares. */
+export function deleteProjectShare(
+  projectSlug: string,
+  shareSlug: string,
+  deleteData: boolean = false,
+): Promise<void> {
+  const qs = deleteData ? "?delete_data=true" : "";
+  return fetch(`/api/projects/${projectSlug}/shares/${shareSlug}${qs}`, {
+    method: "DELETE",
+  }).then((r) => {
+    if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
+  });
 }
 
 export function createAgent(
@@ -488,12 +593,17 @@ export function deleteProject(slug: string): Promise<void> {
 
 export type ArtifactType = "pr" | "jira" | "doc";
 
+export type ArtifactLocation = "worktree" | "shared";
+export type ArtifactGitState = "committed" | "uncommitted";
+
 export type ArtifactSummary = {
   slug: string;
   type: ArtifactType;
   title: string;
   // Per-type enum from the backend tracker — pr: open|draft|merged|closed,
   // jira: todo|in_progress|in_review|done|blocked, doc: draft|published.
+  // For doc rows the FE now ignores this in favour of the location +
+  // git_state chips below; the field stays in the schema for PR/Jira.
   status: string;
   created_at: string;
   // The agent that emitted the marker, if attribution was supplied.
@@ -502,6 +612,10 @@ export type ArtifactSummary = {
   repo: string | null;
   // Absolute path on disk, for doc-type artifacts; click → revealArtifact.
   doc_path: string | null;
+  // Doc-only enrichments computed on each list call. ``null`` for
+  // PR/Jira and for stale doc rows whose path no longer resolves.
+  location_kind: ArtifactLocation | null;
+  git_state: ArtifactGitState | null;
 };
 
 export function listArtifacts(workSlug: string): Promise<ArtifactSummary[]> {
