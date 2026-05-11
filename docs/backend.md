@@ -54,6 +54,10 @@ Each has a `Literal` `type` discriminator; the frontend pattern-matches on it.
 
 **`ts` is set by the adapter; `seq` is set by the supervisor.** The adapter contract test asserts monotonic `ts`. The supervisor stamps the monotonic `seq` when it appends to the transcript log — so consumers can resume from `?cursor=N`.
 
+### Canonical tool shape
+
+`ToolCall.name` and `ToolCall.arguments` follow a single canonical shape regardless of which provider SDK emitted the call. Each adapter calls `infrastructure.agents.tool_canonical.canonicalize_tool(name, raw_input)` before yielding `ToolCall` and `PermissionRequest` so provider quirks (Amp's `cmd`/`edit_file`/`old_str` vs Claude Code's `command`/`Edit`/`old_string`) never leak into `domain/` or the frontend renderer. The canonical concepts are `Bash`, `Edit`, `MultiEdit`, `Read`, `Write`, `Grep`, `Glob` — see the `ToolCall` docstring for required/optional keys per concept. Tools without a canonical concept pass through with their raw shape; the frontend falls back to a generic JSON view. Existing on-disk transcripts can be migrated with `scripts/migrate-transcripts.py` (idempotent).
+
 ## AgentSupervisorService
 
 `domain/supervisor/service.py`. The supervisor is the traffic cop sitting between the browser, the agent SDK, and the on-disk transcript. There is **one `asyncio.Task` per running agent** ("the agent task"), pumping that agent's adapter event stream. The supervisor is single-subscriber: at most one WS connection per agent; a second `subscribe()` replaces the slot.
@@ -353,17 +357,25 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 
 ## WorktreeManager
 
-`domain/worktrees/`. Provisions a per-agent workdir so each agent gets its own branch + index without stepping on the user's main checkout. Three operations: `ensure`, `remove`, `sweep_orphans`. The implementation (`infrastructure/git/worktree_manager.py`) shells out to `git worktree` — three subprocess calls beat pulling in gitpython.
+`domain/worktrees/`. Provisions a per-agent workdir so each agent gets its own checkout without stepping on the user's main one. Operations: `ensure`, `ensure_forked`, `is_detached`, `remove`, `sweep_orphans`. The implementation (`infrastructure/git/worktree_manager.py`) shells out to `git worktree` — a few subprocess calls beat pulling in gitpython.
 
-**Layout** mirrors the architecture: `<workspace_root>/works/<work_slug>/worktrees/<agent_slug>/`. Branch names are `atelier/<work_slug>/<agent_slug>` so multi-agent runs don't collide and the user can spot them in `git branch`.
+**Layout** mirrors the architecture: `<workspace_root>/works/<work_slug>/worktrees/<agent_slug>/`.
 
-**Pass-through for non-git folders.** If the work's `folder` is not a git repo, `ensure` returns the folder itself instead of trying (and failing) to create a worktree. The dialog hint already tells the user "If it's a git repo, agents will spawn worktrees here automatically." — non-repo folders keep working without forcing the user to convert them.
+**Default is detached HEAD.** `ensure(..., branch_name=None)` runs `git worktree add --detach`, matching `ensure_forked`'s long-standing shape. The agent (or user) names a branch later via `git switch -c <name>`. The system prompt rendered for detached worktrees includes a guard: don't `checkout`/`switch` to another branch without first creating one from current HEAD — that's the only path that orphans commits. `system_prompt.render_system_prompt(..., is_detached_worktree=True)` injects the block; both `start.execute` and `resume.execute` derive the flag by calling `worktree_manager.is_detached(workdir)` so the truth in the prompt always matches the truth on disk.
 
-**Removal escalates.** `git worktree remove` first; on dirty/locked, retry with `--force`; on still-failing, recursive `rmtree` plus `git worktree prune` to clean up the source repo's registry. A wedged worktree never blocks provisioning a fresh one.
+**Opt-in named branch.** `ensure(..., branch_name="my-feature")` keeps the legacy `git worktree add -b <name>` path with the existing self-heal-on-collision behaviour (branch already exists → attach; stale registry entry → prune + retry). Surfaced via the optional `branch_name` field on `NewAgentRequest` / the New Agent dialog's "Branch" input; the branch picker (see `GET /api/git/branches`) lets the user pick from the source repo's existing branches.
+
+**Pass-through for non-git folders.** If the work's `folder` is not a git repo, `ensure` returns the folder itself instead of trying (and failing) to create a worktree. The dialog hint already tells the user "If it's a git repo, agents will spawn worktrees here automatically." — non-repo folders keep working without forcing the user to convert them. `is_detached` returns `False` for non-git folders so callers can use it as a soft hint without branching on the git-vs-not-git case.
+
+**Removal escalates.** `git worktree remove` first; on dirty/locked, retry with `--force`; on still-failing, recursive `rmtree` plus `git worktree prune` to clean up the source repo's registry. A wedged worktree never blocks provisioning a fresh one. The teardown also best-effort-deletes the per-agent `atelier/<work>/<agent>` branch when one was created (no-op for detached worktrees).
 
 **Orphan sweep on startup.** `main.py` lifespan walks every work, asks the workstore for live agent slugs, and tells the manager to remove worktree directories that don't match. This is the cleanup path for crashed runs and soft-deleted works. It satisfies the AC "deleting a Work removes them" via reconcile-style sweep rather than coupling the soft-delete command to git ops directly.
 
 **Wired into the `agents/start` command** (`domain/commands/agents/start.py`). The route stays thin: parse the request, `await start.execute(...)`. The command validates the provider config first (via `Spec.build`) so a bad model can't allocate an agent row + worktree we'd have to roll back, then pre-fetches connection-backed contexts before any side effect, then `register_agent` (eager) and an optional first-message send. Domain errors: `WorkNotFound` → 404; `InvalidProviderConfig` / `AgentFolderMissing` / `ContextFetchError` → 422.
+
+### Branch listing for the picker
+
+`infrastructure/git/branches.py:list_branches(path)` shells out to `git for-each-ref --sort=-committerdate refs/heads/` so the New Agent dialog's branch picker can offer existing branches sorted by recency. Returns `[]` for non-git / missing paths so the FE renders a friendly "not a git repo" hint instead of branching on error codes. Surfaced via `GET /api/git/branches?path=<absolute>` (`application/http/routes/git.py`).
 
 ## ConnectionStore
 

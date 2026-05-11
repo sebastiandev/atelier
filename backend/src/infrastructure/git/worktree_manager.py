@@ -45,6 +45,7 @@ class GitWorktreeManager:
         agent_slug: str,
         source: Path,
         base_ref: str = "HEAD",
+        branch_name: str | None = None,
     ) -> Path:
         target = self._worktree_path(work_slug, agent_slug)
         if not _is_git_repo(source):
@@ -57,7 +58,43 @@ class GitWorktreeManager:
         # Make sure the parent dir exists so `git worktree add` doesn't
         # fail on the first agent in a brand-new work.
         target.parent.mkdir(parents=True, exist_ok=True)
-        branch_name = _branch_name(work_slug, agent_slug)
+        if branch_name is None:
+            return self._add_detached(work_slug, agent_slug, source, target, base_ref)
+        return self._add_branch(work_slug, agent_slug, source, target, base_ref, branch_name)
+
+    def _add_detached(
+        self,
+        work_slug: str,
+        agent_slug: str,
+        source: Path,
+        target: Path,
+        base_ref: str,
+    ) -> Path:
+        """Detached HEAD — the default. The user/agent names a branch
+        when they're ready (``git switch -c <name>``). Symmetric with
+        ``ensure_forked``'s shape."""
+        try:
+            _run_git(source, "worktree", "add", "--detach", str(target), base_ref)
+            return target
+        except subprocess.CalledProcessError as exc:
+            raise WorktreeProvisionFailed(
+                f"git worktree add --detach failed for {work_slug}/{agent_slug}: "
+                f"{_stderr(exc)}",
+                stderr=_stderr(exc),
+            ) from exc
+
+    def _add_branch(
+        self,
+        work_slug: str,
+        agent_slug: str,
+        source: Path,
+        target: Path,
+        base_ref: str,
+        branch_name: str,
+    ) -> Path:
+        """Named branch — opt-in via the New Agent modal. Falls back to
+        attaching when the branch already exists, prunes a stale registry
+        entry on collision, and only then surfaces failure."""
         try:
             _run_git(
                 source,
@@ -118,6 +155,17 @@ class GitWorktreeManager:
                     f"attached): {_stderr(final_exc)}",
                     stderr=_stderr(final_exc),
                 ) from final_exc
+
+    def is_detached(self, workdir: Path) -> bool:
+        if not _is_git_repo(workdir):
+            return False
+        try:
+            # symbolic-ref returns 0 + the ref name for branches, non-zero
+            # in detached HEAD. -q suppresses the stderr message.
+            _run_git(workdir, "symbolic-ref", "-q", "HEAD")
+            return False
+        except subprocess.CalledProcessError:
+            return True
 
     def ensure_forked(
         self,

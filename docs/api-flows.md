@@ -208,7 +208,8 @@ The fattest endpoint. Creates an agent row, provisions a worktree, renders conte
 
 ```
 Browser
-   │  payload = {name, persona, role, provider, model, options, contexts}
+   │  payload = {name, persona, role, provider, model, options, contexts,
+   │             fork_from_agent?, branch_name?}
    ▼
 Router (agents.py)
    │
@@ -224,7 +225,12 @@ commands.start.execute(workstore, worktree_manager, settings, req)
    │       └─► writes agents/<slug>/context/<files>.md
    │       └─► writes agents/<slug>/context.md  (index)
    │       returns abs_path | None
-   ├─► WorktreeManager.ensure(work, agent, source)     ← git worktree if source is a repo
+   ├─► WorktreeManager.ensure(work, agent, source, branch_name=req.branch_name)
+   │       └─► branch_name=None  → `git worktree add --detach`  (default)
+   │       └─► branch_name="x"   → `git worktree add -b x` with self-heal-on-collision
+   │       └─► non-git folder    → returns folder unchanged
+   │   (or WorktreeManager.ensure_forked(...) when fork_from_agent is set — always detached)
+   ├─► render_system_prompt(..., is_detached_worktree=worktree_manager.is_detached(workdir))
    ├─► build_adapter(config, settings)                 ← singledispatch: Claude / Amp / Stub
    └─► returns StartAgentPlan(agent, adapter, context, first_message?)
                                      │
@@ -371,6 +377,26 @@ Browser ──► Router (agents.py)
 ```
 
 Symmetric with the work-level reveal but targets the dir where the adapter's CLI actually runs — handy when poking at the agent's working tree. The 404 fires from either lookup (slug not registered, or registered but the agent row vanished mid-call). OS-level errors map to 500.
+
+---
+
+## `GET /api/git/branches`
+
+```
+Browser ──► Router (git.py)
+                │
+                ├─► validate path is absolute (or starts with ~)  ← 400 otherwise
+                └─► list_branches(expanded_path)
+                        │
+                        └─► git for-each-ref --sort=-committerdate
+                                   --format=%(refname:short) refs/heads/
+                            ╔════════════╗
+                            ║ git CLI    ║
+                            ╚════════════╝
+                returns BranchListing{path, branches: [...]}  ← [] for non-git / missing
+```
+
+Powers the New Agent dialog's branch picker. Branches arrive sorted by most-recent committer date so the user's likely target is first. Non-git folders, missing paths, and any subprocess failure all return `branches: []` — the FE renders a friendly "not a git repo" hint instead of branching on error codes.
 
 ---
 

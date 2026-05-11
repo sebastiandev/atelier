@@ -80,6 +80,7 @@ from src.infrastructure.agents.atelier_mcp_tools import (
     marker_payload_for_tool,
 )
 from src.infrastructure.agents.factory import build_adapter
+from src.infrastructure.agents.tool_canonical import canonicalize_tool
 from src.settings import Settings
 
 _SHUTDOWN = object()  # sentinel pushed onto the queue by close()
@@ -246,7 +247,8 @@ class ClaudeCodeAdapter:
         this session — short-circuits without emitting an event so the
         transcript stays clean.
         """
-        if tool_name in self._allow_always:
+        canon_name, canon_input = canonicalize_tool(tool_name, dict(tool_input))
+        if canon_name in self._allow_always:
             return PermissionResultAllow()
         request_id = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
@@ -256,8 +258,8 @@ class ClaudeCodeAdapter:
             PermissionRequest(
                 ts=datetime.now(UTC),
                 request_id=request_id,
-                tool_name=tool_name,
-                tool_input=dict(tool_input),
+                tool_name=canon_name,
+                tool_input=canon_input,
             )
         )
         try:
@@ -275,7 +277,7 @@ class ClaudeCodeAdapter:
             )
         )
         if decision == "allow_always":
-            self._allow_always.add(tool_name)
+            self._allow_always.add(canon_name)
         if decision in ("allow", "allow_always"):
             return PermissionResultAllow()
         return PermissionResultDeny(message="user denied", interrupt=False)
@@ -384,11 +386,14 @@ def _convert(
                 payload = marker_payload_for_tool(block.name, dict(block.input))
                 if payload is not None:
                     yield ArtifactMarker(ts=now, payload=payload)
+                canon_name, canon_args = canonicalize_tool(
+                    block.name, dict(block.input)
+                )
                 yield ToolCall(
                     ts=now,
                     tool_id=block.id,
-                    name=block.name,
-                    arguments=block.input,
+                    name=canon_name,
+                    arguments=canon_args,
                 )
             elif isinstance(block, ToolResultBlock):
                 yield ToolResult(

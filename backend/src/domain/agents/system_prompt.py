@@ -57,6 +57,7 @@ def render_system_prompt(
     *,
     workdir: Path | None = None,
     shares: Sequence[ShareSummary] = (),
+    is_detached_worktree: bool = False,
 ) -> str:
     # Telling the agent its working directory explicitly is load-bearing:
     # without it, models routinely write files to $HOME (or wherever they
@@ -73,14 +74,42 @@ def render_system_prompt(
         if workdir is not None
         else ""
     )
+    detached_block = _DETACHED_WORKTREE_GUIDE if is_detached_worktree else ""
     return (
         f"You are an Atelier {persona} agent.\n"
         f"Role: {role}.\n"
         f"Stay in character and focus on the work assigned to you.\n\n"
         f"{workdir_block}"
+        f"{detached_block}"
         f"{_render_shares_block(shares)}"
         f"{_ARTIFACT_MARKER_GUIDE}"
     )
+
+
+# Injected when the agent's worktree is in detached HEAD. The risk we're
+# warning about is narrow but real: commits stay reachable as long as
+# HEAD points at them, but if the agent runs ``git checkout`` /
+# ``git switch`` to another branch before creating one from the current
+# HEAD, the committed work becomes orphaned (reflog GC after ~30-90d).
+# Creating a branch with ``git switch -c <name>`` anchors the work to a
+# real ref and is safe.
+_DETACHED_WORKTREE_GUIDE = """\
+Detached HEAD worktree
+----------------------
+This worktree starts in detached HEAD with no branch. You can edit and
+commit normally; commits stay reachable from HEAD as long as you don't
+move it.
+
+Before pushing, propose a branch name and run:
+  git switch -c <branch-name>
+
+Do NOT ``git checkout`` / ``git switch`` to a different existing branch
+without first creating a branch from the current HEAD — doing so would
+orphan any commits made in this worktree. If the task asks you to switch
+branches, ask the user first or save the work with ``git switch -c``.
+
+"""
+
 
 
 def _render_shares_block(shares: Sequence[ShareSummary]) -> str:

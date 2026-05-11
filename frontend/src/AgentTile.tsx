@@ -1,12 +1,15 @@
 import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { diffLines } from "diff";
+import { codeToTokensBase, type ThemedToken } from "shiki";
 
 // Render the most recent N events of a transcript by default. Long-lived
 // agents accumulate thousands of events (every status change, every
@@ -83,6 +86,10 @@ type AgentTileProps = {
    *  also copy it from there. When omitted, the folder button is
    *  hidden. */
   onRevealWorktree?: () => void;
+  /** Open the agent's worktree in an editor (VSCode/Cursor) so the
+   *  user can review diffs without leaving their normal IDE flow.
+   *  When omitted, the IDE button is hidden. */
+  onOpenInIde?: () => void;
   /** The worktree path (or source-folder fallback) — used purely for
    *  the reveal button's tooltip. */
   worktreePath?: string;
@@ -112,6 +119,7 @@ export function AgentTile({
   onDetach,
   onHandoff,
   onRevealWorktree,
+  onOpenInIde,
   worktreePath,
 }: AgentTileProps) {
   const {
@@ -161,9 +169,14 @@ export function AgentTile({
     }
   }, [events, workSlug]);
   const [draft, setDraft] = useState("");
-  // Optimistic "thinking" between Send and the first status_change event
-  // back from the adapter, so the dot reacts instantly.
-  const [optimisticThinking, setOptimisticThinking] = useState(false);
+  // Optimistic "thinking" between Send and the first ``status_change``
+  // event back from the adapter, so the dot reacts instantly. Stored
+  // as the seq we sent at — when a ``status_change`` with a *later*
+  // seq arrives, we know the adapter has begun this turn and the real
+  // ``status_change`` stream takes over. Storing a number (not a bool)
+  // avoids the bug where the previous turn's status leaks into the new
+  // optimistic window because the boolean alone doesn't know "since when".
+  const [thinkingSinceSeq, setThinkingSinceSeq] = useState<number | null>(null);
 
   // Composer-local context attachments. Cleared on send. The user can
   // remove individual entries before sending; once Send is hit they're
@@ -265,12 +278,31 @@ export function AgentTile({
     el.style.overflowY = natural > COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
   }, [draft]);
 
-  // Clear optimistic thinking once a real status_change lands.
+  // Clear the optimistic-thinking gate once any progress event with a
+  // seq later than our send-time has landed: a ``status_change`` (any
+  // direction), a terminal ``turn_metrics`` / ``error``, OR a
+  // ``message_delta`` / ``message_complete`` (the agent has begun
+  // producing output, which is what optimistic thinking was a stand-in
+  // for). Multiple signals because adapters vary — Amp, in particular,
+  // sometimes drops the trailing ``status_change("idle")`` on short
+  // turns, so we can't rely on status_change alone.
   useEffect(() => {
-    if (!optimisticThinking) return;
-    const last = events[events.length - 1];
-    if (last && last.type === "status_change") setOptimisticThinking(false);
-  }, [events, optimisticThinking]);
+    if (thinkingSinceSeq === null) return;
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev.seq <= thinkingSinceSeq) break;
+      if (
+        ev.type === "status_change" ||
+        ev.type === "turn_metrics" ||
+        ev.type === "error" ||
+        ev.type === "message_delta" ||
+        ev.type === "message_complete"
+      ) {
+        setThinkingSinceSeq(null);
+        return;
+      }
+    }
+  }, [events, thinkingSinceSeq]);
 
   // Drop entries the user opened but never typed into (empty value) —
   // they'd 422 server-side. Connection-backed rows also need a conn_id
@@ -290,7 +322,7 @@ export function AgentTile({
     setDraft("");
     setPendingContexts([]);
     setPickerOpen(false);
-    setOptimisticThinking(true);
+    setThinkingSinceSeq(events[events.length - 1]?.seq ?? 0);
   }
 
   function addSimpleContext(type: SimpleContextType) {
@@ -337,11 +369,11 @@ export function AgentTile({
       !e.shiftKey &&
       !e.metaKey &&
       !e.ctrlKey &&
-      dotStatus === "thinking"
+      isCurrentlyActive
     ) {
       e.preventDefault();
       sendStop();
-      setOptimisticThinking(false);
+      setThinkingSinceSeq(null);
     }
   }
 
@@ -361,7 +393,16 @@ export function AgentTile({
     return () => window.removeEventListener("keydown", onKey);
   }, [maximized]);
 
-  const dotStatus = optimisticThinking ? "thinking" : agentStatus;
+  const dotStatus = thinkingSinceSeq !== null ? "thinking" : agentStatus;
+  // "Active right now" — driven off the last event's nature, not the
+  // sticky cumulative status. Some adapters (Amp on short turns) leave
+  // ``agentStatus`` parked on ``thinking`` because they don't emit a
+  // trailing ``status_change("idle")``; we treat *terminal* events
+  // (message_complete, turn_metrics, error, status_change(idle))
+  // landing as the agent winding down.
+  const isCurrentlyActive =
+    status === "connected" &&
+    (thinkingSinceSeq !== null || isAgentActive(events));
   const isStopped = status === "stopped";
   // Send only works when the WS is OPEN — otherwise sendInput silently
   // no-ops. Disable the composer for every non-connected state so the
@@ -378,7 +419,7 @@ export function AgentTile({
           ? "Reconnecting to agent…"
           : status === "error"
             ? "Connection error — retrying…"
-            : dotStatus === "thinking"
+            : isCurrentlyActive
               ? "Agent is working — Esc to stop"
               : "Message the agent — Enter sends, Shift+Enter for newline";
 
@@ -427,13 +468,24 @@ export function AgentTile({
             {hint}
           </span>
           <div className="tile-controls">
+          {onOpenInIde && (
+            <button
+              type="button"
+              className="tile-ctl"
+              aria-label="Open worktree in editor"
+              onClick={onOpenInIde}
+              {...hintHandlers("Open in editor")}
+            >
+              <OpenIdeIcon />
+            </button>
+          )}
           {onHandoff && (
             <button
               type="button"
               className="tile-ctl"
-              aria-label="Hand off to a new agent"
+              aria-label="Handoff to agent"
               onClick={onHandoff}
-              {...hintHandlers("Hand off · checkpoint doc + forked worktree")}
+              {...hintHandlers("Handoff to agent")}
             >
               <HandoffIcon />
             </button>
@@ -603,6 +655,23 @@ export function AgentTile({
 // Tile control icons (inline SVG — no icon system yet)
 // ---------------------------------------------------------------------------
 
+function OpenIdeIcon() {
+  // Code brackets — `<` `>` pointing outward — reads as "open in
+  // editor". Distinct from HandoffIcon's inward arrows and DetachIcon's
+  // single chevron at 13×13.
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path
+        d="M6 5L3 8l3 3M10 5l3 3-3 3"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 function HandoffIcon() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
@@ -682,11 +751,22 @@ type TodoItem = {
   activeForm?: string;
 };
 
+type ToolResultPayload = { content: string; isError: boolean };
+
 type RenderUnit =
   | { kind: "assistant"; key: number; text: string; complete: boolean }
   | { kind: "thinking"; key: number; text: string; complete: boolean }
   | { kind: "user"; key: number; text: string }
-  | { kind: "tool_call"; key: number; name: string; args: string }
+  | {
+      kind: "tool_call";
+      key: number;
+      name: string;
+      args: Record<string, unknown>;
+      // Set when a tool_result event matching this call's tool_id is
+      // seen. Renderers fold the result into the same card so the user
+      // sees one paired unit instead of two siblings.
+      result?: ToolResultPayload;
+    }
   | { kind: "tool_result"; key: number; content: string; isError: boolean }
   | { kind: "todo_list"; key: number; todos: TodoItem[] }
   | { kind: "status"; key: number; status: string }
@@ -710,6 +790,13 @@ function groupEvents(events: AgentEvent[]): RenderUnit[] {
   // earlier permission_request — backend doesn't echo it on the
   // decision. Build the lookup as we walk.
   const permissionTools = new Map<string, string>();
+  // tool_id → tool_call unit, so a later tool_result with the same id
+  // can attach into the same paired card instead of pushing a sibling
+  // "→ result" line.
+  const toolCallByTd = new Map<
+    string,
+    Extract<RenderUnit, { kind: "tool_call" }>
+  >();
 
   for (const ev of events) {
     if (ev.type === "message_delta") {
@@ -761,7 +848,13 @@ function groupEvents(events: AgentEvent[]): RenderUnit[] {
       } else {
         // Malformed arguments — fall back to the generic tool_call view.
         const unit = renderUnitFor(ev);
-        if (unit) out.push(unit);
+        if (unit) {
+          out.push(unit);
+          if (unit.kind === "tool_call") {
+            const tid = stringField(ev, "tool_id");
+            if (tid) toolCallByTd.set(tid, unit);
+          }
+        }
       }
     } else if (
       ev.type === "tool_result" &&
@@ -770,6 +863,39 @@ function groupEvents(events: AgentEvent[]): RenderUnit[] {
       // Drop: we already showed the rich render of the corresponding call.
       pendingAssistant = null;
       pendingThinking = null;
+    } else if (ev.type === "tool_result") {
+      pendingAssistant = null;
+      pendingThinking = null;
+      const tid = stringField(ev, "tool_id");
+      const matched = tid ? toolCallByTd.get(tid) : undefined;
+      const payload: ToolResultPayload = {
+        content: stringField(ev, "content"),
+        isError: ev.is_error === true,
+      };
+      if (matched) {
+        matched.result = payload;
+      } else {
+        // Orphan: result arrived without a tool_call we recognise
+        // (replay race, suppressed-call edge cases). Show standalone so
+        // the user still sees the output.
+        out.push({
+          kind: "tool_result",
+          key: ev.seq,
+          content: payload.content,
+          isError: payload.isError,
+        });
+      }
+    } else if (ev.type === "tool_call") {
+      pendingAssistant = null;
+      pendingThinking = null;
+      const unit = renderUnitFor(ev);
+      if (unit && unit.kind === "tool_call") {
+        out.push(unit);
+        const tid = stringField(ev, "tool_id");
+        if (tid) toolCallByTd.set(tid, unit);
+      } else if (unit) {
+        out.push(unit);
+      }
     } else if (ev.type === "permission_request") {
       // Don't push a transcript line — the prompt UI lives above the
       // composer for unresolved requests. We only record the tool_name
@@ -837,7 +963,10 @@ function renderUnitFor(ev: AgentEvent): RenderUnit | null {
         kind: "tool_call",
         key: ev.seq,
         name: stringField(ev, "name"),
-        args: JSON.stringify(ev.arguments ?? {}),
+        args:
+          ev.arguments && typeof ev.arguments === "object"
+            ? (ev.arguments as Record<string, unknown>)
+            : {},
       };
     case "tool_result":
       return {
@@ -865,23 +994,50 @@ function renderUnitFor(ev: AgentEvent): RenderUnit | null {
   }
 }
 
-function prettyJson(raw: string): string {
-  try {
-    return JSON.stringify(JSON.parse(raw), null, 2);
-  } catch {
-    return raw;
-  }
-}
-
 function stringField(ev: AgentEvent, key: string): string {
   const value = ev[key];
   return typeof value === "string" ? value : "";
 }
 
+function isAgentActive(events: AgentEvent[]): boolean {
+  // True iff the agent appears to be doing work *right now*. Reads off
+  // the last event's nature, not the cumulative ``agentStatus``, so it
+  // recovers gracefully when an adapter forgets to emit the trailing
+  // ``status_change("idle")`` (Amp on short turns). Terminal events
+  // (message_complete, turn_metrics, error, status_change(idle)) flip
+  // back to inactive even if the cumulative status remains "thinking".
+  const last = events[events.length - 1];
+  if (!last) return false;
+  switch (last.type) {
+    case "message_delta":
+    case "thinking_delta":
+    case "tool_call":
+    case "tool_result":
+    case "user_input":
+      return true;
+    case "status_change": {
+      const s = stringField(last, "status");
+      return s === "thinking" || s === "live";
+    }
+    default:
+      return false;
+  }
+}
+
 function latestStatus(events: AgentEvent[]): string {
+  // Walk from the tail. ``status_change`` is authoritative; ``turn_metrics``
+  // implies idle as a fallback (per protocol it's emitted right before
+  // ``status_change("idle")``, so when an adapter drops the trailing
+  // status_change — observed with Amp on short turns — the metrics
+  // event is the next-best terminal signal). ``error`` also terminates
+  // the turn.
   for (let i = events.length - 1; i >= 0; i--) {
-    if (events[i].type === "status_change") {
-      return stringField(events[i], "status");
+    const ev = events[i];
+    if (ev.type === "status_change") {
+      return stringField(ev, "status");
+    }
+    if (ev.type === "turn_metrics" || ev.type === "error") {
+      return "idle";
     }
   }
   return "idle";
@@ -1128,20 +1284,14 @@ function Unit({ unit }: { unit: RenderUnit }) {
       return <div className="msg msg-user">{unit.text}</div>;
     case "tool_call":
       return (
-        <details className="msg msg-tool">
-          <summary>
-            ▸ <span className="tool-name">{unit.name}</span>
-          </summary>
-          <MarkdownText text={"```json\n" + prettyJson(unit.args) + "\n```"} />
-        </details>
+        <ToolCallView
+          name={unit.name}
+          args={unit.args}
+          result={unit.result}
+        />
       );
     case "tool_result":
-      return (
-        <details className={`msg msg-tool${unit.isError ? " msg-error" : ""}`}>
-          <summary>{unit.isError ? "  ⚠ result" : "  → result"}</summary>
-          <pre className="tool-result-body">{unit.content}</pre>
-        </details>
-      );
+      return <ToolResultBody content={unit.content} isError={unit.isError} />;
     case "todo_list":
       return <TodoList todos={unit.todos} />;
     case "status":
@@ -1163,6 +1313,645 @@ function Unit({ unit }: { unit: RenderUnit }) {
         </div>
       );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Per-tool call rendering
+// ---------------------------------------------------------------------------
+
+// Each renderer targets the canonical tool shape produced by the
+// adapter layer (see backend infrastructure/agents/tool_canonical.py).
+// All provider name + key variants (Amp's edit_file/cmd/old_str, etc.)
+// are absorbed there, so the FE only knows the canonical names. The
+// optional `result` argument is the paired tool_result content folded
+// in by groupEvents.
+type ToolCallRenderer = (
+  args: Record<string, unknown>,
+  result?: ToolResultPayload,
+) => ReactNode;
+
+const TOOL_RENDERERS: Record<string, ToolCallRenderer> = {
+  Bash: BashCallView,
+  Edit: EditCallView,
+  MultiEdit: MultiEditCallView,
+  Write: WriteCallView,
+  Read: ReadCallView,
+  Grep: GrepCallView,
+  Glob: GlobCallView,
+};
+
+function ToolCallView({
+  name,
+  args,
+  result,
+}: {
+  name: string;
+  args: Record<string, unknown> | string;
+  result?: ToolResultPayload;
+}) {
+  // Defensive: an older build of this component stored args as a JSON
+  // string. After HMR the cached units still carry that shape, and the
+  // new per-tool renderers expect an object. Parse on read so a hard
+  // reload isn't required to see the new view.
+  const parsed = normalizeArgs(args);
+  const renderer = TOOL_RENDERERS[name];
+  if (renderer) return <>{renderer(parsed, result)}</>;
+  return <DefaultToolCallView name={name} args={parsed} result={result} />;
+}
+
+function normalizeArgs(
+  args: Record<string, unknown> | string,
+): Record<string, unknown> {
+  if (typeof args === "string") {
+    try {
+      const obj = JSON.parse(args);
+      return obj && typeof obj === "object" ? (obj as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return args;
+}
+
+function BashCallView(
+  args: Record<string, unknown>,
+  result?: ToolResultPayload,
+) {
+  const command = stringArg(args, "command");
+  const description = stringArg(args, "description");
+  const cwd = stringArg(args, "cwd");
+  return (
+    <details className="msg msg-tool" open={resultLooksLikeDiff(result)}>
+      <summary>
+        <span className="tool-marker">▸</span>
+        <span className="tool-name">Bash</span>
+        {command && (
+          <span className="tool-summary-detail mono">{command}</span>
+        )}
+      </summary>
+      <div className="tool-call-body">
+        {description && (
+          <div className="tool-call-meta">{description}</div>
+        )}
+        {cwd && (
+          <div className="tool-call-meta mono">cwd: {shortenPath(cwd)}</div>
+        )}
+        {command && (
+          <MarkdownText text={"```bash\n" + command + "\n```"} />
+        )}
+        {result && (
+          <ToolResultBody content={result.content} isError={result.isError} />
+        )}
+      </div>
+    </details>
+  );
+}
+
+function EditCallView(
+  args: Record<string, unknown>,
+  result?: ToolResultPayload,
+) {
+  const path = stringArg(args, "path");
+  const oldStr = stringArg(args, "old_text");
+  const newStr = stringArg(args, "new_text");
+  const lang = path ? inferLanguage(path) : null;
+  return (
+    <details className="msg msg-tool" open>
+      <summary>
+        <span className="tool-marker">▸</span>
+        <span className="tool-name">Edit</span>
+        {path && (
+          <span className="tool-summary-detail mono">
+            {shortenPath(path)}
+          </span>
+        )}
+        <DiffStat oldText={oldStr} newText={newStr} />
+      </summary>
+      <DiffView oldText={oldStr} newText={newStr} lang={lang} />
+      {result && (
+        <ToolResultBody content={result.content} isError={result.isError} />
+      )}
+    </details>
+  );
+}
+
+function MultiEditCallView(
+  args: Record<string, unknown>,
+  result?: ToolResultPayload,
+) {
+  const path = stringArg(args, "path");
+  const editsRaw = args.edits;
+  const edits: { oldText: string; newText: string }[] = [];
+  if (Array.isArray(editsRaw)) {
+    for (const e of editsRaw) {
+      if (!e || typeof e !== "object") continue;
+      const er = e as Record<string, unknown>;
+      edits.push({
+        oldText: stringArg(er, "old_text"),
+        newText: stringArg(er, "new_text"),
+      });
+    }
+  }
+  let added = 0;
+  let removed = 0;
+  for (const e of edits) {
+    const s = countDiffStat(e.oldText, e.newText);
+    added += s.added;
+    removed += s.removed;
+  }
+  return (
+    <details className="msg msg-tool" open>
+      <summary>
+        <span className="tool-marker">▸</span>
+        <span className="tool-name">MultiEdit</span>
+        {path && (
+          <span className="tool-summary-detail mono">
+            {shortenPath(path)}
+          </span>
+        )}
+        <span className="tool-summary-meta">{edits.length} edits</span>
+        <DiffStatRaw added={added} removed={removed} />
+      </summary>
+      <div className="tool-call-body">
+        {edits.map((e, i) => (
+          <DiffView
+            key={i}
+            oldText={e.oldText}
+            newText={e.newText}
+            lang={path ? inferLanguage(path) : null}
+          />
+        ))}
+        {result && (
+          <ToolResultBody content={result.content} isError={result.isError} />
+        )}
+      </div>
+    </details>
+  );
+}
+
+function WriteCallView(
+  args: Record<string, unknown>,
+  result?: ToolResultPayload,
+) {
+  const path = stringArg(args, "path");
+  const content = stringArg(args, "content");
+  const lineCount = content ? content.split("\n").length : 0;
+  return (
+    <details className="msg msg-tool">
+      <summary>
+        <span className="tool-marker">▸</span>
+        <span className="tool-name">Write</span>
+        {path && (
+          <span className="tool-summary-detail mono">
+            {shortenPath(path)}
+          </span>
+        )}
+        <span className="tool-summary-meta">{lineCount} lines</span>
+      </summary>
+      <MarkdownText
+        text={"```" + inferLanguage(path) + "\n" + content + "\n```"}
+      />
+      {result && (
+        <ToolResultBody content={result.content} isError={result.isError} />
+      )}
+    </details>
+  );
+}
+
+function ReadCallView(
+  args: Record<string, unknown>,
+  result?: ToolResultPayload,
+) {
+  const path = stringArg(args, "path");
+  const lineRange = stringArg(args, "line_range");
+  const range = lineRange ? ` · L${lineRange}` : "";
+  return (
+    <CompactCallView
+      name="Read"
+      detail={path ? shortenPath(path) + range : null}
+      result={result}
+    />
+  );
+}
+
+function GrepCallView(
+  args: Record<string, unknown>,
+  result?: ToolResultPayload,
+) {
+  const pattern = stringArg(args, "pattern");
+  const path = stringArg(args, "path");
+  return (
+    <CompactCallView
+      name="Grep"
+      detail={pattern}
+      meta={path ? "in " + shortenPath(path) : null}
+      result={result}
+    />
+  );
+}
+
+function GlobCallView(
+  args: Record<string, unknown>,
+  result?: ToolResultPayload,
+) {
+  const pattern = stringArg(args, "pattern");
+  const path = stringArg(args, "path");
+  return (
+    <CompactCallView
+      name="Glob"
+      detail={pattern}
+      meta={path ? "in " + shortenPath(path) : null}
+      result={result}
+    />
+  );
+}
+
+function CompactCallView({
+  name,
+  detail,
+  meta,
+  result,
+}: {
+  name: string;
+  detail?: string | null;
+  meta?: string | null;
+  result?: ToolResultPayload;
+}) {
+  const summary = (
+    <>
+      <span className="tool-marker">▸</span>
+      <span className="tool-name">{name}</span>
+      {detail && <span className="tool-summary-detail mono">{detail}</span>}
+      {meta && <span className="tool-summary-meta">{meta}</span>}
+    </>
+  );
+  if (!result) {
+    return <div className="msg msg-tool tool-call-line">{summary}</div>;
+  }
+  return (
+    <details className="msg msg-tool" open={resultLooksLikeDiff(result)}>
+      <summary>{summary}</summary>
+      <ToolResultBody content={result.content} isError={result.isError} />
+    </details>
+  );
+}
+
+function ToolResultBody({
+  content,
+  isError,
+}: {
+  content: string;
+  isError: boolean;
+}) {
+  // Unwrap Amp's {output, exitCode} wrapper so the user sees the raw
+  // stdout instead of escaped JSON. Claude Code returns the stdout
+  // directly; that path falls through with `parsed === null`.
+  const parsed = parseBashResult(content);
+  const text = parsed?.output ?? content;
+  const exitCode = parsed?.exitCode;
+  const showAsDiff = isUnifiedDiff(text);
+  return (
+    <div className={`tool-result-section${isError ? " is-error" : ""}`}>
+      <div className="tool-result-header">
+        <span className="tool-marker">{isError ? "⚠" : "→"}</span>
+        <span className="tool-name">result</span>
+        {exitCode !== undefined && exitCode !== 0 && (
+          <span className="tool-summary-meta">exit {exitCode}</span>
+        )}
+      </div>
+      {showAsDiff ? (
+        <UnifiedDiffView text={text} />
+      ) : (
+        <pre className="tool-result-body">{text}</pre>
+      )}
+    </div>
+  );
+}
+
+function parseBashResult(
+  content: string,
+): { output: string; exitCode: number } | null {
+  try {
+    const obj = JSON.parse(content) as unknown;
+    if (
+      obj &&
+      typeof obj === "object" &&
+      typeof (obj as { output?: unknown }).output === "string" &&
+      typeof (obj as { exitCode?: unknown }).exitCode === "number"
+    ) {
+      const o = obj as { output: string; exitCode: number };
+      return { output: o.output, exitCode: o.exitCode };
+    }
+  } catch {
+    // Not JSON — fall through.
+  }
+  return null;
+}
+
+function resultLooksLikeDiff(result?: ToolResultPayload): boolean {
+  if (!result) return false;
+  const text = parseBashResult(result.content)?.output ?? result.content;
+  return isUnifiedDiff(text);
+}
+
+function isUnifiedDiff(text: string): boolean {
+  return (
+    /^diff --git /m.test(text) ||
+    /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/m.test(text)
+  );
+}
+
+function UnifiedDiffView({ text }: { text: string }) {
+  const lines = useMemo(() => text.split("\n"), [text]);
+  // Recover the file's language from the diff header so code inside
+  // +/-/context lines picks up syntax highlighting.
+  const lang = useMemo(() => {
+    const m = text.match(/^diff --git a\/(.+?) b\//m);
+    return m ? inferLanguage(m[1]) || null : null;
+  }, [text]);
+  // Strip diff prefixes and rejoin so Shiki sees a pure-code snippet —
+  // preserves multi-line context (strings, blocks) for typical
+  // edit-shaped diffs. Meta lines stay as empty placeholders so token
+  // line indices align 1:1 with the source lines.
+  const codeJoined = useMemo(
+    () =>
+      lines
+        .map((line) =>
+          classifyUnifiedLine(line) === "meta" ? "" : line.slice(1),
+        )
+        .join("\n"),
+    [lines],
+  );
+  const tokens = useShikiLines(codeJoined, lang);
+  return (
+    <div className="tool-diff" role="figure" aria-label="diff">
+      {lines.map((line, i) => {
+        const cls = classifyUnifiedLine(line);
+        if (cls === "meta") {
+          return (
+            <div key={i} className="diff-line diff-meta">
+              <span className="diff-content">{line || " "}</span>
+            </div>
+          );
+        }
+        return (
+          <div key={i} className={`diff-line diff-${cls}`}>
+            <span className="diff-prefix" aria-hidden>
+              {line[0] ?? " "}
+            </span>
+            <span className="diff-content">
+              {renderTokenLine(tokens?.[i], line.slice(1))}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function classifyUnifiedLine(
+  line: string,
+): "add" | "del" | "ctx" | "meta" {
+  // Order matters: +++ / --- (file headers) must be classified as meta
+  // before the +/- (added/removed) check.
+  if (
+    line.startsWith("+++") ||
+    line.startsWith("---") ||
+    line.startsWith("@@") ||
+    line.startsWith("diff ") ||
+    line.startsWith("index ") ||
+    line.startsWith("new file mode") ||
+    line.startsWith("deleted file mode") ||
+    line.startsWith("similarity index") ||
+    line.startsWith("rename from") ||
+    line.startsWith("rename to")
+  ) {
+    return "meta";
+  }
+  if (line.startsWith("+")) return "add";
+  if (line.startsWith("-")) return "del";
+  return "ctx";
+}
+
+function DefaultToolCallView({
+  name,
+  args,
+  result,
+}: {
+  name: string;
+  args: Record<string, unknown>;
+  result?: ToolResultPayload;
+}) {
+  return (
+    <details className="msg msg-tool" open={resultLooksLikeDiff(result)}>
+      <summary>
+        <span className="tool-marker">▸</span>
+        <span className="tool-name">{name}</span>
+      </summary>
+      <MarkdownText
+        text={"```json\n" + JSON.stringify(args, null, 2) + "\n```"}
+      />
+      {result && (
+        <ToolResultBody content={result.content} isError={result.isError} />
+      )}
+    </details>
+  );
+}
+
+function DiffStat({
+  oldText,
+  newText,
+}: {
+  oldText: string;
+  newText: string;
+}) {
+  const stat = useMemo(
+    () => countDiffStat(oldText, newText),
+    [oldText, newText],
+  );
+  return <DiffStatRaw added={stat.added} removed={stat.removed} />;
+}
+
+function DiffStatRaw({
+  added,
+  removed,
+}: {
+  added: number;
+  removed: number;
+}) {
+  return (
+    <span className="tool-summary-stat">
+      <span className="diff-add-text">+{added}</span>{" "}
+      <span className="diff-del-text">−{removed}</span>
+    </span>
+  );
+}
+
+function DiffView({
+  oldText,
+  newText,
+  lang,
+}: {
+  oldText: string;
+  newText: string;
+  lang?: string | null;
+}) {
+  const entries = useMemo(
+    () => buildDiffLines(oldText, newText),
+    [oldText, newText],
+  );
+  // Highlight each side once as a coherent snippet so multi-line context
+  // (strings, comments) is preserved. Tokens align 1:1 with source line
+  // indices recorded on each entry.
+  const oldTokens = useShikiLines(oldText, lang ?? null);
+  const newTokens = useShikiLines(newText, lang ?? null);
+  return (
+    <div className="tool-diff" role="figure" aria-label="diff">
+      {entries.map((l, i) => (
+        <div key={i} className={`diff-line diff-${l.kind}`}>
+          <span className="diff-prefix" aria-hidden>
+            {l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}
+          </span>
+          <span className="diff-content">
+            {renderTokenLine(
+              l.kind === "del" ? oldTokens?.[l.oldIdx] : newTokens?.[l.newIdx],
+              l.text,
+            )}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type DiffLineEntry = {
+  kind: "add" | "del" | "ctx";
+  text: string;
+  oldIdx: number;
+  newIdx: number;
+};
+
+function buildDiffLines(oldText: string, newText: string): DiffLineEntry[] {
+  const out: DiffLineEntry[] = [];
+  let oldIdx = 0;
+  let newIdx = 0;
+  for (const part of diffLines(oldText, newText)) {
+    const kind: "add" | "del" | "ctx" = part.added
+      ? "add"
+      : part.removed
+        ? "del"
+        : "ctx";
+    const partLines = part.value.split("\n");
+    // diff library's `value` typically ends with a trailing newline; the
+    // empty last element from split is artificial — drop it.
+    if (partLines.length > 1 && partLines[partLines.length - 1] === "") {
+      partLines.pop();
+    }
+    for (const text of partLines) {
+      out.push({ kind, text, oldIdx, newIdx });
+      if (kind !== "del") newIdx++;
+      if (kind !== "add") oldIdx++;
+    }
+  }
+  return out;
+}
+
+const SHIKI_THEME = "github-dark";
+
+function useShikiLines(
+  text: string,
+  lang: string | null,
+): ThemedToken[][] | null {
+  const [lines, setLines] = useState<ThemedToken[][] | null>(null);
+  useEffect(() => {
+    if (!lang || !text) {
+      setLines(null);
+      return;
+    }
+    let cancelled = false;
+    codeToTokensBase(text, {
+      // Shiki's lang param is typed as a closed enum, but its runtime
+      // accepts any registered grammar id including the aliases we map
+      // in inferLanguage. Cast to bypass the strict type.
+      lang: lang as never,
+      theme: SHIKI_THEME,
+    })
+      .then((t) => {
+        if (!cancelled) setLines(t);
+      })
+      .catch(() => {
+        if (!cancelled) setLines(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [text, lang]);
+  return lines;
+}
+
+function renderTokenLine(
+  tokens: ThemedToken[] | undefined,
+  fallback: string,
+): ReactNode {
+  if (!tokens || tokens.length === 0) return fallback || " ";
+  return tokens.map((t, i) => (
+    <span key={i} style={t.color ? { color: t.color } : undefined}>
+      {t.content}
+    </span>
+  ));
+}
+
+function countDiffStat(
+  oldText: string,
+  newText: string,
+): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const p of diffLines(oldText, newText)) {
+    if (!p.count) continue;
+    if (p.added) added += p.count;
+    else if (p.removed) removed += p.count;
+  }
+  return { added, removed };
+}
+
+function stringArg(args: Record<string, unknown>, key: string): string {
+  const v = args[key];
+  return typeof v === "string" ? v : "";
+}
+
+function inferLanguage(path: string): string {
+  const ext = path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? "";
+  const map: Record<string, string> = {
+    ts: "typescript",
+    tsx: "tsx",
+    js: "javascript",
+    jsx: "jsx",
+    py: "python",
+    rs: "rust",
+    go: "go",
+    rb: "ruby",
+    java: "java",
+    c: "c",
+    cpp: "cpp",
+    cs: "csharp",
+    swift: "swift",
+    kt: "kotlin",
+    sh: "bash",
+    bash: "bash",
+    zsh: "bash",
+    fish: "bash",
+    md: "markdown",
+    json: "json",
+    yaml: "yaml",
+    yml: "yaml",
+    toml: "toml",
+    html: "html",
+    css: "css",
+    scss: "scss",
+    sql: "sql",
+  };
+  return map[ext] ?? "";
 }
 
 function PermissionPrompt({

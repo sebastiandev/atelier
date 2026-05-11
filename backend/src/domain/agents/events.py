@@ -58,7 +58,28 @@ class ThinkingComplete:
 
 @dataclass(frozen=True, kw_only=True)
 class ToolCall:
-    """The assistant invoked a tool."""
+    """The assistant invoked a tool.
+
+    ``name`` and ``arguments`` follow Atelier's canonical tool shape
+    regardless of which provider SDK emitted the call. Adapters call
+    ``infrastructure.agents.tool_canonical.canonicalize_tool`` before
+    yielding so the supervisor, transcript ledger, and frontend renderer
+    target a single contract per tool concept:
+
+    - ``Bash``      ``command``, optional ``cwd``, ``description``,
+                    ``run_in_background``, ``timeout``
+    - ``Edit``      ``path``, ``old_text``, ``new_text``,
+                    optional ``replace_all``
+    - ``MultiEdit`` ``path``, ``edits[]`` — each
+                    ``{old_text, new_text, replace_all?}``
+    - ``Read``      ``path``, optional ``line_range`` (``"1-100"`` or ``"1+"``)
+    - ``Write``     ``path``, ``content``
+    - ``Grep``      ``pattern``, optional ``path``
+    - ``Glob``      ``pattern``, optional ``path``
+
+    Tools without a canonical concept pass through with their raw
+    provider shape — the frontend falls back to a generic JSON view.
+    """
 
     type: Literal["tool_call"] = "tool_call"
     ts: datetime

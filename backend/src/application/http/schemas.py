@@ -88,6 +88,11 @@ class NewAgentRequest(BaseModel):
     # work — new agent inherits source's uncommitted state in detached
     # HEAD. Used by the handoff flow.
     fork_from_agent: str | None = None
+    # Optional branch name to create on the new worktree. ``None``
+    # (default) leaves the worktree in detached HEAD; the agent decides
+    # the branch name later via ``git switch -c``. Ignored when
+    # ``fork_from_agent`` is set.
+    branch_name: str | None = None
 
 
 class AgentSummary(BaseModel):

@@ -60,7 +60,12 @@ class _ExplodingWorktreeManager:
         self.removed: list[tuple[str, str]] = []
 
     def ensure(
-        self, work_slug: str, agent_slug: str, source: Path, base_ref: str = "HEAD"
+        self,
+        work_slug: str,
+        agent_slug: str,
+        source: Path,
+        base_ref: str = "HEAD",
+        branch_name: str | None = None,
     ) -> Path:
         raise WorktreeProvisionFailed(
             f"git worktree add failed for {work_slug}/{agent_slug}: "
@@ -76,6 +81,9 @@ class _ExplodingWorktreeManager:
         source: Path,
     ) -> Path:  # pragma: no cover — fork path not exercised here
         raise NotImplementedError
+
+    def is_detached(self, workdir: Path) -> bool:  # pragma: no cover
+        return False
 
     def remove(self, work_slug: str, agent_slug: str) -> None:
         self.removed.append((work_slug, agent_slug))

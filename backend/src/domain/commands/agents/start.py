@@ -75,6 +75,12 @@ class StartAgentRequest:
     # agent inherits the source's uncommitted work without sharing the
     # working dir.
     fork_from_agent: str | None = None
+    # Optional name of a branch to create on the new worktree. ``None``
+    # (default) leaves the worktree in detached HEAD and the agent is
+    # told (via system prompt) to ``git switch -c <name>`` before
+    # checking out anything else. Ignored when ``fork_from_agent`` is
+    # set — forks are always detached.
+    branch_name: str | None = None
 
 
 class WorkNotFound(ValueError):
@@ -199,6 +205,7 @@ async def execute(
                 work_slug=req.work_slug,
                 agent_slug=agent.slug,
                 source=req.folder,
+                branch_name=req.branch_name,
             )
 
         # Mount project-scoped shared folders into this worktree (if any).
@@ -216,7 +223,11 @@ async def execute(
         common = CommonAgentConfig(
             workdir=workdir,
             system_prompt=render_system_prompt(
-                req.persona, req.role, workdir=workdir, shares=mounted_shares
+                req.persona,
+                req.role,
+                workdir=workdir,
+                shares=mounted_shares,
+                is_detached_worktree=worktree_manager.is_detached(workdir),
             ),
         )
         config = SPECS[req.provider].build(common, req.model, req.options)

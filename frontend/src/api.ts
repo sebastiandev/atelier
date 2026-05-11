@@ -86,6 +86,23 @@ export function revealWork(slug: string): Promise<void> {
   });
 }
 
+/**
+ * List local branches in the git repo at ``path``. Returns ``[]`` for
+ * non-git folders so the FE can render a "not a git repo" hint without
+ * branching on errors. Most-recently-committed branch comes first.
+ */
+export function listGitBranches(path: string): Promise<string[]> {
+  const qs = new URLSearchParams({ path });
+  return fetch(`/api/git/branches?${qs}`).then(async (r) => {
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`${r.status} ${r.statusText}: ${body}`);
+    }
+    const data = (await r.json()) as { branches: string[] };
+    return data.branches;
+  });
+}
+
 export type CompleteWorkResponse = {
   work_slug: string;
   // Number of agents on the work; the backend stopped each + removed each
@@ -230,6 +247,10 @@ export type CreateAgentPayload = {
   // work — new agent inherits source's uncommitted state in detached
   // HEAD. Used by the handoff flow.
   fork_from_agent?: string | null;
+  // Optional branch name. Blank/null leaves the worktree in detached
+  // HEAD (default); the agent picks a branch name via `git switch -c`
+  // when it's ready.
+  branch_name?: string | null;
 };
 
 export function listProviders(): Promise<ProviderDescriptor[]> {

@@ -94,7 +94,7 @@ The mode is a structural switch, not a theming switch. Splitting into two compon
 
 - **Left** cell: persona pip + status dot + h2 title. h2 truncates with `text-overflow: ellipsis` so long names don't push the meta off-center.
 - **Center** cell: `agent-slug` (mono) + `provider-pill` (`amp · rush`) + `conn-status` (`CONNECTED`) + a `folder-pill mono` showing `shortenPath(worktreePath)` (clickable to reveal the worktree in Finder). Center stays horizontally centered regardless of how wide the title or controls clusters get; the 1fr columns absorb the slack equally.
-- **Right** cell: `tile-controls` wrapper with handoff / maximize / detach / close buttons. Buttons are 26×26 with 15×15 SVG glyphs; controlled by `.tile-controls .tile-ctl` so the meta/folder pill in the center stays at default sizing.
+- **Right** cell: `tile-controls` wrapper with **open-in-IDE / handoff / maximize / detach / close** buttons. Buttons are 26×26 with 13×13 SVG glyphs; controlled by `.tile-controls .tile-ctl` so the meta/folder pill in the center stays at default sizing. The open-in-IDE button uses the `vscode://file/<path>` URL scheme (handled by VSCode and Cursor) — browsers route unknown protocols to the OS handler without navigating, so the page stays.
 
 The standalone worktree-icon button (formerly between conn-status and tile-controls) was removed — the folder pill is itself the reveal affordance. `shortenPath` is exported from `WorkView.tsx` for reuse.
 
@@ -136,13 +136,27 @@ The standalone worktree-icon button (formerly between conn-status and tile-contr
 
 Multi-line auto-growing textarea, capped at 200px before scrolling. Enter submits, Shift/Cmd/Ctrl+Enter inserts a newline.
 
-**Optimistic "thinking" status on send**: the status dot flips to `thinking` the moment you click Send, instead of waiting for the next `status_change` event from the adapter. The optimistic flag clears as soon as a real `status_change` lands. This is a perceived-latency thing; the truth is always the latest event from the adapter.
+**Optimistic "thinking" status on send.** The status dot flips to `thinking` the moment you click Send, instead of waiting for the next `status_change` event from the adapter. Storage is `thinkingSinceSeq: number | null` — captures the latest event seq at Send time so a *new* progress event (any of `status_change`, `turn_metrics`, `error`, `message_delta`, `message_complete` with a later seq) clears it. The boolean precursor only watched for `status_change` as the *last* event, which got shadowed by intervening deltas — and Amp drops the trailing `status_change("idle")` on short turns, leaving the dot stuck. The seq-based gate plus the multi-event terminal set is the fix.
+
+**Composer placeholder.** "Agent is working — Esc to stop" appears only when the agent is actively producing output, derived via `isAgentActive(events)` off the *last* event's nature (active = `message_delta` / `thinking_delta` / `tool_call` / `tool_result` / `user_input` / `status_change(thinking|live)`; everything else = inactive). Same fallback rationale: the cumulative `agentStatus` lies on Amp short turns; the last event tells the truth.
 
 ## Streaming + grouping
 
-`AgentTile.groupEvents()` collapses runs of `message_delta` into a single growing assistant `RenderUnit`, and runs of `thinking_delta` into a single thinking unit. This is what lets you see text accrete instead of seven separate chunks.
+`AgentTile.groupEvents()` collapses runs of `message_delta` into a single growing assistant `RenderUnit`, and runs of `thinking_delta` into a single thinking unit. This is what lets you see text accrete instead of seven separate chunks. A non-delta event (`tool_call`, `status_change`, `user_input`, …) closes any pending delta unit and starts its own.
 
-A non-delta event (`tool_call`, `status_change`, `user_input`, …) closes any pending delta unit and starts its own. Markdown is rendered into the assistant + thinking units only (tool args/results stay in `<pre>` because they're stdout-flavored).
+**`tool_call` and `tool_result` are paired.** When a `tool_result` event lands with a `tool_id` matching a `tool_call` already in the unit list, it's folded into the call's render unit (`unit.result`) rather than appearing as a sibling line. Orphan `tool_result`s (no matching call — replay races, suppressed-call edge cases) still render as standalone units.
+
+**Per-tool renderers.** A `TOOL_RENDERERS` dispatch maps each canonical tool name (see `backend.md` → "Canonical tool shape") to a specialised view:
+
+- **`Bash`** — collapsed summary echoes the command (`▸ Bash · git diff`); body has the description, `cwd`, the command in a syntax-highlighted code fence, and the paired result (auto-unwraps Amp's `{output, exitCode}` JSON).
+- **`Edit` / `MultiEdit`** — collapsed summary shows `path · +N −N`; body renders a line-level diff via `diffLines` from the `diff` package, syntax-highlighted per side via `codeToTokensBase` from Shiki using the language inferred from the file path. Open by default since the diff *is* the body.
+- **`Write`** — `path · N lines` summary; body shows the content fenced with the inferred language.
+- **`Read` / `Grep` / `Glob`** — single-line view (`▸ Read · ~/…/foo.py · L1-100`) collapsing to `<details>` only when there's a result to fold in.
+- **Fallback** — unknown tool names render the args dict as a JSON code fence (today's behaviour).
+
+Folding policy: `<details>` is **closed by default**, opens automatically when the result content is a unified diff (`isUnifiedDiff` matches `diff --git` / `@@ -.. +.. @@`). `Edit` / `MultiEdit` always open since their *call* body is a diff.
+
+**Result rendering.** `ToolResultBody` parses Bash results as `{output, exitCode}` (Amp's wrapper), surfaces `exit N` next to "result" when non-zero, and detects unified-diff content to render with `<UnifiedDiffView>` — which extracts the file path from `diff --git a/PATH b/PATH` so the lines also pick up syntax highlighting via Shiki. Falls back to plain `<pre>` for other content.
 
 ## Design tokens
 
@@ -182,7 +196,7 @@ Both dialogs (`NewWorkDialog`, `NewAgentDialog`) keep the surface small. Advance
 
 Both dialogs accept an optional `contexts` array of `ContextEntry`. `NewWorkDialog` exposes one button per `ConnectionType`; `NewAgentDialog` exposes the connection-backed types **plus** simple `text` / `url` / `file` types. Connection-backed entries render through `ContextRow` (see below); the simple types render through `SimpleContextRow.tsx` — a stripped-down card with a textarea (text) or input (url, file) and a remove button.
 
-The worktree base-branch picker lives with STORY-016.
+**Working folder + Branch row.** The two fields share one `.field-row` (folder grows; branch is fixed-width). The folder field opens a Finder-style `FolderPickerDialog`; the branch field has an inline `BranchPicker` popup (click-outside dismiss, autofocused filter input, Enter-to-pick when one match remains, Esc to close). The picker calls `GET /api/git/branches?path=<folder>` lazily on first open and caches the result until the folder value changes. Blank branch name = detached HEAD (the recommended default — see `backend.md` → WorktreeManager); typing or picking a name creates the branch on agent start. Disabled in fork mode (forks are always detached).
 
 ## ContextRow
 

@@ -106,7 +106,11 @@ async def execute(
     common = CommonAgentConfig(
         workdir=workdir,
         system_prompt=render_system_prompt(
-            agent.persona, agent.role, workdir=workdir, shares=mounted_shares
+            agent.persona,
+            agent.role,
+            workdir=workdir,
+            shares=mounted_shares,
+            is_detached_worktree=worktree_manager.is_detached(workdir),
         ),
     )
     config = SPECS[agent.provider].build(common, agent.model, {})

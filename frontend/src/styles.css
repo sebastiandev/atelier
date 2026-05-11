@@ -831,6 +831,84 @@ body {
   justify-content: center;
 }
 
+/* Two-up field row (e.g. Working folder + Branch in NewAgentDialog).
+   The growing field takes the leftover width; the secondary field has
+   a fixed min so both still fit on narrower modals. */
+.field-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+.field-row .field {
+  margin: 0;
+}
+.field-row .field-grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.field-row .field-branch {
+  flex: 0 0 14rem;
+  min-width: 10rem;
+  position: relative;
+}
+
+/* Branch picker popup — sits below the input, anchored by the row's
+   relative positioning. */
+.branch-input-wrap {
+  position: relative;
+}
+.branch-picker {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  z-index: 5;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+  max-height: 280px;
+}
+.branch-picker-search {
+  padding: 0.4rem 0.45rem;
+  border-bottom: 1px solid var(--line-soft);
+  flex: 0 0 auto;
+}
+.branch-picker-search .input {
+  font-size: 12px;
+  padding: 0.3rem 0.5rem;
+}
+.branch-picker-list {
+  overflow: auto;
+  padding: 0.25rem 0;
+  flex: 1 1 auto;
+}
+.branch-picker-empty {
+  padding: 0.5rem 0.7rem;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+.branch-picker-opt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  color: var(--fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+.branch-picker-opt:hover,
+.branch-picker-opt:focus-visible {
+  background: var(--bg-2);
+  outline: none;
+}
+
 /* Folder picker dialog ------------------------------------------------- */
 
 .folder-picker-bd {
@@ -1309,6 +1387,7 @@ body {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, var(--good)) 25%, transparent);
 }
 
+
 /* Toast — transient single-line confirmation, fades after the WorkView
    timer clears it. Sits above the canvas, doesn't block input. */
 .toast {
@@ -1482,6 +1561,131 @@ body {
   word-break: break-word;
   max-height: 320px;
   overflow: auto;
+}
+
+/* Tool-call summary line — marker, name, then a one-line detail
+   (command, path, etc.) that ellipses if long. Keeps the tool name
+   anchored on the left while the body of the call peeks through on the
+   right. */
+.msg-tool > summary,
+.tool-call-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.tool-call-line {
+  padding: 0.1rem 0;
+}
+.tool-marker {
+  color: var(--fg-3);
+  flex: 0 0 auto;
+  display: inline-block;
+  transition: transform 0.12s ease;
+}
+.msg-tool[open] > summary .tool-marker {
+  transform: rotate(90deg);
+}
+.tool-summary-detail {
+  color: var(--fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.tool-summary-meta {
+  color: var(--fg-3);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+.tool-summary-stat {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+.diff-add-text {
+  color: var(--good);
+}
+.diff-del-text {
+  color: var(--danger);
+}
+.tool-call-body {
+  margin-top: 0.3rem;
+}
+.tool-call-meta {
+  color: var(--fg-3);
+  font-size: 11px;
+  margin-bottom: 0.3rem;
+  font-style: italic;
+}
+
+/* Diff renderer — line-level, monospace, red/green tint. Capped height
+   so a 400-line refactor doesn't blow the transcript open. */
+.tool-diff {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0;
+  margin: 0.3rem 0;
+  max-height: 360px;
+  overflow: auto;
+  line-height: 1.45;
+}
+.diff-line {
+  display: flex;
+  padding: 0 0.6rem;
+}
+.diff-prefix {
+  width: 1ch;
+  margin-right: 0.6rem;
+  color: var(--fg-4);
+  flex: 0 0 auto;
+  user-select: none;
+}
+.diff-content {
+  flex: 1 1 auto;
+  white-space: pre;
+}
+.diff-line.diff-add {
+  background: oklch(0.75 0.14 150 / 0.14);
+}
+.diff-line.diff-add .diff-prefix {
+  color: var(--good);
+}
+.diff-line.diff-del {
+  background: oklch(0.70 0.20 25 / 0.14);
+}
+.diff-line.diff-del .diff-prefix {
+  color: var(--danger);
+}
+.diff-line.diff-meta {
+  color: var(--fg-3);
+  font-style: italic;
+}
+.diff-line.diff-meta .diff-content {
+  white-space: pre;
+}
+
+/* Result section folded into the paired tool_call card. Separated from
+   the call body by a soft top divider so the user reads call → result
+   top-to-bottom without losing the boundary. */
+.tool-result-section {
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--line-soft);
+}
+.tool-result-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.3rem;
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.tool-result-section.is-error .tool-result-header {
+  color: var(--danger);
 }
 
 /* Markdown rendering ----------------------------------------------------- */

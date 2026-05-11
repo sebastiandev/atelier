@@ -120,6 +120,7 @@ from src.infrastructure.agents.atelier_mcp_tools import (
     marker_payload_for_tool,
 )
 from src.infrastructure.agents.factory import build_adapter
+from src.infrastructure.agents.tool_canonical import canonicalize_tool
 from src.settings import Settings
 
 _log = logging.getLogger(__name__)
@@ -393,23 +394,24 @@ class AmpAdapter:
         Mirrors the Claude adapter's ``_can_use_tool``. Auto-allow if the
         user previously said "always allow" for this tool name.
         """
-        if tool_name in self._allow_always:
+        canon_name, canon_input = canonicalize_tool(
+            tool_name, _structured_input_from_argv(argv)
+        )
+        if canon_name in self._allow_always:
             return "allow"
         request_id = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[PermissionDecisionValue] = loop.create_future()
         self._pending[request_id] = fut
-        # The bridge sends raw argv (e.g. ``["-c","ls -la"]``); the prompt
-        # UI is happier with a structured ``tool_input`` shape — pull the
-        # ``-c`` value into ``command`` so the existing renderer's Bash
-        # summary works without special-casing Amp.
-        tool_input = _structured_input_from_argv(argv)
+        # The bridge sends raw argv (e.g. ``["-c","ls -la"]``); we
+        # structure it into ``{command: ...}`` (already canonical for
+        # Bash) before emitting the prompt event.
         await self._outgoing.put(
             PermissionRequest(
                 ts=datetime.now(UTC),
                 request_id=request_id,
-                tool_name=tool_name,
-                tool_input=tool_input,
+                tool_name=canon_name,
+                tool_input=canon_input,
             )
         )
         try:
@@ -425,7 +427,7 @@ class AmpAdapter:
             )
         )
         if decision == "allow_always":
-            self._allow_always.add(tool_name)
+            self._allow_always.add(canon_name)
         return decision
 
     async def close(self) -> None:
@@ -579,11 +581,14 @@ def _convert(
                 )
                 if payload is not None:
                     yield ArtifactMarker(ts=now, payload=payload)
+                canon_name, canon_args = canonicalize_tool(
+                    asst_block.name, dict(asst_block.input)
+                )
                 yield ToolCall(
                     ts=now,
                     tool_id=asst_block.id,
-                    name=asst_block.name,
-                    arguments=asst_block.input,
+                    name=canon_name,
+                    arguments=canon_args,
                 )
         return
     if isinstance(msg, ErrorResultMessage):

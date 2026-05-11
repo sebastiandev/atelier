@@ -572,6 +572,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         void handleDetach(a.slug);
                       }}
                       onHandoff={() => setHandoffSource(a)}
+                      onOpenInIde={() => {
+                        // vscode://file/<path> is handled by VSCode and
+                        // Cursor (Cursor registers the same scheme).
+                        // Browsers route unknown protocols to the OS
+                        // handler without navigating, so the page stays.
+                        window.location.href = `vscode://file${a.worktree_path}`;
+                      }}
                       onRevealWorktree={() => {
                         // Best-effort reveal — same fallback shape as the
                         // work-level pill: copy the path on backend

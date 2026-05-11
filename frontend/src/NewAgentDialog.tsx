@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { FolderPickerDialog } from "./FolderPickerDialog";
 
@@ -12,6 +18,7 @@ import {
   PERSONAS,
   PERSONA_GLYPH,
   listConnections,
+  listGitBranches,
   listProviders,
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
@@ -90,6 +97,13 @@ export function NewAgentDialog({
   const [folder, setFolder] = useState(
     () => forkFromAgent?.folder ?? folderCandidates[0] ?? "",
   );
+  // Optional branch name for the agent's worktree. Blank = detached
+  // HEAD (default), and the agent is told via system prompt to
+  // ``git switch -c <name>`` before checking out elsewhere.
+  const [branchName, setBranchName] = useState("");
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
+  const [branchOptions, setBranchOptions] = useState<string[] | null>(null);
+  const [branchesLoading, setBranchesLoading] = useState(false);
 
   const [goal, setGoal] = useState(initialGoal ?? "");
   const [contexts, setContexts] = useState<ContextEntry[]>([]);
@@ -197,6 +211,21 @@ export function NewAgentDialog({
     (persona !== null || (customMode && customRole.trim())) &&
     !submitting;
 
+  async function openBranchPicker() {
+    setBranchPickerOpen(true);
+    if (branchOptions !== null) return; // already cached
+    setBranchesLoading(true);
+    try {
+      const branches = await listGitBranches(folder.trim());
+      setBranchOptions(branches);
+    } catch {
+      // Soft-fail: render an empty picker with the "no branches" hint.
+      setBranchOptions([]);
+    } finally {
+      setBranchesLoading(false);
+    }
+  }
+
   async function submit() {
     if (!canSubmit || !provider || !model) return;
     const personaId: Persona = persona ?? CUSTOM_PERSONA_PLACEHOLDER;
@@ -218,6 +247,10 @@ export function NewAgentDialog({
     }
     if (forkFromAgent && workdirMode === "fork") {
       payload.fork_from_agent = forkFromAgent.slug;
+    }
+    const trimmedBranch = branchName.trim();
+    if (trimmedBranch) {
+      payload.branch_name = trimmedBranch;
     }
     // Prepend the optional initial-goal textarea as a synthesized text
     // context so the agent's first-message points at it the same way
@@ -371,38 +404,88 @@ export function NewAgentDialog({
             </div>
           )}
 
-          <label className="field">
-            <span className="label">Working folder</span>
-            <div className="folder-input-row">
-              <input
-                className="input"
-                list={`folder-recents-${workSlug}`}
-                placeholder="/Users/you/code/some-repo"
-                value={folder}
-                onChange={(e) => setFolder(e.target.value)}
-              />
-              <button
-                type="button"
-                className="btn-icon folder-input-pick"
-                onClick={() => setPickerOpen(true)}
-                aria-label="Browse for folder"
-                title="Browse"
-              >
-                <FolderIcon />
-              </button>
-            </div>
-            {folderCandidates.length > 0 && (
-              <datalist id={`folder-recents-${workSlug}`}>
-                {folderCandidates.map((f) => (
-                  <option key={f} value={f} />
-                ))}
-              </datalist>
-            )}
-            <span className="hint">
-              Created on agent start if missing. If it's a git repo, this
-              agent gets its own worktree under the work folder.
-            </span>
-          </label>
+          <div className="field-row">
+            <label className="field field-grow">
+              <span className="label">Working folder</span>
+              <div className="folder-input-row">
+                <input
+                  className="input"
+                  list={`folder-recents-${workSlug}`}
+                  placeholder="/Users/you/code/some-repo"
+                  value={folder}
+                  onChange={(e) => {
+                    setFolder(e.target.value);
+                    // Folder changed → cached branch list is stale.
+                    setBranchOptions(null);
+                  }}
+                />
+                <button
+                  type="button"
+                  className="btn-icon folder-input-pick"
+                  onClick={() => setPickerOpen(true)}
+                  aria-label="Browse for folder"
+                  title="Browse"
+                >
+                  <FolderIcon />
+                </button>
+              </div>
+              {folderCandidates.length > 0 && (
+                <datalist id={`folder-recents-${workSlug}`}>
+                  {folderCandidates.map((f) => (
+                    <option key={f} value={f} />
+                  ))}
+                </datalist>
+              )}
+              <span className="hint">
+                Created on start if missing. Git repos get their own
+                worktree.
+              </span>
+            </label>
+
+            <label className="field field-branch">
+              <span className="label">
+                Branch <span className="hint">(optional)</span>
+              </span>
+              <div className="folder-input-row branch-input-wrap">
+                <input
+                  className="input"
+                  placeholder="detached HEAD"
+                  value={branchName}
+                  onChange={(e) => setBranchName(e.target.value)}
+                  disabled={workdirMode === "fork"}
+                />
+                <button
+                  type="button"
+                  className="btn-icon folder-input-pick"
+                  onClick={() => openBranchPicker()}
+                  disabled={workdirMode === "fork" || !folder.trim()}
+                  aria-label="Pick existing branch"
+                  title={
+                    folder.trim()
+                      ? "Pick an existing branch"
+                      : "Set a folder first"
+                  }
+                >
+                  <BranchIcon />
+                </button>
+                {branchPickerOpen && (
+                  <BranchPicker
+                    loading={branchesLoading}
+                    branches={branchOptions}
+                    onPick={(b) => {
+                      setBranchName(b);
+                      setBranchPickerOpen(false);
+                    }}
+                    onClose={() => setBranchPickerOpen(false)}
+                  />
+                )}
+              </div>
+              <span className="hint">
+                Blank = detached HEAD; agent names the branch later via{" "}
+                <code>git switch -c</code>.
+              </span>
+            </label>
+          </div>
 
           {providers && (
             <>
@@ -612,6 +695,129 @@ function FolderIcon() {
     >
       <path d="M1.5 3.5h3l1 1h5v5a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-6Z" />
     </svg>
+  );
+}
+
+function BranchIcon() {
+  // Two stems joining one trunk — reads as "branches" at 14px.
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="3" cy="2.5" r="1" />
+      <circle cx="3" cy="9.5" r="1" />
+      <circle cx="9" cy="6" r="1" />
+      <path d="M3 3.5v5" />
+      <path d="M3 6h2a3 3 0 0 0 3-3v0" />
+    </svg>
+  );
+}
+
+function BranchPicker({
+  loading,
+  branches,
+  onPick,
+  onClose,
+}: {
+  loading: boolean;
+  branches: string[] | null;
+  onPick: (branch: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+
+  // Click-outside dismiss — capture-phase listener so the click that
+  // closes us doesn't also fire on a button it landed on.
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [onClose]);
+
+  // Auto-focus the search field so the user can start typing
+  // immediately after clicking the picker button.
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!branches) return null;
+    const q = query.trim().toLowerCase();
+    if (!q) return branches;
+    return branches.filter((b) => b.toLowerCase().includes(q));
+  }, [branches, query]);
+
+  function onKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onClose();
+    } else if (e.key === "Enter") {
+      // Enter picks if there's a unique match — saves a click in the
+      // common "type a few chars to disambiguate" flow.
+      if (filtered && filtered.length === 1) {
+        e.preventDefault();
+        onPick(filtered[0]);
+      }
+    }
+  }
+
+  return (
+    <div className="branch-picker" ref={ref} role="listbox">
+      <div className="branch-picker-search">
+        <input
+          ref={inputRef}
+          className="input"
+          placeholder="Filter branches…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onKeyDown}
+        />
+      </div>
+      <div className="branch-picker-list">
+        {loading && <div className="branch-picker-empty">Loading…</div>}
+        {!loading && branches !== null && branches.length === 0 && (
+          <div className="branch-picker-empty">
+            No branches found (not a git repo, or empty repo).
+          </div>
+        )}
+        {!loading &&
+          filtered !== null &&
+          branches !== null &&
+          branches.length > 0 &&
+          filtered.length === 0 && (
+            <div className="branch-picker-empty">
+              No matches for &ldquo;{query}&rdquo;.
+            </div>
+          )}
+        {!loading &&
+          filtered !== null &&
+          filtered.length > 0 &&
+          filtered.map((b) => (
+            <button
+              key={b}
+              type="button"
+              className="branch-picker-opt"
+              onClick={() => onPick(b)}
+              role="option"
+            >
+              {b}
+            </button>
+          ))}
+      </div>
+    </div>
   );
 }
 

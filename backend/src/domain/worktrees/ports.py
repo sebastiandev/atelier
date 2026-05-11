@@ -46,7 +46,24 @@ class WorktreeManager(Protocol):
         agent_slug: str,
         source: Path,
         base_ref: str = "HEAD",
-    ) -> Path: ...
+        branch_name: str | None = None,
+    ) -> Path:
+        """Provision a per-agent worktree.
+
+        ``branch_name`` is the optional name of a branch to create (or
+        attach to, if it already exists) on ``base_ref``. When ``None``
+        (the default), the worktree starts in **detached HEAD** — no
+        auto-named branch is created. The user/agent is expected to
+        ``git switch -c <name>`` before checking out anything else if
+        they want to keep the work.
+        """
+        ...
+
+    def is_detached(self, workdir: Path) -> bool:
+        """Whether ``workdir`` is currently checked out in detached HEAD.
+        Returns ``False`` for non-git folders so callers can use it as a
+        soft hint without branching on the git-vs-not-git case."""
+        ...
 
     def ensure_forked(
         self,

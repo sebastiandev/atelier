@@ -117,6 +117,7 @@ async def create_agent(
             for c in payload.contexts
         ),
         fork_from_agent=payload.fork_from_agent,
+        branch_name=payload.branch_name,
     )
     try:
         agent = await start.execute(

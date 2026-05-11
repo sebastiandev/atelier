@@ -43,7 +43,9 @@ A quick tour of the surface area:
 - [Maximize a tile](#maximize-a-tile) — zoom one agent to fill the canvas
 - [Agent shortcuts](#agent-shortcuts) — per-tile toolbar: detach, hand off, maximize, close
 - [Source-backed context](#source-backed-context) — Jira / Sentry / Honeycomb on first turn
-- [Per-agent git worktrees](#per-agent-git-worktrees) — automatic, isolated
+- [Per-agent git worktrees](#per-agent-git-worktrees) — automatic, isolated, detached by default
+- [Open in your IDE](#open-in-your-ide) — one-click VSCode / Cursor on the worktree
+- [Rich tool rendering](#rich-tool-rendering) — paired call+result, syntax-highlighted diffs
 - [Persistent everything](#persistent-everything) — transcripts on disk, conversations resume
 - [Token + cost rollup](#token--cost-rollup) — context %, session spend, per-tile
 - [Projects](#projects) — optional grouping with shared defaults
@@ -159,6 +161,30 @@ Add more context mid-session without restarting.
 Atelier provisions a separate `git worktree` per agent automatically. Two
 agents on the same repo don't step on each other's branches. When you're done,
 the worktrees are still there for review.
+
+By default the worktree starts in **detached HEAD** — no auto-named branch
+clutters your `git branch` list, and the agent decides on a branch name (or
+asks you for one) when there's something worth pushing. The new-agent dialog
+has a Branch field if you want to name one upfront, with a picker that shows
+existing branches in the source repo. The agent's system prompt warns it not
+to `checkout`/`switch` away from a detached worktree without first creating a
+branch from current HEAD — that's the only path that orphans commits.
+
+### Open in your IDE
+
+Each agent tile has an "Open in editor" button that opens its worktree in
+VSCode or Cursor (`vscode://file/<path>`) — handy when you want to review the
+agent's diff in your normal IDE flow without leaving Atelier.
+
+### Rich tool rendering
+
+The transcript collapses each tool call into a one-line summary that actually
+tells you something — `▸ Bash · git diff`, `▸ Edit · ~/…/conftest.py · +12 −3`,
+`▸ Read · ~/…/foo.py · L1-100`. Edit and MultiEdit calls render the diff
+inline with red/green line backgrounds and per-language syntax highlighting;
+Bash results that look like a unified diff (e.g. `git diff` output) get the
+same treatment. Tool calls and their results are paired into a single card
+instead of two siblings, so you read each invocation top-to-bottom.
 
 ### Persistent everything
 

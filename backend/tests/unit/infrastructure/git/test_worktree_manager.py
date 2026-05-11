@@ -209,12 +209,11 @@ def test_sweep_orphans_on_empty_work_is_noop(manager: GitWorktreeManager) -> Non
 def test_remove_deletes_per_agent_atelier_branch(
     manager: GitWorktreeManager, repo: Path
 ) -> None:
-    """Without branch cleanup, a future agent that gets the same slug
-    after a wipe collides with the leftover branch and ``git worktree
-    add`` fails. ``remove`` should drop the branch on the way out."""
-    manager.ensure("WRK-001", "agt-1", repo)
+    """When the user opted into a branch on agent creation, ``remove``
+    must drop it on teardown — otherwise a future agent that lands on
+    the same slug after a wipe collides with the leftover branch."""
+    manager.ensure("WRK-001", "agt-1", repo, branch_name="atelier/WRK-001/agt-1")
 
-    # Branch was created by ensure().
     branches_before = subprocess.run(
         ["git", "branch", "--list", "atelier/WRK-001/agt-1"],
         cwd=str(repo),
@@ -239,11 +238,13 @@ def test_remove_deletes_per_agent_atelier_branch(
 def test_ensure_self_heals_when_branch_lingers_after_dir_was_wiped(
     manager: GitWorktreeManager, repo: Path, tmp_path: Path
 ) -> None:
-    """Reproduces the wipe.sh aftermath: branch exists, git's worktree
-    registry still references a missing path. A naive retry would fail
-    with "branch is already checked out at <missing>" — the manager
-    should prune + retry and succeed."""
-    workdir = manager.ensure("WRK-001", "agt-1", repo)
+    """Reproduces the wipe.sh aftermath on the named-branch path: branch
+    exists, git's worktree registry still references a missing path. A
+    naive retry would fail with "branch is already checked out at
+    <missing>" — the manager should prune + retry and succeed."""
+    workdir = manager.ensure(
+        "WRK-001", "agt-1", repo, branch_name="atelier/WRK-001/agt-1"
+    )
     # Simulate the wipe: blow away the worktree dir without telling git.
     import shutil as _shutil
 
@@ -262,6 +263,57 @@ def test_ensure_self_heals_when_branch_lingers_after_dir_was_wiped(
     # Re-ensure should now self-heal: branch exists, prunable registry
     # entry exists, so the first add fails, the fallback fails too, and
     # the manager prunes + retries.
-    revived = manager.ensure("WRK-001", "agt-1", repo)
+    revived = manager.ensure(
+        "WRK-001", "agt-1", repo, branch_name="atelier/WRK-001/agt-1"
+    )
     assert revived.exists()
     assert (revived / ".git").exists()
+
+
+def test_ensure_default_is_detached_head(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """No branch_name → detached HEAD; symbolic-ref returns non-zero."""
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+    head = subprocess.run(
+        ["git", "symbolic-ref", "-q", "HEAD"],
+        cwd=str(workdir),
+        capture_output=True,
+    )
+    assert head.returncode != 0
+
+
+def test_ensure_with_branch_name_creates_named_branch(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure("WRK-001", "agt-1", repo, branch_name="my-feature")
+    head = subprocess.run(
+        ["git", "symbolic-ref", "HEAD"],
+        cwd=str(workdir),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head == "refs/heads/my-feature"
+
+
+def test_is_detached_reports_true_for_detached_default(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+    assert manager.is_detached(workdir) is True
+
+
+def test_is_detached_reports_false_when_branch_named(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure("WRK-001", "agt-1", repo, branch_name="feature-x")
+    assert manager.is_detached(workdir) is False
+
+
+def test_is_detached_returns_false_for_non_git_folder(
+    manager: GitWorktreeManager, tmp_path: Path
+) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert manager.is_detached(plain) is False
