@@ -194,11 +194,19 @@ class TurnMetrics:
       sum equals what Anthropic actually billed.
 
     - ``last_prompt_tokens`` is the prompt size of the **last** model
-      call in the turn — the closest stand-in we have for "current
-      context size" right before the model said its final thing. This
-      is what consumers use for **context %** display. Without this
-      separation, ctx% would inflate by the number of sub-calls (each
-      replays the full context from cache).
+      call in the turn. The name reads "per-prompt", but each sub-call's
+      prompt contains the *entire conversation history so far* (system +
+      every prior user/assistant/tool-use/tool-result + this turn's new
+      user message + any in-turn tool round-trips). So this value IS the
+      running total of context currently occupying the model's window
+      — the "should I /clear?" number, growing monotonically across
+      turns. Consumers use it for **context %** display.
+
+      Why not sum ``input + cache_read + cache_creation``? Each sub-call
+      replays the full history (read from cache), so summing across N
+      sub-calls multiplies the same content N times. ``last_prompt_tokens``
+      is a one-frame snapshot taken at end-of-turn, after every sub-call
+      has fired.
     """
 
     type: Literal["turn_metrics"] = "turn_metrics"

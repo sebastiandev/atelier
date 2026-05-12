@@ -548,9 +548,12 @@ def _convert(
     user-selected mode (Amp's "primary selector" — smart/rush/deep/large).
 
     ``last_prompt_tokens`` is the prompt size of the last AssistantMessage
-    in the turn — passed in by the pump so emitted ``TurnMetrics`` carry
-    an honest "current context size" alongside the cumulative-for-cost
-    counts from ``ResultMessage.usage``.
+    in the turn — which equals the total context currently in the
+    model's window, since every sub-call's prompt replays the full
+    conversation history. See ``TurnMetrics`` for the full rationale.
+    Passed in by the pump so emitted ``TurnMetrics`` carry the running
+    total alongside the cumulative-for-cost counts from
+    ``ResultMessage.usage``.
     """
     now = datetime.now(UTC)
     if isinstance(msg, SystemMessage):

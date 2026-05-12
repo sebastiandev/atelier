@@ -54,6 +54,12 @@ Each has a `Literal` `type` discriminator; the frontend pattern-matches on it.
 
 **`ts` is set by the adapter; `seq` is set by the supervisor.** The adapter contract test asserts monotonic `ts`. The supervisor stamps the monotonic `seq` when it appends to the transcript log — so consumers can resume from `?cursor=N`.
 
+### `TurnMetrics` token semantics
+
+`TurnMetrics` carries two flavours of token counts, and they aren't interchangeable. `input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens` are **cumulative** across every model sub-call in a turn — a turn that fires 20 tool-uses makes 20 API calls and the SDK's `ResultMessage` aggregates them. Summed across turns these equal what Anthropic billed, so they drive **session cost**.
+
+`last_prompt_tokens` is named misleadingly: it's the prompt size of the *last* sub-call, but because each sub-call's prompt replays the entire conversation history (system + every prior user/assistant/tool-use/tool-result + this turn's new user msg + any in-turn tool round-trips), that value equals the **total context currently in the model's window** — the running total, growing monotonically across turns. This is the "should I /clear?" number, used for the **ctx %** badge. Don't sum it across sub-calls or across turns; it's a snapshot. See `domain/agents/events.py:TurnMetrics` for the full docstring; the FE picks it up in `frontend/src/AgentTile.tsx` (`latestMetrics` → `TurnMetricsBar`).
+
 ### Canonical tool shape
 
 `ToolCall.name` and `ToolCall.arguments` follow a single canonical shape regardless of which provider SDK emitted the call. Each adapter calls `infrastructure.agents.tool_canonical.canonicalize_tool(name, raw_input)` before yielding `ToolCall` and `PermissionRequest` so provider quirks (Amp's `cmd`/`edit_file`/`old_str` vs Claude Code's `command`/`Edit`/`old_string`) never leak into `domain/` or the frontend renderer. The canonical concepts are `Bash`, `Edit`, `MultiEdit`, `Read`, `Write`, `Grep`, `Glob` — see the `ToolCall` docstring for required/optional keys per concept. Tools without a canonical concept pass through with their raw shape; the frontend falls back to a generic JSON view. Existing on-disk transcripts can be migrated with `scripts/migrate-transcripts.py` (idempotent).

@@ -64,12 +64,15 @@ def test_claude_descriptor_exposes_model_meta(app_client: TestClient) -> None:
     assert opus_1m["output_per_mtok"] == 75.0
 
 
-def test_amp_descriptor_model_meta_is_blank(app_client: TestClient) -> None:
+def test_amp_descriptor_exposes_per_mode_context_window(app_client: TestClient) -> None:
     response = app_client.get("/api/providers")
     amp = next(p for p in response.json() if p["name"] == "amp")
     meta = amp["model_meta"]
     assert set(meta.keys()) == {"smart", "rush", "deep", "large"}
-    smart = meta["smart"]
-    assert smart["context_window"] is None
-    assert smart["input_per_mtok"] is None
-    assert smart["output_per_mtok"] is None
+    assert meta["smart"]["context_window"] == 200_000
+    assert meta["rush"]["context_window"] == 200_000
+    assert meta["deep"]["context_window"] == 1_000_000
+    assert meta["large"]["context_window"] == 1_000_000
+    # Pricing isn't published per mode — kept null so the FE shows "—".
+    assert meta["smart"]["input_per_mtok"] is None
+    assert meta["smart"]["output_per_mtok"] is None

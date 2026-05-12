@@ -145,15 +145,24 @@ def test_amp_describe_lists_modes_and_permission_mode() -> None:
     )
 
 
-def test_amp_describe_model_meta_is_blank_per_mode() -> None:
-    """Amp routes modes to underlying models without public pricing —
-    each mode gets a blank ``ModelMeta`` so the FE knows the keys exist
-    but won't render numbers. Once Amp publishes a stable mapping, fill
-    these in (and the FE will start showing cost/ctx automatically)."""
+def test_amp_describe_exposes_per_mode_context_window() -> None:
+    """Each Amp mode publishes a known context window (rush/smart route
+    to 200k-window underlying models, deep/large route to 1M ones) so
+    the FE can render ctx% for Amp agents the same way the Amp CLI does."""
     desc = AmpSpec().describe()
     assert set(desc.model_meta.keys()) == {m.value for m in AmpMode}
+    assert desc.model_meta[AmpMode.SMART.value].context_window == 200_000
+    assert desc.model_meta[AmpMode.RUSH.value].context_window == 200_000
+    assert desc.model_meta[AmpMode.DEEP.value].context_window == 1_000_000
+    assert desc.model_meta[AmpMode.LARGE.value].context_window == 1_000_000
+
+
+def test_amp_describe_pricing_remains_blank() -> None:
+    """Amp routes modes to underlying models without exposing per-token
+    pricing — keep the pricing fields ``None`` so the FE shows "—" for
+    cost rather than guessing."""
+    desc = AmpSpec().describe()
     for meta in desc.model_meta.values():
-        assert meta.context_window is None
         assert meta.input_per_mtok is None
         assert meta.output_per_mtok is None
         assert meta.cache_read_per_mtok is None

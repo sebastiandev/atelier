@@ -1092,10 +1092,13 @@ type TurnRollup = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
-  /** Per-call prompt size from the last AssistantMessage in the turn —
-   *  the honest "current context size" for ctx%. Zero on turn_metrics
-   *  events recorded before the fix; FE falls back to the cumulative
-   *  sum in that case. */
+  /** Prompt size of the last AssistantMessage in the turn. Despite the
+   *  name, this is the running total of context currently in the
+   *  model's window — every sub-call's prompt replays the full
+   *  conversation history, so the last sub-call's prompt = everything
+   *  loaded right now. The "should I /clear?" number. Zero on legacy
+   *  turn_metrics recorded before the fix; FE falls back to the
+   *  cumulative sum in that case. */
   lastPromptTokens: number;
   model: string | null;
 };
@@ -1180,15 +1183,16 @@ function TurnMetricsBar({
     metrics.outputTokens +
     metrics.cacheReadTokens +
     metrics.cacheCreationTokens;
-  // Context %: the prompt size of the *last model call* in the turn,
-  // over the model's context window. The cumulative
-  // ``input + cache_read + cache_creation`` of ResultMessage.usage is
-  // inflated by the number of sub-calls (each replays the full context
-  // from cache) — would balloon ctx% past 100% on tool-heavy turns. We
-  // ride on ``last_prompt_tokens`` which the adapter pulls off the
-  // final AssistantMessage. Legacy turn_metrics emitted before that
-  // field existed fall back to the old (over-counted) sum so the
-  // display doesn't go blank on resumed agents.
+  // Context %: prompt size of the *last model call* in the turn (=
+  // total context currently in the window, since each sub-call's
+  // prompt replays the full conversation history), over the model's
+  // context window. The cumulative ``input + cache_read +
+  // cache_creation`` of ResultMessage.usage is inflated by the
+  // number of sub-calls — would balloon ctx% past 100% on tool-heavy
+  // turns. We ride on ``last_prompt_tokens`` which the adapter pulls
+  // off the final AssistantMessage. Legacy turn_metrics emitted
+  // before that field existed fall back to the old (over-counted) sum
+  // so the display doesn't go blank on resumed agents.
   const promptTokens =
     metrics.lastPromptTokens > 0
       ? metrics.lastPromptTokens

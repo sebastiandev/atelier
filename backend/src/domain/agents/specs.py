@@ -243,11 +243,17 @@ class AmpSpec:
 
     def describe(self) -> ProviderDescriptor:
         default_csv = ", ".join(AMP_DEFAULT_AUTO_ALLOWED_TOOLS)
-        # Amp routes each mode to an underlying model that isn't part of
-        # Amp's public surface — pricing + context window aren't stable
-        # enough to encode here. Empty ``ModelMeta`` per mode makes the
-        # key set explicit while telling the FE "no numbers to display".
-        amp_meta = {mode.value: ModelMeta() for mode in AmpMode}
+        # Each Amp mode has a known context window (rush/smart route to
+        # 200k-window models, deep/large route to 1M-window ones). The
+        # underlying model and its per-token pricing aren't part of Amp's
+        # public surface, so pricing fields stay ``None`` — the FE shows
+        # "—" for cost on Amp but renders ctx% from the window below.
+        amp_meta = {
+            AmpMode.SMART.value: ModelMeta(context_window=200_000),
+            AmpMode.RUSH.value: ModelMeta(context_window=200_000),
+            AmpMode.DEEP.value: ModelMeta(context_window=1_000_000),
+            AmpMode.LARGE.value: ModelMeta(context_window=1_000_000),
+        }
         return ProviderDescriptor(
             name=self.name,
             label=self.label,

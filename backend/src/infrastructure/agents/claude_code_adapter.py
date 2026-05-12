@@ -367,10 +367,13 @@ def _convert(
     configured model id; the SDK doesn't echo it on ResultMessage.
 
     ``last_prompt_tokens`` is the prompt size of the last AssistantMessage
-    in the turn (caller tracks this across messages). It rides along on
-    the emitted ``TurnMetrics`` so the FE has an honest "current context
-    size" number — ``ResultMessage.usage`` itself is cumulative across
-    sub-calls and inflates ctx% by the number of tool-uses in a turn.
+    in the turn (caller tracks this across messages). Because every
+    sub-call's prompt replays the full conversation history, this value
+    equals the total context occupying the model's window at end-of-turn
+    — the running total, not "this prompt's contribution". See
+    ``TurnMetrics`` for full rationale. ``ResultMessage.usage`` itself
+    is cumulative across sub-calls and inflates ctx% by the number of
+    tool-uses in a turn, so we don't use it for the denominator.
     """
     now = datetime.now(UTC)
     if isinstance(msg, AssistantMessage):
