@@ -1,6 +1,12 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
 
-import { type CanvasLayout, TWEAKS_DEFAULTS, useTweaksStore } from "./state/tweaks";
+import {
+  type CanvasLayout,
+  EDITOR_OPTS,
+  type EditorChoice,
+  TWEAKS_DEFAULTS,
+  useTweaksStore,
+} from "./state/tweaks";
 
 const PAD = 16;
 
@@ -19,12 +25,16 @@ export function TweaksPanel() {
   const open = useTweaksStore((s) => s.panelOpen);
   const accentHue = useTweaksStore((s) => s.accentHue);
   const layout = useTweaksStore((s) => s.layout);
+  const editor = useTweaksStore((s) => s.editor);
   const setAccentHue = useTweaksStore((s) => s.setAccentHue);
   const setLayout = useTweaksStore((s) => s.setLayout);
+  const setEditor = useTweaksStore((s) => s.setEditor);
   const resetTweaks = useTweaksStore((s) => s.reset);
   const closePanel = useTweaksStore((s) => s.closePanel);
   const atDefault =
-    accentHue === TWEAKS_DEFAULTS.accentHue && layout === TWEAKS_DEFAULTS.layout;
+    accentHue === TWEAKS_DEFAULTS.accentHue &&
+    layout === TWEAKS_DEFAULTS.layout &&
+    editor === TWEAKS_DEFAULTS.editor;
 
   // Position is held in the panel only — not persisted. The default
   // (bottom-right with 16px padding) matches the prototype.
@@ -124,6 +134,27 @@ export function TweaksPanel() {
         <div className="twk-hint">
           Tiles snap into a responsive grid; columns flow horizontally.
           Drag a tile by its grip in the top-left to reorder.
+        </div>
+
+        <div className="twk-sect">Open in editor</div>
+        <div className="twk-row">
+          <select
+            className="twk-select"
+            value={editor}
+            onChange={(e) => setEditor(e.target.value as EditorChoice)}
+            aria-label="Editor for the Open-in-editor button"
+          >
+            {EDITOR_OPTS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="twk-hint">
+          The IDE the agent tile's editor button hands the worktree off
+          to. Requires the chosen IDE (or JetBrains Toolbox) to have
+          registered its URL handler with the OS.
         </div>
 
         <div className="twk-foot">

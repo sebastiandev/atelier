@@ -2364,6 +2364,37 @@ h5.md-h {
   color: var(--fg-2);
 }
 
+/* Native <select> for choices that don't fit a segmented control
+   (e.g. the "Open in editor" picker — too many options to display
+   inline). Styled to match the segmented look. */
+.twk-select {
+  appearance: none;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  padding: 4px 22px 4px 8px;
+  min-height: 26px;
+  cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 12px) 50%,
+    calc(100% - 8px) 50%;
+  background-size:
+    4px 4px,
+    4px 4px;
+  background-repeat: no-repeat;
+}
+.twk-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .twk-foot {
   margin-top: 6px;
   padding-top: 10px;

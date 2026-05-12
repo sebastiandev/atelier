@@ -49,7 +49,7 @@ import {
   useArtifactsRefresh,
 } from "./state/artifactsRefresh";
 import { useClosedStore } from "./state/closed";
-import { useTweaksStore } from "./state/tweaks";
+import { editorUrl, useTweaksStore } from "./state/tweaks";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
 
@@ -97,6 +97,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     (s) => s.byWork[workSlug],
   );
   const layout = useTweaksStore((s) => s.layout);
+  const editor = useTweaksStore((s) => s.editor);
 
   // 6px activation distance keeps clicks on the grip from firing a drag —
   // matches @dnd-kit's recommended threshold and feels right with the
@@ -573,11 +574,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                       }}
                       onHandoff={() => setHandoffSource(a)}
                       onOpenInIde={() => {
-                        // vscode://file/<path> is handled by VSCode and
-                        // Cursor (Cursor registers the same scheme).
-                        // Browsers route unknown protocols to the OS
-                        // handler without navigating, so the page stays.
-                        window.location.href = `vscode://file${a.worktree_path}`;
+                        // The configured editor (Tweaks panel) maps to
+                        // its OS-registered URL scheme. Browsers route
+                        // unknown protocols to the OS handler without
+                        // navigating, so the page stays put.
+                        window.location.href = editorUrl(editor, a.worktree_path);
                       }}
                       onRevealWorktree={() => {
                         // Best-effort reveal — same fallback shape as the
