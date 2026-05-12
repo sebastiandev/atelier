@@ -29,6 +29,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from src.domain.models import Provider
 
@@ -47,20 +48,81 @@ class LaunchResult:
     copy ``command`` to the clipboard instead."""
 
 
-def build_resume_command(provider: Provider, session_id: str, workdir: Path) -> str:
+def build_resume_command(
+    provider: Provider,
+    session_id: str,
+    workdir: Path,
+    *,
+    model: str | None = None,
+    options: dict[str, Any] | None = None,
+) -> str:
     """The shell command that drops the user into the CLI mid-conversation.
 
     Both providers' resume invocations are well-known. We ``cd`` first so
     relative paths and git context match what the supervisor's SDK process
     was using.
+
+    ``model`` is the agent's primary selector — Claude model id (e.g.
+    ``claude-opus-4-7-1m``) or Amp mode (``smart``/``rush``/``deep``/
+    ``large``). When supplied we forward it as ``--model`` (Claude) or
+    ``--mode`` (Amp) so the CLI session keeps the user's choice instead
+    of falling back to the local CLI default.
+
+    ``options`` mirrors the dict the provider Spec validated at create
+    time. Currently honoured keys per provider (silently ignored when
+    absent or set to a value the CLI would treat as the default):
+      - Claude: ``permission_mode`` → ``--permission-mode``,
+        ``thinking_effort`` → ``--effort``.
+      - Amp: ``permission_mode == "allow_all"`` → ``--dangerously-allow-all``.
+        Amp's ``custom`` / ``default`` permission modes are Atelier-side
+        constructs (the bridge), so they don't translate to CLI flags.
+
+    Both arguments default to ``None`` for callers that pre-date the
+    new behaviour (and for legacy agents whose ``options`` column is
+    NULL): the function emits the original bare invocation in that case.
     """
     cwd = _shell_quote(str(workdir))
     sid = _shell_quote(session_id)
+    opts = options or {}
     if provider == "claude-code":
-        return f"cd {cwd} && claude --resume {sid}"
+        flags = _claude_flags(model, opts)
+        return f"cd {cwd} && claude{flags} --resume {sid}"
     if provider == "amp":
-        return f"cd {cwd} && amp threads continue {sid}"
+        flags = _amp_flags(model, opts)
+        return f"cd {cwd} && amp{flags} threads continue {sid}"
     raise ValueError(f"unknown provider for CLI resume: {provider!r}")
+
+
+def _claude_flags(model: str | None, options: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if model:
+        parts.append(f"--model {_shell_quote(model)}")
+    effort = options.get("thinking_effort")
+    # ``off`` is the absence of reasoning; Claude CLI's ``--effort``
+    # has no equivalent so we just omit the flag.
+    if isinstance(effort, str) and effort and effort != "off":
+        parts.append(f"--effort {_shell_quote(effort)}")
+    perm = options.get("permission_mode")
+    # ``default`` is what the CLI applies when the flag is absent;
+    # forwarding it would just add noise to the command string.
+    if isinstance(perm, str) and perm and perm != "default":
+        parts.append(f"--permission-mode {_shell_quote(perm)}")
+    return (" " + " ".join(parts)) if parts else ""
+
+
+def _amp_flags(model: str | None, options: dict[str, Any]) -> str:
+    parts: list[str] = []
+    perm = options.get("permission_mode")
+    # ``allow_all`` is the only Amp permission mode that maps cleanly to
+    # a CLI flag — the others (``default``, ``custom``) rely on
+    # Atelier's permission bridge that doesn't exist outside Atelier.
+    # Emit the flag first so it sits with the other globals before
+    # the ``threads`` subcommand.
+    if perm == "allow_all":
+        parts.append("--dangerously-allow-all")
+    if model:
+        parts.append(f"--mode {_shell_quote(model)}")
+    return (" " + " ".join(parts)) if parts else ""
 
 
 def launch_in_terminal(command: str) -> LaunchResult:

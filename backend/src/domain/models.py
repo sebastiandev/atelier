@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 # ---------------------------------------------------------------------------
 # Literal types (enums)
@@ -196,6 +196,13 @@ class Agent:
     # belongs to this agent. Walking the chain reconstructs the full
     # message history across forks at re-attach time.
     parent_session_id: str | None = None
+    # Provider-specific options the user picked at create time. Shape
+    # mirrors the ``options`` dict that ``Spec.build`` validates
+    # (``permission_mode``, ``thinking_effort``, ``custom_allowed_tools``,
+    # …). Persisted so resume rebuilds the same config and detach can
+    # forward matching CLI flags. ``None`` on rows that predate this
+    # field — callers must treat that as "use provider defaults".
+    options: dict[str, Any] | None = None
 
 
 @dataclass(kw_only=True)

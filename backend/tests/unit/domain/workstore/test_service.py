@@ -194,6 +194,45 @@ def test_add_agent_raises_when_work_not_found() -> None:
         service.add_agent_to_work(_agent_request(work_slug="WRK-999"))
 
 
+def test_add_agent_persists_options_when_supplied() -> None:
+    """Provider-specific options (permission_mode, thinking_effort, …)
+    must round-trip onto the entity so resume + detach pick them back
+    up. Empty/missing → None (not an empty dict) so legacy rows that
+    predate the column round-trip identically."""
+    service, _, files, _ = _make_service()
+    service.create_work(_new_work_request())
+    request = AddAgentRequest(
+        work_slug="WRK-001",
+        name="Architect",
+        persona="architect",
+        role="architect",
+        provider="claude-code",
+        model="claude-opus-4-7",
+        folder=Path("/code/foo"),
+        options={"permission_mode": "acceptEdits", "thinking_effort": "high"},
+    )
+    agent = service.add_agent_to_work(request)
+    assert agent.options == {
+        "permission_mode": "acceptEdits",
+        "thinking_effort": "high",
+    }
+    # And the on-disk agent.json mirrors the entity.
+    persisted = files.agent_jsons[("WRK-001", "agt-1")]
+    assert persisted["options"] == agent.options
+
+
+def test_add_agent_normalises_empty_options_to_none() -> None:
+    """Empty options dict from the route → ``None`` on the row so the
+    column stores SQL NULL (cleaner than a stored ``{}``) and on-disk
+    agent.json omits the key entirely (legacy-shape parity)."""
+    service, _, files, _ = _make_service()
+    service.create_work(_new_work_request())
+    agent = service.add_agent_to_work(_agent_request())  # no options
+    assert agent.options is None
+    persisted = files.agent_jsons[("WRK-001", "agt-1")]
+    assert "options" not in persisted
+
+
 def test_list_agents_for_work_returns_added_agents() -> None:
     service, _, _, _ = _make_service()
     service.create_work(_new_work_request())

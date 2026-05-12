@@ -152,6 +152,15 @@ The 4404 close code is reserved for agents that don't exist on disk at all.
 
 Detaching hands a running agent to a terminal CLI. `agents/detach.execute` stops the supervisor's task, flips status to `DETACHED`, writes a `user_detached` transcript marker carrying an `sdk_cursor` snapshot (Claude: timestamp; Amp: message count), then shells out to the user's preferred terminal with the right resume command.
 
+The resume command preserves the agent's selector + provider options so the CLI session keeps the user's choice instead of silently dropping to the local CLI default. `infrastructure/cli_launcher/build_resume_command` reads `agent.model` (Claude model id / Amp mode) and `agent.options` (the dict the Spec validated at create time, persisted on the row — see [Persisted provider options](#persisted-provider-options) below) and emits:
+
+| Provider | Selector flag | Option flags |
+|---|---|---|
+| Claude | `--model <id>` | `--effort <level>` (skipped when `thinking_effort=="off"`); `--permission-mode <m>` (skipped when `permission_mode=="default"`, since the CLI applies that anyway) |
+| Amp | `--mode <mode>` | `--dangerously-allow-all` when `permission_mode=="allow_all"`. Amp's other permission modes (`default`/`custom`) and `custom_allowed_tools` are Atelier-side constructs (the bridge) — they don't translate to CLI flags. |
+
+Legacy agents whose `options` column is NULL (rows created before schema v9) detach with the bare `claude --resume <id>` / `amp threads continue <id>` shape — same behaviour as before the column existed. Unit tests in `tests/unit/infrastructure/cli_launcher/test_build_resume_command.py` pin every flag combination.
+
 Re-attach runs through `resume.execute` → `_catch_up_detached_agent`:
 
 - Read the SDK's transcript file/thread (Claude: `~/.claude/projects/<munged-cwd>/<sid>.jsonl`; Amp: `amp threads export <id>`) starting from the `sdk_cursor`. Translate Anthropic-shaped content blocks (`text` / `thinking` / `tool_use` / `tool_result`) into `AgentEvent`-shaped dicts and append to NDJSON.
@@ -293,6 +302,17 @@ The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib
 **Reconcile order matters.** `reconcile_projects(repo, files)` runs **before** `reconcile_works` in the FastAPI lifespan startup hook because `works.project_slug` is a slug FK to `projects.slug`; if a work's project hasn't been inserted yet, the work upsert violates the FK. The order is fixed in `main.py`'s lifespan (look for the comment "Projects reconcile FIRST"). Same rule will apply to any future cross-store reference.
 
 The reconcile invariant is the AC for STORY-005 — see `tests/integration/test_workstore_e2e.py` for the round-trip guarantees. Project-side reconcile is unit-tested with stubs in `domain/projectstore/reconcile.py`.
+
+### Persisted provider options
+
+The `agents.options` column (schema v9, JSON-encoded TEXT, NULLABLE) stores the dict that the provider Spec validated at create time — `{permission_mode, thinking_effort, custom_allowed_tools, …}` minus whatever the user didn't set. Two consumers read it:
+
+- `agents/resume.execute` (`backend/src/domain/commands/agents/resume.py`) calls `SPECS[provider].build(common, agent.model, dict(agent.options or {}))`. Before v9 the third arg was `{}` and re-attach silently reset every option to its provider default — that's the latent drift this column closes.
+- `agents/detach.execute` forwards `agent.options` into `build_resume_command` (see [Detach to CLI + catch-up](#detach-to-cli--catch-up)) so the CLI session inherits the same flags.
+
+Backward compatibility: existing rows have `options=NULL` and `Agent.options=None` after deserialisation. Both consumers normalise that to an empty dict, so the legacy path is byte-identical to pre-v9 behaviour. `serialize_agent` only emits the `options` key when set, so old `agent.json` files round-trip through reconcile unchanged.
+
+The wire format already had `NewAgentRequest.options: dict[str, Any]`; persistence is just plumbing it into the row instead of dropping it after Spec validation.
 
 ## ProjectStore
 

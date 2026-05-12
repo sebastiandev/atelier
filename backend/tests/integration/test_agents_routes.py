@@ -631,7 +631,11 @@ def test_detach_flips_status_writes_marker_and_returns_command(
     assert response.status_code == 200
     body = response.json()
     assert body["launched"] is True
-    assert "amp threads continue" in body["command"]
+    # Mode preservation: the detach command must carry the agent's mode so
+    # the CLI session resumes on the same model the user picked instead of
+    # silently dropping to the local CLI default. ``_create_agent`` defaults
+    # to ``smart``.
+    assert "amp --mode 'smart' threads continue" in body["command"]
     assert "sess-from-test" in body["command"]
     assert captured["command"] == body["command"]
 
@@ -661,6 +665,48 @@ def test_detach_flips_status_writes_marker_and_returns_command(
     cursor = detach_markers[0].get("sdk_cursor")
     assert isinstance(cursor, dict)
     assert cursor["provider"] == "amp"
+
+
+def test_detach_preserves_amp_allow_all_permission_mode(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Amp's ``allow_all`` permission mode maps to the CLI's
+    ``--dangerously-allow-all`` flag — that's the one Amp permission
+    knob detach can actually translate (the others rely on Atelier's
+    bridge)."""
+
+    def fake_launch(command: str):  # type: ignore[no-untyped-def]
+        from src.infrastructure.cli_launcher import LaunchResult
+
+        return LaunchResult(command=command, launched=True)
+
+    monkeypatch.setattr(
+        "src.domain.commands.agents.detach.launch_in_terminal", fake_launch
+    )
+
+    work = _create_work(app_client)
+    response = app_client.post(
+        f"/api/works/{work['slug']}/agents",
+        json={
+            "name": "Architect",
+            "persona": "architect",
+            "role": "architect",
+            "provider": "amp",
+            "model": "deep",
+            "folder": tmp_workdir,
+            "options": {"permission_mode": "allow_all"},
+        },
+    )
+    response.raise_for_status()
+    agent = response.json()
+    workstore = app_client.app.state.workstore
+    workstore.set_agent_session_id(agent["slug"], "sess-amp-deep")
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/detach")
+    assert response.status_code == 200
+    command = response.json()["command"]
+    assert "amp --dangerously-allow-all --mode 'deep' threads continue" in command
+    assert "'sess-amp-deep'" in command
 
 
 def test_detach_returns_clipboard_fallback_when_launch_fails(

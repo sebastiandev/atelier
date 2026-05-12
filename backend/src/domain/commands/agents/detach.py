@@ -114,7 +114,19 @@ async def execute(
         },
     )
 
-    command = build_resume_command(agent.provider, agent.session_id, workdir)
+    # Forward the agent's primary selector (Claude model id / Amp mode)
+    # and persisted options so the CLI session resumes with the same
+    # ``--model`` / ``--mode`` / ``--permission-mode`` / ``--effort``
+    # the user picked in Atelier — otherwise the CLI silently falls
+    # back to its local default. Both arguments are no-ops for legacy
+    # agents whose ``options`` column is NULL.
+    command = build_resume_command(
+        agent.provider,
+        agent.session_id,
+        workdir,
+        model=agent.model,
+        options=agent.options,
+    )
     result = launch_in_terminal(command)
     return DetachAgentResult(command=result.command, launched=result.launched)
 

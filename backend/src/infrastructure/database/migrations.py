@@ -24,7 +24,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 
 
 class SchemaMismatchError(RuntimeError):
@@ -140,6 +140,16 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
             # for tables that ``create_all`` already handles). Nothing to
             # ALTER; this step is a stamp-bump only.
             existing = 8
+        if existing == 8:
+            # v8 → v9: persist provider-specific options on the agent row
+            # (``permission_mode``, ``thinking_effort``, ``custom_allowed_tools``)
+            # so resume rebuilds the same ``AgentConfig`` and detach can
+            # pass matching CLI flags. Nullable column — existing rows
+            # keep NULL, and the resume/detach paths fall back to provider
+            # defaults for those, so no behaviour changes for agents
+            # created before this version.
+            conn.execute(text("ALTER TABLE agents ADD COLUMN options TEXT"))
+            existing = 9
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

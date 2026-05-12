@@ -8,6 +8,7 @@ one place a caller wants both halves together.
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from src.domain.models import (
     ArtifactType,
@@ -57,6 +58,11 @@ class AddAgentRequest:
     model: str
     folder: Path
     contexts: tuple[Context, ...] = ()
+    # Provider-specific options validated by the Spec (``permission_mode``,
+    # ``thinking_effort``, ``custom_allowed_tools``, …). Persisted on the
+    # agent row so resume + detach see the same selections later. Empty
+    # dict means "use provider defaults" — same as ``None`` post-load.
+    options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

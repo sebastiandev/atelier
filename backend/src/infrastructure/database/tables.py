@@ -229,6 +229,15 @@ agents_table = Table(
     # agents and on agents whose provider doesn't fork. Walked at re-attach
     # time to reconstruct the full visual transcript.
     Column("parent_session_id", String, nullable=True),
+    # Provider-specific options the user picked at create time
+    # (``permission_mode``, ``thinking_effort``, ``custom_allowed_tools``).
+    # Lets resume rebuild the same ``AgentConfig`` instead of silently
+    # falling back to defaults, and lets detach pass matching CLI flags
+    # (``--permission-mode``, ``--effort``, ``--dangerously-allow-all``).
+    # Nullable for backward compatibility with rows created before this
+    # column existed — those agents continue to resume/detach with the
+    # provider's default options.
+    Column("options", JsonDict, nullable=True),
 )
 
 

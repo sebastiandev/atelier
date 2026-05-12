@@ -165,6 +165,10 @@ async def execute(
                 model=req.model,
                 folder=req.folder,
                 contexts=req.contexts,
+                # ``req.options`` was already validated by the Spec at
+                # the top of this command; we persist exactly what the
+                # user picked so resume + detach pick it back up.
+                options=dict(req.options),
             )
         )
     except ValueError as exc:

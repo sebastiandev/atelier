@@ -113,7 +113,13 @@ async def execute(
             is_detached_worktree=worktree_manager.is_detached(workdir),
         ),
     )
-    config = SPECS[agent.provider].build(common, agent.model, {})
+    # ``agent.options`` is the dict the Spec.build validated at create
+    # time; passing it here rebuilds the same typed AgentConfig the
+    # supervisor used originally (permission_mode, thinking_effort,
+    # custom_allowed_tools, …). Empty dict on legacy rows that predate
+    # the ``options`` column — in that case the Spec applies defaults,
+    # matching pre-persistence behaviour.
+    config = SPECS[agent.provider].build(common, agent.model, dict(agent.options or {}))
     adapter = build_adapter(config, settings)
     context = AgentStartContext(
         workdir=common.workdir,

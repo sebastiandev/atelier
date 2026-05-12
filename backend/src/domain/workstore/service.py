@@ -164,6 +164,10 @@ class WorkStoreService:
                 folder=req.folder,
                 status=AgentStatus.IDLE,
                 started_at=self._clock(),
+                # Empty dict normalises to ``None`` so the column stores
+                # NULL for "no options" — keeps the on-disk shape uniform
+                # with rows created before this column existed.
+                options=dict(req.options) if req.options else None,
             )
             agent = self._repo.add_agent(agent)
             slug = _require_slug(agent)
