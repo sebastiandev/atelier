@@ -30,6 +30,7 @@ from src.domain.worktrees import WorktreeManager, WorktreeProvisionFailed
 from src.domain.sharedfolders.ports import ShareProvisioner, SharedFolderStore
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
+from src.infrastructure.filesystem.terminal import open_in_terminal
 from src.settings import Settings
 
 router = APIRouter()
@@ -226,6 +227,46 @@ def reveal_agent_endpoint(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"reveal failed: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/agents/{agent_slug}/open-in-console",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def open_agent_in_console_endpoint(
+    agent_slug: str,
+    workstore: WorkStoreDep,
+    settings: SettingsDep,
+    kind: str = "system",
+) -> None:
+    """Open the user's terminal with CWD set to the agent's worktree
+    (or source folder, if no worktree was provisioned). Mirrors the
+    reveal endpoint above but launches a terminal instead of the file
+    browser. The ``kind`` query param picks a specific terminal app
+    (``system`` / ``iterm2`` / ``terminator`` / ``gnome-terminal`` /
+    ``konsole`` / ``tmux``); unknown values fall back to ``system``."""
+    work_slug = workstore.get_work_slug_for_agent(agent_slug)
+    if work_slug is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+        )
+    agent = next(
+        (a for a in workstore.list_agents_for_work(work_slug) if a.slug == agent_slug),
+        None,
+    )
+    if agent is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+        )
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    target = _resolve_worktree_path(paths, work_slug, agent_slug, agent.folder)
+    try:
+        open_in_terminal(str(target), kind=kind)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"open in console failed: {exc}",
         ) from exc
 
 

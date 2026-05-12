@@ -30,6 +30,7 @@ import {
   listArtifacts,
   listProjectShares,
   listProjects,
+  openAgentInConsole,
   revealAgent,
   revealArtifact,
   revealWork,
@@ -98,6 +99,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   );
   const layout = useTweaksStore((s) => s.layout);
   const editor = useTweaksStore((s) => s.editor);
+  const terminal = useTweaksStore((s) => s.terminal);
 
   // 6px activation distance keeps clicks on the grip from firing a drag —
   // matches @dnd-kit's recommended threshold and feels right with the
@@ -579,6 +581,17 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         // unknown protocols to the OS handler without
                         // navigating, so the page stays put.
                         window.location.href = editorUrl(editor, a.worktree_path);
+                      }}
+                      onOpenInConsole={() => {
+                        // Backend shells out to the platform terminal
+                        // — same fallback shape as reveal: copy the
+                        // path so the user can paste it manually if
+                        // the launch fails.
+                        openAgentInConsole(a.slug, terminal).catch(() => {
+                          navigator.clipboard
+                            ?.writeText(a.worktree_path)
+                            .catch(() => {});
+                        });
                       }}
                       onRevealWorktree={() => {
                         // Best-effort reveal — same fallback shape as the

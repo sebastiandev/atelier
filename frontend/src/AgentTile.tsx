@@ -90,6 +90,10 @@ type AgentTileProps = {
    *  user can review diffs without leaving their normal IDE flow.
    *  When omitted, the IDE button is hidden. */
   onOpenInIde?: () => void;
+  /** Open the agent's worktree in a terminal session — same target as
+   *  ``onRevealWorktree`` but lands the user at a shell prompt rather
+   *  than a file browser. When omitted, the console button is hidden. */
+  onOpenInConsole?: () => void;
   /** The worktree path (or source-folder fallback) — used purely for
    *  the reveal button's tooltip. */
   worktreePath?: string;
@@ -120,6 +124,7 @@ export function AgentTile({
   onHandoff,
   onRevealWorktree,
   onOpenInIde,
+  onOpenInConsole,
   worktreePath,
 }: AgentTileProps) {
   const {
@@ -479,6 +484,17 @@ export function AgentTile({
               <OpenIdeIcon />
             </button>
           )}
+          {onOpenInConsole && (
+            <button
+              type="button"
+              className="tile-ctl"
+              aria-label="Open worktree in console"
+              onClick={onOpenInConsole}
+              {...hintHandlers("Open in console")}
+            >
+              <OpenConsoleIcon />
+            </button>
+          )}
           {onHandoff && (
             <button
               type="button"
@@ -665,6 +681,33 @@ function OpenIdeIcon() {
         d="M6 5L3 8l3 3M10 5l3 3-3 3"
         stroke="currentColor"
         strokeWidth="1.4"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+function OpenConsoleIcon() {
+  // Window frame with a chevron prompt — reads as "open a terminal at
+  // this folder". Distinct from DetachIcon (no frame, single chevron)
+  // and OpenIdeIcon (brackets, no frame).
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <rect
+        x="2"
+        y="3"
+        width="12"
+        height="10"
+        rx="1.4"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        fill="none"
+      />
+      <path
+        d="M5 7l2 1.5L5 10"
+        stroke="currentColor"
+        strokeWidth="1.2"
         fill="none"
         strokeLinecap="round"
         strokeLinejoin="round"

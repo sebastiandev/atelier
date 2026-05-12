@@ -34,20 +34,31 @@ export type EditorChoice =
   | "webstorm"
   | "vim";
 
+export type TerminalChoice =
+  | "system"
+  | "iterm2"
+  | "terminator"
+  | "gnome-terminal"
+  | "konsole"
+  | "tmux";
+
 const DEFAULTS = {
   accentHue: 250,
   layout: "tiles" as CanvasLayout,
   editor: "vscode" as EditorChoice,
+  terminal: "system" as TerminalChoice,
 };
 
 type TweaksState = {
   accentHue: number;
   layout: CanvasLayout;
   editor: EditorChoice;
+  terminal: TerminalChoice;
   panelOpen: boolean;
   setAccentHue: (h: number) => void;
   setLayout: (l: CanvasLayout) => void;
   setEditor: (e: EditorChoice) => void;
+  setTerminal: (t: TerminalChoice) => void;
   reset: () => void;
   togglePanel: () => void;
   closePanel: () => void;
@@ -62,6 +73,15 @@ export const EDITOR_OPTS: { value: EditorChoice; label: string }[] = [
   { value: "idea", label: "IntelliJ IDEA" },
   { value: "webstorm", label: "WebStorm" },
   { value: "vim", label: "Vim (MacVim)" },
+];
+
+export const TERMINAL_OPTS: { value: TerminalChoice; label: string }[] = [
+  { value: "system", label: "System default" },
+  { value: "iterm2", label: "iTerm2 (macOS)" },
+  { value: "terminator", label: "Terminator (Linux)" },
+  { value: "gnome-terminal", label: "GNOME Terminal" },
+  { value: "konsole", label: "Konsole (KDE)" },
+  { value: "tmux", label: "tmux" },
 ];
 
 /**
@@ -102,39 +122,52 @@ export const useTweaksStore = create<TweaksState>()(
       setAccentHue: (accentHue) => set({ accentHue }),
       setLayout: (layout) => set({ layout }),
       setEditor: (editor) => set({ editor }),
+      setTerminal: (terminal) => set({ terminal }),
       reset: () => set(DEFAULTS),
       togglePanel: () => set((s) => ({ panelOpen: !s.panelOpen })),
       closePanel: () => set({ panelOpen: false }),
     }),
     {
       name: "atelier:tweaks",
-      version: 3,
+      version: 4,
       // Only persist tweak values, not panel-open transient state.
       partialize: (s) => ({
         accentHue: s.accentHue,
         layout: s.layout,
         editor: s.editor,
+        terminal: s.terminal,
       }),
       // v1 → v2: drop the "windows" layout option (replaced by tile-
       // reorder drag in STORY-024). Map any persisted "windows" back
       // to the default so reload doesn't show a broken layout.
       // v2 → v3: introduce `editor`; default existing users to VSCode
       // so the previous behavior is preserved.
+      // v3 → v4: introduce `terminal`; default existing users to
+      // "system" (the original behavior of the Open-in-console btn).
       migrate: (persisted, version) => {
         const p = persisted as
-          | { accentHue?: number; layout?: string; editor?: EditorChoice }
+          | {
+              accentHue?: number;
+              layout?: string;
+              editor?: EditorChoice;
+              terminal?: TerminalChoice;
+            }
           | null;
         if (!p) return p;
         const next: {
           accentHue?: number;
           layout?: string;
           editor?: EditorChoice;
+          terminal?: TerminalChoice;
         } = { ...p };
         if (version < 2 && next.layout === "windows") {
           next.layout = "tiles";
         }
         if (version < 3 && !next.editor) {
           next.editor = DEFAULTS.editor;
+        }
+        if (version < 4 && !next.terminal) {
+          next.terminal = DEFAULTS.terminal;
         }
         return next;
       },

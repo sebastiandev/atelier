@@ -410,6 +410,31 @@ export function revealAgent(agentSlug: string): Promise<void> {
   );
 }
 
+/**
+ * Open the user's terminal at the agent's worktree (or source folder,
+ * if no worktree was provisioned). Backend shells out to the platform
+ * terminal — same pattern as ``revealAgent`` but launches a console
+ * instead of the file browser.
+ *
+ * ``kind`` selects a specific terminal app on the backend (``system``,
+ * ``iterm2``, ``terminator``, ``gnome-terminal``, ``konsole``,
+ * ``tmux``); unknown values fall back to ``system`` server-side.
+ */
+export function openAgentInConsole(
+  agentSlug: string,
+  kind?: string,
+): Promise<void> {
+  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+  return fetch(`/api/agents/${agentSlug}/open-in-console${qs}`, {
+    method: "POST",
+  }).then(async (r) => {
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`${r.status} ${r.statusText}: ${body}`);
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Connections
 // ---------------------------------------------------------------------------

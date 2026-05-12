@@ -4,6 +4,8 @@ import {
   type CanvasLayout,
   EDITOR_OPTS,
   type EditorChoice,
+  TERMINAL_OPTS,
+  type TerminalChoice,
   TWEAKS_DEFAULTS,
   useTweaksStore,
 } from "./state/tweaks";
@@ -26,15 +28,18 @@ export function TweaksPanel() {
   const accentHue = useTweaksStore((s) => s.accentHue);
   const layout = useTweaksStore((s) => s.layout);
   const editor = useTweaksStore((s) => s.editor);
+  const terminal = useTweaksStore((s) => s.terminal);
   const setAccentHue = useTweaksStore((s) => s.setAccentHue);
   const setLayout = useTweaksStore((s) => s.setLayout);
   const setEditor = useTweaksStore((s) => s.setEditor);
+  const setTerminal = useTweaksStore((s) => s.setTerminal);
   const resetTweaks = useTweaksStore((s) => s.reset);
   const closePanel = useTweaksStore((s) => s.closePanel);
   const atDefault =
     accentHue === TWEAKS_DEFAULTS.accentHue &&
     layout === TWEAKS_DEFAULTS.layout &&
-    editor === TWEAKS_DEFAULTS.editor;
+    editor === TWEAKS_DEFAULTS.editor &&
+    terminal === TWEAKS_DEFAULTS.terminal;
 
   // Position is held in the panel only — not persisted. The default
   // (bottom-right with 16px padding) matches the prototype.
@@ -155,6 +160,28 @@ export function TweaksPanel() {
           The IDE the agent tile's editor button hands the worktree off
           to. Requires the chosen IDE (or JetBrains Toolbox) to have
           registered its URL handler with the OS.
+        </div>
+
+        <div className="twk-sect">Open in console</div>
+        <div className="twk-row">
+          <select
+            className="twk-select"
+            value={terminal}
+            onChange={(e) => setTerminal(e.target.value as TerminalChoice)}
+            aria-label="Terminal for the Open-in-console button"
+          >
+            {TERMINAL_OPTS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="twk-hint">
+          Terminal app the console button launches. "tmux" opens a new
+          window in your current tmux session if Atelier was started
+          inside one; otherwise it creates / attaches an "atelier"
+          session in your system terminal.
         </div>
 
         <div className="twk-foot">

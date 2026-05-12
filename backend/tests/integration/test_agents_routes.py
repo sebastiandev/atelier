@@ -754,6 +754,110 @@ def test_reveal_agent_404_for_unknown_slug(app_client: TestClient) -> None:
     assert app_client.post("/api/agents/agt-404/reveal").status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# REST: open in console — launch a terminal at the agent's worktree
+# ---------------------------------------------------------------------------
+
+
+def test_open_in_console_uses_source_folder_when_no_worktree(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Symmetric with the reveal fallback: a non-git source folder gets
+    no worktree provisioned, so the console opens at the source dir."""
+    from src.application.http.routes import agents as agents_module
+
+    captured: dict[str, object] = {}
+
+    def fake_open(path: str, kind: str = "system") -> None:
+        captured["path"] = path
+        captured["kind"] = kind
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    monkeypatch.setattr(agents_module, "open_in_terminal", fake_open)
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/open-in-console")
+    assert response.status_code == 204
+    assert captured["path"] == tmp_workdir
+    # No ``kind`` query → defaults to "system" server-side.
+    assert captured["kind"] == "system"
+
+
+def test_open_in_console_targets_worktree_when_provisioned(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.application.http.routes import agents as agents_module
+
+    captured: dict[str, object] = {}
+
+    def fake_open(path: str, kind: str = "system") -> None:
+        captured["path"] = path
+        captured["kind"] = kind
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    monkeypatch.setattr(agents_module, "open_in_terminal", fake_open)
+
+    settings = app_client.app.state.settings
+    worktree = (
+        settings.workspace_root / "works" / work["slug"] / "worktrees" / agent["slug"]
+    )
+    worktree.mkdir(parents=True, exist_ok=True)
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/open-in-console")
+    assert response.status_code == 204
+    assert captured["path"] == str(worktree)
+
+
+def test_open_in_console_forwards_kind_query_param(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``?kind=...`` from the FE Tweaks selector reaches the helper."""
+    from src.application.http.routes import agents as agents_module
+
+    captured: dict[str, object] = {}
+
+    def fake_open(path: str, kind: str = "system") -> None:
+        captured["path"] = path
+        captured["kind"] = kind
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    monkeypatch.setattr(agents_module, "open_in_terminal", fake_open)
+
+    response = app_client.post(
+        f"/api/agents/{agent['slug']}/open-in-console?kind=iterm2"
+    )
+    assert response.status_code == 204
+    assert captured["kind"] == "iterm2"
+
+
+def test_open_in_console_404_for_unknown_slug(app_client: TestClient) -> None:
+    assert (
+        app_client.post("/api/agents/agt-404/open-in-console").status_code == 404
+    )
+
+
+def test_open_in_console_500_when_helper_raises(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The route converts ``OSError`` / ``SubprocessError`` from the
+    helper (e.g. ``FileNotFoundError`` when no terminal is on PATH)
+    into a 500 with a useful detail string."""
+    from src.application.http.routes import agents as agents_module
+
+    def raising(path: str, kind: str = "system") -> None:
+        raise FileNotFoundError("no terminal emulator found on PATH")
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    monkeypatch.setattr(agents_module, "open_in_terminal", raising)
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/open-in-console")
+    assert response.status_code == 500
+    assert "open in console failed" in response.json()["detail"]
+
+
 def test_agent_summary_carries_worktree_path(
     app_client: TestClient, tmp_workdir: str
 ) -> None:
