@@ -30,6 +30,29 @@ You probably already use Claude Code, Amp, or a similar CLI. They're great. But:
 
 Atelier is a workspace that wraps these tools instead of replacing them.
 
+## Contents
+
+- [Quick start](#quick-start) — clone, run, open in your browser
+- [What you get](#what-you-get) — feature gallery
+- [Working on Atelier](#working-on-atelier) — first-time setup, dev loop, updating, wipe
+- [Skills for contributors](#skills-for-contributors) — `/update`, `/migrate`, `/test`, `/dev`, `/wipe`, `/new-migration`
+- [Going deeper](#going-deeper) — developer docs index
+- [One-click desktop launcher](#one-click-desktop-launcher) — macOS / Linux / Windows
+- [Status](#status) — what's working, what's rough
+- [License](#license) — FSL-1.1-ALv2
+
+## Quick start
+
+You'll need **Python 3.11+**, **Node 18+**, and [`uv`](https://docs.astral.sh/uv/) for the backend env.
+
+```sh
+git clone https://github.com/sebastiandev/atelier.git
+cd atelier
+./scripts/dev.sh
+```
+
+Frontend serves at `http://127.0.0.1:4173`, backend API at `http://127.0.0.1:8001`.
+
 ## What you get
 
 A quick tour of the surface area:
@@ -218,21 +241,91 @@ feeds, and a project home page that scopes everything to that effort.
   <img src="docs/screenshots/new_project.png" alt="New project dialog — name, glyph, color picker, optional default Jira / Sentry connections" width="540">
 </p>
 
-## Quick start
+## Working on Atelier
 
-You'll need **Python 3.11+**, **Node 18+**, and [`uv`](https://docs.astral.sh/uv/)
-for the backend env.
+For contributors making changes — not just running the app.
 
-```sh
-git clone https://github.com/sebastiandev/atelier.git
-cd atelier
-./scripts/dev.sh
+### First-time setup
+
+After the [Quick start](#quick-start) clone, the first `./scripts/dev.sh` run will:
+
+- Install backend Python deps via `uv` into `backend/.venv` (no `pip install -e` needed; `uv` handles it).
+- Install frontend Node deps via `npm install` into `frontend/node_modules/`.
+- Initialise the SQLite database at `~/Atelier/atelier.db` and run any pending schema migrations.
+- Start backend on `127.0.0.1:8001` and frontend on `127.0.0.1:4173`.
+
+If you want backend or frontend in isolation: `./scripts/dev-backend.sh` or `./scripts/dev-frontend.sh`.
+
+### Daily flow
+
+- **Run dev servers** — `./scripts/dev.sh` (or invoke the `/dev` skill in Claude Code).
+- **Run tests** — `cd backend && uv run pytest -q` (or `/test`). The venv lives at `backend/.venv`; always `uv run` or `source backend/.venv/bin/activate` from `backend/` — never use the system Python.
+- **Read the docs** — design decisions and conventions live in [`docs/`](docs/) (see [Going deeper](#going-deeper)).
+
+### Updating your checkout
+
+Pulling new commits may bring schema changes (DB migrations auto-run on backend boot) **and** on-disk shape changes (transcript, JSON files — these need explicit migration). The `/update` skill handles both end-to-end:
+
+```
+/update
 ```
 
-The frontend serves at `http://127.0.0.1:4173`, the backend API at
-`http://127.0.0.1:8001`.
+That pulls main, runs `uv sync` / `npm install` if lockfiles changed, runs every `scripts/migrate-*.py`, and tells you whether to restart the dev server.
 
-### One-click desktop launcher
+Equivalent manual flow if you don't use Claude Code:
+
+```sh
+git pull --ff-only origin main
+cd backend && uv sync             # if backend/uv.lock changed
+cd ../frontend && npm install     # if frontend/package-lock.json changed
+cd .. && for f in scripts/migrate-*.py; do (cd backend && uv run python ../"$f"); done
+# then restart ./scripts/dev.sh if backend deps or migrations changed
+```
+
+### Wiping local state
+
+Need a clean slate (testing migration paths, debugging stale data, etc.)?
+
+```sh
+./scripts/wipe.sh all                  # all works + projects + cleanup
+./scripts/wipe.sh work WRK-001         # one work
+./scripts/wipe.sh project PRJ-001      # a project + its works
+```
+
+The script preserves connections (DB rows + keychain) and `schema_version`. It also handles state outside the workspace dir — pruning stale `git worktree` registry entries in source repos and clearing the Claude SDK's per-session cache at `~/.claude/projects/`. **Stop the backend first** so its in-flight writes don't race the deletes.
+
+The `/wipe` skill wraps this with a backend-stopped check.
+
+## Skills for contributors
+
+When working on Atelier with Claude Code, six project-local skills live under [`.claude/skills/`](.claude/skills/) (committed to the repo, shared across contributors):
+
+| Skill | What it does |
+| --- | --- |
+| [`/update`](.claude/skills/update/SKILL.md) | Pull main, install deps, run pending migrations, surface what needs a restart. |
+| [`/migrate`](.claude/skills/migrate/SKILL.md) | Run all `scripts/migrate-*.py` — FS-side state migrations. (DB schema migrations auto-apply on backend boot.) |
+| [`/new-migration`](.claude/skills/new-migration/SKILL.md) | Scaffold a new migration: `db <slug>` for SQL schema; `fs <slug>` for an on-disk shape change. Encodes the "ALTER only, never `.create()`" pitfall. |
+| [`/test`](.claude/skills/test/SKILL.md) | Run pytest under the backend venv with optional path/test filter. |
+| [`/dev`](.claude/skills/dev/SKILL.md) | Start `./scripts/dev*.sh` with the project's port conventions baked in. |
+| [`/wipe`](.claude/skills/wipe/SKILL.md) | Wraps `wipe.sh` with a backend-stopped pre-check. |
+
+Each `SKILL.md` has the full step-by-step the model follows — read them if you want to know exactly what a skill does, or if you want to extend / customise one.
+
+## Going deeper
+
+The codebase has its own developer docs in [`docs/`](docs/):
+
+| Doc | Scope |
+| --- | --- |
+| [`architecture.md`](docs/architecture.md) | Clean architecture layers, the command pattern |
+| [`backend.md`](docs/backend.md) | Supervisor model, persistence, WS protocol, `TurnMetrics` semantics |
+| [`frontend.md`](docs/frontend.md) | Routing, state, the agent stream hook |
+| [`design-system.md`](docs/design-system.md) | Tokens, brand mark, visual conventions |
+| [`api-flows.md`](docs/api-flows.md) | Sequence diagrams per endpoint |
+
+For AI assistants working on the codebase, see [`CLAUDE.md`](CLAUDE.md) — it covers the architecture rules, the backward-compatibility contract, and the project conventions every change should respect.
+
+## One-click desktop launcher
 
 Prefer double-clicking an app icon over typing a script?
 
@@ -253,20 +346,6 @@ terminal window.
 Atelier is early. The core loops — multi-agent Work units, multi-provider,
 detach/resume, connection-backed context — are working. Lots of polish and
 feature surface still ahead; expect rough edges, but the workflow is real.
-
-## Going deeper
-
-The codebase has its own developer docs in [`docs/`](docs/):
-
-| Doc | Scope |
-| --- | --- |
-| [`architecture.md`](docs/architecture.md) | Clean architecture layers, the command pattern |
-| [`backend.md`](docs/backend.md) | Supervisor model, persistence, WS protocol |
-| [`frontend.md`](docs/frontend.md) | Routing, state, the agent stream hook |
-| [`design-system.md`](docs/design-system.md) | Tokens, brand mark, visual conventions |
-| [`api-flows.md`](docs/api-flows.md) | Sequence diagrams per endpoint |
-
-For AI assistants working on the codebase, see [`CLAUDE.md`](CLAUDE.md).
 
 ## License
 

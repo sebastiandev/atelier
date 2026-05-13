@@ -33,4 +33,12 @@ frontend/.vite/
 # Work-local artifacts (not version-controlled)
 _bmad-output/
 design/
-.claude/
+# Most of .claude/ is local-only state (settings.local.json, per-machine
+# checkpoint scratchpads under docs/). Skills are project-shared tooling
+# — re-include just that subtree so contributors pick up /update,
+# /migrate, etc. on clone. Note: ignore the children with `.claude/*`,
+# not the directory itself — git refuses to re-include a path whose
+# parent dir was excluded as a unit.
+.claude/*
+!.claude/skills/
+!.claude/skills/**

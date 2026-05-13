@@ -9,6 +9,27 @@
 - When saving or updating checkpoint context for this repo, write it to `.claude/docs/checkpoint-xxxxx.md`.
 - For quick project state, check `_bmad-output/project-status.yaml` right after the continuation prompt.
 
+## Backward compatibility
+
+Atelier already has users running cloned forks against live data — works, agents, transcripts, connections, on-disk files. **Every change must consider those existing installs.** The default is backward compatibility; breaking it is a deliberate decision the user signs off on.
+
+Specifically, before making changes that touch any of these surfaces, plan for compat first:
+
+- **SQLite schema** — new columns must be nullable (or have a default); migrations live in `backend/src/infrastructure/database/migrations.py` and are forward-only ALTERs (never drop/recreate). Read paths must treat NULL as "use defaults" so legacy rows continue to work.
+- **On-disk files** — `work.json`, `agent.json`, `transcript.ndjson`, `project.json`, `~/.claude/projects/...` shapes are canonical. New keys must be optional on read; serializers should only emit them when set so unchanged rows round-trip byte-for-byte through reconcile.
+- **Wire formats** — REST request/response models and the WS protocol are consumed by older frontend builds and (for REST) potentially external scripts. Add fields as optional; never rename or repurpose existing ones in place.
+- **CLI flags + env vars + script behaviour** — desktop launchers, `scripts/dev*.sh`, and the resume-command shapes (`build_resume_command`) are exercised from outside the repo. Don't remove or rename without an alias / fallback.
+- **localStorage / Zustand persistence keys** — frontend state survives reload; renaming a key wipes preferences. If you must rename, ship a one-shot migration that reads the old key and writes the new.
+
+When you can keep compat with a small, readable change (nullable column, optional key, default arg), do it without asking. **Stop and ask the user when**:
+
+- The clean implementation requires breaking an existing on-disk / wire / schema shape, AND
+- The backward-compatible alternative would be obscure (e.g. version-sniffing branches scattered through callers), impractical (e.g. multi-step data migration with edge cases), or would force the new code to inherit limitations from the old shape that defeat the point of the change.
+
+Frame the trade-off explicitly: what breaks, who's affected (users with existing works/agents? users with stored connections? users on a particular OS?), what the recovery path looks like (manual edit, migration script, wipe). Let the user decide rather than silently shipping a break.
+
+When breaking compat is the chosen path, ship a forward migration where feasible (`scripts/migrate-*.py` is the established pattern — `scripts/migrate-transcripts.py` is a good template: idempotent, atomic, runnable from anywhere) and document the break in the commit message + the affected `docs/*.md` page.
+
 ## Developer docs (`docs/`)
 
 - `docs/README.md` is the index. It points to `architecture.md` (cross-cutting), `backend.md`, `frontend.md`, `api-flows.md`, and `design-system.md`.
