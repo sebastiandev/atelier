@@ -45,10 +45,12 @@ from src.domain.agents import (
     ToolResult,
     TurnMetrics,
 )
+from src.infrastructure.agents import amp_adapter as _amp_adapter_module
 from src.infrastructure.agents.amp_adapter import (
     AmpAdapter,
     _assistant_prompt_tokens,
     _convert,
+    _TurnAccumulator,
 )
 
 
@@ -356,6 +358,141 @@ def test_events_before_start_raises() -> None:
                 pass
 
     asyncio.run(session())
+
+
+# --- End-of-turn synthesis (deep / GPT-backed mode) -----------------------
+
+
+def _assistant_with_usage(
+    *blocks: object,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    stop_reason: str | None = None,
+) -> AssistantMessage:
+    return AssistantMessage(
+        session_id="s-1",
+        message=_AssistantMessageDetails(
+            content=list(blocks),
+            usage=Usage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            ),
+            stop_reason=stop_reason,
+        ),
+    )
+
+
+def test_turn_accumulator_signals_end_when_no_tool_use() -> None:
+    """Text-only AssistantMessage → end_signaled (short quiescence)."""
+    acc = _TurnAccumulator()
+    acc.observe(_assistant_with_usage(TextContent(text="done"), input_tokens=100))
+    assert acc.has_activity
+    assert acc.next_quiescence_timeout() == _amp_adapter_module._QUIESCENCE_END_SIGNALED
+
+
+def test_turn_accumulator_waits_long_when_tool_use_pending() -> None:
+    """Tool-use AssistantMessage → expecting_tool_result (long quiescence)."""
+    acc = _TurnAccumulator()
+    acc.observe(
+        _assistant_with_usage(
+            ToolUseContent(id="t-1", name="bash", input={}),
+            input_tokens=100,
+        )
+    )
+    assert acc.next_quiescence_timeout() == _amp_adapter_module._QUIESCENCE_TOOL_PENDING
+
+
+def test_turn_accumulator_tool_result_clears_pending() -> None:
+    acc = _TurnAccumulator()
+    acc.observe(
+        _assistant_with_usage(
+            ToolUseContent(id="t-1", name="bash", input={}),
+            input_tokens=100,
+        )
+    )
+    acc.observe(
+        UserMessage(
+            session_id="s-1",
+            message=_UserMessageDetails(
+                content=[
+                    ToolResultContent(tool_use_id="t-1", content="ok", is_error=False)
+                ]
+            ),
+        )
+    )
+    # Tool came back; we're no longer expecting one — fall back to default.
+    assert acc.next_quiescence_timeout() == _amp_adapter_module._QUIESCENCE_DEFAULT
+
+
+def test_turn_accumulator_no_activity_blocks_indefinitely() -> None:
+    """No usage observed → next_quiescence_timeout returns None so the
+    pump blocks on the iterator instead of synth-emitting a phantom
+    turn close."""
+    acc = _TurnAccumulator()
+    assert acc.next_quiescence_timeout() is None
+
+
+def test_synth_close_fires_when_amp_omits_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The motivating Amp-deep-mode bug: CLI never emits ResultMessage,
+    so the pump must synthesise TurnMetrics + idle on its own once the
+    stream goes quiet."""
+    # Squeeze the timeouts so the test runs in milliseconds.
+    monkeypatch.setattr(
+        _amp_adapter_module, "_QUIESCENCE_END_SIGNALED", 0.05
+    )
+    monkeypatch.setattr(_amp_adapter_module, "_QUIESCENCE_DEFAULT", 0.05)
+
+    async def gpt_mode_executor(
+        prompt: AsyncIterator[UserInputMessage], options: AmpOptions
+    ) -> AsyncIterator[StreamMessage]:
+        async def _drain() -> None:
+            async for _ in prompt:
+                pass
+
+        drain = asyncio.create_task(_drain())
+        try:
+            yield _system()
+            yield _user(TextContent(text="hi"))
+            yield _assistant_with_usage(
+                TextContent(text="hello back"),
+                input_tokens=200,
+                output_tokens=50,
+            )
+            # NO ResultMessage — mimics openai-responses path in Amp.
+            # Block until close() shuts us down.
+            await asyncio.sleep(10)
+        finally:
+            drain.cancel()
+            try:
+                await drain
+            except BaseException:
+                pass
+
+    adapter = AmpAdapter(_config(), executor=gpt_mode_executor)
+
+    async def session() -> list[AgentEvent]:
+        await adapter.start(_start_context())
+        await adapter.send_input("hi")
+        events: list[AgentEvent] = []
+        async for ev in adapter.events():
+            events.append(ev)
+            # Stop once we've seen the synthetic idle so close() can run.
+            if isinstance(ev, StatusChange) and ev.status == "idle":
+                break
+        await adapter.close()
+        return events
+
+    events = asyncio.run(session())
+    assert isinstance(events[0], SessionEstablished)
+    assert isinstance(events[1], StatusChange) and events[1].status == "thinking"
+    assert isinstance(events[2], MessageComplete)
+    metrics, idle = events[3], events[4]
+    assert isinstance(metrics, TurnMetrics)
+    assert metrics.input_tokens == 200
+    assert metrics.output_tokens == 50
+    assert isinstance(idle, StatusChange) and idle.status == "idle"
 
 
 def test_executor_exception_yields_error_then_idle() -> None:

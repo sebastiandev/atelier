@@ -13,6 +13,8 @@ MCP). Status enums match ``domain/agents/artifacts.py``.
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 # Server name (mcp_servers key for Claude / mcpConfig key for Amp).
@@ -149,6 +151,52 @@ def _strip_known_prefix(name: str) -> str:
     return name
 
 
+# Match any line whose stripped content starts with ``{"atelier_artifact"``.
+# Captures the JSON object (greedy to end of line) so we can json.loads it.
+# Multi-line / pretty-printed JSON isn't supported on purpose: the contract
+# in the system prompt is "a single JSON line", and trying to match arbitrary
+# brace-balanced JSON would interact badly with normal prose. If we ever
+# need pretty-printed support, restrict the search to fenced ``json`` blocks.
+_MARKER_LINE_RE = re.compile(
+    r'^\s*(\{\s*"atelier_artifact"\s*:.*\})\s*$', re.MULTILINE
+)
+
+
+def scan_text_for_artifact_markers(text: str) -> list[dict[str, Any]]:
+    """Extract ``atelier_artifact`` payloads from raw assistant text.
+
+    Acts as a belt-and-suspenders fallback when the MCP tool path
+    doesn't deliver — e.g. Amp's GPT-backed modes drop some tool calls
+    during normalization, so the model's only escape hatch is to emit
+    the marker as a JSON line in chat (per the system prompt
+    instructions). Returns a list of normalised payloads compatible
+    with ``record_artifact``'s ``payload`` argument.
+
+    Defensive: malformed JSON is ignored silently, missing ``type`` is
+    ignored, and unknown types fall through to the tracker which will
+    raise ``InvalidMarker`` with a clear message.
+    """
+    found: list[dict[str, Any]] = []
+    for match in _MARKER_LINE_RE.finditer(text):
+        try:
+            parsed = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        body = parsed.get("atelier_artifact")
+        if not isinstance(body, dict):
+            continue
+        # The system prompt teaches the agent to emit ``type`` inside
+        # the body; require it before forwarding. ``record_artifact``
+        # does its own per-type validation, so we don't second-guess
+        # the shape here.
+        if not isinstance(body.get("type"), str):
+            continue
+        found.append(dict(body))
+    return found
+
+
 __all__ = [
     "MCP_SERVER_NAME",
     "TOOL_DESCRIPTIONS",
@@ -157,4 +205,5 @@ __all__ = [
     "TOOL_RECORD_PR",
     "TOOL_SCHEMAS",
     "marker_payload_for_tool",
+    "scan_text_for_artifact_markers",
 ]

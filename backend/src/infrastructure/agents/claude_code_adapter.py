@@ -78,6 +78,7 @@ from src.infrastructure.agents.atelier_mcp_tools import (
     TOOL_RECORD_PR,
     TOOL_SCHEMAS,
     marker_payload_for_tool,
+    scan_text_for_artifact_markers,
 )
 from src.infrastructure.agents.factory import build_adapter
 from src.infrastructure.agents.tool_canonical import canonicalize_tool
@@ -412,6 +413,13 @@ def _convert(
         for block in msg.content:
             if isinstance(block, TextBlock):
                 yield MessageComplete(ts=now, text=block.text)
+                # Belt-and-suspenders fallback — see the matching block
+                # in amp_adapter._convert for the full rationale. The
+                # Claude path almost never needs this (in-process MCP
+                # is reliable) but the cost is one regex pass and the
+                # symmetry keeps the two adapters readable side-by-side.
+                for payload in scan_text_for_artifact_markers(block.text):
+                    yield ArtifactMarker(ts=now, payload=payload)
             elif isinstance(block, ThinkingBlock):
                 yield ThinkingComplete(ts=now, text=block.thinking)
             elif isinstance(block, ToolUseBlock):

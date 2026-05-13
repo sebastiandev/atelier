@@ -36,19 +36,23 @@ Prefer the dedicated tool when it's available:
       path: relative to your working directory; the file must already exist
       status ∈ draft | published (default: draft)
       Only call this for documents you AUTHORED in this turn (a new file
-      you just wrote with Write/Edit). Don't record edits to existing
-      files, and don't record code files — only standalone documents
-      like design notes, ADRs, READMEs, proposals.
+      you just wrote — via Write, Edit, create_file, apply_patch, or
+      whatever file-authoring tool your client surfaces). Don't record
+      edits to existing files, and don't record code files — only
+      standalone documents like design notes, ADRs, READMEs, plans,
+      stories, proposals.
 
-If those tools aren't registered, emit a single JSON line on its own:
+If those tools aren't registered OR a tool call doesn't get through,
+emit a single JSON line on its own (one line per artifact, flush-left
+or lightly indented, not inside a code fence):
   {"atelier_artifact": {"type": "pr", "url": "...", "title": "...", "status": "open"}}
   {"atelier_artifact": {"type": "jira", "url": "...", "title": "...", "status": "in_progress"}}
   {"atelier_artifact": {"type": "doc", "path": "docs/design.md", "title": "...", "status": "draft"}}
 
 Only emit a marker once you've actually created the artifact (e.g. after
-``gh pr create`` returned a URL, or right after Write created a new doc).
-Atelier ignores any agent identifier in the payload — attribution is
-stamped by the supervisor."""
+``gh pr create`` returned a URL, or right after the file landed on
+disk). Atelier ignores any agent identifier in the payload — attribution
+is stamped by the supervisor."""
 
 
 def render_system_prompt(

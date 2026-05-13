@@ -118,6 +118,7 @@ from src.domain.agents import (
 from src.infrastructure.agents.atelier_mcp_tools import (
     MCP_SERVER_NAME,
     marker_payload_for_tool,
+    scan_text_for_artifact_markers,
 )
 from src.infrastructure.agents.factory import build_adapter
 from src.infrastructure.agents.tool_canonical import canonicalize_tool
@@ -280,6 +281,23 @@ class AmpAdapter:
         Terminates ``events()`` by pushing ``_SHUTDOWN`` once the executor
         finishes (success or error). Without that, ``events()`` would
         hang on the queue after the SDK has nothing more to say.
+
+        End-of-turn synthesis: Amp's CLI in GPT-backed modes (deep/large
+        → openai-responses) does NOT emit a trailing ``result`` JSON
+        line at end of turn. Without it, ``TurnMetrics`` + the
+        ``status_change("idle")`` pill never fire and the FE shows
+        "thinking" forever. We carry a small per-turn accumulator that:
+
+        - sums per-AssistantMessage usage as the turn streams,
+        - tracks whether a tool result is still expected (so we don't
+          declare end-of-turn while the CLI is between sub-streams),
+        - on quiescence (the SDK iterator goes silent past a state-
+          dependent timeout), synthesises a TurnMetrics + idle on the
+          way back to the prompt iterator.
+
+        Anthropic-backed modes keep their existing fast path: when a
+        real ``ResultMessage`` arrives, ``_convert`` yields TurnMetrics
+        + idle and we reset the accumulator with nothing to synth.
         """
         opts = self._build_amp_options()
         options = AmpOptions.model_validate(opts)
@@ -287,14 +305,48 @@ class AmpAdapter:
         # Track the prompt size of the latest sub-call for ctx% — see
         # ``TurnMetrics`` doc + the same comment in claude_code_adapter.
         last_prompt_tokens = 0
+        turn = _TurnAccumulator()
+        iterator = self._executor(self._prompt_iter(), options).__aiter__()
+        next_task: asyncio.Task[StreamMessage] | None = None
         try:
-            async for msg in self._executor(self._prompt_iter(), options):
+            while True:
+                if next_task is None:
+                    next_task = asyncio.create_task(_anext(iterator))
+                timeout = turn.next_quiescence_timeout()
+                try:
+                    if timeout is None:
+                        await next_task
+                    else:
+                        done, _pending = await asyncio.wait(
+                            {next_task}, timeout=timeout
+                        )
+                        if not done:
+                            # Iterator went quiet past the state-dependent
+                            # timeout → turn is over. Synth-emit and reset;
+                            # do NOT cancel ``next_task`` so the SDK stream
+                            # keeps draining when the user sends the next
+                            # input.
+                            for ev in turn.synth_close(
+                                now=datetime.now(UTC),
+                                model=model,
+                                last_prompt_tokens=last_prompt_tokens,
+                            ):
+                                await self._outgoing.put(ev)
+                            turn.reset()
+                            last_prompt_tokens = 0
+                            continue
+                    msg = next_task.result()
+                except StopAsyncIteration:
+                    break
+                next_task = None
+
                 sid = getattr(msg, "session_id", None)
                 if sid is not None and sid != self._reported_session_id:
                     self._reported_session_id = sid
                     await self._outgoing.put(
                         SessionEstablished(ts=datetime.now(UTC), session_id=sid)
                     )
+                turn.observe(msg)
                 per_call = _assistant_prompt_tokens(msg)
                 if per_call is not None:
                     last_prompt_tokens = per_call
@@ -303,13 +355,19 @@ class AmpAdapter:
                 ):
                     await self._outgoing.put(ev)
                 if isinstance(msg, ResultMessage | ErrorResultMessage):
+                    # Anthropic-mode happy path: ``_convert`` already
+                    # emitted real TurnMetrics + idle. Drop accumulator
+                    # state so a stale synth close can't pile on.
                     last_prompt_tokens = 0
+                    turn.reset()
         except Exception as e:
             await self._outgoing.put(Error(ts=datetime.now(UTC), message=str(e)))
             await self._outgoing.put(
                 StatusChange(ts=datetime.now(UTC), status="idle")
             )
         finally:
+            if next_task is not None and not next_task.done():
+                next_task.cancel()
             await self._outgoing.put(_SHUTDOWN)
 
     def _build_amp_options(self) -> dict[str, object]:
@@ -608,6 +666,16 @@ def _convert(
         for asst_block in msg.message.content:
             if isinstance(asst_block, TextContent):
                 yield MessageComplete(ts=now, text=asst_block.text)
+                # Belt-and-suspenders fallback: GPT-backed modes drop
+                # some MCP tool calls during normalization, so the
+                # model may resort to emitting an ``atelier_artifact``
+                # JSON line in chat (per the system prompt). Scan
+                # every text block for one — duplicate emissions are
+                # rare in practice (the model picks one path or the
+                # other), and the tracker layer de-dupes per work via
+                # its own validation.
+                for payload in scan_text_for_artifact_markers(asst_block.text):
+                    yield ArtifactMarker(ts=now, payload=payload)
             elif isinstance(asst_block, ToolUseContent):
                 # Atelier artifact tools produce a marker on the side; the
                 # ToolCall still flows so the chat shows the agent's call.
@@ -672,6 +740,145 @@ def _assistant_prompt_tokens(msg: StreamMessage) -> int | None:
         + int(getattr(usage, "cache_read_input_tokens", 0) or 0)
         + int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     )
+
+
+# Quiescence timeouts for the synthetic end-of-turn detector. Picked to
+# cover the typical Amp deep-mode rhythm: most auto-allowed tools return
+# within ~3s, permission prompts emit their own PermissionRequest /
+# PermissionDecision events (which reset the timer), and the inter-
+# sub-stream gap when the CLI is composing the next Responses.create
+# call is sub-second. _QUIESCENCE_TOOL_PENDING gives ourselves a wide
+# berth for slow shell commands; tune down if it starts feeling laggy.
+_QUIESCENCE_END_SIGNALED = 1.5
+_QUIESCENCE_DEFAULT = 4.0
+_QUIESCENCE_TOOL_PENDING = 60.0
+
+
+class _TurnAccumulator:
+    """Per-turn token tally + tool-pending state for the synth-close path.
+
+    Lives only for the GPT-backed-mode case where Amp's CLI omits the
+    trailing ``result`` line. Anthropic-mode turns end via ResultMessage
+    and ``reset()`` here without ever emitting a synth close.
+    """
+
+    def __init__(self) -> None:
+        self.input_tokens: int = 0
+        self.output_tokens: int = 0
+        self.cache_read_input_tokens: int = 0
+        self.cache_creation_input_tokens: int = 0
+        self._start: datetime | None = None
+        self._expecting_tool_result: bool = False
+        self._end_signaled: bool = False
+
+    def reset(self) -> None:
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cache_read_input_tokens = 0
+        self.cache_creation_input_tokens = 0
+        self._start = None
+        self._expecting_tool_result = False
+        self._end_signaled = False
+
+    @property
+    def has_activity(self) -> bool:
+        return (
+            self.input_tokens > 0
+            or self.output_tokens > 0
+            or self.cache_read_input_tokens > 0
+            or self.cache_creation_input_tokens > 0
+        )
+
+    def next_quiescence_timeout(self) -> float | None:
+        """Seconds to wait for the next SDK message before declaring
+        end-of-turn. ``None`` → block indefinitely (no in-flight turn)."""
+        if not self.has_activity:
+            return None
+        if self._expecting_tool_result:
+            return _QUIESCENCE_TOOL_PENDING
+        if self._end_signaled:
+            return _QUIESCENCE_END_SIGNALED
+        return _QUIESCENCE_DEFAULT
+
+    def observe(self, msg: StreamMessage) -> None:
+        """Fold a SDK message into the turn state.
+
+        AssistantMessage accumulates usage and flips ``_expecting_tool_
+        result`` based on whether the message contains a ToolUseContent.
+        UserMessage with ToolResultContent clears the wait flag; with
+        TextContent we mark the previous turn done so the synth close
+        fires promptly when the user sends a follow-up.
+        """
+        if isinstance(msg, AssistantMessage):
+            details = getattr(msg, "message", None)
+            usage = getattr(details, "usage", None) if details is not None else None
+            if usage is not None:
+                self.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
+                self.output_tokens += int(getattr(usage, "output_tokens", 0) or 0)
+                self.cache_read_input_tokens += int(
+                    getattr(usage, "cache_read_input_tokens", 0) or 0
+                )
+                self.cache_creation_input_tokens += int(
+                    getattr(usage, "cache_creation_input_tokens", 0) or 0
+                )
+            content = list(getattr(details, "content", []) or []) if details else []
+            has_tool_use = any(isinstance(b, ToolUseContent) for b in content)
+            stop_reason = getattr(details, "stop_reason", None) if details else None
+            self._expecting_tool_result = has_tool_use
+            # ``stop_reason="end_turn"`` is the model's explicit "I'm
+            # done" signal. ``None`` is common in GPT-mode where Amp
+            # doesn't synthesise the stop_reason — treat absence as a
+            # weaker but still useful "no more tools planned" if the
+            # message has no ToolUseContent.
+            self._end_signaled = (not has_tool_use) and stop_reason in (
+                None,
+                "end_turn",
+            )
+            if self._start is None and self.has_activity:
+                self._start = datetime.now(UTC)
+            return
+        if isinstance(msg, UserMessage):
+            content = msg.message.content
+            if any(isinstance(b, ToolResultContent) for b in content):
+                self._expecting_tool_result = False
+
+    def synth_close(
+        self,
+        *,
+        now: datetime,
+        model: str | None,
+        last_prompt_tokens: int,
+    ) -> Iterable[AgentEvent]:
+        """Yield the synthesised end-of-turn pair: TurnMetrics + idle.
+
+        Caller invokes this when ``next_quiescence_timeout`` elapses
+        without a new SDK message; we assume the turn is over and the
+        CLI is now blocked on the prompt iterator for the next user
+        input.
+        """
+        duration_ms = (
+            int((now - self._start).total_seconds() * 1000)
+            if self._start is not None
+            else 0
+        )
+        yield TurnMetrics(
+            ts=now,
+            duration_ms=duration_ms,
+            input_tokens=self.input_tokens,
+            output_tokens=self.output_tokens,
+            cache_read_input_tokens=self.cache_read_input_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens,
+            last_prompt_tokens=last_prompt_tokens,
+            model=model,
+        )
+        yield StatusChange(ts=now, status="idle")
+
+
+async def _anext(iterator: AsyncIterator[StreamMessage]) -> StreamMessage:
+    """Wrap ``__anext__`` as a regular coroutine so ``create_task`` can
+    schedule it. Required because ``asyncio.wait`` needs Tasks, not
+    bare awaitable iterator protocols."""
+    return await iterator.__anext__()
 
 
 @build_adapter.register
