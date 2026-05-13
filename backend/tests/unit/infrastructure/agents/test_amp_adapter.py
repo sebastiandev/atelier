@@ -37,6 +37,8 @@ from src.domain.agents import (
     CommonAgentConfig,
     Error,
     MessageComplete,
+    PermissionDecision,
+    PermissionRequest,
     SessionEstablished,
     StatusChange,
     ToolCall,
@@ -481,3 +483,145 @@ def test_session_established_emitted_only_once_for_repeat_id() -> None:
     sess_events = [e for e in events if isinstance(e, SessionEstablished)]
     assert len(sess_events) == 1
     assert sess_events[0].session_id == "s-1"
+
+
+# --- Permission lifecycle / orphan prevention ------------------------------
+#
+# These tests pin the contract that every ``PermissionRequest`` published to
+# the transcript is eventually paired with a matching ``PermissionDecision``,
+# even when the user closes the adapter (or the agent dies) while a prompt
+# is still open. Without this guarantee the frontend rebuilds
+# ``pendingPermissions`` from the transcript on reconnect and shows a
+# perpetually-stuck "Allow ...?" prompt that no button can dismiss.
+
+
+def _make_idle_executor():
+    """Executor that stays open until the prompt iterator is closed
+    (i.e. ``close()`` pushes ``_SHUTDOWN`` into ``_user_inputs``). Used
+    by the permission-lifecycle tests so the SDK pump doesn't push its
+    own ``_SHUTDOWN`` into ``_outgoing`` and prematurely terminate the
+    consumer before the prompt + decision events arrive."""
+
+    async def fake(
+        prompt: AsyncIterator[UserInputMessage], options: AmpOptions
+    ) -> AsyncIterator[StreamMessage]:
+        async for _ in prompt:  # blocks until the adapter closes the iterator
+            pass
+        return
+        yield  # type: ignore[unreachable]  # makes this a generator
+
+    return fake
+
+
+def test_resolve_permission_emits_exactly_one_decision() -> None:
+    """Happy path: user clicks Allow → adapter publishes one matching
+    ``PermissionDecision`` and the request is removed from ``_pending``."""
+    adapter = AmpAdapter(_config(), executor=_make_idle_executor())
+
+    async def session() -> tuple[list[AgentEvent], str]:
+        await adapter.start(_start_context())
+        events_got: list[AgentEvent] = []
+
+        async def consumer() -> None:
+            async for ev in adapter.events():
+                events_got.append(ev)
+
+        consumer_task = asyncio.create_task(consumer())
+        perm_task = asyncio.create_task(
+            adapter._decide_permission("Bash", ["-c", "ls"])
+        )
+
+        # Wait for the prompt to land in the queue and reach the consumer.
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if any(isinstance(e, PermissionRequest) for e in events_got):
+                break
+        request_id = next(
+            e.request_id for e in events_got if isinstance(e, PermissionRequest)
+        )
+        await adapter.resolve_permission(request_id, "allow")
+        decision = await perm_task
+
+        await adapter.close()
+        await consumer_task
+        return events_got, decision
+
+    events, decision = asyncio.run(session())
+    assert decision == "allow"
+    requests = [e for e in events if isinstance(e, PermissionRequest)]
+    decisions = [e for e in events if isinstance(e, PermissionDecision)]
+    assert len(requests) == 1
+    assert len(decisions) == 1
+    assert decisions[0].request_id == requests[0].request_id
+    assert decisions[0].decision == "allow"
+    # No duplicate publish from close()'s orphan-prevention path.
+    assert adapter._decided == {requests[0].request_id}
+    assert adapter._pending == {}
+
+
+def test_close_publishes_decision_for_pending_permission() -> None:
+    """Orphan prevention: ``close()`` with a pending prompt MUST publish a
+    synthetic ``PermissionDecision(deny)`` so the transcript stays balanced.
+    Without this, the frontend's transcript-replay rebuild leaves the
+    "Allow ...?" prompt visible forever."""
+    adapter = AmpAdapter(_config(), executor=_make_idle_executor())
+
+    async def session() -> tuple[list[AgentEvent], str]:
+        await adapter.start(_start_context())
+        events_got: list[AgentEvent] = []
+
+        async def consumer() -> None:
+            async for ev in adapter.events():
+                events_got.append(ev)
+
+        consumer_task = asyncio.create_task(consumer())
+        perm_task = asyncio.create_task(
+            adapter._decide_permission("Bash", ["-c", "rm -rf /"])
+        )
+
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if any(isinstance(e, PermissionRequest) for e in events_got):
+                break
+        # Sanity: the prompt is queued and the decider is still suspended.
+        assert any(isinstance(e, PermissionRequest) for e in events_got)
+        assert not perm_task.done()
+
+        # Tear down with the prompt still open — exactly the bug scenario.
+        await adapter.close()
+        decision = await perm_task
+        await consumer_task
+        return events_got, decision
+
+    events, decision = asyncio.run(session())
+    assert decision == "deny"
+    requests = [e for e in events if isinstance(e, PermissionRequest)]
+    decisions = [e for e in events if isinstance(e, PermissionDecision)]
+    # Exactly one request and one matching decision — no orphan, no
+    # duplicate from the late-waking ``_decide_permission`` task.
+    assert len(requests) == 1
+    assert len(decisions) == 1
+    assert decisions[0].request_id == requests[0].request_id
+    assert decisions[0].decision == "deny"
+
+
+def test_close_with_no_pending_permissions_emits_no_decisions() -> None:
+    """Guardrail: the orphan-prevention loop in ``close()`` must not fire
+    spuriously when there's nothing pending."""
+    adapter = AmpAdapter(_config(), executor=_make_fake_executor([]))
+
+    async def session() -> list[AgentEvent]:
+        await adapter.start(_start_context())
+        events_got: list[AgentEvent] = []
+
+        async def consumer() -> None:
+            async for ev in adapter.events():
+                events_got.append(ev)
+
+        consumer_task = asyncio.create_task(consumer())
+        await adapter.close()
+        await consumer_task
+        return events_got
+
+    events = asyncio.run(session())
+    assert [e for e in events if isinstance(e, PermissionDecision)] == []

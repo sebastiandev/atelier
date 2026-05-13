@@ -164,6 +164,10 @@ class AmpAdapter:
         # session-only set of tool names the user has chosen to skip the
         # prompt for (cleared on close).
         self._pending: dict[str, asyncio.Future[PermissionDecisionValue]] = {}
+        # request_ids whose ``PermissionDecision`` event has already been
+        # enqueued for publish — guards against duplicate decisions when
+        # ``close()`` proactively decides on behalf of in-flight prompts.
+        self._decided: set[str] = set()
         self._allow_always: set[str] = set()
         # Per-agent Unix socket the bridge connects back through. Created
         # in a 0700 tmpdir so the path itself is the secret.
@@ -421,11 +425,24 @@ class AmpAdapter:
                 decision = "deny"
         finally:
             self._pending.pop(request_id, None)
-        await self._outgoing.put(
-            PermissionDecision(
-                ts=datetime.now(UTC), request_id=request_id, decision=decision
+        # ``close()`` may have already published a synthetic deny for this
+        # request_id before tearing us down — skip the duplicate so the
+        # transcript stays clean.
+        if request_id not in self._decided:
+            self._decided.add(request_id)
+            # Shield the put so a late cancellation (e.g. server.close()
+            # racing with our resume) can't drop the decision and leave
+            # an orphan ``permission_request`` in the transcript — the
+            # exact bug that produced stuck "Allow Bash?" prompts.
+            await asyncio.shield(
+                self._outgoing.put(
+                    PermissionDecision(
+                        ts=datetime.now(UTC),
+                        request_id=request_id,
+                        decision=decision,
+                    )
+                )
             )
-        )
         if decision == "allow_always":
             self._allow_always.add(canon_name)
         return decision
@@ -435,8 +452,23 @@ class AmpAdapter:
             return
         self._closed = True
         # Free any in-flight bridge connections so they exit instead of
-        # hanging on socket read while we tear down.
-        for fut in list(self._pending.values()):
+        # hanging on socket read while we tear down. We also publish a
+        # synthetic ``PermissionDecision(deny)`` for each pending request
+        # BEFORE resolving the future — that way the transcript always
+        # has a matching decision for every request, even if the
+        # ``_decide_permission`` task is cancelled before it can publish
+        # itself. Without this, the frontend rebuilds ``pendingPermissions``
+        # from the transcript on reconnect and the prompt stays "stuck".
+        for request_id, fut in list(self._pending.items()):
+            if request_id not in self._decided:
+                self._decided.add(request_id)
+                await self._outgoing.put(
+                    PermissionDecision(
+                        ts=datetime.now(UTC),
+                        request_id=request_id,
+                        decision="deny",
+                    )
+                )
             if not fut.done():
                 fut.set_result("deny")
         # Closing the prompt iterator (via _SHUTDOWN) ends stdin, which
