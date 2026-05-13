@@ -312,6 +312,7 @@ def test_record_artifact_without_agent_has_null_agent_id() -> None:
             type="doc",
             title="Notes",
             status="draft",
+            doc_path="/tmp/notes.md",
         )
     )
     assert artifact.agent_id is None
@@ -326,6 +327,7 @@ def test_record_artifact_raises_when_work_missing() -> None:
                 type="doc",
                 title="x",
                 status="draft",
+                doc_path="/tmp/x.md",
             )
         )
 
@@ -341,6 +343,7 @@ def test_record_artifact_raises_when_agent_missing() -> None:
                 type="doc",
                 title="x",
                 status="draft",
+                doc_path="/tmp/x.md",
             )
         )
 

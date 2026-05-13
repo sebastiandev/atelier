@@ -24,7 +24,6 @@ from src.application.http.schemas import (
     WorkDetail,
     WorkSummary,
 )
-from src.domain.agents.doc_state import classify_location, git_state
 from src.domain.agents.handoffs import (
     BuildHandoffRequest,
     Summarizer,
@@ -42,7 +41,8 @@ from src.domain.commands.works import (
     soft_delete,
     update,
 )
-from src.domain.models import Artifact, Context, Handoff, Work
+from src.domain.commands.works.list_artifacts import ArtifactView
+from src.domain.models import Context, Handoff, Work
 from src.domain.projectstore.ports import ProjectStore
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.dtos import (
@@ -152,31 +152,30 @@ def list_work_artifacts_endpoint(
     sharestore: ShareStoreDep,
     settings: SettingsDep,
 ) -> list[ArtifactSummary]:
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+
+    def _resolve_worktree(work: str, agent: str) -> Path | None:
+        candidate = paths.worktree_dir(work, agent)
+        return candidate if candidate.exists() else None
+
+    def _resolve_share_roots(project_slug: str) -> list[Path]:
+        return [
+            share.real_path
+            if share.real_path is not None
+            else paths.project_share_dir(project_slug, share.slug)
+            for share in sharestore.list_for_project(project_slug)
+        ]
+
     try:
-        artifacts = list_artifacts.execute(workstore, work_slug)
+        views = list_artifacts.execute(
+            workstore=workstore,
+            work_slug=work_slug,
+            resolve_worktree=_resolve_worktree,
+            resolve_share_roots=_resolve_share_roots,
+        )
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    agents = workstore.list_agents_for_work(work_slug)
-    agent_slug_by_id = {a.id: a.slug for a in agents if a.id is not None}
-    paths = WorkspacePaths(workspace_root=settings.workspace_root)
-    # Resolve the per-work share roots once — every doc artifact in the
-    # listing falls under either the agent's worktree or one of these.
-    record = workstore.get_work(work_slug)
-    project_slug = record.work.project_slug if record is not None else None
-    share_roots: list[Path] = []
-    if project_slug is not None:
-        for share in sharestore.list_for_project(project_slug):
-            share_roots.append(
-                share.real_path
-                if share.real_path is not None
-                else paths.project_share_dir(project_slug, share.slug)
-            )
-    return [
-        _to_artifact_summary(
-            a, agent_slug_by_id, paths=paths, share_roots=share_roots, work_slug=work_slug
-        )
-        for a in artifacts
-    ]
+    return [_view_to_summary(v) for v in views]
 
 
 @router.post(
@@ -433,56 +432,21 @@ def _to_handoff_summary(
     )
 
 
-def _to_artifact_summary(
-    artifact: Artifact,
-    agent_slug_by_id: dict[int, str | None],
-    *,
-    paths: WorkspacePaths | None = None,
-    share_roots: list[Path] | None = None,
-    work_slug: str | None = None,
-) -> ArtifactSummary:
-    if artifact.slug is None:
-        raise RuntimeError("persisted Artifact has no slug")
-    agent_slug = (
-        agent_slug_by_id.get(artifact.agent_id)
-        if artifact.agent_id is not None
-        else None
-    )
-    location_kind: str | None = None
-    git_state_value: str | None = None
-    # Doc-only enrichment. The worktree root is per-agent: the agent
-    # that recorded the doc is the canonical owner. We fall back to
-    # ``None`` when the agent has been deleted (FK SET NULL) so the
-    # artifact survives but loses its worktree binding.
-    if (
-        artifact.type == "doc"
-        and artifact.doc_path
-        and paths is not None
-        and work_slug is not None
-    ):
-        worktree: Path | None = None
-        if agent_slug is not None:
-            candidate = paths.worktree_dir(work_slug, agent_slug)
-            if candidate.exists():
-                worktree = candidate
-        location_kind = classify_location(
-            Path(artifact.doc_path),
-            worktree=worktree,
-            share_roots=share_roots or [],
-        )
-        git_state_value = git_state(Path(artifact.doc_path))
+def _view_to_summary(view: ArtifactView) -> ArtifactSummary:
+    """Trivial DTO copy — all enrichment already happened in the query
+    command. Kept as a function (not a model_validator) so the wire
+    schema stays a pure pydantic concern."""
     return ArtifactSummary(
-        slug=artifact.slug,
-        type=artifact.type,
-        title=artifact.title,
-        status=artifact.status,
-        created_at=artifact.created_at,
-        agent_slug=agent_slug,
-        url=artifact.url,
-        repo=artifact.repo,
-        doc_path=artifact.doc_path,
-        location_kind=location_kind,
-        git_state=git_state_value,
+        slug=view.slug,
+        type=view.type,
+        title=view.title,
+        status=view.status,
+        created_at=view.created_at,
+        agent_slug=view.agent_slug,
+        url=view.url,
+        repo=view.repo,
+        doc_path=view.doc_path,
+        location_kind=view.location_kind,
     )
 
 

@@ -32,8 +32,9 @@ ContextType = Literal["sentry", "honeycomb", "jira", "url", "text", "file", "age
 Persona = Literal["architect", "developer", "product", "ux", "writer", "custom"]
 Provider = Literal["claude-code", "amp"]
 ConnectionType = Literal["sentry", "honeycomb", "jira"]
-ArtifactType = Literal["pr", "jira", "doc"]
 HandoffTargetDialog = Literal["new-agent"]
+# ``ArtifactType`` was defined here; after the per-type-status split it
+# lives next to the typed Artifact subclasses. Re-exported below.
 
 
 class AgentStatus(StrEnum):
@@ -230,19 +231,19 @@ class Connection:
     last_used: datetime | None = None
 
 
-@dataclass(kw_only=True)
-class Artifact:
-    id: int | None = None
-    slug: str | None = None
-    work_id: int
-    agent_id: int | None
-    type: ArtifactType
-    title: str
-    status: str
-    created_at: datetime
-    repo: str | None = None
-    url: str | None = None
-    doc_path: str | None = None
+# Artifact entities (PrArtifact / JiraArtifact / DocArtifact) moved to
+# src.domain.artifacts after the per-type-status / single-table-
+# inheritance refactor. ``ArtifactType`` stays here as the wire / DB
+# discriminator string; the typed hierarchy lives in
+# ``src.domain.artifacts.models`` and is re-exported below.
+from src.domain.artifacts.models import (  # noqa: E402
+    Artifact,
+    ArtifactType,
+    BaseArtifact,
+    DocArtifact,
+    JiraArtifact,
+    PrArtifact,
+)
 
 
 @dataclass(kw_only=True)
@@ -268,13 +269,17 @@ __all__ = [
     "AgentStatus",
     "Artifact",
     "ArtifactType",
+    "BaseArtifact",
     "Connection",
     "ConnectionType",
     "Context",
     "ContextType",
+    "DocArtifact",
     "Handoff",
     "HandoffTargetDialog",
+    "JiraArtifact",
     "Persona",
+    "PrArtifact",
     "Project",
     "Provider",
     "Work",

@@ -26,7 +26,13 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
-from src.domain.models import Artifact, ArtifactType
+from src.domain.artifacts import (
+    DOC_STATUSES,
+    JIRA_STATUSES,
+    PR_STATUSES,
+    Artifact,
+)
+from src.domain.models import ArtifactType
 from src.domain.workstore.dtos import RecordArtifactRequest
 from src.domain.workstore.ports import WorkStore
 
@@ -39,11 +45,12 @@ from src.domain.workstore.ports import WorkStore
 _DOC_PATH_WAIT_SECONDS = 0.5
 _DOC_PATH_POLL_INTERVAL = 0.05
 
-# Per-type allowed status values. Free-text would bypass the visual-
-# vocabulary contract: the FE renders these as typed status pills.
-_PR_STATUSES = frozenset({"open", "draft", "merged", "closed"})
-_JIRA_STATUSES = frozenset({"todo", "in_progress", "in_review", "done", "blocked"})
-_DOC_STATUSES = frozenset({"draft", "published"})
+# Per-type allowed status values live in ``src.domain.artifacts.status``
+# and are shared with the validation layer. Aliased here so the
+# ``_require_status`` calls below stay readable.
+_PR_STATUSES = PR_STATUSES
+_JIRA_STATUSES = JIRA_STATUSES
+_DOC_STATUSES = DOC_STATUSES
 
 _ALLOWED_TYPES: frozenset[str] = frozenset({"pr", "jira", "doc"})
 

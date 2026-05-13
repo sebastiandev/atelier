@@ -20,7 +20,8 @@ from contextlib import contextmanager
 from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.domain.models import Agent, Artifact, Handoff, Work
+from src.domain.artifacts import Artifact, BaseArtifact
+from src.domain.models import Agent, Handoff, Work
 from src.infrastructure.database.tables import (
     agents_table,
     artifacts_table,
@@ -228,7 +229,7 @@ class SqlWorkRepository:
                 return []
             return list(
                 session.execute(
-                    select(Artifact)
+                    select(BaseArtifact)
                     .where(artifacts_table.c.work_id == work_id)
                     .order_by(artifacts_table.c.created_at.asc())
                 ).scalars()
@@ -237,7 +238,7 @@ class SqlWorkRepository:
     def get_artifact_by_slug(self, slug: str) -> Artifact | None:
         with self._txn() as session:
             return session.execute(
-                select(Artifact).where(artifacts_table.c.slug == slug)
+                select(BaseArtifact).where(artifacts_table.c.slug == slug)
             ).scalar_one_or_none()
 
     def add_handoff(self, handoff: Handoff) -> Handoff:

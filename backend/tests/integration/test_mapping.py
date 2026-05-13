@@ -16,7 +16,15 @@ from sqlalchemy import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from src.domain.models import Agent, Artifact, Connection, Handoff, Work
+from src.domain.models import (
+    Agent,
+    BaseArtifact,
+    Connection,
+    DocArtifact,
+    Handoff,
+    PrArtifact,
+    Work,
+)
 
 UTC_NOW = datetime(2026, 4, 30, 12, 0, tzinfo=UTC)
 
@@ -222,11 +230,10 @@ def test_artifact_round_trip(isolated_engine: Engine) -> None:
     with Session(isolated_engine) as session:
         work = _seed_work(session)
         agent = _seed_agent(session, work_id=work.id)  # type: ignore[arg-type]
-        artifact = Artifact(
+        artifact = PrArtifact(
             slug="art-1",
             work_id=work.id,  # type: ignore[arg-type]
             agent_id=agent.id,
-            type="pr",
             title="Fix",
             status="open",
             created_at=UTC_NOW,
@@ -237,8 +244,9 @@ def test_artifact_round_trip(isolated_engine: Engine) -> None:
         artifact_id = artifact.id
 
     with Session(isolated_engine) as session:
-        loaded = session.get(Artifact, artifact_id)
+        loaded = session.get(BaseArtifact, artifact_id)
         assert loaded is not None
+        assert isinstance(loaded, PrArtifact)
         assert loaded.slug == "art-1"
         assert loaded.type == "pr"
         assert loaded.url == "https://github.com/owner/repo/pull/42"
@@ -308,13 +316,13 @@ def test_deleting_work_cascades_to_agents_and_artifacts(isolated_engine: Engine)
         work = _seed_work(session)
         agent = _seed_agent(session, work_id=work.id)  # type: ignore[arg-type]
         session.add(
-            Artifact(
+            DocArtifact(
                 slug="art-1",
                 work_id=work.id,  # type: ignore[arg-type]
                 agent_id=agent.id,
-                type="doc",
                 title="t",
                 status="draft",
+                doc_path="/tmp/t.md",
                 created_at=UTC_NOW,
             )
         )
@@ -338,13 +346,13 @@ def test_deleting_agent_sets_artifact_agent_id_null(isolated_engine: Engine) -> 
     with Session(isolated_engine) as session:
         work = _seed_work(session)
         agent = _seed_agent(session, work_id=work.id)  # type: ignore[arg-type]
-        artifact = Artifact(
+        artifact = DocArtifact(
             slug="art-1",
             work_id=work.id,  # type: ignore[arg-type]
             agent_id=agent.id,
-            type="doc",
             title="t",
             status="draft",
+            doc_path="/tmp/t.md",
             created_at=UTC_NOW,
         )
         session.add(artifact)
@@ -359,6 +367,7 @@ def test_deleting_agent_sets_artifact_agent_id_null(isolated_engine: Engine) -> 
         session.commit()
 
     with Session(isolated_engine) as session:
-        loaded = session.get(Artifact, artifact_id)
+        loaded = session.get(BaseArtifact, artifact_id)
         assert loaded is not None
+        assert isinstance(loaded, DocArtifact)
         assert loaded.agent_id is None

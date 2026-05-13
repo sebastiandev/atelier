@@ -640,16 +640,27 @@ export function deleteProject(slug: string): Promise<void> {
 export type ArtifactType = "pr" | "jira" | "doc";
 
 export type ArtifactLocation = "worktree" | "shared";
-export type ArtifactGitState = "committed" | "uncommitted";
+// Per-type status vocabularies returned by the backend. PR/Jira values
+// are author-set; doc values are derived from observed git state at
+// list time (pending = worktree-uncommitted, committed = worktree
+// matches HEAD, draft = shared folder).
+export type PrStatus = "draft" | "open" | "merged" | "closed";
+export type DocStatus = "draft" | "pending" | "committed";
+export type JiraStatus =
+  | "todo"
+  | "in_progress"
+  | "in_review"
+  | "done"
+  | "closed"
+  | "blocked";
 
 export type ArtifactSummary = {
   slug: string;
   type: ArtifactType;
   title: string;
-  // Per-type enum from the backend tracker — pr: open|draft|merged|closed,
-  // jira: todo|in_progress|in_review|done|blocked, doc: draft|published.
-  // For doc rows the FE now ignores this in favour of the location +
-  // git_state chips below; the field stays in the schema for PR/Jira.
+  // Per-type vocabulary — see PrStatus / DocStatus / JiraStatus above.
+  // For docs the backend derives this from observed file state so the
+  // FE renders one pill per artifact regardless of type.
   status: string;
   created_at: string;
   // The agent that emitted the marker, if attribution was supplied.
@@ -658,10 +669,9 @@ export type ArtifactSummary = {
   repo: string | null;
   // Absolute path on disk, for doc-type artifacts; click → revealArtifact.
   doc_path: string | null;
-  // Doc-only enrichments computed on each list call. ``null`` for
+  // Doc-only enrichment, computed on each list call. ``null`` for
   // PR/Jira and for stale doc rows whose path no longer resolves.
   location_kind: ArtifactLocation | null;
-  git_state: ArtifactGitState | null;
 };
 
 export function listArtifacts(workSlug: string): Promise<ArtifactSummary[]> {

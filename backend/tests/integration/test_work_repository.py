@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.domain.models import Agent, Artifact, Handoff, Work
+from src.domain.models import Agent, Handoff, PrArtifact, Work
 from src.infrastructure.database import SqlWorkRepository
 
 UTC_NOW = datetime(2026, 5, 1, 13, 49, tzinfo=UTC)
@@ -294,10 +294,9 @@ def test_add_artifact_assigns_id_and_slug(repo: SqlWorkRepository) -> None:
     work = repo.add_work(_new_work())
     assert work.id is not None
     artifact = repo.add_artifact(
-        Artifact(
+        PrArtifact(
             work_id=work.id,
             agent_id=None,
-            type="pr",
             title="PR-1",
             status="open",
             created_at=UTC_NOW,

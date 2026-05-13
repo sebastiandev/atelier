@@ -689,7 +689,9 @@ const ARTIFACT_TYPE_LABEL: Record<ArtifactSummary["type"], string> = {
 
 // Status values that resolve to a "good" chip color (everything else
 // renders as the neutral / info chip via the cascade in styles.css).
-const ARTIFACT_GOOD_STATUSES = new Set(["merged", "done", "published"]);
+// "committed" is the doc terminal state, "merged" and "done" are the
+// PR / Jira ones.
+const ARTIFACT_GOOD_STATUSES = new Set(["merged", "done", "committed"]);
 
 function ArtifactRow({ artifact }: { artifact: ArtifactSummary }) {
   const isClickable =
@@ -735,44 +737,10 @@ function ArtifactRow({ artifact }: { artifact: ArtifactSummary }) {
 }
 
 function ArtifactStatusChips({ artifact }: { artifact: ArtifactSummary }) {
-  // Doc artifacts get the new location + git-state chips; the original
-  // draft/published status is dropped from the rail because the derived
-  // chips carry the same intent more accurately.
-  if (artifact.type === "doc") {
-    return (
-      <span className="rail-arti-chips">
-        {artifact.location_kind && (
-          <span
-            className={`chip arti-loc arti-loc-${artifact.location_kind}`}
-            title={
-              artifact.location_kind === "worktree"
-                ? "Lives in the agent's git worktree"
-                : "Lives in a project shared folder"
-            }
-          >
-            {artifact.location_kind === "worktree" ? "worktree" : "shared"}
-          </span>
-        )}
-        {artifact.git_state && (
-          <span
-            className={
-              "chip " +
-              (artifact.git_state === "committed" ? "good" : "warn")
-            }
-            title={
-              artifact.git_state === "committed"
-                ? "File matches HEAD"
-                : "Working tree differs from HEAD"
-            }
-          >
-            {artifact.git_state}
-          </span>
-        )}
-      </span>
-    );
-  }
-  // PR / Jira keep the single status chip (open/merged/closed for PR,
-  // todo/in_progress/done/etc for Jira). Good-set drives the colour.
+  // One pill per artifact. The backend's derivation already collapses
+  // location + git into ``status`` for docs (draft = shared, pending /
+  // committed = worktree), so a second location chip would just be
+  // noise in the rail's narrow column.
   const statusClass = ARTIFACT_GOOD_STATUSES.has(artifact.status)
     ? "chip good"
     : "chip info";

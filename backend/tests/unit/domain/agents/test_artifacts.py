@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from src.domain.agents import InvalidMarker, record_artifact
-from src.domain.models import Artifact
+from src.domain.artifacts import Artifact, make_artifact
 from src.domain.workstore.dtos import RecordArtifactRequest
 
 
@@ -27,7 +27,7 @@ class _RecorderStore:
 
     def record_artifact(self, req: RecordArtifactRequest) -> Artifact:
         self.calls.append(req)
-        artifact = Artifact(
+        artifact = make_artifact(
             id=self._next_id,
             slug=f"art-{self._next_id}",
             work_id=1,

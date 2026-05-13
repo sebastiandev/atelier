@@ -16,10 +16,11 @@ import pytest
 
 from src.domain.models import (
     Agent,
-    Artifact,
     Connection,
     Context,
+    DocArtifact,
     Handoff,
+    PrArtifact,
     Work,
 )
 
@@ -132,30 +133,31 @@ def test_connection_minimal_construction() -> None:
 
 
 def test_artifact_construction() -> None:
-    art = Artifact(
+    art = PrArtifact(
         work_id=1,
         agent_id=1,
-        type="pr",
         title="Fix checkout 500",
         status="open",
+        url="https://github.com/owner/repo/pull/1",
         created_at=UTC_NOW,
     )
+    assert art.type == "pr"
     assert art.repo is None
-    assert art.url is None
-    assert art.doc_path is None
+    assert art.url == "https://github.com/owner/repo/pull/1"
 
 
 def test_artifact_allows_null_agent_id() -> None:
     """Architecture: artifact.agent_id is FK ON DELETE SET NULL."""
-    art = Artifact(
+    art = DocArtifact(
         work_id=1,
         agent_id=None,
-        type="doc",
         title="t",
         status="draft",
+        doc_path="/tmp/t.md",
         created_at=UTC_NOW,
     )
     assert art.agent_id is None
+    assert art.type == "doc"
 
 
 # ---------------------------------------------------------------------------

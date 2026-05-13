@@ -9,9 +9,14 @@ Idempotent: `configure_mappings()` may be called multiple times safely.
 
 from sqlalchemy.orm import registry
 
+from src.domain.artifacts.models import (
+    BaseArtifact,
+    DocArtifact,
+    JiraArtifact,
+    PrArtifact,
+)
 from src.domain.models import (
     Agent,
-    Artifact,
     Connection,
     Handoff,
     Project,
@@ -47,7 +52,31 @@ def configure_mappings() -> None:
     mapper_registry.map_imperatively(Project, projects_table)
     mapper_registry.map_imperatively(Work, works_table)
     mapper_registry.map_imperatively(Agent, agents_table)
-    mapper_registry.map_imperatively(Artifact, artifacts_table)
+    # Artifact: single-table inheritance on the existing ``artifacts``
+    # table. The ``type`` column is the polymorphic discriminator;
+    # subclasses pick up the columns they actually use via ``properties``.
+    # ``polymorphic_identity`` on the base is None — it's abstract; only
+    # the subclasses are instantiable polymorphic targets.
+    mapper_registry.map_imperatively(
+        BaseArtifact,
+        artifacts_table,
+        polymorphic_on=artifacts_table.c.type,
+    )
+    mapper_registry.map_imperatively(
+        PrArtifact,
+        inherits=BaseArtifact,
+        polymorphic_identity="pr",
+    )
+    mapper_registry.map_imperatively(
+        JiraArtifact,
+        inherits=BaseArtifact,
+        polymorphic_identity="jira",
+    )
+    mapper_registry.map_imperatively(
+        DocArtifact,
+        inherits=BaseArtifact,
+        polymorphic_identity="doc",
+    )
     mapper_registry.map_imperatively(Connection, connections_table)
     mapper_registry.map_imperatively(Handoff, handoffs_table)
     mapper_registry.map_imperatively(SharedFolder, shared_folders_table)

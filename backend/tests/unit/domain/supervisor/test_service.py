@@ -21,7 +21,7 @@ from src.domain.agents import (
     SessionEstablished,
     StatusChange,
 )
-from src.domain.models import Artifact
+from src.domain.models import Artifact, PrArtifact
 from src.domain.supervisor import SUBSCRIBER_QUEUE_MAX, AgentSupervisorService
 from src.infrastructure.agents import StubAgentAdapter
 from tests.unit.domain.workstore._stubs import StubTranscriptLog
@@ -633,16 +633,15 @@ def test_artifact_marker_invokes_recorder_and_emits_artifact_recorded() -> None:
 
     def recorder(work: str, agent: str, payload: dict[str, Any]) -> Artifact:
         captured.append((work, agent, payload))
-        return Artifact(
+        return PrArtifact(
             id=1,
             slug="art-1",
             work_id=1,
             agent_id=1,
-            type="pr",
             title=payload["title"],
             status=payload["status"],
             created_at=UTC_NOW,
-            url=payload.get("url"),
+            url=payload["url"],
         )
 
     async def run() -> list[dict[str, Any]]:

@@ -20,7 +20,8 @@ from threading import RLock
 from typing import Any
 
 from src.domain.agents.context_render import render_agent_contexts
-from src.domain.models import Agent, AgentStatus, Artifact, Context, Handoff, Work
+from src.domain.artifacts import Artifact, make_artifact, validate_status
+from src.domain.models import Agent, AgentStatus, Context, Handoff, Work
 from src.domain.workstore._serde import (
     deserialize_contexts,
     serialize_agent,
@@ -301,6 +302,7 @@ class WorkStoreService:
 
     def record_artifact(self, req: RecordArtifactRequest) -> Artifact:
         with self._lock:
+            validate_status(req.type, req.status)
             parent = self._require_work(req.work_slug)
             agent_id: int | None = None
             if req.agent_slug is not None:
@@ -308,10 +310,10 @@ class WorkStoreService:
                 if agent is None:
                     raise ValueError(f"agent not found: {req.agent_slug}")
                 agent_id = agent.id
-            artifact = Artifact(
+            artifact = make_artifact(
+                type=req.type,
                 work_id=_require_id(parent),
                 agent_id=agent_id,
-                type=req.type,
                 title=req.title,
                 status=req.status,
                 created_at=self._clock(),

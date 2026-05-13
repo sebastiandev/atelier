@@ -24,7 +24,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 
 
 class SchemaMismatchError(RuntimeError):
@@ -150,6 +150,23 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
             # created before this version.
             conn.execute(text("ALTER TABLE agents ADD COLUMN options TEXT"))
             existing = 9
+        if existing == 9:
+            # v9 → v10: doc status vocabulary changed from
+            # ``draft|published`` to ``draft|pending|committed``. The
+            # new values are derived at list time from observed file
+            # state, so the persisted ``status`` for docs now always
+            # holds ``draft`` post-record. Existing ``published`` rows
+            # — which used to mean "the agent considers this final" —
+            # map to ``committed`` (closest semantic neighbour: the
+            # doc has been published into the repo). PR / Jira status
+            # values weren't reduced, so no migration there.
+            conn.execute(
+                text(
+                    "UPDATE artifacts SET status = 'committed' "
+                    "WHERE type = 'doc' AND status = 'published'"
+                )
+            )
+            existing = 10
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)
