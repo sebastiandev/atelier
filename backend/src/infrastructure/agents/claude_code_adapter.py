@@ -106,6 +106,10 @@ class ClaudeCodeAdapter:
         # names the user has chosen to auto-allow for the rest of this
         # adapter's lifetime (cleared on close).
         self._pending: dict[str, asyncio.Future[PermissionDecisionValue]] = {}
+        # request_ids whose ``PermissionDecision`` event has already been
+        # enqueued for publish — guards against duplicate decisions when
+        # ``close()`` proactively decides on behalf of in-flight prompts.
+        self._decided: set[str] = set()
         self._allow_always: set[str] = set()
         self._pump_task: asyncio.Task[None] | None = None
 
@@ -271,11 +275,23 @@ class ClaudeCodeAdapter:
                 decision = "deny"
         finally:
             self._pending.pop(request_id, None)
-        await self._outgoing.put(
-            PermissionDecision(
-                ts=datetime.now(UTC), request_id=request_id, decision=decision
+        # ``close()`` may have already published a synthetic deny for this
+        # request_id before tearing us down — skip the duplicate so the
+        # transcript stays clean.
+        if request_id not in self._decided:
+            self._decided.add(request_id)
+            # Shield the put so a late cancellation can't drop the
+            # decision and leave an orphan ``permission_request`` in the
+            # transcript (the bug behind stuck "Allow ..." prompts).
+            await asyncio.shield(
+                self._outgoing.put(
+                    PermissionDecision(
+                        ts=datetime.now(UTC),
+                        request_id=request_id,
+                        decision=decision,
+                    )
+                )
             )
-        )
         if decision == "allow_always":
             self._allow_always.add(canon_name)
         if decision in ("allow", "allow_always"):
@@ -288,7 +304,23 @@ class ClaudeCodeAdapter:
         self._closed = True
         # Resolve any in-flight permission prompts so the SDK callback
         # can return; otherwise disconnect would block on a hung future.
-        for fut in list(self._pending.values()):
+        # We also publish a synthetic ``PermissionDecision(deny)`` for
+        # each pending request BEFORE resolving the future — that way
+        # the transcript always has a matching decision for every
+        # request, even if the ``_can_use_tool`` task is cancelled
+        # before it can publish itself. Without this, the frontend
+        # rebuilds ``pendingPermissions`` from the transcript on
+        # reconnect and the prompt stays "stuck".
+        for request_id, fut in list(self._pending.items()):
+            if request_id not in self._decided:
+                self._decided.add(request_id)
+                await self._outgoing.put(
+                    PermissionDecision(
+                        ts=datetime.now(UTC),
+                        request_id=request_id,
+                        decision="deny",
+                    )
+                )
             if not fut.done():
                 fut.set_result("deny")
         # Unblock events() / pump if they're waiting on the queue.
