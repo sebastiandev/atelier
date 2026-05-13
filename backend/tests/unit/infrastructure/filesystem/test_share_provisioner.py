@@ -80,6 +80,33 @@ def test_link_canonical_refuses_non_empty_default_dir(tmp_path: Path) -> None:
         prov.link_canonical_to_external("PRJ-001", "shr-1", real)
 
 
+def test_link_canonical_refuses_self_referential_real_path(
+    tmp_path: Path,
+) -> None:
+    """Guard against the user (or a buggy caller) picking the share's
+    own canonical path as the real_path — that would create a symlink
+    pointing at itself."""
+    prov, paths = _provisioner(tmp_path)
+    canonical = paths.project_share_dir("PRJ-001", "shr-1")
+    canonical.parent.mkdir(parents=True)
+    canonical.mkdir()
+    with pytest.raises(ValueError, match="self-referential"):
+        prov.link_canonical_to_external("PRJ-001", "shr-1", canonical)
+
+
+def test_link_canonical_refuses_real_path_inside_works_tree(
+    tmp_path: Path,
+) -> None:
+    """Pointing a share at a path inside ``<workspace>/works/`` (i.e.
+    inside any agent worktree) would loop when that worktree later
+    mounts the share at the same name."""
+    prov, paths = _provisioner(tmp_path)
+    inside_worktree = paths.worktree_dir("WRK-001", "agt-1") / "bmad"
+    inside_worktree.mkdir(parents=True)
+    with pytest.raises(ValueError, match="inside the agent worktree tree"):
+        prov.link_canonical_to_external("PRJ-001", "shr-1", inside_worktree)
+
+
 def test_remove_canonical_drops_symlink_without_following(
     tmp_path: Path,
 ) -> None:
@@ -194,6 +221,58 @@ def test_mount_replaces_symlink_pointing_at_wrong_target(
 
     prov.mount_in_worktree("WRK-001", "agt-1", "_bmad", canonical)
     assert Path(os.readlink(worktree / "_bmad")) == canonical
+
+
+def test_mount_refuses_when_worktree_resolves_outside_workspace(
+    tmp_path: Path,
+) -> None:
+    """Defense in depth: if some ancestor of the worktree dir was made
+    a symlink that redirects outside the workspace (the historical bug
+    that turned the user's main repo's ``bmad/`` into a self-link to a
+    worktree), we must refuse to write rather than scribble outside
+    Atelier."""
+    # Need a workspace_root that has a sibling we can call "external" —
+    # tmp_path on its own would put external INSIDE the workspace.
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    external = tmp_path / "outside_workspace_repo"
+    external.mkdir()
+    paths = WorkspacePaths(workspace_root=workspace_root)
+    prov = FsShareProvisioner(paths)
+
+    canonical = prov.ensure_canonical_dir("PRJ-001", "shr-1")
+    # Plant the worktree dir as a symlink to `external`. The
+    # provisioner's mount routine calls .resolve() on link_path.parent
+    # — when the worktree is a symlink to elsewhere, that resolves
+    # outside workspace_root.
+    worktree_parent = paths.worktree_dir("WRK-001", "agt-1").parent
+    worktree_parent.mkdir(parents=True)
+    (worktree_parent / "agt-1").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(MountConflict, match="outside workspace"):
+        prov.mount_in_worktree("WRK-001", "agt-1", "bmad", canonical)
+    # Critically: nothing was written inside `external` — the original
+    # folder is left alone.
+    assert list(external.iterdir()) == []
+
+
+def test_mount_refuses_when_target_contains_mount_parent(
+    tmp_path: Path,
+) -> None:
+    """If the share's resolved target is an ancestor of the worktree
+    parent (or equal to it), the symlink would loop instantly. Refuse."""
+    prov, paths = _provisioner(tmp_path)
+    worktree = _make_worktree(paths, "WRK-001", "agt-1")
+    # Point a custom-location share at the worktree's parent. The
+    # canonical resolves into the works tree → mount would create
+    # ``<worktree>/sub`` symlink → resolves up to the worktree itself.
+    custom = worktree.parent  # ``<workspace>/works/WRK-001/worktrees/``
+    canonical = prov.share_canonical_path("PRJ-001", "shr-1")
+    canonical.parent.mkdir(parents=True)
+    canonical.symlink_to(custom, target_is_directory=True)
+
+    with pytest.raises(MountConflict, match="symlink loop"):
+        prov.mount_in_worktree("WRK-001", "agt-1", "sub", canonical)
 
 
 def test_unmount_removes_symlink_only(tmp_path: Path) -> None:
