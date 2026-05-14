@@ -75,13 +75,14 @@ class GitWorktreeManager:
         ``ensure_forked``'s shape."""
         try:
             _run_git(source, "worktree", "add", "--detach", str(target), base_ref)
-            return target
         except subprocess.CalledProcessError as exc:
             raise WorktreeProvisionFailed(
                 f"git worktree add --detach failed for {work_slug}/{agent_slug}: "
                 f"{_stderr(exc)}",
                 stderr=_stderr(exc),
             ) from exc
+        _symlink_devtime_artifacts(source, target)
+        return target
 
     def _add_branch(
         self,
@@ -105,6 +106,7 @@ class GitWorktreeManager:
                 str(target),
                 base_ref,
             )
+            _symlink_devtime_artifacts(source, target)
             return target
         except subprocess.CalledProcessError as add_with_branch_exc:
             stderr = (add_with_branch_exc.stderr or "").lower()
@@ -120,6 +122,7 @@ class GitWorktreeManager:
         # Branch existed — retry by attaching to it.
         try:
             _run_git(source, "worktree", "add", str(target), branch_name)
+            _symlink_devtime_artifacts(source, target)
             return target
         except subprocess.CalledProcessError as attach_exc:
             attach_stderr = _stderr(attach_exc)
@@ -147,6 +150,7 @@ class GitWorktreeManager:
                 )
             try:
                 _run_git(source, "worktree", "add", str(target), branch_name)
+                _symlink_devtime_artifacts(source, target)
                 return target
             except subprocess.CalledProcessError as final_exc:
                 raise WorktreeProvisionFailed(
@@ -219,6 +223,12 @@ class GitWorktreeManager:
             source_head,
         )
         _overlay_working_state(source_worktree, target)
+        # Symlink devtime artifacts from the ORIGINAL source (not the
+        # forked-from agent's worktree) — the upstream venv / node_modules
+        # is what stays in sync with the canonical repo layout. The
+        # source agent's worktree typically just has a symlink to the
+        # same place anyway.
+        _symlink_devtime_artifacts(source, target)
         return target
 
     def remove(self, work_slug: str, agent_slug: str) -> None:
@@ -349,6 +359,74 @@ def _overlay_working_state(src: Path, dst: Path) -> None:
         dst_file = dst / rel
         dst_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_file, dst_file)
+
+
+# Devtime artifacts we mirror from the source repo into every fresh
+# worktree. Symlinks (not copies) so agents share one environment by
+# default — fast, zero extra disk, package upgrades propagate. The risk
+# is parallel mutating installs (one agent's ``uv add`` clobbers a
+# sibling's lockfile); the system prompt should warn about this. Names
+# match the canonical conventions across uv/poetry/pipenv/npm/yarn.
+_DEVTIME_ARTIFACT_NAMES = (".venv", "venv", "node_modules")
+
+
+def _symlink_devtime_artifacts(source: Path, target: Path) -> None:
+    """Mirror any ``.venv`` / ``venv`` / ``node_modules`` from ``source``
+    into ``target`` as symlinks. Looks at the top level and one level
+    down (so monorepos like ``backend/.venv`` + ``frontend/node_modules``
+    are covered). No-op for non-Python / non-Node repos that don't have
+    these directories.
+
+    Failures are logged and swallowed — the worktree itself is already
+    provisioned by the time we run, and a missing convenience symlink is
+    a degradation (the agent can ``uv sync`` to recover), not a reason
+    to fail the agent launch.
+    """
+    try:
+        _link_top_level(source, target)
+        _link_one_level_deep(source, target)
+    except OSError as exc:
+        _log.warning(
+            "devtime artifact symlinking partially failed for %s → %s: %s",
+            source,
+            target,
+            exc,
+        )
+
+
+def _link_top_level(source: Path, target: Path) -> None:
+    for name in _DEVTIME_ARTIFACT_NAMES:
+        _maybe_symlink(source / name, target / name)
+
+
+def _link_one_level_deep(source: Path, target: Path) -> None:
+    # Skip hidden dirs (notably ``.git``) and anything that isn't a
+    # directory on disk — a regular file named ``backend`` shouldn't
+    # cause us to fabricate a target subdir.
+    for child in source.iterdir():
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        target_child = target / child.name
+        # Only mirror into subdirs that actually exist in the worktree
+        # (i.e. the source's subdir contains tracked files). Creating an
+        # otherwise-empty ``backend/`` just to hold a venv symlink would
+        # mislead path-scanning tools.
+        if not target_child.is_dir():
+            continue
+        for name in _DEVTIME_ARTIFACT_NAMES:
+            _maybe_symlink(child / name, target_child / name)
+
+
+def _maybe_symlink(src: Path, link: Path) -> None:
+    # Only mirror directories (e.g. a ``.venv`` file would be weird and
+    # we don't want to risk symlinking a real file). Don't clobber an
+    # existing path at the link site — if the user (or a prior pass)
+    # already put something there, leave it alone.
+    if not src.is_dir():
+        return
+    if link.exists() or link.is_symlink():
+        return
+    link.symlink_to(src, target_is_directory=True)
 
 
 def _is_git_repo(path: Path) -> bool:

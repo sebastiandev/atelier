@@ -317,3 +317,117 @@ def test_is_detached_returns_false_for_non_git_folder(
     plain = tmp_path / "plain"
     plain.mkdir()
     assert manager.is_detached(plain) is False
+
+
+# --- devtime artifact symlinks ----------------------------------------------
+
+
+def test_ensure_symlinks_top_level_venv_into_worktree(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """A ``.venv`` at the source root is gitignored, so it doesn't get
+    cloned into the worktree by ``git worktree add``. We mirror it as a
+    symlink so the agent's shell sees the same env the user has."""
+    venv = repo / ".venv"
+    venv.mkdir()
+    (venv / "marker").write_text("present\n")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    link = workdir / ".venv"
+    assert link.is_symlink()
+    assert link.resolve() == venv.resolve()
+    assert (link / "marker").read_text() == "present\n"
+
+
+def test_ensure_symlinks_nested_venv_for_monorepos(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """Atelier-style layouts put venv/node_modules one level down
+    (``backend/.venv``, ``frontend/node_modules``). The target subdir
+    must already exist in the worktree (from a tracked file) for the
+    mirror to fire — we don't fabricate subdirs."""
+    backend = repo / "backend"
+    backend.mkdir()
+    (backend / "app.py").write_text("pass\n")
+    _git(repo, "add", "backend/app.py")
+    _git(repo, "commit", "-q", "-m", "add backend")
+
+    venv = backend / ".venv"
+    venv.mkdir()
+
+    frontend = repo / "frontend"
+    frontend.mkdir()
+    (frontend / "index.html").write_text("<html></html>\n")
+    _git(repo, "add", "frontend/index.html")
+    _git(repo, "commit", "-q", "-m", "add frontend")
+
+    node_modules = frontend / "node_modules"
+    node_modules.mkdir()
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    backend_link = workdir / "backend" / ".venv"
+    frontend_link = workdir / "frontend" / "node_modules"
+    assert backend_link.is_symlink()
+    assert backend_link.resolve() == venv.resolve()
+    assert frontend_link.is_symlink()
+    assert frontend_link.resolve() == node_modules.resolve()
+
+
+def test_ensure_skips_symlink_when_source_has_no_devtime_artifacts(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """No .venv / venv / node_modules at the source → no symlinks
+    created. Non-Python / non-Node repos should be untouched."""
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    assert not (workdir / ".venv").exists()
+    assert not (workdir / "venv").exists()
+    assert not (workdir / "node_modules").exists()
+
+
+def test_ensure_skips_when_devtime_artifact_is_a_file_not_a_dir(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """A regular file named ``.venv`` (unusual but possible) must not
+    be symlinked — we only mirror directories."""
+    (repo / ".venv").write_text("not a venv\n")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    assert not (workdir / ".venv").exists()
+    assert not (workdir / ".venv").is_symlink()
+
+
+def test_ensure_with_branch_name_also_symlinks_devtime_artifacts(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """Named-branch worktrees follow the same convenience path."""
+    venv = repo / ".venv"
+    venv.mkdir()
+
+    workdir = manager.ensure(
+        "WRK-001", "agt-1", repo, branch_name="feature-x"
+    )
+
+    link = workdir / ".venv"
+    assert link.is_symlink()
+    assert link.resolve() == venv.resolve()
+
+
+def test_ensure_forked_symlinks_devtime_artifacts(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """The fork path runs through ``ensure_forked`` (handoff into a new
+    agent). It also overlays uncommitted state — the venv symlink should
+    coexist with that overlay."""
+    venv = repo / ".venv"
+    venv.mkdir()
+
+    manager.ensure("WRK-001", "agt-1", repo)
+    forked = manager.ensure_forked("WRK-001", "agt-2", "agt-1", repo)
+
+    link = forked / ".venv"
+    assert link.is_symlink()
+    assert link.resolve() == venv.resolve()
