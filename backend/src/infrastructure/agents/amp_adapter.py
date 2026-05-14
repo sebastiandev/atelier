@@ -67,6 +67,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -105,6 +106,7 @@ from src.domain.agents import (
     AmpPermissionMode,
     ArtifactMarker,
     Error,
+    HandoffOffered,
     MessageComplete,
     PermissionDecision,
     PermissionDecisionValue,
@@ -128,6 +130,30 @@ _log = logging.getLogger(__name__)
 
 _SHUTDOWN = object()  # sentinel pushed onto the queue by close()
 _BRIDGE_PATH = str(Path(__file__).with_name("amp_permission_bridge.py"))
+
+# Amp's CLI auto-hands-off the conversation to a new thread when the
+# current one approaches its context limit; the existing SDK stream
+# typically ends with an assistant message of the shape:
+#   "Handoff created — work continues in T-019e2766-01b7-70ce-90d8-be2b8d9cb40f."
+# The new thread is seeded with a plan but the SDK process driving the
+# old thread does NOT swap over — left alone the agent appears stuck on
+# the closed thread. We pattern-match the assistant text and emit a
+# HandoffOffered event so the UI can offer a one-click switch that
+# rebuilds the adapter with ``continue_thread=<new_id>``.
+#
+# Anchored on the literal "Handoff created" phrase + a UUID-shaped Amp
+# thread id (T-{8}-{4}-{4}-{4}-{12} hex) so a regular conversation that
+# happens to quote a T-id doesn't trigger.
+_HANDOFF_PATTERN = re.compile(
+    r"Handoff created[\s\S]{0,200}?"
+    r"(T-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+    r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+)
+
+
+def _detect_handoff(text: str) -> str | None:
+    match = _HANDOFF_PATTERN.search(text)
+    return match.group(1) if match else None
 
 # DI seam: the executor matches ``amp_sdk.execute``'s signature so tests
 # can supply a fake that yields scripted StreamMessages without spawning
@@ -676,6 +702,9 @@ def _convert(
                 # its own validation.
                 for payload in scan_text_for_artifact_markers(asst_block.text):
                     yield ArtifactMarker(ts=now, payload=payload)
+                handoff_id = _detect_handoff(asst_block.text)
+                if handoff_id is not None:
+                    yield HandoffOffered(ts=now, new_thread_id=handoff_id)
             elif isinstance(asst_block, ToolUseContent):
                 # Atelier artifact tools produce a marker on the side; the
                 # ToolCall still flows so the chat shows the agent's call.

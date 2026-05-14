@@ -20,8 +20,15 @@ from src.application.http.schemas import (
     AgentSummary,
     DetachResponse,
     NewAgentRequest,
+    SwitchThreadRequest,
 )
-from src.domain.commands.agents import delete, detach, list_for_work, start
+from src.domain.commands.agents import (
+    delete,
+    detach,
+    list_for_work,
+    start,
+    switch_thread,
+)
 from src.domain.connections import ConnectionStore, ContextFetchError
 from src.domain.models import Agent, Context
 from src.domain.supervisor import AgentSupervisorService
@@ -268,6 +275,46 @@ def open_agent_in_console_endpoint(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"open in console failed: {exc}",
         ) from exc
+
+
+@router.post(
+    "/agents/{agent_slug}/switch-thread",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def switch_agent_thread(
+    agent_slug: str,
+    payload: SwitchThreadRequest,
+    workstore: WorkStoreDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    settings: SettingsDep,
+) -> None:
+    """Switch the agent's underlying provider thread to ``thread_id``.
+
+    Stops the current adapter, persists the new ``session_id``, writes a
+    ``handoff_accepted`` transcript marker, and re-registers the agent
+    lazily so the next user input spawns a fresh CLI subprocess against
+    the new thread.
+    """
+    try:
+        await switch_thread.execute(
+            workstore,
+            supervisor,
+            worktree_manager,
+            sharestore,
+            share_provisioner,
+            settings,
+            switch_thread.SwitchThreadRequest(
+                agent_slug=agent_slug,
+                new_thread_id=payload.thread_id,
+            ),
+        )
+    except switch_thread.AgentNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except switch_thread.InvalidThreadId as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
 
 
 def _to_summary(work_slug: str, agent: Agent, paths: WorkspacePaths) -> AgentSummary:

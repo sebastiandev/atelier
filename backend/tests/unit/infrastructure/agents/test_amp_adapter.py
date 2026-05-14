@@ -36,6 +36,7 @@ from src.domain.agents import (
     ArtifactMarker,
     CommonAgentConfig,
     Error,
+    HandoffOffered,
     MessageComplete,
     PermissionDecision,
     PermissionRequest,
@@ -133,6 +134,45 @@ def test_assistant_text_maps_to_message_complete() -> None:
     [event] = list(_convert(_assistant(TextContent(text="hello"))))
     assert isinstance(event, MessageComplete)
     assert event.text == "hello"
+
+
+def test_assistant_handoff_text_emits_handoff_offered_after_message() -> None:
+    """Amp's smart-mode auto-handoff produces an assistant message of the
+    form 'Handoff created — work continues in T-...'. The adapter mirrors
+    the text as a normal MessageComplete and emits a HandoffOffered so
+    the UI can offer the user a one-click switch."""
+    text = (
+        "Handoff created — work continues in "
+        "T-019e2766-01b7-70ce-90d8-be2b8d9cb40f. The new thread has the "
+        "full plan."
+    )
+    events = list(_convert(_assistant(TextContent(text=text))))
+    assert len(events) == 2
+    msg, handoff = events
+    assert isinstance(msg, MessageComplete)
+    assert isinstance(handoff, HandoffOffered)
+    assert handoff.new_thread_id == "T-019e2766-01b7-70ce-90d8-be2b8d9cb40f"
+
+
+def test_assistant_text_without_handoff_phrase_emits_no_handoff() -> None:
+    """A bare T-id in conversation (e.g. user discussing a thread) must
+    not trigger a handoff — detection is anchored on the 'Handoff
+    created' phrase to keep false-positives off the rail."""
+    text = "I'll continue in T-019e2766-01b7-70ce-90d8-be2b8d9cb40f tomorrow."
+    events = list(_convert(_assistant(TextContent(text=text))))
+    assert len(events) == 1
+    assert isinstance(events[0], MessageComplete)
+
+
+def test_assistant_handoff_phrase_without_uuid_emits_no_handoff() -> None:
+    """A malformed thread id (or none at all) must not produce a partial
+    HandoffOffered — we require a properly-shaped UUID to commit to a
+    switch target."""
+    events = list(
+        _convert(_assistant(TextContent(text="Handoff created — see Slack.")))
+    )
+    assert len(events) == 1
+    assert isinstance(events[0], MessageComplete)
 
 
 def test_assistant_tool_use_maps_to_tool_call() -> None:

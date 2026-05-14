@@ -19,6 +19,12 @@ export type PendingPermission = {
   seq: number;
 };
 
+export type PendingHandoff = {
+  new_thread_id: string;
+  ts: string;
+  seq: number;
+};
+
 export type ConnectionStatus =
   | "connecting"
   | "connected"
@@ -184,5 +190,36 @@ export function useAgentStream(agentSlug: string) {
     return Array.from(open.values());
   }, [events]);
 
-  return { events, status, sendInput, sendStop, sendPermission, pendingPermissions };
+  // The latest unaccepted handoff (Amp auto-handoff). A `handoff_offered`
+  // event opens one; a subsequent `handoff_accepted` (written by the
+  // backend after the switch lands) clears it. Survives WS reconnects
+  // for the same reason as `pendingPermissions`.
+  const pendingHandoff = useMemo<PendingHandoff | null>(() => {
+    let latest: PendingHandoff | null = null;
+    for (const ev of events) {
+      if (
+        ev.type === "handoff_offered" &&
+        typeof ev.new_thread_id === "string"
+      ) {
+        latest = {
+          new_thread_id: ev.new_thread_id,
+          ts: ev.ts,
+          seq: ev.seq,
+        };
+      } else if (ev.type === "handoff_accepted") {
+        latest = null;
+      }
+    }
+    return latest;
+  }, [events]);
+
+  return {
+    events,
+    status,
+    sendInput,
+    sendStop,
+    sendPermission,
+    pendingPermissions,
+    pendingHandoff,
+  };
 }

@@ -2153,6 +2153,60 @@ h5.md-h {
   justify-content: flex-end;
 }
 
+/* Handoff prompt — Amp auto-handoff offer. Sits in the same slot as the
+   permission prompts (above the composer); shares the alert-card look
+   but uses a neutral accent so it doesn't read as a security warning. */
+.handoff-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem 0.85rem;
+  margin: 0.5rem 1rem 0;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.handoff-prompt-hd {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+.handoff-prompt-icon {
+  font-size: 0.95rem;
+  color: var(--fg-3);
+}
+.handoff-prompt-title {
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+.handoff-prompt-body {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.handoff-prompt-thread {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+.handoff-prompt-error {
+  padding: 0.4rem 0.55rem;
+  background: color-mix(in oklch, oklch(0.55 0.18 25) 12%, var(--bg-2));
+  border-radius: 5px;
+  font-size: 0.82rem;
+  color: oklch(0.6 0.18 25);
+}
+.handoff-prompt-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
 .msg-permission {
   font-size: 0.82rem;
   color: var(--fg-3);

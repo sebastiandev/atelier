@@ -142,6 +142,22 @@ class SessionEstablished:
     session_id: str
 
 
+@dataclass(frozen=True, kw_only=True)
+class HandoffOffered:
+    """The agent's reply indicates a provider-side auto-handoff to a new
+    thread/session — currently emitted only by the Amp adapter, which
+    pattern-matches the CLI's "Handoff created — work continues in
+    T-XXX" assistant text. The original SDK stream typically ends with
+    that message, so we surface this event so the UI can offer the user
+    a one-click switch to continue in ``new_thread_id``. The switch
+    rebuilds the adapter with ``continue_thread=new_thread_id``.
+    """
+
+    type: Literal["handoff_offered"] = "handoff_offered"
+    ts: datetime
+    new_thread_id: str
+
+
 PermissionDecisionValue = Literal["allow", "allow_always", "deny"]
 
 
@@ -231,6 +247,7 @@ AgentEvent = (
     | ArtifactMarker
     | Error
     | SessionEstablished
+    | HandoffOffered
     | PermissionRequest
     | PermissionDecision
     | TurnMetrics
@@ -241,6 +258,7 @@ __all__ = [
     "AgentEvent",
     "ArtifactMarker",
     "Error",
+    "HandoffOffered",
     "MessageComplete",
     "MessageDelta",
     "PermissionDecision",

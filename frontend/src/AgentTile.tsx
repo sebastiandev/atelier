@@ -28,6 +28,7 @@ import {
   PERSONA_GLYPH,
   type Persona,
   listConnections,
+  switchAgentThread,
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
@@ -134,7 +135,18 @@ export function AgentTile({
     sendStop,
     sendPermission,
     pendingPermissions,
+    pendingHandoff,
   } = useAgentStream(agentSlug);
+  const [handoffSwitching, setHandoffSwitching] = useState(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  // Reset transient switching/error state whenever the offer goes away
+  // (handoff_accepted arrived) or a fresh offer appears. Without this,
+  // a second handoff in the same agent session would inherit the first
+  // attempt's error message.
+  useEffect(() => {
+    setHandoffSwitching(false);
+    setHandoffError(null);
+  }, [pendingHandoff?.new_thread_id]);
   // Provided by SortableCanvasCell when the tile is mounted on the
   // WorkView canvas; absent on the standalone /agents/{slug} page.
   const dragHandle = useDragHandle();
@@ -580,6 +592,29 @@ export function AgentTile({
             />
           ))}
         </div>
+      )}
+      {pendingHandoff && (
+        <HandoffPrompt
+          threadId={pendingHandoff.new_thread_id}
+          switching={handoffSwitching}
+          error={handoffError}
+          onSwitch={async () => {
+            setHandoffError(null);
+            setHandoffSwitching(true);
+            try {
+              await switchAgentThread(agentSlug, pendingHandoff.new_thread_id);
+              // The backend appends `handoff_accepted` to the transcript,
+              // which clears `pendingHandoff` via the WS replay. We leave
+              // `switching` true until the new event arrives so the
+              // button doesn't flash back to "Continue".
+            } catch (err) {
+              setHandoffError(
+                err instanceof Error ? err.message : String(err),
+              );
+              setHandoffSwitching(false);
+            }
+          }}
+        />
       )}
       <form className="composer" onSubmit={handleSubmit}>
         {pendingContexts.length > 0 && (
@@ -2054,6 +2089,50 @@ function PermissionPrompt({
           onClick={() => onDecide(prompt.request_id, "deny")}
         >
           Deny
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HandoffPrompt({
+  threadId,
+  switching,
+  error,
+  onSwitch,
+}: {
+  threadId: string;
+  switching: boolean;
+  error: string | null;
+  onSwitch: () => void;
+}) {
+  return (
+    <div
+      className="handoff-prompt"
+      role="alertdialog"
+      aria-label="Continue in new thread"
+    >
+      <div className="handoff-prompt-hd">
+        <span className="handoff-prompt-icon" aria-hidden>
+          ↪
+        </span>
+        <span className="handoff-prompt-title">
+          Provider handed off to a new thread
+        </span>
+      </div>
+      <div className="handoff-prompt-body">
+        <span className="hint">Continue this agent in</span>
+        <span className="handoff-prompt-thread mono">{threadId}</span>
+      </div>
+      {error && <div className="handoff-prompt-error">{error}</div>}
+      <div className="handoff-prompt-actions">
+        <button
+          type="button"
+          className="btn sm primary"
+          onClick={onSwitch}
+          disabled={switching}
+        >
+          {switching ? "Switching…" : "Continue here"}
         </button>
       </div>
     </div>

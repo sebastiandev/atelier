@@ -146,6 +146,13 @@ class MoveWorkRequest(BaseModel):
     must reference an existing project (422 otherwise)."""
 
 
+class SwitchThreadRequest(BaseModel):
+    """Body for POST /agents/{slug}/switch-thread — swap the agent's
+    underlying provider thread. Currently only meaningful for Amp."""
+
+    thread_id: str = Field(min_length=1)
+
+
 class JiraConfigSchema(BaseModel):
     type: Literal["jira"]
     url: str = Field(min_length=1)
@@ -309,6 +316,7 @@ __all__ = [
     "PatchWorkRequest",
     "ProjectDetail",
     "ProjectSummary",
+    "SwitchThreadRequest",
     "VerifyResponse",
     "WorkDetail",
     "WorkSummary",

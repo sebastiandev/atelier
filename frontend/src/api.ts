@@ -395,6 +395,30 @@ export function detachAgent(agentSlug: string): Promise<DetachAgentResult> {
 }
 
 /**
+ * Switch an agent's underlying provider thread to ``threadId`` — used
+ * to recover from Amp's auto-handoff where the SDK stream ends with
+ * "work continues in T-…". The backend stops the current adapter,
+ * persists the new ``session_id``, writes a ``handoff_accepted``
+ * transcript marker, and re-registers the agent lazily so the next
+ * user input spawns a fresh CLI subprocess against the new thread.
+ */
+export function switchAgentThread(
+  agentSlug: string,
+  threadId: string,
+): Promise<void> {
+  return fetch(`/api/agents/${agentSlug}/switch-thread`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ thread_id: threadId }),
+  }).then(async (r) => {
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`${r.status} ${r.statusText}: ${body}`);
+    }
+  });
+}
+
+/**
  * Open the agent's worktree (or source folder, if no worktree was
  * provisioned) in the OS file browser. Same shell-out pattern as
  * ``revealWork``.
