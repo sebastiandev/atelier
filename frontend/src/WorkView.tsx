@@ -21,6 +21,7 @@ import {
   type ProjectSummary,
   type SharedFolderSummary,
   type WorkDetail,
+  type WorkSummary,
   PERSONA_GLYPH,
   createAgent,
   detachAgent,
@@ -30,6 +31,7 @@ import {
   listArtifacts,
   listProjectShares,
   listProjects,
+  listWorks,
   openAgentInConsole,
   revealAgent,
   revealArtifact,
@@ -41,6 +43,7 @@ import { HandoffDialog } from "./HandoffDialog";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
 import { SortableCanvasCell } from "./SortableCanvasCell";
+import { Switcher, SwitcherChevron, type SwitcherItem } from "./Switcher";
 import {
   applyAgentOrder,
   useAgentOrderStore,
@@ -82,6 +85,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   // Projects list for the move picker — fetched lazily when the dialog
   // opens so the WorkView doesn't pay the cost on every mount.
   const [allProjects, setAllProjects] = useState<ProjectSummary[] | null>(null);
+  // Sibling-works list for the work switcher palette — fetched lazily
+  // on first Shift+W / chevron click.
+  const [allWorks, setAllWorks] = useState<WorkSummary[] | null>(null);
+  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
+  const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
   const artifactsRevision = useArtifactsRefresh((s) =>
     selectWorkRevision(s, workSlug),
   );
@@ -108,6 +116,49 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
 
+  // Switcher rows. Projects ordered pinned-first; sibling works scoped
+  // to the current work's project (or other loose works when the
+  // current work is loose). The current work itself is filtered out —
+  // switching to where you already are is a no-op the user doesn't need
+  // to see.
+  const projectItems = useMemo<SwitcherItem[]>(() => {
+    if (!allProjects) return [];
+    return [...allProjects]
+      .sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
+      .map((p) => ({
+        slug: p.slug,
+        name: p.name,
+        glyph: p.glyph,
+        hue: p.color,
+        href: `/projects/${p.slug}`,
+      }));
+  }, [allProjects]);
+
+  const workItems = useMemo<SwitcherItem[]>(() => {
+    if (!allWorks || !work) return [];
+    const scoped = allWorks.filter(
+      (w) => w.slug !== work.slug && w.project_slug === work.project_slug,
+    );
+    return [...scoped]
+      .sort((a, b) => {
+        if (a.status !== b.status) return a.status === "active" ? -1 : 1;
+        return b.created_at.localeCompare(a.created_at);
+      })
+      .map((w) => ({
+        slug: w.slug,
+        name: w.name,
+        subtitle:
+          (project?.name ?? (w.project_slug ? w.project_slug : "Loose work")) +
+          (w.status === "completed" ? " · completed" : ""),
+        glyph: project?.glyph,
+        hue: project?.color,
+        href: `/works/${w.slug}`,
+      }));
+  }, [allWorks, work, project]);
+
   // Apply the user-controlled override (handoff insertions, future drag
   // reorder) on top of the backend's creation order. The result drives
   // both the rail and the canvas so they always stay in sync.
@@ -122,10 +173,33 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       .filter((a): a is AgentSummary => a !== undefined);
   }, [agents, agentOrderOverride]);
 
-  // N → new agent. Mirrors the workspace-level shortcuts (W = new work,
-  // P = new project). Suppressed while a modal is open, when any chord
-  // modifier is held, and inside editable fields so typing "n" in the
-  // composer doesn't pop the dialog.
+  // Open the project switcher and lazy-fetch the project list if we
+  // don't have it yet. The switcher renders gracefully against an empty
+  // list and re-renders once the fetch resolves.
+  function openProjectSwitcher() {
+    if (allProjects === null) {
+      listProjects()
+        .then(setAllProjects)
+        .catch(() => setAllProjects([]));
+    }
+    setProjectSwitcherOpen(true);
+  }
+  function openWorkSwitcher() {
+    if (allWorks === null) {
+      listWorks()
+        .then(setAllWorks)
+        .catch(() => setAllWorks([]));
+    }
+    setWorkSwitcherOpen(true);
+  }
+
+  // Shortcuts:
+  //   N       → new agent
+  //   Shift+W → switch to a sibling work (palette)
+  //   Shift+P → switch project (palette)
+  // Suppressed while any modal is open, when a chord modifier is held,
+  // and inside editable fields so typing "n" in the composer doesn't
+  // pop the dialog.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (
@@ -133,7 +207,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         completeOpen ||
         moveOpen ||
         handoffSource !== null ||
-        deleteTarget !== null
+        deleteTarget !== null ||
+        projectSwitcherOpen ||
+        workSwitcherOpen
       )
         return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -141,14 +217,30 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable)
         return;
-      if (e.key === "n" || e.key === "N") {
+      if (e.shiftKey && (e.key === "W" || e.key === "w")) {
+        e.preventDefault();
+        openWorkSwitcher();
+      } else if (e.shiftKey && (e.key === "P" || e.key === "p")) {
+        e.preventDefault();
+        openProjectSwitcher();
+      } else if (!e.shiftKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
         setAgentDialogOpen(true);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [agentDialogOpen, completeOpen, moveOpen, handoffSource, deleteTarget]);
+  }, [
+    agentDialogOpen,
+    completeOpen,
+    moveOpen,
+    handoffSource,
+    deleteTarget,
+    projectSwitcherOpen,
+    workSwitcherOpen,
+    allProjects,
+    allWorks,
+  ]);
 
   // Refetch on revision bump (an agent emitted artifact_recorded) AND on
   // mount / workSlug change. Initial fetch is the same call so we don't
@@ -353,10 +445,18 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                 ) : null}
                 {project?.name ?? work.project_slug}
               </a>
+              <SwitcherChevron
+                onClick={openProjectSwitcher}
+                title="Switch project (Shift+P)"
+              />
             </>
           )}
           <span className="sep">/</span>
           <span className="now mono">{work.slug}</span>
+          <SwitcherChevron
+            onClick={openWorkSwitcher}
+            title="Switch work (Shift+W)"
+          />
         </span>
         <span className="hint" style={{ marginLeft: "0.5rem" }}>
           {work.name}
@@ -674,6 +774,32 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         <div className="toast" role="status" aria-live="polite">
           {toast}
         </div>
+      )}
+      {projectSwitcherOpen && (
+        <Switcher
+          placeholder="Switch to project…"
+          items={projectItems}
+          onClose={() => setProjectSwitcherOpen(false)}
+          emptyMessage={allProjects === null ? "Loading…" : "No projects yet"}
+        />
+      )}
+      {workSwitcherOpen && (
+        <Switcher
+          placeholder={
+            work.project_slug
+              ? `Switch work in ${project?.name ?? work.project_slug}…`
+              : "Switch loose work…"
+          }
+          items={workItems}
+          onClose={() => setWorkSwitcherOpen(false)}
+          emptyMessage={
+            allWorks === null
+              ? "Loading…"
+              : work.project_slug
+                ? "No sibling work in this project"
+                : "No other loose work"
+          }
+        />
       )}
     </div>
   );

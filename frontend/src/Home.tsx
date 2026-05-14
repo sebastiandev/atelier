@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NewWorkDialog } from "./NewWorkDialog";
+import { Switcher, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
 
@@ -52,6 +53,8 @@ export function Home() {
   const [view, setView] = useState<HomeView>(() => readHomeView());
   const [workDialogOpen, setWorkDialogOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
+  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
+  const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
 
   function changeView(next: HomeView) {
     setView(next);
@@ -73,27 +76,40 @@ export function Home() {
     refresh();
   }, []);
 
-  // Global shortcuts: W → new work, P → new project. Both ignored while
-  // any modal is open or focus is in an editable field, and skipped when
-  // a chord modifier is held (so Cmd+W still closes the tab).
+  // Global shortcuts:
+  //   W       → new work
+  //   P       → new project
+  //   Shift+W → switch work (palette over all works in the workspace)
+  //   Shift+P → switch project (palette)
+  // All ignored while any modal/palette is open or focus is in an
+  // editable field, and skipped when a chord modifier is held (so Cmd+W
+  // still closes the tab). Bare shortcuts gate on !e.shiftKey so they
+  // don't double-fire alongside the Shift+ variants.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (workDialogOpen || projectDialogOpen) return;
+      if (projectSwitcherOpen || workSwitcherOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
-      if (e.key === "w" || e.key === "W") {
+      if (e.shiftKey && (e.key === "W" || e.key === "w")) {
+        e.preventDefault();
+        setWorkSwitcherOpen(true);
+      } else if (e.shiftKey && (e.key === "P" || e.key === "p")) {
+        e.preventDefault();
+        setProjectSwitcherOpen(true);
+      } else if (!e.shiftKey && (e.key === "w" || e.key === "W")) {
         e.preventDefault();
         setWorkDialogOpen(true);
-      } else if (e.key === "p" || e.key === "P") {
+      } else if (!e.shiftKey && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
         setProjectDialogOpen(true);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [workDialogOpen, projectDialogOpen]);
+  }, [workDialogOpen, projectDialogOpen, projectSwitcherOpen, workSwitcherOpen]);
 
   async function handleCreateWork(payload: CreateWorkPayload) {
     await createWork(payload);
@@ -163,6 +179,38 @@ export function Home() {
   // home-launched dialogs aren't locked).
   const newWorkPreset: string | null | undefined =
     filter === "all" ? undefined : filter === "loose" ? null : filter.slug;
+
+  // Switcher rows: pinned projects first, then by name. Works follow
+  // their parent project's color/glyph so the palette reads at a glance.
+  const projectItems = useMemo<SwitcherItem[]>(() => {
+    const sorted = [...projects].sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return sorted.map((p) => ({
+      slug: p.slug,
+      name: p.name,
+      glyph: p.glyph,
+      hue: p.color,
+      href: `/projects/${p.slug}`,
+    }));
+  }, [projects]);
+
+  const workItems = useMemo<SwitcherItem[]>(() => {
+    return [...works]
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
+      .map((w) => {
+        const p = w.project_slug ? projectMap.get(w.project_slug) : undefined;
+        return {
+          slug: w.slug,
+          name: w.name,
+          subtitle: p ? p.name : "Loose work",
+          glyph: p?.glyph,
+          hue: p?.color,
+          href: `/works/${w.slug}`,
+        };
+      });
+  }, [works, projectMap]);
 
   return (
     <div className="home">
@@ -386,6 +434,22 @@ export function Home() {
             await refresh();
             setFilter({ slug: created.slug });
           }}
+        />
+      )}
+      {projectSwitcherOpen && (
+        <Switcher
+          placeholder="Switch to project…"
+          items={projectItems}
+          onClose={() => setProjectSwitcherOpen(false)}
+          emptyMessage="No projects yet"
+        />
+      )}
+      {workSwitcherOpen && (
+        <Switcher
+          placeholder="Switch to work…"
+          items={workItems}
+          onClose={() => setWorkSwitcherOpen(false)}
+          emptyMessage="No work yet"
         />
       )}
     </div>

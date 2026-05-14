@@ -3,14 +3,17 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type CreateWorkPayload,
   type ProjectDetail,
+  type ProjectSummary,
   type WorkSummary,
   createWork,
   getProject,
+  listProjects,
   listWorks,
 } from "./api";
 import { EditProjectDialog } from "./EditProjectDialog";
 import { NewWorkDialog } from "./NewWorkDialog";
 import { SharedFoldersSection } from "./SharedFoldersSection";
+import { Switcher, SwitcherChevron, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
 
@@ -43,20 +46,25 @@ function writePersistedView(slug: string, view: View): void {
 export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [works, setWorks] = useState<WorkSummary[]>([]);
+  const [allProjects, setAllProjects] = useState<ProjectSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("active");
   const [view, setView] = useState<View>(() => readPersistedView(projectSlug));
   const [workDialogOpen, setWorkDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
+  const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
 
   async function refresh() {
     try {
-      const [p, allWorks] = await Promise.all([
+      const [p, allWorks, projects] = await Promise.all([
         getProject(projectSlug),
         listWorks(),
+        listProjects(),
       ]);
       setProject(p);
       setWorks(allWorks.filter((w) => w.project_slug === projectSlug));
+      setAllProjects(projects);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -68,21 +76,32 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
     setView(readPersistedView(projectSlug));
   }, [projectSlug]);
 
+  // Shortcuts:
+  //   W       → new work (in this project)
+  //   Shift+W → switch to another work within this project
+  //   Shift+P → switch project
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (workDialogOpen) return;
+      if (workDialogOpen || editDialogOpen) return;
+      if (projectSwitcherOpen || workSwitcherOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
-      if (e.key === "w" || e.key === "W") {
+      if (e.shiftKey && (e.key === "W" || e.key === "w")) {
+        e.preventDefault();
+        setWorkSwitcherOpen(true);
+      } else if (e.shiftKey && (e.key === "P" || e.key === "p")) {
+        e.preventDefault();
+        setProjectSwitcherOpen(true);
+      } else if (!e.shiftKey && (e.key === "w" || e.key === "W")) {
         e.preventDefault();
         setWorkDialogOpen(true);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [workDialogOpen]);
+  }, [workDialogOpen, editDialogOpen, projectSwitcherOpen, workSwitcherOpen]);
 
   async function handleCreateWork(payload: CreateWorkPayload) {
     // Re-assert project_slug here so a stale dialog prop can't leak through.
@@ -103,6 +122,40 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
     const list = works.filter((w) => w.status === tab);
     return [...list].sort((a, b) => b.created_at.localeCompare(a.created_at));
   }, [works, tab]);
+
+  // Switcher rows: projects ordered pinned-first, works scoped to the
+  // current project (active first, then completed) so the palette shows
+  // what the user most likely wants to jump to.
+  const projectItems = useMemo<SwitcherItem[]>(() => {
+    const sorted = [...allProjects].sort((a, b) => {
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    return sorted.map((p) => ({
+      slug: p.slug,
+      name: p.name,
+      glyph: p.glyph,
+      hue: p.color,
+      href: `/projects/${p.slug}`,
+    }));
+  }, [allProjects]);
+
+  const workItems = useMemo<SwitcherItem[]>(() => {
+    if (!project) return [];
+    return [...works]
+      .sort((a, b) => {
+        if (a.status !== b.status) return a.status === "active" ? -1 : 1;
+        return b.created_at.localeCompare(a.created_at);
+      })
+      .map((w) => ({
+        slug: w.slug,
+        name: w.name,
+        subtitle: w.status === "completed" ? `${project.name} · completed` : project.name,
+        glyph: project.glyph,
+        hue: project.color,
+        href: `/works/${w.slug}`,
+      }));
+  }, [works, project]);
 
   if (error) {
     return (
@@ -136,6 +189,10 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
             </span>
             {project.name}
           </span>
+          <SwitcherChevron
+            onClick={() => setProjectSwitcherOpen(true)}
+            title="Switch project (Shift+P)"
+          />
         </span>
         <span className="hint" style={{ marginLeft: "0.5rem" }}>
           {project.slug}
@@ -351,6 +408,23 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
             // No project on screen any more — drop back to the workspace.
             window.location.href = "/";
           }}
+        />
+      )}
+
+      {projectSwitcherOpen && (
+        <Switcher
+          placeholder="Switch to project…"
+          items={projectItems}
+          onClose={() => setProjectSwitcherOpen(false)}
+          emptyMessage="No projects yet"
+        />
+      )}
+      {workSwitcherOpen && (
+        <Switcher
+          placeholder={`Switch work in ${project.name}…`}
+          items={workItems}
+          onClose={() => setWorkSwitcherOpen(false)}
+          emptyMessage="No work in this project"
         />
       )}
     </div>
