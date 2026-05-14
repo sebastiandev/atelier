@@ -126,6 +126,26 @@ class StubRepository:
     def get_artifact_by_slug(self, slug: str) -> Artifact | None:
         return self.artifacts.get(slug)
 
+    def list_non_terminal_pr_artifacts(self) -> list[tuple[str, "Artifact"]]:
+        work_by_id = {w.id: w for w in self.works.values()}
+        out: list[tuple[str, Artifact]] = []
+        for artifact in self.artifacts.values():
+            if artifact.type != "pr":
+                continue
+            if artifact.status not in ("open", "draft"):
+                continue
+            work = work_by_id.get(artifact.work_id)
+            if work is None or work.slug is None:
+                continue
+            out.append((work.slug, artifact))
+        return out
+
+    def update_artifact_status(self, slug: str, status: str) -> None:
+        artifact = self.artifacts.get(slug)
+        if artifact is None:
+            return
+        artifact.status = status
+
     def add_handoff(self, handoff: Handoff) -> Handoff:
         handoff.id = self._next_handoff_id
         self._next_handoff_id += 1

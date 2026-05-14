@@ -45,6 +45,7 @@ from src.infrastructure.filesystem import (
     WorkspacePaths,
 )
 from src.infrastructure.filesystem.share_provisioner import FsShareProvisioner
+from src.infrastructure.artifacts.pr_status_poller import PrStatusPoller
 from src.infrastructure.git import GitWorktreeManager
 from src.infrastructure.summarizer import build_summarizer
 from src.settings import Settings, get_settings
@@ -193,9 +194,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Anthropic-backed when an API key is set, structural fallback
         # otherwise — keeps the handoff feature usable offline.
         app.state.summarizer = build_summarizer(resolved.anthropic_api_key)
+
+        # Background loop that refreshes non-terminal PR artifact
+        # statuses against GitHub every 5 minutes. No-op when the user
+        # doesn't track any PRs — the cycle's first query short-
+        # circuits with an empty list and we never hit the network.
+        pr_status_poller = PrStatusPoller(workstore)
+        pr_status_poller.start()
+        app.state.pr_status_poller = pr_status_poller
+
         try:
             yield
         finally:
+            await pr_status_poller.stop()
             await supervisor.shutdown()
             engine.dispose()
 

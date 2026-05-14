@@ -21,6 +21,7 @@ from typing import Any
 
 from src.domain.agents.context_render import render_agent_contexts
 from src.domain.artifacts import Artifact, make_artifact, validate_status
+from src.domain.artifacts.models import PrArtifact
 from src.domain.models import Agent, AgentStatus, Context, Handoff, Work
 from src.domain.workstore._serde import (
     deserialize_contexts,
@@ -330,6 +331,20 @@ class WorkStoreService:
 
     def get_artifact_by_slug(self, slug: str) -> Artifact | None:
         return self._repo.get_artifact_by_slug(slug)
+
+    def list_non_terminal_pr_artifacts(self) -> list[tuple[str, PrArtifact]]:
+        with self._lock:
+            return self._repo.list_non_terminal_pr_artifacts()
+
+    def update_artifact_status(self, slug: str, status: str) -> None:
+        with self._lock:
+            existing = self._repo.get_artifact_by_slug(slug)
+            if existing is None:
+                # Caller may have raced a delete — silently drop. The
+                # poller doesn't care; it'll skip this slug next cycle.
+                return
+            validate_status(existing.type, status)
+            self._repo.update_artifact_status(slug, status)
 
     def record_handoff(self, req: RecordHandoffRequest) -> Handoff:
         with self._lock:

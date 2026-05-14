@@ -21,6 +21,7 @@ from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.domain.artifacts import Artifact, BaseArtifact
+from src.domain.artifacts.models import PrArtifact
 from src.domain.models import Agent, Handoff, Work
 from src.infrastructure.database.tables import (
     agents_table,
@@ -240,6 +241,32 @@ class SqlWorkRepository:
             return session.execute(
                 select(BaseArtifact).where(artifacts_table.c.slug == slug)
             ).scalar_one_or_none()
+
+    def list_non_terminal_pr_artifacts(self) -> list[tuple[str, PrArtifact]]:
+        # Pair each PR with its parent work's slug in one query so the
+        # caller doesn't have to re-resolve work_id → slug per row.
+        # Joined against works_table so a cascaded delete doesn't leave
+        # us with dangling rows.
+        with self._txn() as session:
+            stmt = (
+                select(works_table.c.slug, BaseArtifact)
+                .join(works_table, works_table.c.id == artifacts_table.c.work_id)
+                .where(artifacts_table.c.type == "pr")
+                .where(artifacts_table.c.status.in_(("open", "draft")))
+            )
+            rows = session.execute(stmt).all()
+            # ``rows`` is a list of (work_slug, BaseArtifact); the
+            # polymorphic mapping ensures each artifact is the concrete
+            # PrArtifact subclass (the type column filter guarantees it).
+            return [(work_slug, artifact) for work_slug, artifact in rows]
+
+    def update_artifact_status(self, slug: str, status: str) -> None:
+        with self._txn() as session:
+            session.execute(
+                update(artifacts_table)
+                .where(artifacts_table.c.slug == slug)
+                .values(status=status)
+            )
 
     def add_handoff(self, handoff: Handoff) -> Handoff:
         with self._txn() as session:
