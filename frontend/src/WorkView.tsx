@@ -813,11 +813,19 @@ const ARTIFACT_TYPE_LABEL: Record<ArtifactSummary["type"], string> = {
   doc: "DC",
 };
 
-// Status values that resolve to a "good" chip color (everything else
-// renders as the neutral / info chip via the cascade in styles.css).
-// "committed" is the doc terminal state, "merged" and "done" are the
-// PR / Jira ones.
-const ARTIFACT_GOOD_STATUSES = new Set(["merged", "done", "committed"]);
+// Status values that resolve to a "good" (green) chip color. PR
+// terminal states get their own colors below — ``merged`` is purple
+// (matches GitHub's convention; reads as distinct from "done"/Jira
+// completion) and ``closed`` is red. Everything else falls through to
+// the neutral / info chip via the cascade in styles.css.
+const ARTIFACT_GOOD_STATUSES = new Set(["done", "committed"]);
+
+function chipClassFor(status: string): string {
+  if (status === "merged") return "chip merged";
+  if (status === "closed") return "chip bad";
+  if (ARTIFACT_GOOD_STATUSES.has(status)) return "chip good";
+  return "chip info";
+}
 
 function ArtifactRow({ artifact }: { artifact: ArtifactSummary }) {
   const isClickable =
@@ -867,10 +875,7 @@ function ArtifactStatusChips({ artifact }: { artifact: ArtifactSummary }) {
   // location + git into ``status`` for docs (draft = shared, pending /
   // committed = worktree), so a second location chip would just be
   // noise in the rail's narrow column.
-  const statusClass = ARTIFACT_GOOD_STATUSES.has(artifact.status)
-    ? "chip good"
-    : "chip info";
-  return <span className={statusClass}>{artifact.status}</span>;
+  return <span className={chipClassFor(artifact.status)}>{artifact.status}</span>;
 }
 
 function RailSection({

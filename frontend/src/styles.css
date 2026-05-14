@@ -50,6 +50,10 @@
   --warn:   oklch(0.80 0.15  75);
   --danger: oklch(0.70 0.20  25);
   --info:   oklch(0.75 0.13 230);
+  /* PR-specific terminal state. ``merged`` is its own colour (matches
+     GitHub's purple) so it reads as distinct from ``done``/``committed``
+     greens at a glance. */
+  --merged: oklch(0.70 0.18 305);
 
   /* Radii + shadows */
   --radius: 8px;
@@ -100,6 +104,7 @@
   --warn:   oklch(0.75 0.15  75);
   --danger: oklch(0.65 0.20  25);
   --info:   oklch(0.70 0.13 230);
+  --merged: oklch(0.55 0.20 305);
 
   /* Accent overrides for higher-contrast soft tints on light bg */
   --accent-soft: oklch(0.62 0.18 var(--accent-h) / 0.12);
@@ -3099,6 +3104,16 @@ h5.md-h {
   border-color: color-mix(in oklch, var(--warn, var(--info)) 40%, transparent);
   background: color-mix(in oklch, var(--warn, var(--info)) 10%, transparent);
 }
+.chip.merged {
+  color: var(--merged);
+  border-color: color-mix(in oklch, var(--merged) 40%, transparent);
+  background: color-mix(in oklch, var(--merged) 10%, transparent);
+}
+.chip.bad {
+  color: var(--danger);
+  border-color: color-mix(in oklch, var(--danger) 40%, transparent);
+  background: color-mix(in oklch, var(--danger) 10%, transparent);
+}
 
 /* Canvas ----------------------------------------------------------------- */
 
@@ -3714,6 +3729,7 @@ h5.md-h {
   --warn:   var(--ansi-yellow);
   --danger: var(--ansi-red);
   --info:   var(--ansi-blue);
+  --merged: var(--ansi-magenta);
 }
 
 /* Persona color tokens — remap the warm hue ramp to ANSI brights */
@@ -3764,9 +3780,11 @@ h5.md-h {
 }
 
 /* Status bits → ANSI brights */
-[data-theme="ansi"] .chip.good { color: var(--ansi-green); }
-[data-theme="ansi"] .chip.warn { color: var(--ansi-yellow); }
-[data-theme="ansi"] .chip.info { color: var(--ansi-blue); }
+[data-theme="ansi"] .chip.good   { color: var(--ansi-green); }
+[data-theme="ansi"] .chip.warn   { color: var(--ansi-yellow); }
+[data-theme="ansi"] .chip.info   { color: var(--ansi-blue); }
+[data-theme="ansi"] .chip.merged { color: var(--ansi-magenta); }
+[data-theme="ansi"] .chip.bad    { color: var(--ansi-red); }
 [data-theme="ansi"] .dot.live     { background: var(--ansi-green);  color: var(--ansi-green); }
 [data-theme="ansi"] .dot.thinking { background: var(--ansi-yellow); color: var(--ansi-yellow); }
 [data-theme="ansi"] .dot.done     { background: var(--ansi-blue);   color: var(--ansi-blue); }
