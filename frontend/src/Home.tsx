@@ -13,6 +13,7 @@ import { NewWorkDialog } from "./NewWorkDialog";
 import { Switcher, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
+import { UpdateChip } from "./UpdateChip";
 
 // "all" shows everything (incl. loose). "loose" shows works without a
 // project. { slug } scopes to one project. Drives both the project-card
@@ -219,6 +220,7 @@ export function Home() {
           <span className="brand-mark" /> Atelier
         </a>
         <div className="spacer" />
+        <UpdateChip />
         <a className="btn-ghost-sm" href="/connections">
           Connections
         </a>

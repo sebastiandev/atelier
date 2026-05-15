@@ -61,6 +61,17 @@ export function listWorks(): Promise<WorkSummary[]> {
   return fetch("/api/works").then((r) => jsonOrThrow<WorkSummary[]>(r));
 }
 
+export type UpdateStatus = {
+  available: boolean;
+  repo_path: string;
+  current_sha: string | null;
+  latest_sha: string | null;
+};
+
+export function getUpdateStatus(): Promise<UpdateStatus> {
+  return fetch("/api/update-status").then((r) => jsonOrThrow<UpdateStatus>(r));
+}
+
 export function getWork(slug: string): Promise<WorkDetail> {
   return fetch(`/api/works/${slug}`).then((r) => jsonOrThrow<WorkDetail>(r));
 }

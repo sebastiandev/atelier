@@ -4532,3 +4532,100 @@ h5.md-h {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--bg);
 }
+
+/* ============================================================== */
+/* Update-available chip + popover                                  */
+/* ============================================================== */
+.update-chip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.update-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+  border: 1px solid var(--accent-line);
+  color: var(--accent);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.update-chip:hover {
+  background: color-mix(in oklch, var(--accent) 22%, transparent);
+}
+.update-chip-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 20%, transparent);
+}
+.update-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 320px;
+  max-width: 420px;
+  padding: 0.85rem 0.9rem;
+  background: var(--bg-elev, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  z-index: 30;
+}
+.update-popover-hd {
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  font-size: 13px;
+}
+.update-popover-body {
+  margin: 0 0 0.6rem 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.update-popover-body code {
+  background: var(--bg-3, color-mix(in oklch, var(--fg) 7%, transparent));
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  font-size: 12px;
+}
+.update-popover-path {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin-bottom: 0.6rem;
+  font-size: 12px;
+  color: var(--muted);
+}
+.update-popover-path code {
+  flex: 1;
+  background: var(--bg-3, color-mix(in oklch, var(--fg) 7%, transparent));
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.update-popover-path-label {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--fg-3, var(--muted));
+}
+.update-popover-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.update-popover-copy {
+  flex: 1;
+  font-size: 12px;
+  padding: 0.4rem 0.6rem;
+}

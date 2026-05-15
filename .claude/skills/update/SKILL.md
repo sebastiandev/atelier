@@ -23,18 +23,24 @@ git rev-parse --abbrev-ref HEAD
 
 ### 2. Pull
 
+Capture HEAD before pulling so subsequent steps can detect a no-op:
+
 ```bash
+PRE_HEAD=$(git rev-parse HEAD)
 git pull --ff-only origin main
+POST_HEAD=$(git rev-parse HEAD)
 ```
 
-If that fails (diverged branch), fall back to `git pull --rebase origin main` and surface any merge conflicts to the user — don't try to resolve them blindly.
+If `git pull` fails (diverged branch), fall back to `git pull --rebase origin main` and surface any merge conflicts to the user — don't try to resolve them blindly.
+
+**"Already up to date" is not a reason to stop.** If `PRE_HEAD == POST_HEAD` the local branch was already at `origin/main` — but the user may have pulled manually since the backend last started, leaving FS migrations un-run or DB migrations un-applied. Continue to steps 3-5 regardless. The skills are idempotent; running them on a no-op pull is cheap and safety-relevant.
 
 ### 3. Install dependencies if lockfiles changed
 
-Diff the pull range:
+Diff the pull range (empty when `PRE_HEAD == POST_HEAD`):
 
 ```bash
-git diff --name-only HEAD@{1} HEAD -- backend/uv.lock backend/pyproject.toml frontend/package-lock.json frontend/package.json
+git diff --name-only "$PRE_HEAD" "$POST_HEAD" -- backend/uv.lock backend/pyproject.toml frontend/package-lock.json frontend/package.json
 ```
 
 - If `backend/uv.lock` or `backend/pyproject.toml` changed → `cd backend && uv sync` (use `uv sync` rather than activating a venv; it's faster and skips the activation dance).
@@ -46,11 +52,18 @@ Skip silently when nothing changed — this is the common case and shouldn't add
 
 DB schema migrations auto-apply on backend boot, so we don't run them here. **FS-side state migrations (transcripts, on-disk JSON shape changes) need explicit invocation** — invoke the `/migrate` skill to do this, which globs `scripts/migrate-*.py` and runs each.
 
+**Always run this step, even on a no-op pull.** Migrations are idempotent (see the `/migrate` contract); the cost of a re-run is "no FS-side migrations registered" or "0 files rewritten", and the benefit is covering the case where the user pulled manually before invoking this skill.
+
 ### 5. Tell the user what (if anything) needs a restart
 
-- If backend dependencies changed OR there are commits touching `backend/src/infrastructure/database/migrations.py` in the pulled range → the backend needs a restart so DB migrations apply. Surface this; don't restart yourself.
-- If frontend dependencies changed OR commits touched `frontend/src/`, `frontend/index.html`, or `frontend/vite.config.ts` → recommend a Vite refresh / restart. Same caveat — surface, don't act.
-- If nothing changed in either layer, say so and stop.
+Use the pulled range (`$PRE_HEAD..$POST_HEAD`) — empty on a no-op pull:
+
+- If backend dependencies changed OR commits in the pulled range touch `backend/src/infrastructure/database/migrations.py` → the backend needs a restart so DB migrations apply. Surface this; don't restart yourself.
+- If frontend dependencies changed OR commits in the pulled range touch `frontend/src/`, `frontend/index.html`, or `frontend/vite.config.ts` → recommend a Vite refresh / restart. Same caveat — surface, don't act.
+
+**No-op pull (`PRE_HEAD == POST_HEAD`) extra step:** the user may already have pulled commits manually that haven't been consumed by a backend restart. We can't tell from git state alone whether they've restarted since their last pull. Add a one-line, non-alarming reminder: *"If you pulled commits since the last backend start, restart the backend now so DB migrations apply."* — then stop.
+
+If nothing changed in either layer AND this was an actual pull that moved HEAD, say so and stop without the reminder.
 
 ### 6. Show the new HEAD
 

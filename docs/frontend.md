@@ -79,6 +79,10 @@ Home, Project, Work, Agent, and Connections all share the same chrome — brand 
 
 Project crumb pattern: `← Workspace` (`btn-ghost-sm` button, links to `/`) followed by a `crumbs` span with `/ [glyph chip] {Name}`. WorkView extends with another `/ {WRK-slug}` and a folder-pill on the right.
 
+### UpdateChip
+
+`UpdateChip.tsx` lives in every topbar (Home, ProjectScreen, WorkView) just before `TweaksToggle`. It polls `GET /api/update-status` every 10 minutes; when the backend reports `available=true` it renders a small accent-tinted pill ("Update available"). Clicking it reveals a popover with the repo path and a single primary action that copies `cd <repo> && claude` to the clipboard — the chip is a hint to run `/update` inside Claude, not a self-acting upgrader. Dismiss persists in `sessionStorage` keyed on the upstream SHA, so the chip reappears when a new upstream commit lands even if previously dismissed.
+
 ## AgentTile — modes
 
 `AgentTile` is the same component in two contexts:

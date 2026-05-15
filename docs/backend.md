@@ -403,6 +403,14 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 
 `infrastructure/git/branches.py:list_branches(path)` shells out to `git for-each-ref --sort=-committerdate refs/heads/` so the New Agent dialog's branch picker can offer existing branches sorted by recency. Returns `[]` for non-git / missing paths so the FE renders a friendly "not a git repo" hint instead of branching on error codes. Surfaced via `GET /api/git/branches?path=<absolute>` (`application/http/routes/git.py`).
 
+## UpdateChecker
+
+`domain/update_check/` defines a flat `UpdateStatus` dataclass and a single async `UpdateChecker` Protocol. `infrastructure/update_check/git_checker.py` implements it by shelling out to `git fetch <remote> <branch>` and comparing local `HEAD` to the fetched tip; the repo root is derived from this package's location (`Path(__file__).resolve().parents[4]`), so the backend always tracks its own checkout regardless of where the process was launched.
+
+`UpdateCheckPoller` (`infrastructure/update_check/poller.py`) owns the cycle: it runs one check on start (so a user who reboots after pulling sees the chip immediately) then loops every 2h. The poller's `status` attribute is the canonical snapshot for the process; `GET /api/update-status` (see `api-flows.md`) reads it directly. Errors during fetch are swallowed and surfaced as `None` — the last successful status is retained so a flaky network doesn't flicker the chip off.
+
+The checker is inert on hosts without git installed or without a `.git/` directory — `available` defaults to `false` and the chip stays hidden. There's no auth: the only network call is `git fetch origin main`, which works for any public/cloned repo without extra credentials.
+
 ## ConnectionStore
 
 `domain/connections/`. Source-system credentials (Jira, Sentry, Honeycomb) split across two stores by design:

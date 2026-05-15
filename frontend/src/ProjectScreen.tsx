@@ -16,6 +16,7 @@ import { SharedFoldersSection } from "./SharedFoldersSection";
 import { Switcher, SwitcherChevron, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
+import { UpdateChip } from "./UpdateChip";
 
 type Tab = "active" | "completed";
 type View = "tiles" | "list";
@@ -198,6 +199,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           {project.slug}
         </span>
         <div className="spacer" />
+        <UpdateChip />
         <TweaksToggle />
         <ThemeToggle />
       </header>

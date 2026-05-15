@@ -16,6 +16,7 @@ from src.application.http.routes import (
     projects,
     providers,
     shared_folders,
+    update_status,
     works,
 )
 from src.application.ws import agents as ws_agents
@@ -48,6 +49,7 @@ from src.infrastructure.filesystem.share_provisioner import FsShareProvisioner
 from src.infrastructure.artifacts.pr_status_poller import PrStatusPoller
 from src.infrastructure.git import GitWorktreeManager
 from src.infrastructure.summarizer import build_summarizer
+from src.infrastructure.update_check import GitUpdateChecker, UpdateCheckPoller
 from src.settings import Settings, get_settings
 
 
@@ -203,9 +205,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         pr_status_poller.start()
         app.state.pr_status_poller = pr_status_poller
 
+        # Background loop that compares this checkout to origin/main
+        # every 2h so the frontend can show an "update available"
+        # chip. The checker is inert (returns None) on non-git or
+        # offline hosts; the route degrades to available=false in
+        # that case.
+        update_checker = GitUpdateChecker()
+        update_check_poller = UpdateCheckPoller(update_checker)
+        update_check_poller.start()
+        app.state.update_checker = update_checker
+        app.state.update_check_poller = update_check_poller
+
         try:
             yield
         finally:
+            await update_check_poller.stop()
             await pr_status_poller.stop()
             await supervisor.shutdown()
             engine.dispose()
@@ -221,6 +235,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(fs.router, prefix="/api")
     app.include_router(git.router, prefix="/api")
     app.include_router(shared_folders.router, prefix="/api")
+    app.include_router(update_status.router, prefix="/api")
     app.include_router(ws_agents.router, prefix="/api")
     return app
 
