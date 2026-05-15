@@ -482,15 +482,24 @@ def _event_to_dict(event: AgentEvent) -> dict[str, Any]:
 
 
 def _artifact_to_dict(artifact: Artifact) -> dict[str, Any]:
+    """Flatten a typed artifact into a wire-shaped dict.
+
+    Each subtype owns a different subset of the optional fields
+    (``url`` / ``repo`` / ``doc_path``); the frontend's
+    ``ArtifactSummary`` expects all three keys with ``null`` for the
+    ones that don't apply. ``getattr`` keeps this branch-free and
+    immune to a future subtype that adds a field but not a method —
+    new keys become null without code changes here.
+    """
     return {
         "slug": artifact.slug,
         "type": artifact.type,
         "title": artifact.title,
         "status": artifact.status,
         "created_at": artifact.created_at.isoformat(),
-        "url": artifact.url,
-        "repo": artifact.repo,
-        "doc_path": artifact.doc_path,
+        "url": getattr(artifact, "url", None),
+        "repo": getattr(artifact, "repo", None),
+        "doc_path": getattr(artifact, "doc_path", None),
     }
 
 
