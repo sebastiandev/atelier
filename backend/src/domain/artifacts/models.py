@@ -55,12 +55,19 @@ class BaseArtifact:
 class PrArtifact(BaseArtifact):
     """Pull-request artifact. ``url`` is the canonical identifier
     (``https://github.com/...``); ``repo`` is an optional grouping
-    shorthand the FE uses to badge multi-repo work."""
+    shorthand the FE uses to badge multi-repo work.
+
+    ``pr_etag`` carries the GitHub response ETag from the last
+    successful fetch so the poller can send ``If-None-Match`` and let
+    304s skip the rate-limit budget. ``None`` on PRs we've never
+    fetched against (e.g. just-recorded artifact, or a 404 fallback).
+    """
 
     type: ArtifactType = "pr"
     status: PrStatus  # type: ignore[assignment]
     url: str
     repo: str | None = None
+    pr_etag: str | None = None
 
 
 @dataclass(kw_only=True)

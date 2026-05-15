@@ -24,7 +24,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 
 class SchemaMismatchError(RuntimeError):
@@ -167,6 +167,16 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
                 )
             )
             existing = 10
+        if existing == 10:
+            # v10 → v11: persist the GitHub response ETag from the
+            # last successful PR fetch so the background poller can
+            # send ``If-None-Match`` and let 304s skip the rate-limit
+            # budget. Nullable column; existing rows stay NULL and
+            # the fetcher just sends no header for them on first hit.
+            conn.execute(
+                text("ALTER TABLE artifacts ADD COLUMN pr_etag TEXT")
+            )
+            existing = 11
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

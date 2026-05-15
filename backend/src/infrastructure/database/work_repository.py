@@ -260,12 +260,26 @@ class SqlWorkRepository:
             # PrArtifact subclass (the type column filter guarantees it).
             return [(work_slug, artifact) for work_slug, artifact in rows]
 
-    def update_artifact_status(self, slug: str, status: str) -> None:
+    def update_artifact_status(
+        self, slug: str, status: str, *, pr_etag: str | None = None
+    ) -> None:
+        values: dict[str, str | None] = {"status": status}
+        if pr_etag is not None:
+            values["pr_etag"] = pr_etag
         with self._txn() as session:
             session.execute(
                 update(artifacts_table)
                 .where(artifacts_table.c.slug == slug)
-                .values(status=status)
+                .values(**values)
+            )
+
+    def update_pr_artifact_etag(self, slug: str, pr_etag: str) -> None:
+        with self._txn() as session:
+            session.execute(
+                update(artifacts_table)
+                .where(artifacts_table.c.slug == slug)
+                .where(artifacts_table.c.type == "pr")
+                .values(pr_etag=pr_etag)
             )
 
     def add_handoff(self, handoff: Handoff) -> Handoff:

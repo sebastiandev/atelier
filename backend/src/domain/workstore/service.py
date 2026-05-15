@@ -336,7 +336,9 @@ class WorkStoreService:
         with self._lock:
             return self._repo.list_non_terminal_pr_artifacts()
 
-    def update_artifact_status(self, slug: str, status: str) -> None:
+    def update_artifact_status(
+        self, slug: str, status: str, *, pr_etag: str | None = None
+    ) -> None:
         with self._lock:
             existing = self._repo.get_artifact_by_slug(slug)
             if existing is None:
@@ -344,7 +346,11 @@ class WorkStoreService:
                 # poller doesn't care; it'll skip this slug next cycle.
                 return
             validate_status(existing.type, status)
-            self._repo.update_artifact_status(slug, status)
+            self._repo.update_artifact_status(slug, status, pr_etag=pr_etag)
+
+    def update_pr_artifact_etag(self, slug: str, pr_etag: str) -> None:
+        with self._lock:
+            self._repo.update_pr_artifact_etag(slug, pr_etag)
 
     def record_handoff(self, req: RecordHandoffRequest) -> Handoff:
         with self._lock:

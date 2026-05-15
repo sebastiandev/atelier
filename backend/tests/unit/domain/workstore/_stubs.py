@@ -140,11 +140,21 @@ class StubRepository:
             out.append((work.slug, artifact))
         return out
 
-    def update_artifact_status(self, slug: str, status: str) -> None:
+    def update_artifact_status(
+        self, slug: str, status: str, *, pr_etag: str | None = None
+    ) -> None:
         artifact = self.artifacts.get(slug)
         if artifact is None:
             return
         artifact.status = status
+        if pr_etag is not None and hasattr(artifact, "pr_etag"):
+            artifact.pr_etag = pr_etag
+
+    def update_pr_artifact_etag(self, slug: str, pr_etag: str) -> None:
+        artifact = self.artifacts.get(slug)
+        if artifact is None or artifact.type != "pr":
+            return
+        artifact.pr_etag = pr_etag
 
     def add_handoff(self, handoff: Handoff) -> Handoff:
         handoff.id = self._next_handoff_id

@@ -159,10 +159,30 @@ class WorkStore(Protocol):
         need a refresh."""
         ...
 
-    def update_artifact_status(self, slug: str, status: str) -> None:
-        """Persist a new status on an existing artifact. Validated
-        against the type's allowed vocabulary — invalid values raise
-        ``InvalidStatus``. No-op if the row is gone."""
+    def update_artifact_status(
+        self, slug: str, status: str, *, pr_etag: str | None = None
+    ) -> None:
+        """Persist a new status on an existing artifact, optionally
+        rotating the PR's cached ETag in the same write.
+
+        ``pr_etag`` is set on every successful PR fetch — refreshed
+        rows get the new validator so the next cycle can send it as
+        ``If-None-Match``. ``None`` leaves the column untouched (the
+        common case for non-PR artifacts; the poller never calls this
+        with a non-None etag outside the PR refresh path).
+
+        Validated against the type's allowed vocabulary — invalid
+        values raise ``InvalidStatus``. No-op if the row is gone.
+        """
+        ...
+
+    def update_pr_artifact_etag(self, slug: str, pr_etag: str) -> None:
+        """Persist a fresh ETag without changing the row's status.
+
+        Used after a 304 confirms our cached state is current and the
+        remote returned a different validator (rare but allowed by
+        spec). No-op if the row is gone or no longer a PR.
+        """
         ...
 
     def record_handoff(self, req: RecordHandoffRequest) -> Handoff: ...
@@ -202,7 +222,10 @@ class WorkRepository(Protocol):
     def list_artifacts_for_work(self, work_slug: str) -> list[Artifact]: ...
     def get_artifact_by_slug(self, slug: str) -> Artifact | None: ...
     def list_non_terminal_pr_artifacts(self) -> list[tuple[str, PrArtifact]]: ...
-    def update_artifact_status(self, slug: str, status: str) -> None: ...
+    def update_artifact_status(
+        self, slug: str, status: str, *, pr_etag: str | None = None
+    ) -> None: ...
+    def update_pr_artifact_etag(self, slug: str, pr_etag: str) -> None: ...
     def add_handoff(self, handoff: Handoff) -> Handoff: ...
     def list_handoffs_for_work(self, work_slug: str) -> list[Handoff]: ...
 

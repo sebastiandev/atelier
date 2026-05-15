@@ -68,12 +68,37 @@ def parse_pr_url(url: str) -> PrRef | None:
     )
 
 
-class PrStateFetcher(Protocol):
-    """Look up a PR's current status. Returns ``None`` when the remote
-    is unreachable, the PR is gone, or auth is missing — the poller
-    treats ``None`` as "leave the row alone, try again next cycle"."""
+@dataclass(frozen=True)
+class FetchedPrState:
+    """Result of one PR fetch.
 
-    async def __call__(self, ref: PrRef) -> str | None: ...
+    ``not_modified`` is True when the remote returned 304 (GitHub
+    confirmed our cached state is current); in that case ``status``
+    carries no new information and the caller should leave the row
+    alone. ``etag`` reflects the freshest cache validator either way
+    — a new one on 200, the previously-stored one on 304, or ``None``
+    when the remote didn't supply one.
+    """
+
+    status: str | None
+    etag: str | None
+    not_modified: bool
+
+
+class PrStateFetcher(Protocol):
+    """Look up a PR's current status with optional ETag round-trip.
+
+    Returns ``None`` when the remote is unreachable, the PR is gone,
+    or auth is missing — the poller treats ``None`` as "leave the row
+    alone, try again next cycle". Returns a ``FetchedPrState`` with
+    ``not_modified=True`` for a 304 (no state change since
+    ``if_none_match``), or with ``not_modified=False`` and a
+    populated ``status`` + new ``etag`` for a 200.
+    """
+
+    async def __call__(
+        self, ref: PrRef, *, if_none_match: str | None = None
+    ) -> "FetchedPrState | None": ...
 
 
 def is_terminal_pr_status(status: str) -> bool:
@@ -88,6 +113,7 @@ def is_terminal_pr_status(status: str) -> bool:
 
 __all__ = [
     "PR_STATUSES",
+    "FetchedPrState",
     "PrRef",
     "PrStateFetcher",
     "is_terminal_pr_status",

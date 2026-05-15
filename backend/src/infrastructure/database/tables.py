@@ -266,6 +266,13 @@ artifacts_table = Table(
     Column("repo", String, nullable=True),
     Column("url", String, nullable=True),
     Column("doc_path", String, nullable=True),
+    # ETag from the last successful GitHub PR fetch. PR-only column;
+    # NULL on every other artifact type and on PRs we haven't fetched
+    # against yet. Persistence lets the poller send
+    # ``If-None-Match: <etag>`` after a restart, so a freshly-booted
+    # backend doesn't spend its rate-limit budget re-confirming
+    # statuses the last process already confirmed.
+    Column("pr_etag", String, nullable=True),
 )
 
 

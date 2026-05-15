@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from src.domain.artifacts.pr_status import PrRef
+from src.domain.artifacts.pr_status import FetchedPrState, PrRef
 from src.domain.commands.artifacts import refresh_pr_statuses
 from src.domain.workstore import (
     CreateWorkRequest,
@@ -58,10 +58,25 @@ def _seed_pr(store: WorkStoreService, *, status: str, url: str) -> str:
 
 def _scripted_fetcher(
     by_url: dict[str, str | None],
-) -> Callable[[PrRef], Awaitable[str | None]]:
-    async def fetch(ref: PrRef) -> str | None:
+    *,
+    etag: str | None = None,
+) -> Callable[..., Awaitable[FetchedPrState | None]]:
+    """Build a fetcher whose return shape matches ``PrStateFetcher``.
+
+    ``by_url[<url>] = None`` means "skip this row" (network failure);
+    a status string yields a ``FetchedPrState`` carrying that status.
+    """
+
+    async def fetch(
+        ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
         key = f"https://github.com/{ref.owner}/{ref.repo}/pull/{ref.number}"
-        return by_url.get(key)
+        if key not in by_url:
+            return None
+        value = by_url[key]
+        if value is None:
+            return None
+        return FetchedPrState(status=value, etag=etag, not_modified=False)
 
     return fetch
 
@@ -73,7 +88,9 @@ async def test_empty_pool_is_a_clean_noop() -> None:
     store = _make_store()
     calls = 0
 
-    async def fetcher(_ref: PrRef) -> str | None:
+    async def fetcher(
+        _ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
         nonlocal calls
         calls += 1
         return None
@@ -96,7 +113,9 @@ async def test_terminal_prs_are_skipped() -> None:
 
     calls = 0
 
-    async def fetcher(_ref: PrRef) -> str | None:
+    async def fetcher(
+        _ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
         nonlocal calls
         calls += 1
         return "merged"
@@ -170,7 +189,9 @@ async def test_unparseable_url_is_skipped_without_calling_fetcher() -> None:
     )
     calls = 0
 
-    async def fetcher(_ref: PrRef) -> str | None:
+    async def fetcher(
+        _ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
         nonlocal calls
         calls += 1
         return "merged"
@@ -190,13 +211,96 @@ async def test_fetcher_exception_does_not_kill_cycle() -> None:
         store, status="open", url="https://github.com/o/r/pull/11"
     )
 
-    async def fetcher(ref: PrRef) -> str | None:
+    async def fetcher(
+        ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
         if ref.number == 10:
             raise RuntimeError("boom")
-        return "merged"
+        return FetchedPrState(status="merged", etag=None, not_modified=False)
 
     result = await refresh_pr_statuses.execute(store, fetcher)
     assert result.checked == 1
     assert result.updated == 1
     assert result.skipped == 1
     assert store.get_artifact_by_slug(slug_b).status == "merged"
+
+
+@pytest.mark.anyio
+async def test_etag_is_sent_on_subsequent_calls() -> None:
+    """After a successful fetch persists an ETag, the next cycle must
+    send it as ``If-None-Match`` so GitHub can return 304 without
+    burning the rate budget."""
+    store = _make_store()
+    _seed_pr(store, status="open", url="https://github.com/o/r/pull/50")
+    seen_etags: list[str | None] = []
+
+    async def fetcher(
+        ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
+        seen_etags.append(if_none_match)
+        return FetchedPrState(
+            status="open", etag='"abc"', not_modified=False
+        )
+
+    # First pass — no etag stored yet, so we send None.
+    await refresh_pr_statuses.execute(store, fetcher)
+    # Second pass — first pass should have persisted '"abc"'.
+    await refresh_pr_statuses.execute(store, fetcher)
+    assert seen_etags == [None, '"abc"']
+
+
+@pytest.mark.anyio
+async def test_304_short_circuits_without_status_write() -> None:
+    """A 304 (``not_modified=True``) means the cached status is
+    authoritative — no DB write, no ``checked`` bump, but a
+    ``not_modified`` count for visibility."""
+    store = _make_store()
+    slug = _seed_pr(
+        store, status="open", url="https://github.com/o/r/pull/51"
+    )
+
+    async def fetcher(
+        _ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
+        return FetchedPrState(
+            status=None, etag='"unchanged"', not_modified=True
+        )
+
+    result = await refresh_pr_statuses.execute(store, fetcher)
+    assert result.checked == 0
+    assert result.updated == 0
+    assert result.not_modified == 1
+    assert store.get_artifact_by_slug(slug).status == "open"
+
+
+@pytest.mark.anyio
+async def test_etag_rotation_on_304_persists_new_validator() -> None:
+    """Spec allows the server to rotate the ETag while answering 304.
+    When that happens, we should persist the fresh validator so the
+    next cycle sends the right header."""
+    store = _make_store()
+    slug = _seed_pr(
+        store, status="open", url="https://github.com/o/r/pull/52"
+    )
+    # Seed the artifact with an existing etag by running one fetch.
+
+    async def initial_fetcher(
+        _ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
+        return FetchedPrState(
+            status="open", etag='"v1"', not_modified=False
+        )
+
+    await refresh_pr_statuses.execute(store, initial_fetcher)
+    assert store.get_artifact_by_slug(slug).pr_etag == '"v1"'
+
+    async def rotating_fetcher(
+        _ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
+        # Server rotated the etag while reporting "still unchanged".
+        return FetchedPrState(
+            status=None, etag='"v2"', not_modified=True
+        )
+
+    await refresh_pr_statuses.execute(store, rotating_fetcher)
+    assert store.get_artifact_by_slug(slug).pr_etag == '"v2"'

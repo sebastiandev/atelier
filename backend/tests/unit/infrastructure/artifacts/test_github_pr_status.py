@@ -86,7 +86,64 @@ async def test_fetcher_maps_github_response() -> None:
         result = await fetcher(
             PrRef(host="github.com", owner="o", repo="r", number=123)
         )
-    assert result == "merged"
+    assert result is not None
+    assert result.status == "merged"
+    assert result.not_modified is False
+
+
+@pytest.mark.anyio
+async def test_fetcher_sends_if_none_match_when_etag_supplied() -> None:
+    """When the caller passes an existing ETag, the adapter must send
+    it as ``If-None-Match`` so GitHub can short-circuit unchanged PRs
+    with a 304 (which doesn't count against the rate-limit budget)."""
+
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Echo back any conditional header the test cares to assert on.
+        if "If-None-Match" in request.headers:
+            captured["if_none_match"] = request.headers["If-None-Match"]
+        return httpx.Response(
+            200,
+            headers={"ETag": '"new-etag-v2"'},
+            json={"state": "open", "merged": False, "draft": False},
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        fetcher = GitHubPrStateFetcher(client, token_supplier=lambda: "tok")
+        result = await fetcher(
+            PrRef(host="github.com", owner="o", repo="r", number=1),
+            if_none_match='"old-etag-v1"',
+        )
+    assert captured["if_none_match"] == '"old-etag-v1"'
+    assert result is not None
+    assert result.status == "open"
+    assert result.etag == '"new-etag-v2"'
+    assert result.not_modified is False
+
+
+@pytest.mark.anyio
+async def test_fetcher_returns_not_modified_on_304() -> None:
+    """A 304 says the cached state is current. The adapter returns a
+    ``not_modified=True`` sentinel so the caller can skip the DB
+    write — and reuses the validator we sent so callers don't have
+    to thread state through."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(304)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        fetcher = GitHubPrStateFetcher(client, token_supplier=lambda: "tok")
+        result = await fetcher(
+            PrRef(host="github.com", owner="o", repo="r", number=1),
+            if_none_match='"abc123"',
+        )
+    assert result is not None
+    assert result.not_modified is True
+    assert result.etag == '"abc123"'
+    assert result.status is None
 
 
 @pytest.mark.anyio

@@ -28,7 +28,7 @@ from typing import Any
 
 import httpx
 
-from src.domain.artifacts.pr_status import PrRef
+from src.domain.artifacts.pr_status import FetchedPrState, PrRef
 
 
 # Pluggable so tests / future "GitHub connection" wiring can swap in a
@@ -67,7 +67,9 @@ class GitHubPrStateFetcher:
         self._client = client
         self._token_supplier = token_supplier or _gh_auth_token
 
-    async def __call__(self, ref: PrRef) -> str | None:
+    async def __call__(
+        self, ref: PrRef, *, if_none_match: str | None = None
+    ) -> FetchedPrState | None:
         # Re-fetch the token each call rather than cache once. ``gh auth``
         # state can change (logout, scope refresh) and the cost is one
         # subprocess invocation every ~5 minutes — negligible.
@@ -83,6 +85,11 @@ class GitHubPrStateFetcher:
             return None
         url = f"{_GITHUB_API}/repos/{ref.owner}/{ref.repo}/pulls/{ref.number}"
         headers = {**_HEADERS_BASE, "Authorization": f"Bearer {token}"}
+        if if_none_match:
+            # 304s on a matching ETag don't count against the
+            # rate-limit budget per GitHub's docs — exactly the win
+            # we're after for the high-volume open-PR case.
+            headers["If-None-Match"] = if_none_match
         try:
             response = await self._client.get(
                 url, headers=headers, timeout=_REQUEST_TIMEOUT_SECONDS
@@ -90,6 +97,14 @@ class GitHubPrStateFetcher:
         except httpx.HTTPError as exc:
             _log.warning("GitHub fetch failed for %s: %s", url, exc)
             return None
+        if response.status_code == 304:
+            # Nothing changed since the stored ETag. Return the
+            # validator we sent so the caller doesn't have to thread
+            # state through; ``not_modified=True`` is the short-circuit
+            # signal.
+            return FetchedPrState(
+                status=None, etag=if_none_match, not_modified=True
+            )
         if response.status_code == 404:
             # PR was deleted (or repo renamed). Leave the row alone —
             # surfacing as "still open" is wrong but flipping it to
@@ -108,7 +123,13 @@ class GitHubPrStateFetcher:
         except ValueError:
             _log.warning("GitHub response wasn't JSON for %s", url)
             return None
-        return _map_github_state(payload)
+        status = _map_github_state(payload)
+        if status is None:
+            return None
+        # GitHub returns the ETag verbatim; the spec is case-insensitive
+        # so we pull both header variants for safety.
+        etag = response.headers.get("ETag") or response.headers.get("etag")
+        return FetchedPrState(status=status, etag=etag, not_modified=False)
 
 
 def _map_github_state(payload: dict[str, Any]) -> str | None:
