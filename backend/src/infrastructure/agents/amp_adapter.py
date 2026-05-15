@@ -155,6 +155,62 @@ def _detect_handoff(text: str) -> str | None:
     match = _HANDOFF_PATTERN.search(text)
     return match.group(1) if match else None
 
+
+# The Amp ``handoff`` tool returns a JSON payload like
+# ``{"newThreadID": "T-...", "message": "Created handoff thread T-..."}``.
+# That's a stronger signal than the assistant text fallback above: the
+# model sometimes paraphrases ("Handed off to a new thread…") and the
+# regex misses, but the tool result is structured so we can't be wrong
+# about what happened.
+_HANDOFF_THREAD_ID_PATTERN = re.compile(
+    r"T-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+    r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _detect_handoff_from_tool_result(content: Any) -> str | None:
+    """Extract a new thread id from the Amp ``handoff`` tool result.
+
+    ``content`` may be a JSON-encoded string, a dict, or a list of
+    content blocks (Amp's SDK shape varies by content type). We try the
+    structured paths first; anything that yields a ``newThreadID`` of
+    the canonical T-UUID shape is accepted.
+    """
+
+    def _from_dict(d: dict[str, Any]) -> str | None:
+        candidate = d.get("newThreadID")
+        if isinstance(candidate, str) and _HANDOFF_THREAD_ID_PATTERN.fullmatch(
+            candidate
+        ):
+            return candidate
+        return None
+
+    if isinstance(content, dict):
+        return _from_dict(content)
+
+    if isinstance(content, list):
+        # Content blocks: scan each for an embedded JSON payload.
+        for block in content:
+            if isinstance(block, dict):
+                hit = _from_dict(block)
+                if hit:
+                    return hit
+                text = block.get("text")
+                if isinstance(text, str):
+                    hit = _detect_handoff_from_tool_result(text)
+                    if hit:
+                        return hit
+        return None
+
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if isinstance(parsed, dict):
+            return _from_dict(parsed)
+    return None
+
 # DI seam: the executor matches ``amp_sdk.execute``'s signature so tests
 # can supply a fake that yields scripted StreamMessages without spawning
 # the real CLI subprocess.
@@ -687,6 +743,13 @@ def _convert(
                     content=user_block.content,
                     is_error=user_block.is_error,
                 )
+                # Structured handoff signal: the ``handoff`` tool's
+                # JSON result carries ``newThreadID`` directly. More
+                # reliable than the assistant-text regex fallback,
+                # which misses when the model paraphrases.
+                handoff_id = _detect_handoff_from_tool_result(user_block.content)
+                if handoff_id is not None:
+                    yield HandoffOffered(ts=now, new_thread_id=handoff_id)
         return
     if isinstance(msg, AssistantMessage):
         for asst_block in msg.message.content:

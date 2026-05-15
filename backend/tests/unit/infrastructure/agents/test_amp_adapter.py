@@ -175,6 +175,50 @@ def test_assistant_handoff_phrase_without_uuid_emits_no_handoff() -> None:
     assert isinstance(events[0], MessageComplete)
 
 
+def test_handoff_tool_result_emits_handoff_offered() -> None:
+    """The ``handoff`` tool returns a JSON payload carrying
+    ``newThreadID``. That structured signal is the canonical handoff
+    trigger — the assistant-text fallback can miss when the model
+    paraphrases ('Handed off to a new thread…' won't match the regex
+    anchored on 'Handoff created')."""
+    payload = (
+        '{"newThreadID":"T-019e2be7-d3e6-726f-8b96-7e2a153d707f",'
+        '"message":"Created handoff thread T-019e2be7-d3e6-726f-8b96-7e2a153d707f."}'
+    )
+    events = list(
+        _convert(
+            _user(
+                ToolResultContent(
+                    tool_use_id="t-handoff", content=payload, is_error=False
+                )
+            )
+        )
+    )
+    assert len(events) == 2
+    result, handoff = events
+    assert isinstance(result, ToolResult)
+    assert isinstance(handoff, HandoffOffered)
+    assert handoff.new_thread_id == "T-019e2be7-d3e6-726f-8b96-7e2a153d707f"
+
+
+def test_non_handoff_tool_result_does_not_emit_handoff() -> None:
+    """A vanilla tool result (no ``newThreadID`` key) must not produce
+    a HandoffOffered even if the body happens to mention a T-id —
+    detection is keyed on the structured field, not text contents."""
+    payload = '{"output":"ran in T-019e2be7-d3e6-726f-8b96-7e2a153d707f land"}'
+    events = list(
+        _convert(
+            _user(
+                ToolResultContent(
+                    tool_use_id="t-bash", content=payload, is_error=False
+                )
+            )
+        )
+    )
+    assert len(events) == 1
+    assert isinstance(events[0], ToolResult)
+
+
 def test_assistant_tool_use_maps_to_tool_call() -> None:
     [event] = list(
         _convert(_assistant(ToolUseContent(id="t-1", name="bash", input={"cmd": "ls"})))
