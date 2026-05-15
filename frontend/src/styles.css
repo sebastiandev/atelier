@@ -2068,6 +2068,61 @@ h5.md-h {
   font-weight: 600;
 }
 
+/* Activity indicator: phase label + persona-tinted shimmer track.
+   Lives at the end of the metrics row and takes the leftover space.
+   The shimmer animates regardless of event traffic so silent
+   thinking / tool stretches still feel alive. */
+.turn-metrics-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  min-width: 0;
+  flex: 1 1 0;
+  justify-content: flex-end;
+}
+.turn-metrics-activity-label {
+  color: var(--fg-3);
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.turn-metrics-activity-track {
+  position: relative;
+  flex: 0 1 96px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--p-soft, color-mix(in oklch, var(--accent) 14%, transparent));
+  overflow: hidden;
+}
+.turn-metrics-activity-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 40%;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--p-color, var(--accent)) 50%,
+    transparent 100%
+  );
+  opacity: 0.55;
+  animation: turn-metrics-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes turn-metrics-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(280%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn-metrics-activity-fill {
+    animation: none;
+    opacity: 0.4;
+  }
+}
+
 /* Permission prompts (above composer) ----------------------------------- */
 
 .permission-prompts {

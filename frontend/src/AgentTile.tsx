@@ -233,6 +233,31 @@ export function AgentTile({
   const units = useMemo(() => groupEvents(visibleEvents), [visibleEvents]);
   const agentStatus = useMemo(() => latestStatus(events), [events]);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
+  const rawActivityPhase = useMemo(
+    () => deriveActivityPhase(events, isAgentActive(events)),
+    [events],
+  );
+  // Debounce label swaps. Rapid event bursts inside a single turn
+  // (tool_call → tool_result → message_delta in 200ms) would otherwise
+  // strobe the phase text. The shimmer underneath keeps animating
+  // throughout; only the label is held steady.
+  const [activityPhase, setActivityPhase] = useState<string | null>(
+    rawActivityPhase,
+  );
+  useEffect(() => {
+    if (rawActivityPhase === activityPhase) return;
+    // Hide immediately when going inactive — no point holding a stale
+    // label after the turn ends.
+    if (rawActivityPhase === null) {
+      setActivityPhase(null);
+      return;
+    }
+    const handle = window.setTimeout(
+      () => setActivityPhase(rawActivityPhase),
+      300,
+    );
+    return () => window.clearTimeout(handle);
+  }, [rawActivityPhase, activityPhase]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const { byName: providersByName } = useProviderDescriptors();
   const modelMeta = lookupModelMeta(providersByName, provider, model);
@@ -580,6 +605,7 @@ export function AgentTile({
           metrics={lastMetrics}
           session={sessionTotals}
           meta={modelMeta}
+          activityPhase={activityPhase}
         />
       )}
       {pendingPermissions.length > 0 && (
@@ -1138,6 +1164,70 @@ type TurnRollup = {
   model: string | null;
 };
 
+/**
+ * Best-effort label for what the agent is doing *right now*, derived
+ * from the tail of the event log. Returns `null` when the agent isn't
+ * actively working (so the indicator hides on idle/error/stopped).
+ *
+ * Heuristics, in priority order:
+ * 1. An unfinished `tool_call` at the tail → "running <Tool>" or, for
+ *    file-shaped tools, "editing <basename>" / "reading <basename>".
+ * 2. `thinking_delta` recently → "thinking…"
+ * 3. `message_delta` recently → "generating…"
+ * 4. Otherwise → "working…"
+ *
+ * "Recently" means within the last 5 events; rapid tool/thinking
+ * interleaving inside a turn shouldn't strand us on a stale label.
+ */
+function deriveActivityPhase(
+  events: AgentEvent[], isActive: boolean,
+): string | null {
+  if (!isActive) return null;
+  // Walk back to find the latest unmatched tool_call. Tool results
+  // include the tool_use_id of the call they're answering; if the
+  // latest tool_call hasn't seen its result yet, it's in-flight.
+  const seenResultIds = new Set<string>();
+  let latestPendingCall: AgentEvent | null = null;
+  const windowStart = Math.max(0, events.length - 30);
+  for (let i = events.length - 1; i >= windowStart; i--) {
+    const ev = events[i];
+    if (ev.type === "tool_result") {
+      const id = stringField(ev, "tool_use_id");
+      if (id) seenResultIds.add(id);
+    } else if (ev.type === "tool_call") {
+      const id = stringField(ev, "tool_use_id");
+      if (id && !seenResultIds.has(id)) {
+        latestPendingCall = ev;
+        break;
+      }
+    }
+  }
+  if (latestPendingCall) {
+    const name = stringField(latestPendingCall, "name") || "tool";
+    const args = (latestPendingCall.arguments as Record<string, unknown>) ?? {};
+    if (name === "Edit" || name === "MultiEdit" || name === "Write") {
+      const path = (args.file_path as string) ?? (args.path as string) ?? "";
+      const base = path ? path.split("/").pop() : "";
+      return base ? `editing ${base}` : "editing…";
+    }
+    if (name === "Read") {
+      const path = (args.file_path as string) ?? (args.path as string) ?? "";
+      const base = path ? path.split("/").pop() : "";
+      return base ? `reading ${base}` : "reading…";
+    }
+    if (name === "Bash") return "running Bash";
+    if (name === "Grep" || name === "Glob") return "searching";
+    return `running ${name}`;
+  }
+  const tailStart = Math.max(0, events.length - 5);
+  for (let i = events.length - 1; i >= tailStart; i--) {
+    const t = events[i].type;
+    if (t === "thinking_delta") return "thinking…";
+    if (t === "message_delta") return "generating…";
+  }
+  return "working…";
+}
+
 function latestMetrics(events: AgentEvent[]): TurnRollup | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
@@ -1204,10 +1294,12 @@ function TurnMetricsBar({
   metrics,
   session,
   meta,
+  activityPhase,
 }: {
   metrics: TurnRollup;
   session: SessionTotals;
   meta: ModelMeta | null;
+  activityPhase: string | null;
 }) {
   // Total tokens charged on the response side: input + cached lookups
   // count toward the prompt; output is what the model wrote. We surface
@@ -1280,6 +1372,14 @@ function TurnMetricsBar({
           <span className="turn-metrics-sep">·</span>
           <span className="turn-metrics-item">{formatCost(sessionCost)}</span>
         </>
+      )}
+      {activityPhase && (
+        <span className="turn-metrics-activity" aria-live="polite">
+          <span className="turn-metrics-activity-label">{activityPhase}</span>
+          <span className="turn-metrics-activity-track" aria-hidden="true">
+            <span className="turn-metrics-activity-fill" />
+          </span>
+        </span>
       )}
     </div>
   );
