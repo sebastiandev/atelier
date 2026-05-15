@@ -1610,7 +1610,7 @@ function EditCallView(
         <DiffStat oldText={oldStr} newText={newStr} />
       </summary>
       <DiffView oldText={oldStr} newText={newStr} lang={lang} />
-      {result && (
+      {result?.isError && (
         <ToolResultBody content={result.content} isError={result.isError} />
       )}
     </details>
@@ -1663,7 +1663,7 @@ function MultiEditCallView(
             lang={path ? inferLanguage(path) : null}
           />
         ))}
-        {result && (
+        {result?.isError && (
           <ToolResultBody content={result.content} isError={result.isError} />
         )}
       </div>
