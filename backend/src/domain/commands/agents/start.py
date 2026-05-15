@@ -30,6 +30,7 @@ from src.domain.agents import (
     SPECS,
     AgentStartContext,
     CommonAgentConfig,
+    detect_shared_envs,
     render_system_prompt,
 )
 from src.domain.connections import ConnectionStore
@@ -232,6 +233,7 @@ async def execute(
                 workdir=workdir,
                 shares=mounted_shares,
                 is_detached_worktree=worktree_manager.is_detached(workdir),
+                shared_envs=detect_shared_envs(workdir),
             ),
         )
         config = SPECS[req.provider].build(common, req.model, req.options)

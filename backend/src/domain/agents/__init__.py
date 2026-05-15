@@ -43,7 +43,7 @@ from src.domain.agents.specs import (
     Spec,
     TextOption,
 )
-from src.domain.agents.system_prompt import render_system_prompt
+from src.domain.agents.system_prompt import detect_shared_envs, render_system_prompt
 from src.domain.agents.user_actions import (
     ResolvePermission,
     SendInput,
@@ -94,6 +94,7 @@ __all__ = [
     "ToolResult",
     "TurnMetrics",
     "UserAction",
+    "detect_shared_envs",
     "parse_user_action",
     "record_artifact",
     "render_agent_contexts",

@@ -55,6 +55,43 @@ disk). Atelier ignores any agent identifier in the payload — attribution
 is stamped by the supervisor."""
 
 
+def detect_shared_envs(workdir: Path | None) -> list[str]:
+    """Return relative paths of `.venv` / `venv` / `node_modules`
+    symlinks present in the worktree.
+
+    Worktrees inherit these symlinks from the source repo (see
+    ``infrastructure/git/worktree_manager._symlink_devtime_artifacts``)
+    so sibling agents share one Python env / one node_modules tree.
+    The list drives a system-prompt nudge warning agents about
+    concurrent ``uv add`` / ``pip install`` / ``npm install`` races
+    across siblings — they touch the same lockfiles and partial state.
+
+    Mirrors the symlink walk in the worktree manager: top-level first,
+    then one level deep so monorepo layouts (``backend/.venv``,
+    ``frontend/node_modules``) are picked up.
+    """
+    if workdir is None:
+        return []
+    names = (".venv", "venv", "node_modules")
+    found: list[str] = []
+    for name in names:
+        candidate = workdir / name
+        if candidate.is_symlink():
+            found.append(name)
+    try:
+        children = sorted(p for p in workdir.iterdir() if p.is_dir())
+    except OSError:
+        return found
+    for child in children:
+        if child.is_symlink():
+            continue
+        for name in names:
+            candidate = child / name
+            if candidate.is_symlink():
+                found.append(f"{child.name}/{name}")
+    return found
+
+
 def render_system_prompt(
     persona: Persona,
     role: str,
@@ -62,6 +99,7 @@ def render_system_prompt(
     workdir: Path | None = None,
     shares: Sequence[ShareSummary] = (),
     is_detached_worktree: bool = False,
+    shared_envs: Sequence[str] = (),
 ) -> str:
     # Telling the agent its working directory explicitly is load-bearing:
     # without it, models routinely write files to $HOME (or wherever they
@@ -79,12 +117,14 @@ def render_system_prompt(
         else ""
     )
     detached_block = _DETACHED_WORKTREE_GUIDE if is_detached_worktree else ""
+    shared_envs_block = _render_shared_envs_block(shared_envs)
     return (
         f"You are an Atelier {persona} agent.\n"
         f"Role: {role}.\n"
         f"Stay in character and focus on the work assigned to you.\n\n"
         f"{workdir_block}"
         f"{detached_block}"
+        f"{shared_envs_block}"
         f"{_render_shares_block(shares)}"
         f"{_ARTIFACT_MARKER_GUIDE}"
     )
@@ -114,6 +154,36 @@ branches, ask the user first or save the work with ``git switch -c``.
 
 """
 
+
+
+def _render_shared_envs_block(shared_envs: Sequence[str]) -> str:
+    """Warn the agent that its dev environment is shared with siblings.
+
+    Atelier symlinks ``.venv`` / ``node_modules`` from the source repo
+    into every worktree so sibling agents don't each download multi-GB
+    dependency trees. The side effect: concurrent installs from
+    different worktrees race on the same lockfile + ``site-packages`` /
+    ``node_modules`` state. ``uv add`` and ``pip install`` can corrupt
+    the env half-way through.
+    """
+    if not shared_envs:
+        return ""
+    bullets = "\n".join(f"  - {name}" for name in shared_envs)
+    return (
+        "Shared dev environment\n"
+        "----------------------\n"
+        "The following dependency directories are symlinks to the "
+        "source repo — they are shared with every sibling agent on "
+        "this work:\n"
+        f"{bullets}\n"
+        "If you install dependencies (`uv add`, `pip install`, "
+        "`npm install`, etc.) they affect every sibling immediately, "
+        "and concurrent installs race on lockfiles + partial state. "
+        "Before installing: (1) tell the user what you're about to "
+        "add, (2) make sure no sibling agent is mid-install, (3) "
+        "prefer adding to the source repo's manifest and re-resolving "
+        "rather than ad-hoc installs.\n\n"
+    )
 
 
 def _render_shares_block(shares: Sequence[ShareSummary]) -> str:
