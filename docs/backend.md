@@ -403,6 +403,15 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 
 `infrastructure/git/branches.py:list_branches(path)` shells out to `git for-each-ref --sort=-committerdate refs/heads/` so the New Agent dialog's branch picker can offer existing branches sorted by recency. Returns `[]` for non-git / missing paths so the FE renders a friendly "not a git repo" hint instead of branching on error codes. Surfaced via `GET /api/git/branches?path=<absolute>` (`application/http/routes/git.py`).
 
+## PrStatusPoller
+
+`infrastructure/artifacts/pr_status_poller.py` owns two refresh paths against the same `refresh_pr_statuses` command:
+
+- **Scheduled loop** — every 5 minutes the loop calls the command against the shared `GitHubPrStateFetcher`. Lifecycle is owned by the FastAPI lifespan: `start()` spawns the task, `stop()` cancels and awaits.
+- **On-demand refresh** — `refresh_now()` runs the same command out-of-band, triggered by `POST /api/artifacts/refresh-pr-statuses` when a `WorkView` mounts with non-terminal PRs. Throttled to one actual run per 30s; concurrent callers within the window get `None`. The scheduled loop and `refresh_now` share the same throttle clock, so a cycle that just ran satisfies the throttle for the next 30s of on-demand calls.
+
+Each PR row carries a `pr_etag` column (added in schema v11; nullable). The fetcher sends it as `If-None-Match` on subsequent calls — GitHub answers 304 with no body, which doesn't count against the authenticated 5k/hr rate budget. On rotation the new ETag is persisted via the workstore's `update_pr_artifact_etag` (or via the same `update_artifact_status` write when the status itself changed).
+
 ## UpdateChecker
 
 `domain/update_check/` defines a flat `UpdateStatus` dataclass and a single async `UpdateChecker` Protocol. `infrastructure/update_check/git_checker.py` implements it by shelling out to `git fetch <remote> <branch>` and comparing local `HEAD` to the fetched tip; the repo root is derived from this package's location (`Path(__file__).resolve().parents[4]`), so the backend always tracks its own checkout regardless of where the process was launched.

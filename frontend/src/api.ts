@@ -715,6 +715,28 @@ export function listArtifacts(workSlug: string): Promise<ArtifactSummary[]> {
   );
 }
 
+export type RefreshPrStatusesResponse = {
+  // False when the backend throttled the call or the poller isn't
+  // available — UI treats this as "current cached data is fresh
+  // enough", no follow-up refetch needed.
+  ran: boolean;
+  checked: number;
+  updated: number;
+  skipped: number;
+  not_modified: number;
+};
+
+/**
+ * Trigger an out-of-band PR status refresh on the backend. The
+ * backend throttles to ~30s between actual fetches so bouncing
+ * between work tabs doesn't fan out per-click GitHub requests.
+ */
+export function refreshPrStatuses(): Promise<RefreshPrStatusesResponse> {
+  return fetch(`/api/artifacts/refresh-pr-statuses`, {
+    method: "POST",
+  }).then((r) => jsonOrThrow<RefreshPrStatusesResponse>(r));
+}
+
 /**
  * Open a doc-type artifact's underlying file in the OS file browser.
  * 404 if the slug is unknown; 422 if the artifact isn't a doc.

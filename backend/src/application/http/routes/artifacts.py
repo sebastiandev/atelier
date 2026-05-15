@@ -8,12 +8,59 @@ own slug because the FE knows it from the rail row.
 
 import subprocess
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel
 
 from src.application.http.routes.works import WorkStoreDep
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 
 router = APIRouter()
+
+
+class RefreshPrStatusesResponse(BaseModel):
+    """Result of a PR-status refresh request.
+
+    ``ran=False`` when the call was throttled or the poller isn't
+    available; counts are zero in that case. ``ran=True`` with all
+    counts at zero means the work has no non-terminal PR rows to
+    check, which is the steady-state case for completed work.
+    """
+
+    ran: bool
+    checked: int = 0
+    updated: int = 0
+    skipped: int = 0
+    not_modified: int = 0
+
+
+@router.post("/artifacts/refresh-pr-statuses")
+async def refresh_pr_statuses_endpoint(
+    request: Request,
+) -> RefreshPrStatusesResponse:
+    """Trigger an out-of-band PR-status refresh.
+
+    Called by the FE when a WorkView mounts so a freshly-opened tab
+    sees fresh statuses without waiting up to 5 minutes for the
+    scheduled cycle. The poller throttles repeat calls within ~30s so
+    bouncing between tabs doesn't fan out hundreds of GitHub fetches.
+
+    Returns ``ran=false`` when the throttle short-circuits — the
+    frontend treats that as 'cached data is current enough', no
+    follow-up refetch needed.
+    """
+    poller = getattr(request.app.state, "pr_status_poller", None)
+    if poller is None:
+        return RefreshPrStatusesResponse(ran=False)
+    result = await poller.refresh_now()
+    if result is None:
+        return RefreshPrStatusesResponse(ran=False)
+    return RefreshPrStatusesResponse(
+        ran=True,
+        checked=result.checked,
+        updated=result.updated,
+        skipped=result.skipped,
+        not_modified=result.not_modified,
+    )
 
 
 @router.post(

@@ -29,6 +29,7 @@ import {
   getWork,
   listAgents,
   listArtifacts,
+  refreshPrStatuses,
   listProjectShares,
   listProjects,
   listWorks,
@@ -250,7 +251,33 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     let cancelled = false;
     listArtifacts(workSlug)
       .then((rows) => {
-        if (!cancelled) setArtifacts(rows);
+        if (cancelled) return;
+        setArtifacts(rows);
+        // If any PR row is non-terminal, kick a background refresh so
+        // the freshly-opened tab doesn't show statuses up to 5 min
+        // stale. The backend throttles to one refresh per ~30s, so
+        // tab-bouncing won't fan out per-click GitHub fetches.
+        const hasOpenPr = rows.some(
+          (r) => r.type === "pr" && (r.status === "open" || r.status === "draft"),
+        );
+        if (hasOpenPr) {
+          refreshPrStatuses()
+            .then((res) => {
+              // Only re-fetch the artifact list when the backend
+              // actually ran a refresh that touched something. The
+              // throttle short-circuit (ran=false) and the zero-update
+              // case both leave persisted state unchanged.
+              if (cancelled || !res.ran || res.updated === 0) return;
+              listArtifacts(workSlug)
+                .then((freshRows) => {
+                  if (!cancelled) setArtifacts(freshRows);
+                })
+                .catch(() => {});
+            })
+            .catch(() => {
+              // Best-effort hint, not a user-visible failure path.
+            });
+        }
       })
       .catch(() => {
         // Silent: rail just shows the previous list (or empty on first

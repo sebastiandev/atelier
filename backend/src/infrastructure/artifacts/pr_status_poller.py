@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import httpx
 
@@ -33,6 +34,11 @@ from src.infrastructure.artifacts.github_pr_status import GitHubPrStateFetcher
 _log = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_SECONDS = 300  # 5 minutes
+# Minimum gap between out-of-band refreshes. Protects against a user
+# bouncing between work tabs (or scripts hammering the endpoint) from
+# triggering one fetch-per-PR-per-click. 30s is short enough that an
+# opened tab feels live, long enough to coalesce real bursts.
+DEFAULT_THROTTLE_SECONDS = 30.0
 
 
 class PrStatusPoller:
@@ -41,12 +47,21 @@ class PrStatusPoller:
         workstore: WorkStore,
         *,
         interval_seconds: int = DEFAULT_INTERVAL_SECONDS,
+        throttle_seconds: float = DEFAULT_THROTTLE_SECONDS,
     ) -> None:
         self._workstore = workstore
         self._interval = interval_seconds
+        self._throttle = throttle_seconds
         self._task: asyncio.Task[None] | None = None
         self._client: httpx.AsyncClient | None = None
         self._stop_event = asyncio.Event()
+        # Last refresh wall-clock (monotonic). Set after the scheduled
+        # loop or an out-of-band call finishes; used to throttle
+        # ``refresh_now``. Float('-inf') so the first call always runs.
+        self._last_refresh_monotonic: float = float("-inf")
+        # Serialise concurrent ``refresh_now`` invocations — two
+        # browser tabs opening simultaneously shouldn't double-fetch.
+        self._refresh_lock = asyncio.Lock()
 
     def start(self) -> None:
         if self._task is not None:
@@ -73,6 +88,40 @@ class PrStatusPoller:
             await self._client.aclose()
             self._client = None
 
+    async def refresh_now(self) -> "refresh_pr_statuses.RefreshResult | None":
+        """Out-of-band refresh triggered by the UI (work-view mount).
+
+        Throttled to one run per ``throttle_seconds`` — concurrent
+        callers within the window get ``None`` and the cached statuses
+        from the last refresh. Reuses the same httpx client + fetcher
+        as the scheduled loop so connection pooling carries over.
+        """
+        if self._client is None:
+            # Poller not started (tests, or backend mid-shutdown).
+            # Refuse rather than build a client we won't get to close.
+            return None
+        async with self._refresh_lock:
+            now = asyncio.get_event_loop().time()
+            if now - self._last_refresh_monotonic < self._throttle:
+                return None
+            fetcher = GitHubPrStateFetcher(self._client)
+            try:
+                result = await refresh_pr_statuses.execute(
+                    self._workstore, fetcher
+                )
+            except Exception:
+                _log.exception("on-demand pr-status refresh failed")
+                return None
+            self._last_refresh_monotonic = now
+            if result.checked or result.updated:
+                _log.info(
+                    "pr-status (on-demand): checked=%d updated=%d "
+                    "skipped=%d not_modified=%d",
+                    result.checked, result.updated,
+                    result.skipped, result.not_modified,
+                )
+            return result
+
     async def _loop(self) -> None:
         assert self._client is not None
         fetcher = GitHubPrStateFetcher(self._client)
@@ -91,15 +140,24 @@ class PrStatusPoller:
                 except asyncio.TimeoutError:
                     pass
 
-                try:
-                    result = await refresh_pr_statuses.execute(
-                        self._workstore, fetcher
+                async with self._refresh_lock:
+                    try:
+                        result = await refresh_pr_statuses.execute(
+                            self._workstore, fetcher
+                        )
+                    except Exception:
+                        # Never let a single failed cycle take the
+                        # loop down. Log + continue; the next tick
+                        # retries.
+                        _log.exception("pr-status refresh cycle failed")
+                        continue
+                    # Sharing the throttle clock with ``refresh_now``
+                    # means a scheduled cycle satisfies the throttle
+                    # for the next 30s — a user reloading right after
+                    # the loop ran gets the freshly-persisted data.
+                    self._last_refresh_monotonic = (
+                        asyncio.get_event_loop().time()
                     )
-                except Exception:
-                    # Never let a single failed cycle take the loop
-                    # down. Log + continue; the next tick retries.
-                    _log.exception("pr-status refresh cycle failed")
-                    continue
 
                 if result.checked or result.updated:
                     _log.info(

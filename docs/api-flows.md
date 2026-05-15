@@ -27,6 +27,29 @@ Bare liveness probe. No persistence touched.
 
 ---
 
+## `POST /api/artifacts/refresh-pr-statuses`
+
+```
+Browser ──► Router (artifacts.py)
+                │
+                └─► app.state.pr_status_poller.refresh_now()
+                        │
+                        ├─► throttle check (30s window) → ran=false
+                        │
+                        └─► refresh_pr_statuses.execute(workstore, fetcher)
+                                │
+                                ├─► WorkStore.list_non_terminal_pr_artifacts()
+                                ├─► GitHubPrStateFetcher(ref, if_none_match=etag)
+                                │       │
+                                │       └─► api.github.com (304s skip rate-limit budget)
+                                └─► WorkStore.update_artifact_status / .update_pr_artifact_etag
+                Returns {ran, checked, updated, skipped, not_modified}
+```
+
+Fired from `WorkView` on mount when at least one tracked PR is non-terminal (`open`/`draft`), so a freshly-opened tab doesn't sit on up-to-5-min-stale data. The poller throttles to one actual refresh per 30s — bouncing between work tabs returns `ran=false` after the first call, and the FE only refetches the artifact list when `ran=true && updated > 0`. The ETag stored on each PR row drives `If-None-Match` so unchanged PRs return 304 (no rate-limit cost).
+
+---
+
 ## `GET /api/update-status`
 
 ```
