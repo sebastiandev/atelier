@@ -89,6 +89,44 @@ export function ChevronRightIcon({ size = 12, ...rest }: IconProps) {
   );
 }
 
+// Folder — used by shared-folders rail rows.
+export function FolderIcon({ size = 12, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinejoin="round"
+      strokeLinecap="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M2 5.5V11a1.5 1.5 0 0 0 1.5 1.5h9A1.5 1.5 0 0 0 14 11V6a1.5 1.5 0 0 0-1.5-1.5H8L6.5 3h-3A1.5 1.5 0 0 0 2 4.5v1z" />
+    </svg>
+  );
+}
+
+// Three-dot "more" affordance for trailing row icons.
+export function MoreIcon({ size = 12, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="currentColor"
+      aria-hidden
+      {...rest}
+    >
+      <circle cx="3" cy="8" r="1.3" />
+      <circle cx="8" cy="8" r="1.3" />
+      <circle cx="13" cy="8" r="1.3" />
+    </svg>
+  );
+}
+
 // Small check used in "Verified" rows (no pill background, just the
 // check + the word "Verified" in muted text).
 export function CheckIcon({ size = 12, ...rest }: IconProps) {

@@ -4,69 +4,55 @@ import {
   type CreateWorkPayload,
   type ProjectDetail,
   type ProjectSummary,
+  type SharedFolderSummary,
   type WorkSummary,
   createWork,
   getProject,
+  listProjectShares,
   listProjects,
   listWorks,
 } from "./api";
 import { BrandMark } from "./BrandMark";
 import { EditProjectDialog } from "./EditProjectDialog";
+import {
+  CheckIcon,
+  FolderIcon,
+  MoreIcon,
+  SearchIcon,
+  SlidersIcon,
+} from "./Icons";
 import { NewWorkDialog } from "./NewWorkDialog";
 import { SharedFoldersSection } from "./SharedFoldersSection";
-import { Switcher, SwitcherChevron, type SwitcherItem } from "./Switcher";
+import { Switcher, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
-import { TweaksToggle } from "./TweaksPanel";
-import { UpdateChip } from "./UpdateChip";
 
 type Tab = "active" | "completed";
-type View = "tiles" | "list";
-
-const VIEW_KEY_PREFIX = "atelier:project:";
-
-function readPersistedView(slug: string): View {
-  // Per-project view preference. localStorage so each project remembers
-  // whether the user prefers Tiles or List independently. Default Tiles
-  // on first visit (matches design).
-  try {
-    const raw = window.localStorage.getItem(`${VIEW_KEY_PREFIX}${slug}:view`);
-    if (raw === "list" || raw === "tiles") return raw;
-  } catch {
-    // private mode / SSR / etc — fall through to default
-  }
-  return "tiles";
-}
-
-function writePersistedView(slug: string, view: View): void {
-  try {
-    window.localStorage.setItem(`${VIEW_KEY_PREFIX}${slug}:view`, view);
-  } catch {
-    // ignore — preference loss is non-fatal
-  }
-}
 
 export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [works, setWorks] = useState<WorkSummary[]>([]);
   const [allProjects, setAllProjects] = useState<ProjectSummary[]>([]);
+  const [shares, setShares] = useState<SharedFolderSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("active");
-  const [view, setView] = useState<View>(() => readPersistedView(projectSlug));
   const [workDialogOpen, setWorkDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
+  const [sharedFoldersOpen, setSharedFoldersOpen] = useState(false);
 
   async function refresh() {
     try {
-      const [p, allWorks, projects] = await Promise.all([
+      const [p, allWorks, projects, projectShares] = await Promise.all([
         getProject(projectSlug),
         listWorks(),
         listProjects(),
+        listProjectShares(projectSlug),
       ]);
       setProject(p);
       setWorks(allWorks.filter((w) => w.project_slug === projectSlug));
       setAllProjects(projects);
+      setShares(projectShares);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -75,17 +61,17 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
 
   useEffect(() => {
     refresh();
-    setView(readPersistedView(projectSlug));
   }, [projectSlug]);
 
   // Shortcuts:
-  //   W       → new work (in this project)
+  //   N       → new work (in this project)
   //   Shift+W → switch to another work within this project
   //   Shift+P → switch project
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (workDialogOpen || editDialogOpen) return;
       if (projectSwitcherOpen || workSwitcherOpen) return;
+      if (sharedFoldersOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
@@ -96,25 +82,26 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
       } else if (e.shiftKey && (e.key === "P" || e.key === "p")) {
         e.preventDefault();
         setProjectSwitcherOpen(true);
-      } else if (!e.shiftKey && (e.key === "w" || e.key === "W")) {
+      } else if (!e.shiftKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
         setWorkDialogOpen(true);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [workDialogOpen, editDialogOpen, projectSwitcherOpen, workSwitcherOpen]);
+  }, [
+    workDialogOpen,
+    editDialogOpen,
+    projectSwitcherOpen,
+    workSwitcherOpen,
+    sharedFoldersOpen,
+  ]);
 
   async function handleCreateWork(payload: CreateWorkPayload) {
     // Re-assert project_slug here so a stale dialog prop can't leak through.
     await createWork({ ...payload, project_slug: projectSlug });
     await refresh();
     setWorkDialogOpen(false);
-  }
-
-  function changeView(next: View) {
-    setView(next);
-    writePersistedView(projectSlug, next);
   }
 
   const activeCount = works.filter((w) => w.status === "active").length;
@@ -125,9 +112,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
     return [...list].sort((a, b) => b.created_at.localeCompare(a.created_at));
   }, [works, tab]);
 
-  // Switcher rows: projects ordered pinned-first, works scoped to the
-  // current project (active first, then completed) so the palette shows
-  // what the user most likely wants to jump to.
+  // Switcher rows.
   const projectItems = useMemo<SwitcherItem[]>(() => {
     const sorted = [...allProjects].sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -152,7 +137,8 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
       .map((w) => ({
         slug: w.slug,
         name: w.name,
-        subtitle: w.status === "completed" ? `${project.name} · completed` : project.name,
+        subtitle:
+          w.status === "completed" ? `${project.name} · completed` : project.name,
         glyph: project.glyph,
         hue: project.color,
         href: `/works/${w.slug}`,
@@ -169,225 +155,230 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
       </div>
     );
   }
-
   if (!project) {
     return <div className="work-loading hint">Loading…</div>;
   }
 
-  return (
-    <div className="home" style={{ ["--proj-h" as string]: String(project.color) }}>
-      <header className="topbar wv-topbar">
-        <a className="brand brand-link" href="/" aria-label="Atelier">
-          <BrandMark />telier
-        </a>
-        <a className="btn-ghost-sm" href="/">
-          ← Workspace
-        </a>
-        <span className="crumbs">
-          <span className="sep">/</span>
-          <span className="now">
-            <span className="filter-pill-glyph" aria-hidden="true">
-              {project.glyph}
-            </span>
-            {project.name}
-          </span>
-          <SwitcherChevron
-            onClick={() => setProjectSwitcherOpen(true)}
-            title="Switch project (Shift+P)"
-          />
-        </span>
-        <span className="hint" style={{ marginLeft: "0.5rem" }}>
-          {project.slug}
-        </span>
-        <div className="spacer" />
-        <UpdateChip />
-        <TweaksToggle />
-        <ThemeToggle />
-      </header>
+  const defaultsCount =
+    (project.default_jira_conn ? 1 : 0) +
+    (project.default_sentry_conn ? 1 : 0);
 
-      <section className="proj-hero">
-        <div className="proj-hero-bar" aria-hidden="true" />
-        <div className="proj-hero-body">
-          <div className="proj-hero-l">
-            <span className="proj-glyph-xl" aria-hidden="true">
-              {project.glyph}
+  return (
+    <div
+      className="shell-v3 project-v3"
+      style={{
+        ["--proj-h" as string]: String(project.color),
+        ["--proj-color" as string]: `oklch(0.62 0.16 ${project.color})`,
+        ["--proj-soft" as string]: `oklch(0.62 0.16 ${project.color} / 0.10)`,
+      }}
+    >
+      {/* LEFT — rail: crown, crumbs, hero, stats, defaults, shared folders, actions */}
+      <aside className="shell-left proj-rail">
+        <div className="crown">
+          <a className="wordmark" href="/" title="Back to workspace">
+            <span className="wm-mark" aria-hidden>
+              <BrandMark />
             </span>
-            <div>
-              <div className="hint mono">{project.slug}</div>
-              <h1 className="proj-hero-name">{project.name}</h1>
+            <span className="wm-rest">telier</span>
+          </a>
+          <div className="crown-actions">
+            <button
+              className="btn-icon"
+              onClick={() => setProjectSwitcherOpen(true)}
+              title="Search (⇧F)"
+              aria-label="Search"
+            >
+              <SearchIcon size={12} />
+            </button>
+            <a
+              className="btn-icon"
+              href="/settings"
+              title="Settings (⌘,)"
+              aria-label="Settings"
+            >
+              <SlidersIcon size={12} />
+            </a>
+            <ThemeToggle className="btn-icon" />
+          </div>
+        </div>
+
+        <div className="crumbs-v3">
+          <a className="crumb" href="/">
+            ← workspace
+          </a>
+          <span className="sep">/</span>
+          <span className="now">{project.slug}</span>
+        </div>
+
+        <div className="scrolly">
+          <div className="hero-block">
+            <div className="hero-glyph">{project.glyph}</div>
+            <div className="hero-text">
+              <div className="hero-id">{project.slug}</div>
+              <h1 className="hero-name">{project.name}</h1>
               {project.description && (
-                <div className="proj-hero-desc">{project.description}</div>
+                <div className="hero-desc">{project.description}</div>
               )}
             </div>
           </div>
-          <div className="proj-hero-actions">
-            <button
-              className="btn"
-              onClick={() => setEditDialogOpen(true)}
-              title="Edit name, glyph, color, default connections"
-            >
-              Edit
-            </button>
-            <button
-              className="btn primary proj-hero-cta"
-              onClick={() => setWorkDialogOpen(true)}
-            >
-              + New work in {project.name}
-            </button>
+
+          <div className="stats">
+            <div className="stat-cell">
+              <div className="lbl">Active</div>
+              <div className="val">{activeCount}</div>
+            </div>
+            <div className="stat-cell">
+              <div className="lbl">Completed</div>
+              <div className="val muted">{completedCount}</div>
+            </div>
           </div>
-        </div>
-        <dl className="proj-hero-meta">
-          <div className="proj-meta-item">
-            <dt className="proj-meta-lbl">ID</dt>
-            <dd className="proj-meta-val mono">{project.slug}</dd>
+
+          <div className="v3-shd">
+            <span>
+              Default connections{" "}
+              <span className="num" style={{ marginLeft: 8 }}>
+                {defaultsCount}
+              </span>
+            </span>
+            <span className="right">
+              <a href="/settings/connections">manage ↗</a>
+            </span>
           </div>
-          <div className="proj-meta-item">
-            <dt className="proj-meta-lbl">Default connections</dt>
-            <dd className="proj-meta-val">
-              <div className="proj-defaults">
-                {project.default_jira_conn && (
-                  <span className="conn-pill" data-source="jira">
-                    JI · {project.default_jira_conn}
-                  </span>
-                )}
-                {project.default_sentry_conn && (
-                  <span className="conn-pill" data-source="sentry">
-                    SE · {project.default_sentry_conn}
-                  </span>
-                )}
-                {!project.default_jira_conn && !project.default_sentry_conn && (
-                  <span className="hint">None</span>
-                )}
-                <a
-                  className="btn-icon-sm"
-                  href="/connections"
-                  title="Manage connections"
-                  aria-label="Manage connections"
+          <div className="defaults">
+            <div className="row">
+              {project.default_jira_conn && (
+                <span className="conn-mini" data-source="jira">
+                  <span className="ico">JI</span> {project.default_jira_conn}
+                </span>
+              )}
+              {project.default_sentry_conn && (
+                <span className="conn-mini" data-source="sentry">
+                  <span className="ico">SE</span> {project.default_sentry_conn}
+                </span>
+              )}
+              {defaultsCount === 0 && (
+                <span
+                  className="hint"
+                  style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}
                 >
-                  ↗
-                </a>
-              </div>
-            </dd>
-          </div>
-          <div className="proj-meta-item">
-            <dt className="proj-meta-lbl">Active</dt>
-            <dd className="proj-meta-val proj-meta-num">{activeCount}</dd>
-          </div>
-          <div className="proj-meta-item">
-            <dt className="proj-meta-lbl">Completed</dt>
-            <dd className="proj-meta-val proj-meta-num">{completedCount}</dd>
-          </div>
-        </dl>
-      </section>
-
-      <div className="home-tabs proj-tabs">
-        <button
-          className={"home-tab" + (tab === "active" ? " active" : "")}
-          onClick={() => setTab("active")}
-        >
-          Active <span className="count mono">{activeCount}</span>
-        </button>
-        <button
-          className={"home-tab" + (tab === "completed" ? " active" : "")}
-          onClick={() => setTab("completed")}
-        >
-          Completed <span className="count mono">{completedCount}</span>
-        </button>
-        <div className="view-toggle" role="tablist" aria-label="View">
-          <button
-            className={"view-toggle-btn" + (view === "tiles" ? " active" : "")}
-            onClick={() => changeView("tiles")}
-            aria-pressed={view === "tiles"}
-            title="Tile view"
-          >
-            <GridIcon /> Tiles
-          </button>
-          <button
-            className={"view-toggle-btn" + (view === "list" ? " active" : "")}
-            onClick={() => changeView("list")}
-            aria-pressed={view === "list"}
-            title="List view"
-          >
-            <ListIcon /> List
-          </button>
-        </div>
-      </div>
-
-      {view === "tiles" ? (
-        <div className="home-grid">
-          <button
-            className="work-card create"
-            onClick={() => setWorkDialogOpen(true)}
-          >
-            <span className="plus">+</span>
-            <span className="create-title">Start new work</span>
-            <span className="hint">in {project.name}</span>
-          </button>
-          {filtered.map((w) => (
-            <WorkTile key={w.slug} work={w} />
-          ))}
-          {filtered.length === 0 && (
-            <div className="empty hint">
-              {tab === "active"
-                ? "Nothing active here yet."
-                : "No completed work yet."}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="work-list">
-          <button
-            className="work-row create"
-            onClick={() => setWorkDialogOpen(true)}
-          >
-            <span className="work-row-status" aria-hidden="true">
-              +
-            </span>
-            <span className="work-row-main">
-              <span className="work-row-top">
-                <span className="work-row-title">
-                  Start new work in {project.name}
+                  none configured
                 </span>
+              )}
+            </div>
+          </div>
+
+          <div className="v3-shd">
+            <span>
+              Shared folders{" "}
+              <span className="num" style={{ marginLeft: 8 }}>
+                {shares.length}
               </span>
             </span>
-            <span className="kbd">W</span>
-          </button>
-          {filtered.map((w) => (
-            <a key={w.slug} className="work-row" href={`/works/${w.slug}`}>
-              <span className={`work-row-status ${w.status}`} title={w.status}>
-                {w.status === "active" ? <span className="dot live" /> : "✓"}
-              </span>
-              <span className="work-row-main">
-                <span className="work-row-top">
-                  <span className="work-row-id">{w.slug}</span>
-                  <span className="work-row-title">{w.name}</span>
-                </span>
-                <span className="work-row-meta">
-                  <span>{formatDate(w.created_at)}</span>
-                  <span className="wc-stat" title={`${w.agent_count} agents`}>
-                    <AgentIcon /> {w.agent_count}
-                  </span>
-                  <span className="wc-stat" title={`${w.artifact_count} artifacts`}>
-                    <ArtifactIcon /> {w.artifact_count}
-                  </span>
-                </span>
-              </span>
-            </a>
-          ))}
-          {filtered.length === 0 && (
-            <div className="work-row-empty">
-              {tab === "active"
-                ? "Nothing active here yet."
-                : "No completed work yet."}
+            <span className="right">
+              <button onClick={() => setSharedFoldersOpen(true)}>
+                + add
+              </button>
+            </span>
+          </div>
+          {shares.length === 0 && (
+            <div className="v3-empty" style={{ paddingTop: 4 }}>
+              none
             </div>
           )}
-        </div>
-      )}
+          {shares.map((s) => (
+            <button
+              key={s.slug}
+              className="v3-folder-row compact"
+              onClick={() => setSharedFoldersOpen(true)}
+              title={s.canonical_path}
+            >
+              <span className="ico">
+                <FolderIcon size={12} />
+              </span>
+              <span className="body">
+                <span className="lbl">
+                  <span>{s.name}</span>
+                  {s.is_custom_location && <span className="tag">custom</span>}
+                </span>
+                <span className="path">./{s.mount_path}/</span>
+              </span>
+              <span className="more">
+                <MoreIcon size={12} />
+              </span>
+            </button>
+          ))}
 
-      <SharedFoldersSection
-        projectSlug={project.slug}
-        projectName={project.name}
-      />
+          <div style={{ height: 12 }} />
+        </div>
+
+        <div
+          className="actions"
+          style={{ borderTop: "1px solid var(--line-soft)", paddingTop: 12 }}
+        >
+          <button
+            className="btn primary"
+            onClick={() => setWorkDialogOpen(true)}
+          >
+            + New work <span className="kbd" style={{ marginLeft: 8 }}>N</span>
+          </button>
+          <button className="btn" onClick={() => setEditDialogOpen(true)}>
+            Edit project
+          </button>
+        </div>
+
+        <div className="v3-footstrip">
+          <span className="seg">
+            <span className="dot live" />
+            {activeCount} active
+          </span>
+          <span className="seg">{completedCount} done</span>
+        </div>
+      </aside>
+
+      {/* RIGHT — tabs + work list */}
+      <main className="shell-right proj-right">
+        <div className="head">
+          <div>
+            <div className="title">Latest work</div>
+            <div className="sub">
+              {works.length} {works.length === 1 ? "unit" : "units"} in{" "}
+              {project.name}
+            </div>
+          </div>
+        </div>
+        <div className="tabs">
+          <button
+            className={"tab" + (tab === "active" ? " active" : "")}
+            onClick={() => setTab("active")}
+          >
+            active<span className="count">{activeCount}</span>
+          </button>
+          <button
+            className={"tab" + (tab === "completed" ? " active" : "")}
+            onClick={() => setTab("completed")}
+          >
+            completed<span className="count">{completedCount}</span>
+          </button>
+          <span className="spacer" />
+        </div>
+
+        <div className="body">
+          <button className="v3-add-row" onClick={() => setWorkDialogOpen(true)}>
+            <span className="marker">+</span> start new work
+            <span style={{ color: "var(--fg-4)", marginLeft: 6 }}>
+              · in {project.name}
+            </span>
+            <span className="kbd">N</span>
+          </button>
+          {filtered.length === 0 && (
+            <div className="v3-empty">nothing {tab} here yet.</div>
+          )}
+          {filtered.map((w) => (
+            <V3WorkRow key={w.slug} work={w} />
+          ))}
+          <div style={{ height: 40 }} />
+        </div>
+      </main>
 
       {workDialogOpen && (
         <NewWorkDialog
@@ -398,7 +389,6 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           lockProjectSlug
         />
       )}
-
       {editDialogOpen && (
         <EditProjectDialog
           project={project}
@@ -408,12 +398,10 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
             setEditDialogOpen(false);
           }}
           onDeleted={() => {
-            // No project on screen any more — drop back to the workspace.
             window.location.href = "/";
           }}
         />
       )}
-
       {projectSwitcherOpen && (
         <Switcher
           placeholder="Switch to project…"
@@ -430,94 +418,113 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           emptyMessage="No work in this project"
         />
       )}
+      {sharedFoldersOpen && (
+        <SharedFoldersManagerDialog
+          projectSlug={project.slug}
+          projectName={project.name}
+          onClose={() => {
+            setSharedFoldersOpen(false);
+            // Refresh shares so any add/edit/delete reflects in the rail.
+            refresh();
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function WorkTile({ work }: { work: WorkSummary }) {
-  const created = formatDate(work.created_at);
+function V3WorkRow({ work }: { work: WorkSummary }) {
   return (
-    <a className="work-card" href={`/works/${work.slug}`}>
-      <div className="wc-hd">
-        <div>
-          <div className="wc-id mono">
-            {work.slug} · {created}
-          </div>
-          <div className="wc-title">{work.name}</div>
-        </div>
-        <span className={`chip chip-${work.status}`}>
-          {work.status === "active" && <span className="dot live" />}
-          {work.status}
-        </span>
-      </div>
-      <div className="wc-desc">{work.description}</div>
-      <div className="wc-stats">
-        <span className="wc-stat" title={`${work.agent_count} agents`}>
-          <AgentIcon /> {work.agent_count}
-        </span>
-        <span className="wc-stat" title={`${work.artifact_count} artifacts`}>
-          <ArtifactIcon /> {work.artifact_count}
-        </span>
-      </div>
+    <a className="v3-work-row" href={`/works/${work.slug}`}>
+      <span className="stat-dot" aria-hidden>
+        {work.status === "active" ? (
+          <span className="dot live" title="active" />
+        ) : (
+          <span className="check">
+            <CheckIcon size={10} />
+          </span>
+        )}
+      </span>
+      <span className="id-mono">{work.slug}</span>
+      <span className="name">{work.name}</span>
+      <span className="age">{formatAge(work.created_at)}</span>
+      <span />
     </a>
   );
 }
 
-function AgentIcon() {
+// Wraps the existing SharedFoldersSection (which manages all CRUD)
+// in a lightweight modal frame. The section's own header/empty UI
+// stays — it's the canonical management surface; the rail rows are
+// just a read-only preview.
+function SharedFoldersManagerDialog({
+  projectSlug,
+  projectName,
+  onClose,
+}: {
+  projectSlug: string;
+  projectName: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
-    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <circle cx="6" cy="3.6" r="1.9" fill="currentColor" />
-      <path
-        d="M2 11 C2 7.6 4 6.6 6 6.6 C8 6.6 10 7.6 10 11 Z"
-        fill="currentColor"
-      />
-    </svg>
+    <div
+      className="scrim"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="modal modal-lg">
+        <div className="modal-hd">
+          <div>
+            <h3>Shared folders</h3>
+            <div className="sub">
+              Project: <strong>{projectName}</strong>
+            </div>
+          </div>
+          <button
+            className="btn-ghost-sm"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="modal-bd">
+          <SharedFoldersSection
+            projectSlug={projectSlug}
+            projectName={projectName}
+          />
+        </div>
+        <div className="modal-ft">
+          <button className="btn" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
-function ArtifactIcon() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <path
-        d="M3 1 L7.4 1 L10 3.6 L10 11 L3 11 Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M7.4 1 L7.4 3.6 L10 3.6"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-    </svg>
-  );
-}
-
-function GridIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <rect x="1" y="1" width="4" height="4" rx="1" fill="currentColor" />
-      <rect x="7" y="1" width="4" height="4" rx="1" fill="currentColor" />
-      <rect x="1" y="7" width="4" height="4" rx="1" fill="currentColor" />
-      <rect x="7" y="7" width="4" height="4" rx="1" fill="currentColor" />
-    </svg>
-  );
-}
-
-function ListIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <rect x="1" y="2" width="10" height="1.5" rx="0.5" fill="currentColor" />
-      <rect x="1" y="5.25" width="10" height="1.5" rx="0.5" fill="currentColor" />
-      <rect x="1" y="8.5" width="10" height="1.5" rx="0.5" fill="currentColor" />
-    </svg>
-  );
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+function formatAge(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "now";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d ago`;
+  const w = Math.floor(d / 7);
+  if (w < 5) return `${w}w ago`;
+  const mo = Math.floor(d / 30);
+  return `${mo}mo ago`;
 }
