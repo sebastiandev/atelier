@@ -153,11 +153,25 @@ export function Home() {
           <div className="home-v3-hero-top">
             <div className="home-v3-mark" aria-label="Atelier">
               <span className="glyph-a" aria-hidden>
-                <svg viewBox="0 0 64 64" overflow="visible">
-                  <g fill="none" stroke="currentColor" strokeWidth="5" strokeLinecap="butt">
-                    <path d="M14 50 L32 12" />
-                    <path d="M32 12 L50 50" />
-                    <path d="M21 36 L43 36" />
+                {/* viewBox crops to the A's bounds so the SVG box's
+                    baseline lands at the bottom of the legs. The
+                    dash sits at y=56 (below the viewBox) and renders
+                    via overflow:visible — it's decoration, not part
+                    of the letterform's optical baseline. */}
+                <svg viewBox="0 0 64 50" overflow="visible">
+                  <g
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="6"
+                    strokeLinecap="butt"
+                    strokeLinejoin="miter"
+                    strokeMiterlimit="10"
+                  >
+                    {/* Single path through both legs so the apex at
+                        (32, 12) renders as a clean miter joint, not
+                        two butted flat caps. */}
+                    <path d="M 14 50 L 32 12 L 50 50" />
+                    <path d="M 21 36 L 43 36" />
                   </g>
                   <rect
                     className="cur-dash"
@@ -278,7 +292,7 @@ export function Home() {
                 }}
               >
                 <span className="swatch" />
-                {p.slug}
+                {p.name}
               </button>
             ))}
             <button
@@ -479,7 +493,7 @@ function V3WorkRow({
           }
         >
           <span className="swatch" />
-          {project?.slug ?? "loose"}
+          {project?.name ?? "loose"}
         </span>
       ) : (
         <span />

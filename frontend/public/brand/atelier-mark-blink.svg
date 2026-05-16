@@ -4,5 +4,7 @@
     <path d="M32 12 L50 50"></path>
     <path d="M21 36 L43 36"></path>
   </g>
-  <rect class="brand-mark__cursor" x="11" y="56" width="42" height="5" fill="currentColor"></rect>
+  <rect class="brand-mark__cursor" x="11" y="56" width="42" height="5" fill="currentColor">
+    
+  </rect>
 </svg>
