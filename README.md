@@ -8,8 +8,11 @@
 <h1 align="center">Atelier</h1>
 
 <p align="center">
-  Run a small team of AI agents on a real task — across providers, with full
-  history, without losing your place when you switch to the terminal.
+  A centralised workspace for all the work you do with AI agents — no matter which agents you use.
+</p>
+
+<p align="center">
+  Organise, track, and improve how you coordinate them. Atelier handles the orchestration: source-backed context, agent-to-agent handoff, isolated per-agent worktrees, and automatic artifact tracking (PRs, Jira tickets, docs). When you need to drop into the CLI, sessions stay in sync — pick up exactly where you left off, in either direction.
 </p>
 
 <p align="center">
@@ -18,24 +21,10 @@
 
 ---
 
-## Why
-
-You probably already use Claude Code, Amp, or a similar CLI. They're great. But:
-
-- Each agent lives in its own terminal. Tracking five concurrent conversations
-  means five tabs and a memory of which one was doing what.
-- Providers don't talk to each other. If today's task wants Claude's reasoning
-  *and* Amp's tooling, you bounce between two apps.
-- The CLI is great for deep work — a UI is better for *"what are all my agents
-  doing right now?"*
-- The moment you exit the CLI, that conversation is over. Resuming usually
-  means losing the live thread.
-
-Atelier is a workspace that wraps these tools instead of replacing them.
-
 ## Contents
 
 - [Quick start](#quick-start) — clone, run, open in your browser
+- [Install as a desktop app](#install-as-a-desktop-app-pwa) — Chrome / Safari / Edge / Firefox
 - [What you get](#what-you-get) — feature gallery
 - [Working on Atelier](#working-on-atelier) — first-time setup, dev loop, updating, wipe
 - [Skills for contributors](#skills-for-contributors) — `/update`, `/migrate`, `/test`, `/dev`, `/wipe`, `/new-migration`
@@ -55,6 +44,17 @@ cd atelier
 ```
 
 Frontend serves at `http://127.0.0.1:4173`, backend API at `http://127.0.0.1:8001`.
+
+## Install as a desktop app (PWA)
+
+You can turn the Atelier tab into a standalone app window — no address bar, its own Dock / Taskbar icon, opens in one click. Atelier is just a local web app, so any modern browser's "install" or "create shortcut" flow works.
+
+- **Chrome / Edge / Brave / Arc** — open `http://127.0.0.1:4173`, then **⋮ menu → Cast, save and share → Install page as app…** (older Chrome: *More tools → Create shortcut…*, tick **Open as window**). The app shows up in `~/Applications/Chrome Apps` on macOS and in the Start menu on Windows.
+- **Safari (macOS 14 Sonoma+)** — open Atelier, then **Share button (square with arrow up) in the toolbar → Add to Dock**. Pins it to your Dock; click to launch in a standalone window.
+- **Vivaldi** — right-click the Atelier tab → **Progressive Apps → Install Atelier as a Progressive Web Application**. Vivaldi launches it in its own window with its own taskbar icon, no browser chrome.
+- **Firefox (desktop)** — Firefox doesn't ship PWA install on desktop. Workarounds: the [`PWAsForFirefox`](https://github.com/filips123/PWAsForFirefox) extension, or just use the [desktop launcher](#one-click-desktop-launcher) below which gives you a `.app` / `.desktop` / `.lnk` shortcut that boots both servers and opens the page.
+
+Tip: start `./scripts/dev.sh` from your `~/.zshrc` / startup folder so the backend is always up when you click the app icon.
 
 ## What you get
 
@@ -102,9 +102,9 @@ agent reattaches in Atelier with the full transcript intact — including
 everything that happened in the terminal.
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/97d23025-be69-4fcd-94da-e7209c7e7423" controls muted width="900">
-    Detach flow demo — your browser couldn't play this inline.
-  </video>
+
+https://github.com/sebastiandev/atelier/raw/main/docs/screenshots/agent_detach_to_cli.mp4
+
 </p>
 
 ### Hand off to a new agent
@@ -120,16 +120,28 @@ auto-branch; you name one when you're ready.
 
 ### Artifact detection
 
-Agents announce the things they produce — pull requests, Jira tickets,
-brand-new documents — via dedicated tools that Atelier surfaces on the
-work's artifact rail. Click a PR or ticket row to open the URL; click a
-doc to reveal the file in your OS file browser. No more scrolling through
-twenty turns of transcript to find the link the agent dropped earlier.
+Agents announce the things they produce so they surface on the work's
+artifact rail — no scrolling through twenty turns of transcript to find the
+link the agent dropped earlier. Three artifact types are tracked today:
+
+- **Pull requests** — agents call a dedicated tool with the PR URL and
+  metadata. Atelier monitors the PR on GitHub and keeps the artifact
+  in sync, updating its status as it moves through `draft → open →
+  merged` (or `closed`) — no need to chase it manually.
+- **Jira tickets** — URL + title + status (`todo`, `in_progress`,
+  `in_review`, `done`, `blocked`).
+- **Documents** — markdown notes, ADRs, plans, design docs the agent
+  authored in its worktree. The rail row reveals the file in your OS file
+  browser when clicked; status (`draft` / `pending` / `committed`) is
+  derived from whether the file matches HEAD.
+
+Click any rail entry to open: PRs and tickets open the URL in a new tab;
+docs open the local file.
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/559e75f2-ff56-42c9-9bd1-1d5c88caca42" controls muted width="900">
-    Artifact detection demo — your browser couldn't play this inline.
-  </video>
+
+https://github.com/sebastiandev/atelier/raw/main/docs/screenshots/artifact_detection.mp4
+
 </p>
 
 ### Re-organize the canvas
@@ -139,9 +151,9 @@ sense for the work. The arrangement is per-work, persisted across reloads,
 and the rail mirrors the canvas so both stay in sync.
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/5105d2e0-0325-41de-9bd0-01c1e4fe3b39" controls muted width="900">
-    Re-organize agents demo — your browser couldn't play this inline.
-  </video>
+
+https://github.com/sebastiandev/atelier/raw/main/docs/screenshots/reorganize_agents.mp4
+
 </p>
 
 ### Maximize a tile
@@ -152,9 +164,9 @@ full output without the other tiles competing for space. Shift+Esc /
 Cmd+Esc restores the multi-tile layout.
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/9851b463-20ac-49de-8039-ddf3e9bc3fda" controls muted width="900">
-    Maximize tile demo — your browser couldn't play this inline.
-  </video>
+
+https://github.com/sebastiandev/atelier/raw/main/docs/screenshots/agent_full_view.mp4
+
 </p>
 
 ### Agent shortcuts
@@ -166,9 +178,9 @@ Atelier surfaces a small set of actions in the agent toolbar:
  - **Close** — pin the agent to the rail
 
 <p align="center">
-  <video src="https://github.com/user-attachments/assets/636842d7-bf2e-49a7-ab70-338a6f5b4b2f" controls muted width="900">
-    Agent shortcuts demo — your browser couldn't play this inline.
-  </video>
+
+https://github.com/sebastiandev/atelier/raw/main/docs/screenshots/agent_shortcuts.mp4
+
 </p>
 
 ### Source-backed context
@@ -235,10 +247,6 @@ usage off each assistant message so the cost rollup never has gaps.
 Long-running effort? Wrap a set of Work units in an optional **Project**
 with a glyph and a hue. Per-project default connections, filtered work
 feeds, and a project home page that scopes everything to that effort.
-
-<p align="center">
-  <img src="docs/screenshots/project.png" alt="Project page — Atelier project header with active/completed counts and a Support Codex work card" width="1100">
-</p>
 
 <p align="center">
   <img src="docs/screenshots/new_project.png" alt="New project dialog — name, glyph, color picker, optional default Jira / Sentry connections" width="540">
