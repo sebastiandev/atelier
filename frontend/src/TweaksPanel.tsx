@@ -1,48 +1,31 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
 
-import {
-  type CanvasLayout,
-  EDITOR_OPTS,
-  type EditorChoice,
-  TERMINAL_OPTS,
-  type TerminalChoice,
-  TWEAKS_DEFAULTS,
-  useTweaksStore,
-} from "./state/tweaks";
+import { TWEAKS_DEFAULTS, useTweaksStore } from "./state/tweaks";
 
 const PAD = 16;
+const DEV_FLAG_KEY = "atelier:dev-tweaks";
 
-/**
- * Floating tweaks panel — accent hue + canvas layout.
- *
- * Always rendered (fixed position) but only visible when
- * `tweaksStore.panelOpen` is true. The header is draggable; the close
- * button (×) sets `panelOpen=false`.
- *
- * The trigger lives in the topbars (`TweaksToggle`) — Home / WorkView /
- * Connections all mount it next to the theme toggle. We keep the panel
- * itself at App scope so the gear icon can fire from anywhere.
- */
+// Dev-only colour playground. Off by default; enable with
+// `localStorage.setItem("atelier:dev-tweaks", "true")` then reload.
+// The editor / console / canvas-layout knobs that used to live here
+// moved into the Settings screen (Default tools section); this panel
+// is now purely for accent-hue iteration.
+function isDevTweaksEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(DEV_FLAG_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
 export function TweaksPanel() {
   const open = useTweaksStore((s) => s.panelOpen);
   const accentHue = useTweaksStore((s) => s.accentHue);
-  const layout = useTweaksStore((s) => s.layout);
-  const editor = useTweaksStore((s) => s.editor);
-  const terminal = useTweaksStore((s) => s.terminal);
   const setAccentHue = useTweaksStore((s) => s.setAccentHue);
-  const setLayout = useTweaksStore((s) => s.setLayout);
-  const setEditor = useTweaksStore((s) => s.setEditor);
-  const setTerminal = useTweaksStore((s) => s.setTerminal);
   const resetTweaks = useTweaksStore((s) => s.reset);
   const closePanel = useTweaksStore((s) => s.closePanel);
-  const atDefault =
-    accentHue === TWEAKS_DEFAULTS.accentHue &&
-    layout === TWEAKS_DEFAULTS.layout &&
-    editor === TWEAKS_DEFAULTS.editor &&
-    terminal === TWEAKS_DEFAULTS.terminal;
+  const atDefault = accentHue === TWEAKS_DEFAULTS.accentHue;
 
-  // Position is held in the panel only — not persisted. The default
-  // (bottom-right with 16px padding) matches the prototype.
   const panelRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef({ x: PAD, y: PAD });
 
@@ -61,7 +44,6 @@ export function TweaksPanel() {
     el.style.bottom = `${offsetRef.current.y}px`;
   };
 
-  // Re-clamp on open and on viewport resize so the panel never escapes.
   useEffect(() => {
     if (!open) return;
     clamp();
@@ -95,6 +77,7 @@ export function TweaksPanel() {
   }
 
   if (!open) return null;
+  if (!isDevTweaksEnabled()) return null;
 
   return (
     <div
@@ -133,55 +116,11 @@ export function TweaksPanel() {
             onChange={(e) => setAccentHue(Number(e.target.value))}
           />
         </div>
-
-        <div className="twk-sect">Agent layout</div>
-        <LayoutRadio value={layout} onChange={setLayout} />
         <div className="twk-hint">
-          Tiles snap into a responsive grid; columns flow horizontally.
-          Drag a tile by its grip in the top-left to reorder.
-        </div>
-
-        <div className="twk-sect">Open in editor</div>
-        <div className="twk-row">
-          <select
-            className="twk-select"
-            value={editor}
-            onChange={(e) => setEditor(e.target.value as EditorChoice)}
-            aria-label="Editor for the Open-in-editor button"
-          >
-            {EDITOR_OPTS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="twk-hint">
-          The IDE the agent tile's editor button hands the worktree off
-          to. Requires the chosen IDE (or JetBrains Toolbox) to have
-          registered its URL handler with the OS.
-        </div>
-
-        <div className="twk-sect">Open in console</div>
-        <div className="twk-row">
-          <select
-            className="twk-select"
-            value={terminal}
-            onChange={(e) => setTerminal(e.target.value as TerminalChoice)}
-            aria-label="Terminal for the Open-in-console button"
-          >
-            {TERMINAL_OPTS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="twk-hint">
-          Terminal app the console button launches. "tmux" opens a new
-          window in your current tmux session if Atelier was started
-          inside one; otherwise it creates / attaches an "atelier"
-          session in your system terminal.
+          Drives the <code>--accent-h</code> custom property on{" "}
+          <code>&lt;html&gt;</code>. The rest of the accent ramp
+          derives via <code>oklch()</code>. Dev-only — enable by
+          setting <code>localStorage.atelier:dev-tweaks = "true"</code>.
         </div>
 
         <div className="twk-foot">
@@ -190,9 +129,9 @@ export function TweaksPanel() {
             className="twk-reset"
             onClick={resetTweaks}
             disabled={atDefault}
-            title={atDefault ? "Already at defaults" : "Reset accent + layout to defaults"}
+            title={atDefault ? "Already at default" : "Reset accent to default"}
           >
-            Reset to defaults
+            Reset to default
           </button>
         </div>
       </div>
@@ -200,53 +139,12 @@ export function TweaksPanel() {
   );
 }
 
-const LAYOUT_OPTS: { value: CanvasLayout; label: string }[] = [
-  { value: "tiles", label: "Tiles" },
-  { value: "columns", label: "Columns" },
-];
-
-function LayoutRadio({
-  value,
-  onChange,
-}: {
-  value: CanvasLayout;
-  onChange: (v: CanvasLayout) => void;
-}) {
-  const idx = Math.max(
-    0,
-    LAYOUT_OPTS.findIndex((o) => o.value === value),
-  );
-  const n = LAYOUT_OPTS.length;
-  return (
-    <div className="twk-seg" role="radiogroup">
-      <div
-        className="twk-seg-thumb"
-        style={{
-          left: `calc(2px + ${idx} * (100% - 4px) / ${n})`,
-          width: `calc((100% - 4px) / ${n})`,
-        }}
-      />
-      {LAYOUT_OPTS.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={o.value === value}
-          onClick={() => onChange(o.value)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/**
- * Gear icon trigger — toggles the panel. Place in topbars next to ThemeToggle.
- */
+// Trigger for the panel. Renders only when the dev flag is on so
+// production builds don't carry the gear icon into the v3 shell.
 export function TweaksToggle() {
   const togglePanel = useTweaksStore((s) => s.togglePanel);
   const open = useTweaksStore((s) => s.panelOpen);
+  if (!isDevTweaksEnabled()) return null;
   return (
     <button
       type="button"
@@ -254,7 +152,7 @@ export function TweaksToggle() {
       onClick={togglePanel}
       aria-label="Tweaks"
       aria-pressed={open}
-      title="Tweaks"
+      title="Tweaks (dev)"
     >
       <GearIcon />
     </button>

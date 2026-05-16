@@ -22,6 +22,7 @@ import {
   SlidersIcon,
 } from "./Icons";
 import { NewWorkDialog } from "./NewWorkDialog";
+import { SearchModal } from "./SearchModal";
 import { SharedFoldersSection } from "./SharedFoldersSection";
 import { Switcher, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
@@ -40,6 +41,8 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
   const [sharedFoldersOpen, setSharedFoldersOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [allWorks, setAllWorks] = useState<WorkSummary[]>([]);
 
   async function refresh() {
     try {
@@ -53,6 +56,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
       setWorks(allWorks.filter((w) => w.project_slug === projectSlug));
       setAllProjects(projects);
       setShares(projectShares);
+      setAllWorks(allWorks);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -71,12 +75,15 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
     function onKey(e: KeyboardEvent) {
       if (workDialogOpen || editDialogOpen) return;
       if (projectSwitcherOpen || workSwitcherOpen) return;
-      if (sharedFoldersOpen) return;
+      if (sharedFoldersOpen || searchOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
-      if (e.shiftKey && (e.key === "W" || e.key === "w")) {
+      if (e.shiftKey && (e.key === "F" || e.key === "f" || e.key === "S" || e.key === "s")) {
+        e.preventDefault();
+        setSearchOpen(true);
+      } else if (e.shiftKey && (e.key === "W" || e.key === "w")) {
         e.preventDefault();
         setWorkSwitcherOpen(true);
       } else if (e.shiftKey && (e.key === "P" || e.key === "p")) {
@@ -95,6 +102,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
     projectSwitcherOpen,
     workSwitcherOpen,
     sharedFoldersOpen,
+    searchOpen,
   ]);
 
   async function handleCreateWork(payload: CreateWorkPayload) {
@@ -184,7 +192,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           <div className="crown-actions">
             <button
               className="btn-icon"
-              onClick={() => setProjectSwitcherOpen(true)}
+              onClick={() => setSearchOpen(true)}
               title="Search (⇧F)"
               aria-label="Search"
             >
@@ -427,6 +435,14 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
             // Refresh shares so any add/edit/delete reflects in the rail.
             refresh();
           }}
+        />
+      )}
+      {searchOpen && (
+        <SearchModal
+          works={allWorks}
+          projects={allProjects}
+          defaultScope={{ slug: project.slug }}
+          onClose={() => setSearchOpen(false)}
         />
       )}
     </div>

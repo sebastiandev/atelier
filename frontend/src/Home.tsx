@@ -11,6 +11,7 @@ import {
 import { CheckIcon, ChevronRightIcon, PlugIcon, SearchIcon, SlidersIcon } from "./Icons";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NewWorkDialog } from "./NewWorkDialog";
+import { SearchModal } from "./SearchModal";
 import { Switcher, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
 import { UpdateChip } from "./UpdateChip";
@@ -30,6 +31,7 @@ export function Home() {
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   async function refresh() {
     try {
@@ -57,11 +59,15 @@ export function Home() {
     function onKey(e: KeyboardEvent) {
       if (workDialogOpen || projectDialogOpen) return;
       if (projectSwitcherOpen || workSwitcherOpen) return;
+      if (searchOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
-      if (e.shiftKey && (e.key === "W" || e.key === "w")) {
+      if (e.shiftKey && (e.key === "F" || e.key === "f" || e.key === "S" || e.key === "s")) {
+        e.preventDefault();
+        setSearchOpen(true);
+      } else if (e.shiftKey && (e.key === "W" || e.key === "w")) {
         e.preventDefault();
         setWorkSwitcherOpen(true);
       } else if (e.shiftKey && (e.key === "P" || e.key === "p")) {
@@ -77,7 +83,13 @@ export function Home() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [workDialogOpen, projectDialogOpen, projectSwitcherOpen, workSwitcherOpen]);
+  }, [
+    workDialogOpen,
+    projectDialogOpen,
+    projectSwitcherOpen,
+    workSwitcherOpen,
+    searchOpen,
+  ]);
 
   async function handleCreateWork(payload: CreateWorkPayload) {
     await createWork(payload);
@@ -209,11 +221,7 @@ export function Home() {
               </button>
               <button
                 className="btn ghost"
-                onClick={() => {
-                  // Phase 6 lands the search modal. Until then, fall
-                  // back to the project switcher palette.
-                  setProjectSwitcherOpen(true);
-                }}
+                onClick={() => setSearchOpen(true)}
               >
                 <SearchIcon size={12} /> Search{" "}
                 <span className="kbd">⇧F</span>
@@ -428,6 +436,13 @@ export function Home() {
           placeholder="Switch work"
           items={workItems}
           onClose={() => setWorkSwitcherOpen(false)}
+        />
+      )}
+      {searchOpen && (
+        <SearchModal
+          works={works}
+          projects={projects}
+          onClose={() => setSearchOpen(false)}
         />
       )}
     </div>

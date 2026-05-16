@@ -5974,6 +5974,180 @@ h5.md-h {
   border: 0;
 }
 
+/* ─── Search modal (Shift+F / Shift+S) ──────────────────────────
+   Centered overlay; keyboard-driven. Highlights matching substrings
+   with <mark>. Scope toggle in the input row defaults to "all" but
+   the caller can supply a scope (current project / work). */
+.search-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: oklch(0 0 0 / 0.35);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+}
+.search-modal {
+  width: 640px;
+  max-width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+}
+.search-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.search-input-row .ico { color: var(--fg-3); display: inline-flex; }
+.search-input-row input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  font-size: 16px;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  outline: none;
+  padding: 4px 0;
+}
+.search-input-row input::placeholder { color: var(--fg-4); }
+.search-input-row .esc-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-4);
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg-2);
+}
+
+.search-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0 12px;
+}
+.search-group-hd {
+  padding: 12px 14px 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  display: flex;
+  justify-content: space-between;
+}
+.search-group-hd .count { color: var(--fg-4); font-weight: 400; }
+
+.search-result {
+  display: grid;
+  grid-template-columns: 22px auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 14px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  color: var(--fg);
+  text-decoration: none;
+}
+.search-result:hover,
+.search-result.kbd-active {
+  background: var(--bg-1);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.search-result .pip {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--proj-soft, var(--bg-2));
+  color: var(--proj-color, var(--fg-3));
+  border: 1px solid color-mix(in oklch, var(--proj-color, var(--line)) 30%, var(--line));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.search-result .id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.search-result .body { min-width: 0; }
+.search-result .name {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-result .desc {
+  font-size: 11px;
+  color: var(--fg-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-result mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 0 2px;
+  border-radius: 2px;
+  font-weight: 600;
+}
+.search-result .tail {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-4);
+  white-space: nowrap;
+}
+.search-empty {
+  padding: 24px 14px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-4);
+}
+.search-empty .strong { color: var(--fg-2); display: block; margin-bottom: 4px; }
+.search-foot {
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-1);
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-4);
+  flex-shrink: 0;
+}
+.search-foot .seg { display: inline-flex; align-items: center; gap: 4px; }
+.search-foot .key {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg-2);
+  color: var(--fg-3);
+}
+
 /* ─── Theme picker cards (Appearance section) ─────────────────── */
 .theme-card .theme-swatch {
   width: 32px;

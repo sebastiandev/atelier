@@ -50,6 +50,7 @@ import {
 } from "./Icons";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
+import { SearchModal } from "./SearchModal";
 import { SortableCanvasCell } from "./SortableCanvasCell";
 import { Switcher, type SwitcherItem } from "./Switcher";
 import {
@@ -98,6 +99,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [allWorks, setAllWorks] = useState<WorkSummary[] | null>(null);
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const artifactsRevision = useArtifactsRefresh((s) =>
     selectWorkRevision(s, workSlug),
   );
@@ -199,6 +201,19 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
     setWorkSwitcherOpen(true);
   }
+  function openSearch() {
+    if (allProjects === null) {
+      listProjects()
+        .then(setAllProjects)
+        .catch(() => setAllProjects([]));
+    }
+    if (allWorks === null) {
+      listWorks()
+        .then(setAllWorks)
+        .catch(() => setAllWorks([]));
+    }
+    setSearchOpen(true);
+  }
 
   // Shortcuts:
   //   N       → new agent
@@ -216,7 +231,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         handoffSource !== null ||
         deleteTarget !== null ||
         projectSwitcherOpen ||
-        workSwitcherOpen
+        workSwitcherOpen ||
+        searchOpen
       )
         return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -224,7 +240,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable)
         return;
-      if (e.shiftKey && (e.key === "W" || e.key === "w")) {
+      if (e.shiftKey && (e.key === "F" || e.key === "f" || e.key === "S" || e.key === "s")) {
+        e.preventDefault();
+        openSearch();
+      } else if (e.shiftKey && (e.key === "W" || e.key === "w")) {
         e.preventDefault();
         openWorkSwitcher();
       } else if (e.shiftKey && (e.key === "P" || e.key === "p")) {
@@ -245,6 +264,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     deleteTarget,
     projectSwitcherOpen,
     workSwitcherOpen,
+    searchOpen,
     allProjects,
     allWorks,
   ]);
@@ -510,9 +530,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           <div className="crown-actions">
             <button
               className="btn-icon"
-              onClick={openWorkSwitcher}
-              title="Switch work (⇧W)"
-              aria-label="Switch work"
+              onClick={openSearch}
+              title="Search (⇧F)"
+              aria-label="Search"
             >
               <SearchIcon size={12} />
             </button>
@@ -913,6 +933,16 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                 ? "No sibling work in this project"
                 : "No other loose work"
           }
+        />
+      )}
+      {searchOpen && allWorks !== null && (
+        <SearchModal
+          works={allWorks}
+          projects={allProjects ?? []}
+          defaultScope={
+            work.project_slug ? { slug: work.project_slug } : "all"
+          }
+          onClose={() => setSearchOpen(false)}
         />
       )}
     </div>
