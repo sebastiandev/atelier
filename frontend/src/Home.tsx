@@ -8,59 +8,28 @@ import {
   listProjects,
   listWorks,
 } from "./api";
+import { CheckIcon, ChevronRightIcon, PlugIcon, SearchIcon, SlidersIcon } from "./Icons";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NewWorkDialog } from "./NewWorkDialog";
 import { Switcher, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
-import { TweaksToggle } from "./TweaksPanel";
 import { UpdateChip } from "./UpdateChip";
 
-// "all" shows everything (incl. loose). "loose" shows works without a
-// project. { slug } scopes to one project. Drives both the project-card
-// selection state and the latest-work filter pills (single source of
-// truth so they stay in sync).
+// "all" → everything (incl. loose). "loose" → no project. { slug } →
+// scope to a specific project. Single source of truth shared by the
+// filter pills row and the "+ start new work" composer row (the +
+// preselects the active filter's project in the new-work dialog).
 type ProjectFilter = "all" | "loose" | { slug: string };
-
-type HomeView = "tiles" | "list";
-
-const HOME_VIEW_KEY = "atelier:home:view";
-
-function readHomeView(): HomeView {
-  // Default to "list" — Home is a chronological feed and rows scan
-  // faster than tiles. Project pages default to "tiles" instead since
-  // they're scoped to a smaller set the user wants to graze.
-  try {
-    const raw = window.localStorage.getItem(HOME_VIEW_KEY);
-    if (raw === "tiles" || raw === "list") return raw;
-  } catch {
-    // private mode / SSR — fall through
-  }
-  return "list";
-}
-
-function writeHomeView(view: HomeView): void {
-  try {
-    window.localStorage.setItem(HOME_VIEW_KEY, view);
-  } catch {
-    // ignore — preference loss is non-fatal
-  }
-}
 
 export function Home() {
   const [works, setWorks] = useState<WorkSummary[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProjectFilter>("all");
-  const [view, setView] = useState<HomeView>(() => readHomeView());
   const [workDialogOpen, setWorkDialogOpen] = useState(false);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
-
-  function changeView(next: HomeView) {
-    setView(next);
-    writeHomeView(next);
-  }
 
   async function refresh() {
     try {
@@ -78,14 +47,12 @@ export function Home() {
   }, []);
 
   // Global shortcuts:
-  //   W       → new work
+  //   N       → new work
   //   P       → new project
   //   Shift+W → switch work (palette over all works in the workspace)
   //   Shift+P → switch project (palette)
-  // All ignored while any modal/palette is open or focus is in an
-  // editable field, and skipped when a chord modifier is held (so Cmd+W
-  // still closes the tab). Bare shortcuts gate on !e.shiftKey so they
-  // don't double-fire alongside the Shift+ variants.
+  // Ignored while modals/palettes are open or focus is in an editable
+  // field, and skipped when a chord modifier is held (Cmd+W = close tab).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (workDialogOpen || projectDialogOpen) return;
@@ -100,7 +67,7 @@ export function Home() {
       } else if (e.shiftKey && (e.key === "P" || e.key === "p")) {
         e.preventDefault();
         setProjectSwitcherOpen(true);
-      } else if (!e.shiftKey && (e.key === "w" || e.key === "W")) {
+      } else if (!e.shiftKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
         setWorkDialogOpen(true);
       } else if (!e.shiftKey && (e.key === "p" || e.key === "P")) {
@@ -118,71 +85,36 @@ export function Home() {
     setWorkDialogOpen(false);
   }
 
-  // Lookup map: project_slug → ProjectSummary, used when rendering chips
-  // and pill counts.
   const projectMap = useMemo(() => {
     const m = new Map<string, ProjectSummary>();
     for (const p of projects) m.set(p.slug, p);
     return m;
   }, [projects]);
 
-  const totalCount = works.length;
+  const activeCount = works.filter((w) => w.status === "active").length;
   const looseCount = works.filter((w) => w.project_slug == null).length;
 
-  // Latest-work list: filter-aware, sorted by created_at desc, all statuses.
+  // Top 10 most-recent work for the rail's "Latest work" section.
   const latest = useMemo(() => {
     const filtered = works.filter((w) => {
       if (filter === "all") return true;
       if (filter === "loose") return w.project_slug == null;
       return w.project_slug === filter.slug;
     });
-    return [...filtered].sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return [...filtered]
+      .sort((a, b) => {
+        // Active first, then newest within each group.
+        if (a.status !== b.status) return a.status === "active" ? -1 : 1;
+        return b.created_at.localeCompare(a.created_at);
+      })
+      .slice(0, 10);
   }, [works, filter]);
 
-  const recentByProject = useMemo(() => {
-    const out = new Map<string, WorkSummary[]>();
-    for (const p of projects) {
-      out.set(
-        p.slug,
-        works
-          .filter((w) => w.project_slug === p.slug)
-          .sort((a, b) => b.created_at.localeCompare(a.created_at))
-          .slice(0, 3),
-      );
-    }
-    return out;
-  }, [projects, works]);
-  const recentLoose = useMemo(
-    () =>
-      works
-        .filter((w) => w.project_slug == null)
-        .sort((a, b) => b.created_at.localeCompare(a.created_at))
-        .slice(0, 3),
-    [works],
-  );
-
-  function isFilterActive(target: ProjectFilter): boolean {
-    if (typeof target === "object" && typeof filter === "object") {
-      return target.slug === filter.slug;
-    }
-    return target === filter;
-  }
-
-  function activeFilterLabel(): string | null {
-    if (filter === "all") return null;
-    if (filter === "loose") return "Loose work";
-    return projectMap.get(filter.slug)?.name ?? filter.slug;
-  }
-
-  // When opening NewWorkDialog, seed the picker from the current filter.
-  // "all" → no preset (defaults to Loose). "loose" → null preset.
-  // { slug } → that project. The picker stays freely editable (per design,
-  // home-launched dialogs aren't locked).
   const newWorkPreset: string | null | undefined =
     filter === "all" ? undefined : filter === "loose" ? null : filter.slug;
 
-  // Switcher rows: pinned projects first, then by name. Works follow
-  // their parent project's color/glyph so the palette reads at a glance.
+  // Switcher palettes — palette mode is keyboard + click; we feed the
+  // full project / work universe (the v2 behavior).
   const projectItems = useMemo<SwitcherItem[]>(() => {
     const sorted = [...projects].sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
@@ -214,405 +146,305 @@ export function Home() {
   }, [works, projectMap]);
 
   return (
-    <div className="home">
-      <header className="topbar wv-topbar">
-        <a className="brand brand-link" href="/">
-          <span className="brand-mark" /> Atelier
-        </a>
-        <div className="spacer" />
-        <UpdateChip />
-        <a className="btn-ghost-sm" href="/connections">
-          Connections
-        </a>
-        <TweaksToggle />
-        <ThemeToggle />
-      </header>
-
-      <div className="home-hd">
-        <div>
-          <h1>Your work</h1>
-          <p className="tagline">
-            Each work unit is a goal and the agents working on it.
-          </p>
+    <div className="shell-v3 wide-left home-v3">
+      {/* LEFT: hero wordmark + tagline + 3 action buttons + footer */}
+      <aside className="shell-left">
+        <div className="home-v3-hero">
+          <div className="home-v3-hero-top">
+            <div className="home-v3-mark" aria-label="Atelier">
+              <span className="glyph-a" aria-hidden>
+                <svg viewBox="0 0 64 64" overflow="visible">
+                  <g fill="none" stroke="currentColor" strokeWidth="5" strokeLinecap="butt">
+                    <path d="M14 50 L32 12" />
+                    <path d="M32 12 L50 50" />
+                    <path d="M21 36 L43 36" />
+                  </g>
+                  <rect
+                    className="cur-dash"
+                    x="11"
+                    y="56"
+                    width="42"
+                    height="5"
+                    fill="currentColor"
+                  >
+                    <animate
+                      attributeName="opacity"
+                      values="1;1;0;0"
+                      keyTimes="0;0.55;0.6;1"
+                      dur="1.05s"
+                      repeatCount="indefinite"
+                    />
+                  </rect>
+                </svg>
+              </span>
+              <span className="rest">telier</span>
+            </div>
+            <div className="home-v3-tag">
+              Manage work across multiple agents.
+              <br />
+              <span className="strong">
+                Group it under projects, or run it loose.
+              </span>
+            </div>
+            <div className="home-v3-actions">
+              <button className="btn primary" onClick={() => setWorkDialogOpen(true)}>
+                + New work <span className="kbd">N</span>
+              </button>
+              <button className="btn" onClick={() => setProjectDialogOpen(true)}>
+                + New project <span className="kbd">P</span>
+              </button>
+              <button
+                className="btn ghost"
+                onClick={() => {
+                  // Phase 6 lands the search modal. Until then, fall
+                  // back to the project switcher palette.
+                  setProjectSwitcherOpen(true);
+                }}
+              >
+                <SearchIcon size={12} /> Search{" "}
+                <span className="kbd">⇧F</span>
+              </button>
+            </div>
+          </div>
+          <div className="home-v3-foot">
+            <div className="home-v3-meta">
+              <div className="ln">
+                <span className="lbl">$ status</span>
+                <span className="val">
+                  <span className="dot live" />
+                  {activeCount} active · {works.length} total
+                </span>
+              </div>
+              <div className="ln">
+                <span className="lbl">$ projects</span>
+                <span className="val">{projects.length} configured</span>
+              </div>
+              <div className="ln">
+                <span className="lbl">$ atelier</span>
+                <span className="val">v3 shell</span>
+              </div>
+            </div>
+            <div className="home-v3-util">
+              <a className="util-btn" href="/settings/connections">
+                <PlugIcon size={11} /> connections
+              </a>
+              <a className="util-btn" href="/settings">
+                <SlidersIcon size={11} /> settings
+              </a>
+              <ThemeToggle className="util-btn" labelled />
+              <UpdateChip className="util-btn" compact />
+            </div>
+          </div>
         </div>
-        <button className="btn primary" onClick={() => setWorkDialogOpen(true)}>
-          + New work <span className="kbd">W</span>
-        </button>
-      </div>
+      </aside>
 
-      {/* ----- Projects section ----- */}
-      <section className="proj-section">
-        <div className="proj-section-hd">
-          <span className="latest-title">
-            Projects <span className="count">{projects.length}</span>
-          </span>
-          <span className="spacer" />
-          <button
-            className="btn-ghost-sm"
-            onClick={() => setProjectDialogOpen(true)}
-          >
-            + New project <span className="kbd">P</span>
-          </button>
-        </div>
-        <div className="proj-grid">
-          {projects.map((p) => (
-            <ProjectCard
-              key={p.slug}
-              project={p}
-              recent={recentByProject.get(p.slug) ?? []}
-              activeCount={
-                works.filter(
-                  (w) => w.project_slug === p.slug && w.status === "active",
-                ).length
-              }
-            />
-          ))}
-          <LooseCard
-            recent={recentLoose}
-            activeCount={
-              works.filter((w) => w.project_slug == null && w.status === "active").length
+      {/* RIGHT: latest work + projects */}
+      <main className="shell-right home-v3-right">
+        {loadError && (
+          <div className="v3-empty" style={{ color: "var(--danger)" }}>
+            {loadError}
+          </div>
+        )}
+        <div className="scroll-area">
+          {/* Latest work */}
+          <V3SectionHd
+            title="Latest work"
+            count={works.length}
+            right={
+              <button onClick={() => setWorkSwitcherOpen(true)}>
+                search <span className="kbd" style={{ marginLeft: 4 }}>⇧W</span>
+              </button>
             }
-            selected={isFilterActive("loose")}
-            onSelect={() => setFilter(isFilterActive("loose") ? "all" : "loose")}
           />
-          <button
-            className="proj-card create"
-            onClick={() => setProjectDialogOpen(true)}
-          >
-            <span className="plus">+</span>
-            <span>New project</span>
-          </button>
-        </div>
-      </section>
-
-      {/* ----- Latest work section: header + filter pills + flat list ----- */}
-      <section className="latest-section">
-        <div className="latest-hd">
-          <span className="latest-title">
-            Latest work <span className="count">{totalCount}</span>
-          </span>
-          <div className="latest-pills">
+          <div className="v3-filter-bar">
             <button
-              className={"filter-pill" + (isFilterActive("all") ? " active" : "")}
+              className={"v3-filter-pill" + (filter === "all" ? " active" : "")}
               onClick={() => setFilter("all")}
             >
-              All
+              all <span className="count">{works.length}</span>
             </button>
             {projects.map((p) => (
               <button
                 key={p.slug}
                 className={
-                  "filter-pill" + (isFilterActive({ slug: p.slug }) ? " active" : "")
+                  "v3-filter-pill" +
+                  (typeof filter === "object" && filter.slug === p.slug
+                    ? " active"
+                    : "")
                 }
-                style={{ ["--proj-h" as string]: String(p.color) }}
                 onClick={() => setFilter({ slug: p.slug })}
+                style={{
+                  ["--proj-color" as string]: `oklch(0.62 0.16 ${p.color})`,
+                }}
               >
-                <span className="filter-pill-glyph">{p.glyph}</span>
-                {p.name}
+                <span className="swatch" />
+                {p.slug}
               </button>
             ))}
             <button
-              className={"filter-pill" + (isFilterActive("loose") ? " active" : "")}
+              className={"v3-filter-pill" + (filter === "loose" ? " active" : "")}
               onClick={() => setFilter("loose")}
             >
-              Loose <span className="count">{looseCount}</span>
+              loose <span className="count">{looseCount}</span>
             </button>
-            <div
-              className="view-toggle"
-              role="tablist"
-              aria-label="View"
-              style={{ marginLeft: "0.5rem" }}
-            >
-              <button
-                className={"view-toggle-btn" + (view === "tiles" ? " active" : "")}
-                onClick={() => changeView("tiles")}
-                aria-pressed={view === "tiles"}
-                title="Tile view"
-              >
-                <GridIcon /> Tiles
-              </button>
-              <button
-                className={"view-toggle-btn" + (view === "list" ? " active" : "")}
-                onClick={() => changeView("list")}
-                aria-pressed={view === "list"}
-                title="List view"
-              >
-                <ListIcon /> List
-              </button>
-            </div>
           </div>
-        </div>
-
-        {loadError && <div className="form-error">{loadError}</div>}
-
-        {view === "list" ? (
-          <div className="work-list">
-            <button
-              className="work-row create"
-              onClick={() => setWorkDialogOpen(true)}
-            >
-              <span className="work-row-status" aria-hidden="true">
-                +
+          <div className="v3-rule" />
+          <button
+            className="v3-add-row"
+            onClick={() => setWorkDialogOpen(true)}
+          >
+            <span className="marker">+</span> start new work
+            {typeof filter === "object" && projectMap.get(filter.slug) && (
+              <span style={{ color: "var(--fg-4)", marginLeft: 6 }}>
+                · in {projectMap.get(filter.slug)!.name}
               </span>
-              <span className="work-row-main">
-                <span className="work-row-top">
-                  <span className="work-row-title">
-                    Start new work
-                    {typeof filter === "object"
-                      ? ` in ${activeFilterLabel()}`
-                      : filter === "loose"
-                        ? " · loose"
-                        : ""}
+            )}
+            <span className="kbd">N</span>
+          </button>
+          {latest.length === 0 && (
+            <div className="v3-empty">
+              no work {filter !== "all" ? "for this filter" : "yet"}.
+            </div>
+          )}
+          {latest.map((w) => (
+            <V3WorkRow
+              key={w.slug}
+              work={w}
+              project={
+                w.project_slug ? projectMap.get(w.project_slug) ?? null : null
+              }
+              showProject={filter === "all"}
+            />
+          ))}
+
+          {/* Projects */}
+          <div style={{ height: 28 }} />
+          <V3SectionHd
+            title="Projects"
+            count={projects.length}
+            right={
+              <button onClick={() => setProjectDialogOpen(true)}>
+                + new <span className="kbd" style={{ marginLeft: 4 }}>P</span>
+              </button>
+            }
+          />
+          <div className="v3-rule" />
+          {projects.map((p) => {
+            const projWork = works.filter((w) => w.project_slug === p.slug);
+            const active = projWork.filter((w) => w.status === "active").length;
+            return (
+              <a
+                key={p.slug}
+                className="v3-proj-row"
+                href={`/projects/${p.slug}`}
+                style={{
+                  ["--proj-color" as string]: `oklch(0.62 0.16 ${p.color})`,
+                  ["--proj-soft" as string]: `oklch(0.62 0.16 ${p.color} / 0.12)`,
+                }}
+              >
+                <span className="swatch">{p.glyph}</span>
+                <span>
+                  <div className="name">{p.name}</div>
+                  <div className="desc">{p.description}</div>
+                </span>
+                <span className="meta">
+                  <span>
+                    <span className="num">{active}</span> active
+                  </span>
+                  <span>
+                    <span className="num">{projWork.length}</span> total
                   </span>
                 </span>
-              </span>
-              <span className="kbd">W</span>
-            </button>
-            {latest.map((w) => (
-              <WorkRow
-                key={w.slug}
-                work={w}
-                project={w.project_slug ? projectMap.get(w.project_slug) ?? null : null}
-                showProject={filter === "all"}
-              />
-            ))}
-            {latest.length === 0 && (
-              <div className="work-row-empty">
-                {filter === "all"
-                  ? "No work yet."
-                  : `No work in ${activeFilterLabel()} yet.`}
+                <span className="chev">
+                  <ChevronRightIcon size={12} />
+                </span>
+              </a>
+            );
+          })}
+          <button
+            className="v3-proj-row"
+            onClick={() => setFilter("loose")}
+            style={{ borderTop: "1px solid var(--line-soft)" }}
+          >
+            <span className="swatch loose">·</span>
+            <span>
+              <div className="name">Loose work</div>
+              <div className="desc">
+                One-offs and quick fixes that aren't in a project.
               </div>
-            )}
-          </div>
-        ) : (
-          <div className="home-grid">
-            <button
-              className="work-card create"
-              onClick={() => setWorkDialogOpen(true)}
-            >
-              <span className="plus">+</span>
-              <span className="create-title">
-                Start new work
-                {typeof filter === "object"
-                  ? ` in ${activeFilterLabel()}`
-                  : filter === "loose"
-                    ? " · loose"
-                    : ""}
+            </span>
+            <span className="meta">
+              <span>
+                <span className="num">{looseCount}</span> total
               </span>
-              <span className="hint">Brief and name.</span>
-            </button>
-            {latest.map((w) => (
-              <WorkTile
-                key={w.slug}
-                work={w}
-                project={w.project_slug ? projectMap.get(w.project_slug) ?? null : null}
-                showProject={filter === "all"}
-              />
-            ))}
-            {latest.length === 0 && (
-              <div className="empty hint">
-                {filter === "all"
-                  ? "No work yet."
-                  : `No work in ${activeFilterLabel()} yet.`}
-              </div>
-            )}
-          </div>
-        )}
-      </section>
+            </span>
+            <span className="chev">
+              <ChevronRightIcon size={12} />
+            </span>
+          </button>
+        </div>
+      </main>
 
       {workDialogOpen && (
         <NewWorkDialog
-          onClose={() => setWorkDialogOpen(false)}
-          onCreate={handleCreateWork}
           projects={projects}
           presetProjectSlug={newWorkPreset}
+          onClose={() => setWorkDialogOpen(false)}
+          onCreate={handleCreateWork}
         />
       )}
       {projectDialogOpen && (
         <NewProjectDialog
           onClose={() => setProjectDialogOpen(false)}
-          onCreated={async (created) => {
+          onCreated={() => {
             setProjectDialogOpen(false);
-            await refresh();
-            setFilter({ slug: created.slug });
+            refresh();
           }}
         />
       )}
       {projectSwitcherOpen && (
         <Switcher
-          placeholder="Switch to project…"
+          placeholder="Switch project"
           items={projectItems}
           onClose={() => setProjectSwitcherOpen(false)}
-          emptyMessage="No projects yet"
         />
       )}
       {workSwitcherOpen && (
         <Switcher
-          placeholder="Switch to work…"
+          placeholder="Switch work"
           items={workItems}
           onClose={() => setWorkSwitcherOpen(false)}
-          emptyMessage="No work yet"
         />
       )}
     </div>
   );
 }
 
-function ProjectCard({
-  project,
-  recent,
-  activeCount,
+function V3SectionHd({
+  title,
+  count,
+  right,
 }: {
-  project: ProjectSummary;
-  recent: WorkSummary[];
-  activeCount: number;
+  title: string;
+  count?: number;
+  right?: React.ReactNode;
 }) {
-  // Card is a clickable div (not anchor) because the recent-work rows
-  // inside are anchors — nested <a> is invalid HTML. Recent rows
-  // stopPropagation so they navigate without firing the card click.
-  const goToProject = () => window.location.assign(`/projects/${project.slug}`);
-  const hasConnections =
-    project.default_jira_conn || project.default_sentry_conn;
   return (
-    <div
-      className="proj-card"
-      style={{ ["--proj-h" as string]: String(project.color) }}
-      onClick={goToProject}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          goToProject();
-        }
-      }}
-    >
-      <div className="pc-hd">
-        <span className="pc-glyph" aria-hidden="true">
-          {project.glyph}
-        </span>
-        <div className="pc-titlewrap">
-          <div className="pc-name">{project.name}</div>
-          <div className="pc-id mono">{project.slug}</div>
-        </div>
-        <span className="pc-count">
-          <span className="pc-count-num">{activeCount}</span>
-          <span className="pc-count-sub">active</span>
-        </span>
-      </div>
-      {project.description && <div className="pc-desc">{project.description}</div>}
-      <div className="pc-recent">
-        {recent.length === 0 && (
-          <div className="hint pc-recent-empty">No work yet.</div>
-        )}
-        {recent.map((w) => (
-          <a
-            key={w.slug}
-            className="pc-recent-row"
-            href={`/works/${w.slug}`}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <WorkStatusIcon status={w.status} />
-            <span className="mono">{w.slug}</span>
-            <span className="pc-recent-title">{w.name}</span>
-          </a>
-        ))}
-      </div>
-      {(hasConnections || true) && (
-        <div className="pc-footer">
-          {project.default_jira_conn && (
-            <span className="conn-pill" data-source="jira">
-              JI
-            </span>
-          )}
-          {project.default_sentry_conn && (
-            <span className="conn-pill" data-source="sentry">
-              SE
-            </span>
-          )}
-          <span className="pc-open">
-            Open <span aria-hidden="true">›</span>
+    <div className="v3-shd">
+      <span>
+        {title}
+        {count != null && (
+          <span className="num" style={{ marginLeft: 8 }}>
+            {count}
           </span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function WorkStatusIcon({ status }: { status: WorkSummary["status"] }) {
-  if (status === "active") {
-    return (
-      <span className="work-row-status active" aria-hidden="true">
-        <span className="dot live" />
-      </span>
-    );
-  }
-  return (
-    <span className="work-row-status completed" aria-hidden="true">
-      ✓
-    </span>
-  );
-}
-
-function LooseCard({
-  recent,
-  activeCount,
-  selected,
-  onSelect,
-}: {
-  recent: WorkSummary[];
-  activeCount: number;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <div
-      className={"proj-card loose" + (selected ? " selected" : "")}
-      onClick={onSelect}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
-    >
-      <div className="pc-hd">
-        <span className="pc-glyph loose" aria-hidden="true">
-          ◇
-        </span>
-        <div className="pc-titlewrap">
-          <div className="pc-name">Loose work</div>
-          <div className="pc-id">Not in any project</div>
-        </div>
-        <span className="pc-count">
-          <span className="pc-count-num">{activeCount}</span>
-          <span className="pc-count-sub">active</span>
-        </span>
-      </div>
-      <div className="pc-recent">
-        {recent.length === 0 && (
-          <div className="hint pc-recent-empty">No loose work.</div>
         )}
-        {recent.map((w) => (
-          <a
-            key={w.slug}
-            className="pc-recent-row"
-            href={`/works/${w.slug}`}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <WorkStatusIcon status={w.status} />
-            <span className="mono">{w.slug}</span>
-            <span className="pc-recent-title">{w.name}</span>
-          </a>
-        ))}
-      </div>
+      </span>
+      {right && <span className="right">{right}</span>}
     </div>
   );
 }
 
-function WorkRow({
+function V3WorkRow({
   work,
   project,
   showProject,
@@ -621,159 +453,56 @@ function WorkRow({
   project: ProjectSummary | null;
   showProject: boolean;
 }) {
-  const created = formatDate(work.created_at);
   return (
-    <a className="work-row" href={`/works/${work.slug}`}>
-      <span className={`work-row-status ${work.status}`} title={work.status}>
-        {work.status === "active" ? <span className="dot live" /> : "✓"}
-      </span>
-      <span className="work-row-main">
-        <span className="work-row-top">
-          <span className="work-row-id">{work.slug}</span>
-          <span className="work-row-title">{work.name}</span>
-        </span>
-        <span className="work-row-meta">
-          <span>{created}</span>
-          <span className="wc-stat" title={`${work.agent_count} agents`}>
-            <AgentIcon /> {work.agent_count}
+    <a className="v3-work-row" href={`/works/${work.slug}`}>
+      <span className="stat-dot" aria-hidden>
+        {work.status === "active" ? (
+          <span className="dot live" title="active" />
+        ) : (
+          <span className="check">
+            <CheckIcon size={10} />
           </span>
-          <span className="wc-stat" title={`${work.artifact_count} artifacts`}>
-            <ArtifactIcon /> {work.artifact_count}
-          </span>
-        </span>
+        )}
       </span>
-      {showProject && project && (
+      <span className="id-mono">{work.slug}</span>
+      <span className="name">{work.name}</span>
+      <span className="age">{formatAge(work.created_at)}</span>
+      {showProject ? (
         <span
-          className="proj-chip"
-          style={{ ["--proj-h" as string]: String(project.color) }}
+          className="proj-tag"
+          style={
+            project
+              ? {
+                  ["--proj-color" as string]: `oklch(0.62 0.16 ${project.color})`,
+                }
+              : undefined
+          }
         >
-          <span className="dot" />
-          {project.name}
+          <span className="swatch" />
+          {project?.slug ?? "loose"}
         </span>
+      ) : (
+        <span />
       )}
     </a>
   );
 }
 
-function WorkTile({
-  work,
-  project,
-  showProject,
-}: {
-  work: WorkSummary;
-  project: ProjectSummary | null;
-  showProject: boolean;
-}) {
-  const created = formatDate(work.created_at);
-  return (
-    <a className="work-card" href={`/works/${work.slug}`}>
-      <div className="wc-hd">
-        <div>
-          <div className="wc-id mono">
-            {work.slug} · {created}
-          </div>
-          <div className="wc-title">{work.name}</div>
-        </div>
-        <span className={`chip chip-${work.status}`}>
-          {work.status === "active" && <span className="dot live" />}
-          {work.status}
-        </span>
-      </div>
-      <div className="wc-desc">{work.description}</div>
-      <div className="wc-stats">
-        <span className="wc-stat" title={`${work.agent_count} agents`}>
-          <AgentIcon /> {work.agent_count}
-        </span>
-        <span className="wc-stat" title={`${work.artifact_count} artifacts`}>
-          <ArtifactIcon /> {work.artifact_count}
-        </span>
-        {showProject && project && (
-          <span
-            className="proj-chip"
-            style={{ ["--proj-h" as string]: String(project.color), marginLeft: "auto" }}
-          >
-            <span className="dot" />
-            {project.name}
-          </span>
-        )}
-      </div>
-    </a>
-  );
-}
-
-function AgentIcon() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <circle cx="6" cy="3.6" r="1.9" fill="currentColor" />
-      <path
-        d="M2 11 C2 7.6 4 6.6 6 6.6 C8 6.6 10 7.6 10 11 Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
-function ArtifactIcon() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <path
-        d="M3 1 L7.4 1 L10 3.6 L10 11 L3 11 Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M7.4 1 L7.4 3.6 L10 3.6"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-      />
-    </svg>
-  );
-}
-
-function GridIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <rect x="1" y="1" width="4" height="4" rx="1" fill="currentColor" />
-      <rect x="7" y="1" width="4" height="4" rx="1" fill="currentColor" />
-      <rect x="1" y="7" width="4" height="4" rx="1" fill="currentColor" />
-      <rect x="7" y="7" width="4" height="4" rx="1" fill="currentColor" />
-    </svg>
-  );
-}
-
-function ListIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <rect x="1" y="2" width="10" height="1.5" rx="0.5" fill="currentColor" />
-      <rect x="1" y="5.25" width="10" height="1.5" rx="0.5" fill="currentColor" />
-      <rect x="1" y="8.5" width="10" height="1.5" rx="0.5" fill="currentColor" />
-    </svg>
-  );
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return iso;
-  const diffMs = Date.now() - d.getTime();
-  const min = Math.round(diffMs / 60_000);
-  const hr = Math.round(diffMs / 3_600_000);
-  const day = Math.round(diffMs / 86_400_000);
-
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
-  if (hr < 24) return `${hr}h ago`;
-  if (day === 1) return "yesterday";
-  if (day < 7) return `${day}d ago`;
-  if (day < 30) return `${Math.round(day / 7)}w ago`;
-
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  return d.toLocaleDateString(
-    undefined,
-    sameYear
-      ? { month: "short", day: "numeric" }
-      : { month: "short", day: "numeric", year: "numeric" },
-  );
+// Compact relative-time formatter. The list shows up to 10 rows so a
+// crude "Xm/h/d/wk ago" is plenty — no need for a full i18n library.
+function formatAge(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "now";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d ago`;
+  const w = Math.floor(d / 7);
+  if (w < 5) return `${w}w ago`;
+  const mo = Math.floor(d / 30);
+  return `${mo}mo ago`;
 }

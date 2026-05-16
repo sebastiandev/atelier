@@ -27,7 +27,10 @@ function writeDismissedSha(sha: string): void {
   }
 }
 
-export function UpdateChip() {
+export function UpdateChip({
+  className,
+  compact,
+}: { className?: string; compact?: boolean } = {}) {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -99,14 +102,14 @@ export function UpdateChip() {
     <div className="update-chip-wrap" ref={popoverRef}>
       <button
         type="button"
-        className="update-chip"
+        className={className ?? "update-chip"}
         onClick={() => setPopoverOpen((o) => !o)}
         aria-haspopup="dialog"
         aria-expanded={popoverOpen}
         title="An update is available"
       >
         <span className="update-chip-dot" aria-hidden />
-        Update available
+        {compact ? "update" : "Update available"}
       </button>
       {popoverOpen ? (
         <div className="update-popover" role="dialog" aria-label="Update available">
