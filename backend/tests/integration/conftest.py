@@ -29,6 +29,7 @@ from src.domain.agents import (
 )
 from src.infrastructure.agents import StubAgentAdapter
 from src.infrastructure.agents.factory import build_adapter
+from src.infrastructure.update_check import git_checker as _git_checker_module
 from src.settings import Settings
 
 
@@ -70,6 +71,30 @@ def tmp_workdir(tmp_path: Path) -> str:
     folder = tmp_path / "workdir"
     folder.mkdir()
     return str(folder)
+
+
+@pytest.fixture(autouse=True)
+def stub_update_checker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Short-circuit ``GitUpdateChecker.__call__`` for integration tests.
+
+    The lifespan spins up a ``UpdateCheckPoller`` whose first action is
+    an immediate ``await self._checker()``. The real checker shells out
+    to ``git fetch`` against the remote — a network call that adds
+    ~3 seconds per test (lifespan teardown blocks on the in-flight
+    fetch via ``poller.stop`` → ``await self._task``). Across the
+    agents-routes suite that's a couple of minutes of pure git fetch.
+
+    The unit tests under ``tests/unit/infrastructure/update_check/`` are
+    untouched — they don't go through this conftest and exercise the
+    real checker / poller behaviour directly.
+    """
+
+    async def _noop_check(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        _git_checker_module.GitUpdateChecker, "__call__", _noop_check
+    )
 
 
 @pytest.fixture(autouse=True)
