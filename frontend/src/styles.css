@@ -5279,6 +5279,17 @@ h5.md-h {
   height: 100%;
   min-height: 0;
   gap: 24px;
+  /* Drives the home wordmark font-size + the optical inset applied
+     to the tag / actions / foot column. The A's visible leftmost
+     stroke sits at x=14 of a 64-wide viewBox; the SVG element itself
+     is 1.18em wide, so the visible inset is 0.258 × font-size. */
+  --wm-size: clamp(48px, 5.2vw, 76px);
+  --wm-text-inset: calc(var(--wm-size) * 0.258);
+}
+.home-v3-hero > .home-v3-hero-top > .home-v3-tag,
+.home-v3-hero > .home-v3-hero-top > .home-v3-actions,
+.home-v3-hero > .home-v3-foot {
+  padding-left: var(--wm-text-inset);
 }
 .home-v3-hero-top {
   display: flex;
@@ -5288,7 +5299,7 @@ h5.md-h {
 .home-v3-mark {
   font-family: var(--font-mono);
   font-weight: 700;
-  font-size: clamp(48px, 5.2vw, 76px);
+  font-size: var(--wm-size, clamp(48px, 5.2vw, 76px));
   line-height: 0.88;
   letter-spacing: -0.04em;
   color: var(--fg);
