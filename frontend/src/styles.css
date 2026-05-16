@@ -5844,5 +5844,154 @@ h5.md-h {
 .modal .modal-hd { border-bottom-color: transparent; }
 .modal .modal-ft { border-top-color: transparent; background: var(--bg-1); }
 
+/* ─── Settings → Connections re-skin ─────────────────────────────
+   ConnectionsScreen renders ``.home > .conn-screen`` with its own
+   topbar (suppressed via the ``chromeless`` prop). The
+   ``.settings-conn-host`` wrapper restyles each ``.conn-group`` so
+   it lines up with the surrounding ``.settings-card`` aesthetic —
+   mono uppercase header band, panel bg, flat rows inside. The
+   small JI/SE source slug stays as the only color anchor, matching
+   the v3 explicit walk-back of jewel-tone pills. */
+.settings-conn-host {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+.settings-conn-host .home { height: auto; display: block; background: transparent; }
+.settings-conn-host .conn-screen { padding: 0; max-width: 100%; gap: 14px; }
+.settings-conn-host .conn-group {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.settings-conn-host .conn-group-hd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg);
+}
+.settings-conn-host .conn-group-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.settings-conn-host .conn-group-title .count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0;
+  color: var(--fg-4);
+  font-weight: 400;
+  text-transform: none;
+}
+.settings-conn-host .conn-group-title .ctx-type {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  gap: 8px;
+}
+.settings-conn-host .conn-group-title .ctx-type .mono {
+  color: var(--s-color, var(--fg-3));
+  background: var(--s-soft, var(--bg-2));
+  border: 1px solid color-mix(in oklch, var(--s-color, var(--line)) 25%, var(--line));
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.settings-conn-host .conn-empty {
+  padding: 14px 16px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-4);
+}
+.settings-conn-host .conn-list { gap: 0; }
+.settings-conn-host .conn-card {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0;
+  overflow: hidden;
+}
+.settings-conn-host .conn-list .conn-card:first-child { border-top: 0; }
+.settings-conn-host .conn-card:hover { border-color: var(--line-soft); }
+.settings-conn-host .conn-card.editing {
+  border-color: var(--line-soft);
+  box-shadow: none;
+  background: var(--bg-1);
+}
+.settings-conn-host .conn-card.fresh {
+  margin-top: 0;
+  border-top: 1px solid var(--line-soft);
+  background: var(--bg-1);
+}
+.settings-conn-host .conn-card-hd-static {
+  background: transparent;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 12px 16px;
+}
+.settings-conn-host .conn-card-hd { padding: 10px 16px; }
+.settings-conn-host .conn-card-bd { background: transparent; padding: 14px 16px; }
+.settings-conn-host .verify-pill {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--fg-3);
+  font-size: 10.5px;
+  font-weight: 500;
+  gap: 4px;
+}
+.settings-conn-host .verify-pill.ok {
+  color: var(--fg-3);
+  background: transparent;
+  border: 0;
+}
+.settings-conn-host .verify-pill.ok svg { color: var(--good); }
+.settings-conn-host .verify-pill.err {
+  color: var(--danger);
+  background: transparent;
+  border: 0;
+}
+
+/* ─── Theme picker cards (Appearance section) ─────────────────── */
+.theme-card .theme-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  flex-shrink: 0;
+}
+.theme-card .swatch-light {
+  background: linear-gradient(135deg, #ffffff 50%, oklch(0.62 0.18 250) 50%);
+}
+.theme-card .swatch-dark {
+  background: linear-gradient(135deg, oklch(0.20 0.008 260) 50%, oklch(0.62 0.18 250) 50%);
+}
+.theme-card .swatch-ansi {
+  background: linear-gradient(135deg, oklch(0.27 0.014 255) 50%, oklch(0.82 0.18 145) 50%);
+}
+
 /* Tinted seam — work canvas inherits the right column's --bg-1 */
 .shell-v3.work-v3 .work-right-hd { border-bottom: 0; }
