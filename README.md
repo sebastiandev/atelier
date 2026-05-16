@@ -103,7 +103,7 @@ everything that happened in the terminal.
 
 <p align="center">
 
-https://github.com/sebastiandev/atelier/raw/main/docs/screenshots/agent_detach_to_cli.mp4
+https://github.com/user-attachments/assets/398f3e22-9c2a-4cce-9add-cab3b27d7358
 
 </p>
 
@@ -152,7 +152,7 @@ and the rail mirrors the canvas so both stay in sync.
 
 <p align="center">
 
-https://github.com/sebastiandev/atelier/raw/main/docs/screenshots/reorganize_agents.mp4
+https://github.com/user-attachments/assets/491b0e98-505b-4d1c-a02e-49de874770f7
 
 </p>
 
@@ -165,7 +165,7 @@ Cmd+Esc restores the multi-tile layout.
 
 <p align="center">
 
-https://github.com/sebastiandev/atelier/raw/main/docs/screenshots/agent_full_view.mp4
+https://github.com/user-attachments/assets/dc22bbe0-60d8-4a04-9730-df4e4069be7e
 
 </p>
 
@@ -179,7 +179,7 @@ Atelier surfaces a small set of actions in the agent toolbar:
 
 <p align="center">
 
-https://github.com/sebastiandev/atelier/raw/main/docs/screenshots/agent_shortcuts.mp4
+https://github.com/user-attachments/assets/014f5121-282b-47ed-a7c0-6c32083a8c14
 
 </p>
 
