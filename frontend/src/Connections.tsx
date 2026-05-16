@@ -15,6 +15,7 @@ import {
   patchConnection,
   verifyConnection,
 } from "./api";
+import { BrandMark } from "./BrandMark";
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
@@ -180,8 +181,8 @@ export function Connections() {
   return (
     <div className="home">
       <header className="topbar">
-        <a className="brand brand-link" href="/">
-          <span className="brand-mark" /> Atelier
+        <a className="brand brand-link" href="/" aria-label="Atelier">
+          <BrandMark />telier
         </a>
         <span className="crumbs">
           <span className="sep">/</span>

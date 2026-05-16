@@ -38,6 +38,7 @@ import {
   revealArtifact,
   revealWork,
 } from "./api";
+import { BrandMark } from "./BrandMark";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { HandoffDialog } from "./HandoffDialog";
@@ -447,8 +448,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   return (
     <div className="work-view">
       <header className="topbar wv-topbar">
-        <a className="brand brand-link" href="/">
-          <span className="brand-mark" /> Atelier
+        <a className="brand brand-link" href="/" aria-label="Atelier">
+          <BrandMark blink />telier
         </a>
         <a className="btn-ghost-sm" href="/">
           ← Workspace

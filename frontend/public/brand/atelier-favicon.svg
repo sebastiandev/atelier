@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Atelier">
+  <style>
+    .fg { stroke: #111; fill: #111; }
+    @media (prefers-color-scheme: dark) {
+      .fg { stroke: #fff; fill: #fff; }
+    }
+  </style>
+  <g class="fg" fill="none" stroke-width="6" stroke-linecap="butt">
+    <path d="M14 50 L32 12"></path>
+    <path d="M32 12 L50 50"></path>
+    <path d="M21 36 L43 36"></path>
+  </g>
+  <rect class="fg" x="11" y="56" width="42" height="5" stroke="none"></rect>
+</svg>

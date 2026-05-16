@@ -10,6 +10,7 @@ import {
   listProjects,
   listWorks,
 } from "./api";
+import { BrandMark } from "./BrandMark";
 import { EditProjectDialog } from "./EditProjectDialog";
 import { NewWorkDialog } from "./NewWorkDialog";
 import { SharedFoldersSection } from "./SharedFoldersSection";
@@ -176,8 +177,8 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
   return (
     <div className="home" style={{ ["--proj-h" as string]: String(project.color) }}>
       <header className="topbar wv-topbar">
-        <a className="brand brand-link" href="/">
-          <span className="brand-mark" /> Atelier
+        <a className="brand brand-link" href="/" aria-label="Atelier">
+          <BrandMark />telier
         </a>
         <a className="btn-ghost-sm" href="/">
           ← Workspace
