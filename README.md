@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="scripts/launchers/icons/atelier.png" alt="Atelier" width="120">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/atelier-mark-light.svg">
+    <img src="brand/atelier-mark-dark.svg" alt="Atelier" width="96">
+  </picture>
 </p>
 
 <h1 align="center">Atelier</h1>
