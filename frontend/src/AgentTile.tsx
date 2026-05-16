@@ -600,7 +600,7 @@ export function AgentTile({
           <Unit key={unit.key} unit={unit} />
         ))}
       </div>
-      {lastMetrics && (
+      {(lastMetrics || isCurrentlyActive) && (
         <TurnMetricsBar
           metrics={lastMetrics}
           session={sessionTotals}
@@ -1296,11 +1296,41 @@ function TurnMetricsBar({
   meta,
   activityPhase,
 }: {
-  metrics: TurnRollup;
+  metrics: TurnRollup | null;
   session: SessionTotals;
   meta: ModelMeta | null;
   activityPhase: string | null;
 }) {
+  // Persona-tinted wave that spans from the last metric segment to
+  // the right margin. Renders only while the agent is mid-turn so a
+  // settled bar reads as "done".
+  const activityNode = activityPhase ? (
+    <span
+      className="turn-metrics-activity"
+      aria-hidden
+      title={activityPhase}
+    >
+      <span className="turn-metrics-activity-track">
+        <span className="turn-metrics-activity-fill" />
+      </span>
+    </span>
+  ) : null;
+  // First-turn-in-progress path: no ``turn_metrics`` event yet so the
+  // rollup is null. Render an em-dash placeholder for each segment so
+  // the bar still shows up (with the activity phase + shimmer); the
+  // numbers fill in once the turn lands.
+  if (metrics === null) {
+    return (
+      <div className="turn-metrics" title="Metrics will appear when the first turn completes.">
+        <span className="turn-metrics-item">—</span>
+        <span className="turn-metrics-sep">·</span>
+        <span className="turn-metrics-item">↓ — tokens</span>
+        <span className="turn-metrics-sep">·</span>
+        <span className="turn-metrics-item turn-metrics-ctx">ctx —</span>
+        {activityNode}
+      </div>
+    );
+  }
   // Total tokens charged on the response side: input + cached lookups
   // count toward the prompt; output is what the model wrote. We surface
   // their sum because that's the "cost-shaped" number users care about
@@ -1373,14 +1403,7 @@ function TurnMetricsBar({
           <span className="turn-metrics-item">{formatCost(sessionCost)}</span>
         </>
       )}
-      {activityPhase && (
-        <span className="turn-metrics-activity" aria-live="polite">
-          <span className="turn-metrics-activity-label">{activityPhase}</span>
-          <span className="turn-metrics-activity-track" aria-hidden="true">
-            <span className="turn-metrics-activity-fill" />
-          </span>
-        </span>
-      )}
+      {activityNode}
     </div>
   );
 }

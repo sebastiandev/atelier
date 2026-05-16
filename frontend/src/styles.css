@@ -2073,59 +2073,49 @@ h5.md-h {
   font-weight: 600;
 }
 
-/* Activity indicator: phase label + persona-tinted shimmer track.
-   Lives at the end of the metrics row and takes the leftover space.
-   The shimmer animates regardless of event traffic so silent
-   thinking / tool stretches still feel alive. */
+/* Activity indicator: persona-tinted wave that spans the leftover
+   horizontal space from the last metric segment to the right
+   margin. Drifts continuously while the agent is mid-turn — the
+   motion (not a label) tells the user it's still alive. */
 .turn-metrics-activity {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
   margin-left: auto;
   min-width: 0;
   flex: 1 1 0;
-  justify-content: flex-end;
-}
-.turn-metrics-activity-label {
-  color: var(--fg-3);
-  font-style: italic;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .turn-metrics-activity-track {
   position: relative;
-  flex: 0 1 96px;
+  flex: 1 1 0;
   height: 2px;
   border-radius: 2px;
   background: var(--p-soft, color-mix(in oklch, var(--accent) 14%, transparent));
   overflow: hidden;
+  align-self: center;
 }
 .turn-metrics-activity-fill {
   position: absolute;
   top: 0;
   left: 0;
   height: 100%;
-  width: 40%;
-  border-radius: 2px;
+  width: 200%;
   background: linear-gradient(
     90deg,
     transparent 0%,
-    var(--p-color, var(--accent)) 50%,
+    var(--p-color, var(--accent)) 25%,
+    transparent 50%,
+    var(--p-color, var(--accent)) 75%,
     transparent 100%
   );
-  opacity: 0.55;
-  animation: turn-metrics-shimmer 1.6s ease-in-out infinite;
+  opacity: 0.45;
+  animation: turn-metrics-wave 2.4s linear infinite;
 }
-@keyframes turn-metrics-shimmer {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(280%); }
+@keyframes turn-metrics-wave {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .turn-metrics-activity-fill {
-    animation: none;
-    opacity: 0.4;
-  }
+  .turn-metrics-activity-fill { animation: none; opacity: 0.4; }
 }
 
 /* Permission prompts (above composer) ----------------------------------- */
