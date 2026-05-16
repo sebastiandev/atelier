@@ -21,7 +21,7 @@ This rule is what lets `domain/` be tested without a database, without HTTP, and
 Infrastructure boundaries are `Protocol` classes in `domain/`. They're *callable* signatures or thin services. Examples:
 
 - `WorkStore` (`backend/src/domain/workstore/ports.py`) — the public persistence boundary. Composed of three narrow ports under the hood: `WorkRepository`, `WorkspaceFiles`, `TranscriptLog`.
-- `AgentAdapter` (`backend/src/domain/agents/ports.py`) — the contract every provider (Claude, Amp, …) implements.
+- `AgentAdapter` (`backend/src/domain/agents/ports.py`) — the contract every provider (Claude, Amp, Codex, …) implements.
 
 Tests pass stubs satisfying the Protocol; production wires real implementations in `application/lifespan` (or the equivalent FastAPI startup hook).
 

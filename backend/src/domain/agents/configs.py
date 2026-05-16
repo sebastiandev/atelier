@@ -166,7 +166,83 @@ class AmpAgentConfig:
     custom_allowed_tools: tuple[str, ...] = ()
 
 
-AgentConfig = ClaudeAgentConfig | AmpAgentConfig
+class CodexModel(str, Enum):
+    """OpenAI Codex model aliases accepted by the Codex SDK / CLI.
+
+    The Codex CLI/SDK accepts these short-form names. Newer date-stamped
+    snapshots can be passed through the runtime config, but pinning here
+    keeps the new-agent dialog deterministic.
+    """
+
+    GPT_5_4 = "gpt-5.4"
+    GPT_5_4_PRO = "gpt-5.4-pro"
+    GPT_5_3 = "gpt-5.3"
+
+
+class CodexReasoningEffort(str, Enum):
+    """Codex reasoning effort ladder.
+
+    Mirrors the Codex CLI's ``model_reasoning_effort`` knob. ``high`` grants
+    a longer reasoning budget at the cost of latency + tokens billed.
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class CodexSandbox(str, Enum):
+    """Filesystem sandbox tier for the Codex process.
+
+    Orthogonal to Atelier's per-tool permission UI: this is the OS-level
+    guard rail (what Codex *can* touch on disk), while ``approval_mode``
+    governs *when* it has to ask before touching.
+
+    - ``READ_ONLY`` — agent can read but never write.
+    - ``WORKSPACE_WRITE`` — writes are confined to the agent's worktree.
+      This is the SDK default and the right grain for Atelier worktrees.
+    - ``DANGER_FULL_ACCESS`` — no sandbox; agent can write anywhere the
+      user can. Use only for trusted workflows + ``approval_mode=never``.
+    """
+
+    READ_ONLY = "read-only"
+    WORKSPACE_WRITE = "workspace-write"
+    DANGER_FULL_ACCESS = "danger-full-access"
+
+
+class CodexApprovalMode(str, Enum):
+    """Approval policy for Codex's typed approval requests.
+
+    Maps directly to Codex's ``--ask-for-approval`` ladder. ``on-request``
+    is the value that routes file/command approvals to Atelier's
+    ``PermissionRequest`` event path; ``never`` auto-runs everything and
+    ``untrusted`` is paranoid (every tool prompts).
+    """
+
+    NEVER = "never"
+    ON_REQUEST = "on-request"
+    ON_FAILURE = "on-failure"
+    UNTRUSTED = "untrusted"
+
+
+@dataclass(frozen=True, kw_only=True)
+class CodexAgentConfig:
+    """Codex adapter inputs.
+
+    ``sandbox`` is OS-level filesystem gating, ``approval_mode`` is the
+    when-to-prompt knob — both layers exist independently. The system
+    prompt flows in via ``common.system_prompt`` and is forwarded to
+    Codex as ``base_instructions`` by the adapter.
+    """
+
+    common: CommonAgentConfig
+    model: CodexModel = CodexModel.GPT_5_4
+    reasoning_effort: CodexReasoningEffort = CodexReasoningEffort.MEDIUM
+    sandbox: CodexSandbox = CodexSandbox.WORKSPACE_WRITE
+    approval_mode: CodexApprovalMode = CodexApprovalMode.ON_REQUEST
+
+
+AgentConfig = ClaudeAgentConfig | AmpAgentConfig | CodexAgentConfig
 
 
 __all__ = [
@@ -180,5 +256,10 @@ __all__ = [
     "ClaudeEffort",
     "ClaudeModel",
     "ClaudePermissionMode",
+    "CodexAgentConfig",
+    "CodexApprovalMode",
+    "CodexModel",
+    "CodexReasoningEffort",
+    "CodexSandbox",
     "CommonAgentConfig",
 ]

@@ -68,6 +68,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # construct the app see the same view.
     if resolved.anthropic_api_key and not os.environ.get("ANTHROPIC_API_KEY"):
         os.environ["ANTHROPIC_API_KEY"] = resolved.anthropic_api_key
+    if resolved.openai_api_key and not os.environ.get("OPENAI_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = resolved.openai_api_key
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

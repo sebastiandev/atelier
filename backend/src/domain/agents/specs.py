@@ -32,6 +32,11 @@ from src.domain.agents.configs import (
     ClaudeEffort,
     ClaudeModel,
     ClaudePermissionMode,
+    CodexAgentConfig,
+    CodexApprovalMode,
+    CodexModel,
+    CodexReasoningEffort,
+    CodexSandbox,
     CommonAgentConfig,
 )
 from src.domain.models import Provider
@@ -314,9 +319,96 @@ class AmpSpec:
         )
 
 
+class CodexSpec:
+    name: ClassVar[Provider] = "codex"
+    label: ClassVar[str] = "Codex (OpenAI)"
+
+    _allowed_options: ClassVar[set[str]] = {
+        "reasoning_effort",
+        "sandbox",
+        "approval_mode",
+    }
+
+    _CODEX_ADVANCED_INTRO: ClassVar[str] = (
+        "Codex has two independent permission layers. Sandbox restricts "
+        "what the agent can touch on disk regardless of model intent — "
+        "``workspace-write`` (the default) confines writes to the agent's "
+        "worktree. Approval picks when Codex asks before running a command "
+        "or applying a patch: ``on request`` routes Codex's prompts "
+        "through Atelier, ``never`` auto-runs everything, ``untrusted`` "
+        "prompts on every tool."
+    )
+
+    def describe(self) -> ProviderDescriptor:
+        # ``model_meta`` is empty for v1: OpenAI's public pricing for
+        # Codex models is in flux; the FE renders "—" for cost (same as
+        # Amp). Fold in pricing when it settles upstream.
+        return ProviderDescriptor(
+            name=self.name,
+            label=self.label,
+            primary_field=EnumOption(
+                label="Model",
+                values=_enum_values(CodexModel),
+                default=CodexModel.GPT_5_4.value,
+            ),
+            options={
+                "reasoning_effort": EnumOption(
+                    label="Reasoning effort",
+                    values=_enum_values(CodexReasoningEffort),
+                    default=CodexReasoningEffort.MEDIUM.value,
+                ),
+                "sandbox": EnumOption(
+                    label="Sandbox",
+                    values=_enum_values(CodexSandbox),
+                    default=CodexSandbox.WORKSPACE_WRITE.value,
+                    value_labels=[
+                        "Read-only",
+                        "Workspace write (default)",
+                        "Full access (risky)",
+                    ],
+                ),
+                "approval_mode": EnumOption(
+                    label="Approval mode",
+                    values=_enum_values(CodexApprovalMode),
+                    default=CodexApprovalMode.ON_REQUEST.value,
+                    value_labels=[
+                        "Never (auto-run)",
+                        "On request (Atelier prompts)",
+                        "On failure",
+                        "Untrusted (prompt every tool)",
+                    ],
+                ),
+            },
+            advanced_intro=self._CODEX_ADVANCED_INTRO,
+        )
+
+    def build(
+        self, common: CommonAgentConfig, model: str, options: dict[str, Any]
+    ) -> CodexAgentConfig:
+        _reject_unknown(self.name, options, self._allowed_options)
+        return CodexAgentConfig(
+            common=common,
+            model=CodexModel(model),
+            reasoning_effort=CodexReasoningEffort(
+                options.get(
+                    "reasoning_effort", CodexReasoningEffort.MEDIUM.value
+                )
+            ),
+            sandbox=CodexSandbox(
+                options.get("sandbox", CodexSandbox.WORKSPACE_WRITE.value)
+            ),
+            approval_mode=CodexApprovalMode(
+                options.get(
+                    "approval_mode", CodexApprovalMode.ON_REQUEST.value
+                )
+            ),
+        )
+
+
 SPECS: dict[Provider, Spec] = {
     "claude-code": ClaudeSpec(),
     "amp": AmpSpec(),
+    "codex": CodexSpec(),
 }
 
 
@@ -324,6 +416,7 @@ __all__ = [
     "SPECS",
     "AmpSpec",
     "ClaudeSpec",
+    "CodexSpec",
     "EnumOption",
     "ModelMeta",
     "ProviderDescriptor",

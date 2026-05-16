@@ -30,7 +30,7 @@ from typing import Any, Literal
 WorkStatus = Literal["active", "completed", "deleted"]
 ContextType = Literal["sentry", "honeycomb", "jira", "url", "text", "file", "agentout"]
 Persona = Literal["architect", "developer", "product", "ux", "writer", "custom"]
-Provider = Literal["claude-code", "amp"]
+Provider = Literal["claude-code", "amp", "codex"]
 ConnectionType = Literal["sentry", "honeycomb", "jira"]
 HandoffTargetDialog = Literal["new-agent"]
 # ``ArtifactType`` was defined here; after the per-type-status split it

@@ -76,6 +76,10 @@ def build_resume_command(
       - Amp: ``permission_mode == "allow_all"`` → ``--dangerously-allow-all``.
         Amp's ``custom`` / ``default`` permission modes are Atelier-side
         constructs (the bridge), so they don't translate to CLI flags.
+      - Codex: ``sandbox`` → ``--sandbox`` (when non-default),
+        ``approval_mode`` → ``--ask-for-approval`` (when non-default),
+        ``reasoning_effort`` → ``-c model_reasoning_effort=<value>``
+        (the Codex CLI's TOML override escape hatch).
 
     Both arguments default to ``None`` for callers that pre-date the
     new behaviour (and for legacy agents whose ``options`` column is
@@ -90,6 +94,9 @@ def build_resume_command(
     if provider == "amp":
         flags = _amp_flags(model, opts)
         return f"cd {cwd} && amp{flags} threads continue {sid}"
+    if provider == "codex":
+        flags = _codex_flags(model, opts)
+        return f"cd {cwd} && codex exec resume {sid}{flags}"
     raise ValueError(f"unknown provider for CLI resume: {provider!r}")
 
 
@@ -122,6 +129,39 @@ def _amp_flags(model: str | None, options: dict[str, Any]) -> str:
         parts.append("--dangerously-allow-all")
     if model:
         parts.append(f"--mode {_shell_quote(model)}")
+    return (" " + " ".join(parts)) if parts else ""
+
+
+def _codex_flags(model: str | None, options: dict[str, Any]) -> str:
+    """Build the trailing flag string for ``codex exec resume``.
+
+    All flags sit after the session id (``codex exec resume <sid>
+    --model ...``) — that's how the Codex CLI parses subcommand args.
+
+    - ``--model`` forwarded when non-empty.
+    - ``--sandbox`` forwarded when set to anything other than
+      ``workspace-write`` (the SDK + CLI default).
+    - ``--ask-for-approval`` forwarded when set to anything other than
+      ``on-request`` (the Atelier-default routing of approvals to the
+      permission UI; outside Atelier the CLI's default is the same).
+    - ``reasoning_effort`` routes through ``-c
+      model_reasoning_effort=<value>`` (Codex's TOML config override) for
+      anything other than ``medium`` (the CLI default). The Codex CLI
+      doesn't expose a dedicated flag, so we use the documented escape
+      hatch.
+    """
+    parts: list[str] = []
+    if model:
+        parts.append(f"--model {_shell_quote(model)}")
+    sandbox = options.get("sandbox")
+    if isinstance(sandbox, str) and sandbox and sandbox != "workspace-write":
+        parts.append(f"--sandbox {_shell_quote(sandbox)}")
+    approval = options.get("approval_mode")
+    if isinstance(approval, str) and approval and approval != "on-request":
+        parts.append(f"--ask-for-approval {_shell_quote(approval)}")
+    effort = options.get("reasoning_effort")
+    if isinstance(effort, str) and effort and effort != "medium":
+        parts.append(f"-c {_shell_quote(f'model_reasoning_effort={effort}')}")
     return (" " + " ".join(parts)) if parts else ""
 
 
