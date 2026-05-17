@@ -10,7 +10,7 @@ Pure-domain — depends only on `WorkRepository` and `WorkspaceFiles` ports
 and is unit-tested with stubs.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from src.domain.workstore._serde import (
     deserialize_agent,
@@ -92,9 +92,39 @@ def _reconcile_agents_for_work(
         if db_agent is None:
             repo.upsert_agent(fs_agent)
             report.inserted_agents.append(fs_slug)
-        elif db_agent != fs_agent:
-            repo.upsert_agent(fs_agent)
-            report.updated_agents.append(fs_slug)
+        else:
+            # Split of authority on the agent row:
+            #   FS-canonical  — definition fields (name, persona, role,
+            #                   provider, model, folder, contexts).
+            #                   These only change through the create
+            #                   path, which writes agent.json first.
+            #   DB-canonical  — runtime fields (session_id,
+            #                   parent_session_id, status). These flip
+            #                   on every SessionEstablished / detach /
+            #                   resume, and the supervisor writes
+            #                   straight to SQL (set_agent_session_id /
+            #                   set_agent_status) without touching
+            #                   agent.json.
+            #
+            # The previous reconcile treated the entire row as FS-
+            # canonical and clobbered the runtime fields with whatever
+            # agent.json had — usually NULL — every backend restart.
+            # That left agents with a populated SQL session_id reset
+            # to NULL on resume, and the next detach failed with
+            # "no session attached".
+            #
+            # Merge: keep DB runtime fields on the FS-shaped record,
+            # then compare. Upsert only when something else actually
+            # differs.
+            merged = replace(
+                fs_agent,
+                session_id=db_agent.session_id,
+                parent_session_id=db_agent.parent_session_id,
+                status=db_agent.status,
+            )
+            if db_agent != merged:
+                repo.upsert_agent(merged)
+                report.updated_agents.append(fs_slug)
 
     for db_slug in sorted(db_agents_by_slug.keys() - fs_agent_slugs):
         repo.delete_agent(db_slug)

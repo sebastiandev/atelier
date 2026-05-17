@@ -99,6 +99,8 @@ def _seed_db_agent(repo: StubRepository, **overrides: Any) -> Agent:
         status=overrides.get("status", "idle"),
         started_at=overrides.get("started_at", UTC_NOW),
         stopped_at=overrides.get("stopped_at"),
+        session_id=overrides.get("session_id"),
+        parent_session_id=overrides.get("parent_session_id"),
     )
     assert agent.slug is not None
     repo.agents[agent.slug] = agent
@@ -187,17 +189,21 @@ def test_reconcile_inserts_missing_agent_under_existing_work() -> None:
 
 
 def test_reconcile_updates_agent_on_conflict() -> None:
+    """When a definition field (here: role) differs between FS and
+    DB, reconcile upserts the FS-canonical row. Runtime fields
+    (status / session_id) are preserved separately — see the merge
+    tests further down."""
     repo = StubRepository()
     _seed_db_work(repo)
-    _seed_db_agent(repo, status="live")
+    _seed_db_agent(repo, role="architect")
     files = StubFiles()
     files.work_jsons["WRK-001"] = _work_json()
-    files.agent_jsons[("WRK-001", "agt-1")] = _agent_json(status="idle")
+    files.agent_jsons[("WRK-001", "agt-1")] = _agent_json(role="reviewer")
 
     report = reconcile(repo, files)
 
     assert report.updated_agents == ["agt-1"]
-    assert repo.agents["agt-1"].status == "idle"
+    assert repo.agents["agt-1"].role == "reviewer"
 
 
 def test_reconcile_deletes_orphan_agent() -> None:
@@ -296,3 +302,66 @@ def test_reconcile_combined_scenario_returns_full_report() -> None:
     assert report.inserted_works == ["WRK-004"]
     assert report.updated_works == ["WRK-003"]
     assert report.deleted_works == ["WRK-002"]
+
+
+def test_reconcile_preserves_db_session_id_when_fs_is_null() -> None:
+    """``set_agent_session_id`` writes straight to SQL on
+    SessionEstablished and intentionally never touches agent.json
+    (the file is authoritative for definition fields only). Before
+    this fix, reconcile compared the entire row and re-upserted
+    agent.json's stale ``session_id: null`` over the DB value on
+    every backend restart — leaving the next detach with no resume
+    handle. The merge must keep the DB-canonical runtime fields."""
+    repo = StubRepository()
+    files = StubFiles()
+    _seed_db_work(repo)
+    _seed_db_agent(
+        repo,
+        session_id="bf242c12-b1e0-4964-a2d4-5d17bbea9b79",
+        parent_session_id="prev-sid",
+        status="idle",
+    )
+    files.work_jsons["WRK-001"] = _work_json()
+    # agent.json has the runtime fields as null — that's the on-
+    # disk reality because nothing writes them through the FS path.
+    fs_agent = _agent_json()
+    fs_agent["session_id"] = None
+    fs_agent["parent_session_id"] = None
+    files.agent_jsons[("WRK-001", "agt-1")] = fs_agent
+
+    report = reconcile(repo, files)
+
+    assert report.updated_agents == [], (
+        "FS agent matches the FS-canonical fields of the DB row "
+        "(after preserving DB-canonical runtime fields), so reconcile "
+        "must NOT upsert."
+    )
+    db_after = repo.agents["agt-1"]
+    assert db_after.session_id == "bf242c12-b1e0-4964-a2d4-5d17bbea9b79"
+    assert db_after.parent_session_id == "prev-sid"
+
+
+def test_reconcile_updates_definition_fields_but_keeps_db_session() -> None:
+    """When a definition field (name, role, model, …) actually
+    differs between FS and DB, reconcile upserts — but still
+    preserves the DB-canonical runtime fields on the merged row."""
+    repo = StubRepository()
+    files = StubFiles()
+    _seed_db_work(repo)
+    _seed_db_agent(
+        repo,
+        name="Architect",
+        session_id="bf242c12",
+        status="idle",
+    )
+    files.work_jsons["WRK-001"] = _work_json()
+    fs_agent = _agent_json(name="Renamed Architect")  # definition drift
+    fs_agent["session_id"] = None
+    files.agent_jsons[("WRK-001", "agt-1")] = fs_agent
+
+    report = reconcile(repo, files)
+
+    assert report.updated_agents == ["agt-1"]
+    db_after = repo.agents["agt-1"]
+    assert db_after.name == "Renamed Architect"
+    assert db_after.session_id == "bf242c12"  # NOT wiped
