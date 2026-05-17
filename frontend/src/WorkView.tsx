@@ -818,15 +818,31 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         window.location.href = editorUrl(editor, a.worktree_path);
                       }}
                       onOpenInConsole={() => {
-                        // Backend shells out to the platform terminal
-                        // — same fallback shape as reveal: copy the
-                        // path so the user can paste it manually if
-                        // the launch fails.
-                        openAgentInConsole(a.slug, terminal).catch(() => {
-                          navigator.clipboard
-                            ?.writeText(a.worktree_path)
-                            .catch(() => {});
-                        });
+                        // Backend shells out to the platform terminal.
+                        // Surface the actual outcome — earlier the
+                        // failure path was silent (just copied the
+                        // path to clipboard), so a misconfigured
+                        // terminal preference looked like "the button
+                        // does nothing".
+                        openAgentInConsole(a.slug, terminal)
+                          .then(() => {
+                            showToast(
+                              `Opened in ${terminal === "system" ? "your terminal" : terminal}`,
+                            );
+                          })
+                          .catch(async (err) => {
+                            const copied = await navigator.clipboard
+                              ?.writeText(a.worktree_path)
+                              .then(() => true)
+                              .catch(() => false);
+                            const message =
+                              err instanceof Error ? err.message : String(err);
+                            showToast(
+                              copied
+                                ? `Couldn't open terminal — path copied to clipboard. (${message})`
+                                : `Couldn't open terminal: ${message}`,
+                            );
+                          });
                       }}
                       onRevealWorktree={() => {
                         // Best-effort reveal — same fallback shape as the
