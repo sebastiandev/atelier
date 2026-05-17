@@ -240,6 +240,16 @@ class AgentSupervisorService:
             self._states[agent_slug] = state
         await adapter.start(context)
         state.started = True
+        # Stale permission cleanup: a permission_request whose decision
+        # never landed (backend crashed mid-prompt, adapter died on
+        # resume, tile closed while waiting) becomes a zombie prompt
+        # the FE re-derives from the transcript on every reload — and
+        # the user's "Allow" click can't reach any live future because
+        # the original adapter is gone. Publish a synthetic ``deny``
+        # for every orphan so the prompt clears and the agent can
+        # accept new input. Runs BEFORE the pump task so stale
+        # decisions land first in seq order.
+        await self._clear_stale_permission_requests(state)
         if not lazy:
             state.task = asyncio.create_task(
                 self._run_agent(state), name=f"agent-{agent_slug}"
@@ -271,7 +281,22 @@ class AgentSupervisorService:
         # raised the prompt. The adapter emits ``PermissionDecision``
         # itself once the future resolves, so no transcript write here —
         # the publish path stays the same as any other adapter event.
-        state = self._require_state(agent_slug)
+        state = self._states.get(agent_slug)
+        if state is None:
+            # Stale prompt: backend restarted (or the agent was closed)
+            # while the FE was still showing a permission card. The
+            # adapter's pending future is gone; routing to it would
+            # fail. The auto-cleanup at register_agent already covers
+            # the next attach, but the user's click should also clear
+            # the prompt right now. Fall through silently: when the
+            # agent next resumes, ``_clear_stale_permission_requests``
+            # writes the synthetic deny.
+            _log.info(
+                "resolve_permission for unregistered agent=%s rid=%s — "
+                "deferred to next resume",
+                agent_slug, request_id,
+            )
+            return
         await state.adapter.resolve_permission(request_id, decision)
 
     async def stop_turn(self, agent_slug: str) -> None:
@@ -393,6 +418,57 @@ class AgentSupervisorService:
                     "type": "error",
                     "ts": datetime.now(UTC).isoformat(),
                     "message": f"adapter task crashed: {exc!r}",
+                },
+            )
+
+    async def _clear_stale_permission_requests(
+        self, state: _AgentState
+    ) -> None:
+        """Synthesise a ``deny`` for every permission_request that
+        never got a decision recorded.
+
+        Called once at register-time. Builds the orphan set from a
+        full transcript read; for each, calls ``_publish`` which
+        bumps seq, appends to NDJSON, and broadcasts to any live
+        subscriber. Deny (not allow) on purpose: the re-attach is
+        automatic — auto-allowing would let a tool call through
+        that the user never explicitly approved.
+        """
+        events = await asyncio.to_thread(
+            lambda: list(
+                self._transcript_log.read_from_cursor(
+                    state.work_slug, state.agent_slug, 0
+                )
+            )
+        )
+        requested: dict[str, str | None] = {}
+        decided: set[str] = set()
+        for ev in events:
+            t = ev.get("type")
+            rid = ev.get("request_id")
+            if not isinstance(rid, str):
+                continue
+            if t == "permission_request":
+                requested[rid] = ev.get("tool_name")
+            elif t == "permission_decision":
+                decided.add(rid)
+        orphans = [(rid, name) for rid, name in requested.items() if rid not in decided]
+        if not orphans:
+            return
+        now = datetime.now(UTC).isoformat()
+        for rid, tool_name in orphans:
+            _log.info(
+                "auto-deny stale permission request agent=%s tool=%s rid=%s",
+                state.agent_slug, tool_name, rid,
+            )
+            await self._publish(
+                state,
+                {
+                    "type": "permission_decision",
+                    "ts": now,
+                    "request_id": rid,
+                    "decision": "deny",
+                    "stale": True,
                 },
             )
 
