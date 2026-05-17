@@ -7,6 +7,7 @@ import { Settings, type SettingsSection } from "./Settings";
 import { useThemeStore } from "./state/theme";
 import { useTweaksStore } from "./state/tweaks";
 import { TweaksPanel } from "./TweaksPanel";
+import { UpdateBanner } from "./UpdateBanner";
 import { WorkView } from "./WorkView";
 
 export function App() {
@@ -17,6 +18,7 @@ export function App() {
   return (
     <>
       <RouteView path={path} />
+      <UpdateBanner />
       <TweaksPanel />
     </>
   );

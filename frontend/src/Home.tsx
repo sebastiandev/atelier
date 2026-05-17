@@ -14,7 +14,6 @@ import { NewWorkDialog } from "./NewWorkDialog";
 import { SearchModal } from "./SearchModal";
 import { Switcher, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
-import { UpdateChip } from "./UpdateChip";
 
 // "all" → everything (incl. loose). "loose" → no project. { slug } →
 // scope to a specific project. Single source of truth shared by the
@@ -254,7 +253,6 @@ export function Home() {
                 <SlidersIcon size={11} /> settings
               </a>
               <ThemeToggle className="util-btn" labelled />
-              <UpdateChip className="util-btn" compact />
             </div>
           </div>
         </div>

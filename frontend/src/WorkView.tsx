@@ -64,7 +64,6 @@ import {
 import { useClosedStore } from "./state/closed";
 import { editorUrl, useTweaksStore } from "./state/tweaks";
 import { ThemeToggle } from "./ThemeToggle";
-import { UpdateChip } from "./UpdateChip";
 
 // Stable singleton so the selector below doesn't return a fresh ref on
 // every render — Zustand's default Object.is snapshot check would
@@ -707,7 +706,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           >
             <FolderIcon size={12} />
           </button>
-          <UpdateChip />
         </div>
       </aside>
 

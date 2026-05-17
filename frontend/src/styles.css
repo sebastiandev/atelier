@@ -4582,101 +4582,129 @@ h5.md-h {
 }
 
 /* ============================================================== */
-/* Update-available chip + popover                                  */
+/* Update-available banner (top-center, warn-tinted)                */
+/* Mounts once at the app level so every route gets coverage.      */
 /* ============================================================== */
-.update-chip-wrap {
-  position: relative;
-  display: inline-flex;
+.update-banner-wrap {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 250;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
-.update-chip {
+.update-banner {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.6rem;
-  background: color-mix(in oklch, var(--accent) 14%, transparent);
-  border: 1px solid var(--accent-line);
-  color: var(--accent);
+  gap: 10px;
+  padding: 8px 12px 8px 14px;
+  background: color-mix(in oklch, var(--warn) 22%, var(--panel));
+  border: 1px solid color-mix(in oklch, var(--warn) 55%, var(--line));
+  color: var(--fg);
   border-radius: 999px;
-  font: inherit;
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
+  box-shadow: 0 4px 16px oklch(0 0 0 / 0.18);
+  white-space: nowrap;
+  /* Tiny entrance — the banner only ever lands when an update is
+     genuinely available; a quiet slide makes it feel intentional
+     rather than alarmist. */
+  animation: update-banner-in 220ms ease-out;
 }
-.update-chip:hover {
-  background: color-mix(in oklch, var(--accent) 22%, transparent);
+@keyframes update-banner-in {
+  from { transform: translateY(-8px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
 }
-.update-chip-dot {
+.update-banner:hover {
+  background: color-mix(in oklch, var(--warn) 32%, var(--panel));
+}
+.update-banner-dot {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 20%, transparent);
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--warn) 25%, transparent);
 }
-.update-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  min-width: 320px;
-  max-width: 420px;
-  padding: 0.85rem 0.9rem;
-  background: var(--bg-elev, var(--bg));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 8px);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
-  z-index: 30;
+.update-banner-msg { color: var(--fg); }
+.update-banner-hint {
+  font-size: 11px;
+  color: var(--fg-3);
+  font-weight: 400;
 }
-.update-popover-hd {
-  font-weight: 600;
-  margin-bottom: 0.35rem;
-  font-size: 13px;
+.update-banner-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 4px;
+  background: transparent;
+  border: 0;
+  color: var(--fg-3);
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 3px;
+  cursor: pointer;
 }
-.update-popover-body {
-  margin: 0 0 0.6rem 0;
+.update-banner-x:hover { color: var(--fg); background: color-mix(in oklch, var(--fg) 8%, transparent); }
+
+.update-banner-popover {
+  margin-top: 6px;
+  min-width: 340px;
+  max-width: 460px;
+  padding: 14px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px oklch(0 0 0 / 0.22);
+}
+.update-banner-popover-body {
+  margin: 0 0 10px 0;
   font-size: 12.5px;
-  color: var(--muted);
-  line-height: 1.4;
+  color: var(--fg-2);
+  line-height: 1.45;
 }
-.update-popover-body code {
-  background: var(--bg-3, color-mix(in oklch, var(--fg) 7%, transparent));
-  padding: 0 0.25rem;
+.update-banner-popover-body code {
+  background: var(--bg-2);
+  padding: 0 4px;
   border-radius: 3px;
   font-size: 12px;
 }
-.update-popover-path {
+.update-banner-popover-path {
   display: flex;
-  gap: 0.5rem;
+  gap: 8px;
   align-items: baseline;
-  margin-bottom: 0.6rem;
+  margin-bottom: 12px;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--fg-3);
 }
-.update-popover-path code {
+.update-banner-popover-path code {
   flex: 1;
-  background: var(--bg-3, color-mix(in oklch, var(--fg) 7%, transparent));
-  padding: 0.2rem 0.4rem;
+  background: var(--bg-2);
+  padding: 3px 6px;
   border-radius: 4px;
   color: var(--fg);
   font-size: 11.5px;
   overflow-wrap: anywhere;
 }
-.update-popover-path-label {
+.update-banner-popover-path-label {
   text-transform: uppercase;
   font-size: 10px;
   letter-spacing: 0.04em;
-  color: var(--fg-3, var(--muted));
+  color: var(--fg-4);
 }
-.update-popover-actions {
+.update-banner-popover-actions {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.5rem;
+  gap: 8px;
 }
-.update-popover-copy {
-  flex: 1;
-  font-size: 12px;
-  padding: 0.4rem 0.6rem;
-}
+.update-banner-popover-actions .btn.primary { flex: 1; font-size: 12px; }
 
 /* ============================================================== */
 /* v3 SHELL                                                        */
