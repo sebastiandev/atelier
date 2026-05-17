@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Atelier">
+  <g fill="none" stroke="#0a0a0a" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10">
+    <path d="M 14 50 L 32 12 L 50 50"/>
+    <path d="M 21 36 L 43 36"/>
+  </g>
+  <rect x="11" y="56" width="42" height="5" fill="#0a0a0a"/>
+</svg>

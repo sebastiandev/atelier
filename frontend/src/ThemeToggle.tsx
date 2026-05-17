@@ -9,19 +9,20 @@ const NEXT_LABEL: Record<Theme, Theme> = {
   ansi: "light",
 };
 
-export function ThemeToggle() {
+export function ThemeToggle({ className, labelled }: { className?: string; labelled?: boolean } = {}) {
   const theme = useThemeStore((s) => s.theme);
   const toggle = useThemeStore((s) => s.toggleTheme);
   const next = NEXT_LABEL[theme];
   return (
     <button
       type="button"
-      className="theme-toggle"
+      className={className ?? "theme-toggle"}
       title={`Switch to ${next} theme`}
       aria-label={`Switch to ${next} theme`}
       onClick={toggle}
     >
       <PreviewIcon theme={next} />
+      {labelled && <span style={{ marginLeft: 4 }}>theme</span>}
     </button>
   );
 }

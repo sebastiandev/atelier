@@ -38,13 +38,21 @@ import {
   revealArtifact,
   revealWork,
 } from "./api";
+import { BrandMark } from "./BrandMark";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { HandoffDialog } from "./HandoffDialog";
+import {
+  CheckIcon,
+  FolderIcon,
+  SearchIcon,
+  SlidersIcon,
+} from "./Icons";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
+import { SearchModal } from "./SearchModal";
 import { SortableCanvasCell } from "./SortableCanvasCell";
-import { Switcher, SwitcherChevron, type SwitcherItem } from "./Switcher";
+import { Switcher, type SwitcherItem } from "./Switcher";
 import {
   applyAgentOrder,
   useAgentOrderStore,
@@ -56,8 +64,6 @@ import {
 import { useClosedStore } from "./state/closed";
 import { editorUrl, useTweaksStore } from "./state/tweaks";
 import { ThemeToggle } from "./ThemeToggle";
-import { TweaksToggle } from "./TweaksPanel";
-import { UpdateChip } from "./UpdateChip";
 
 // Stable singleton so the selector below doesn't return a fresh ref on
 // every render — Zustand's default Object.is snapshot check would
@@ -92,6 +98,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [allWorks, setAllWorks] = useState<WorkSummary[] | null>(null);
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const artifactsRevision = useArtifactsRefresh((s) =>
     selectWorkRevision(s, workSlug),
   );
@@ -107,7 +114,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const agentOrderOverride = useAgentOrderStore(
     (s) => s.byWork[workSlug],
   );
-  const layout = useTweaksStore((s) => s.layout);
   const editor = useTweaksStore((s) => s.editor);
   const terminal = useTweaksStore((s) => s.terminal);
 
@@ -194,6 +200,19 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
     setWorkSwitcherOpen(true);
   }
+  function openSearch() {
+    if (allProjects === null) {
+      listProjects()
+        .then(setAllProjects)
+        .catch(() => setAllProjects([]));
+    }
+    if (allWorks === null) {
+      listWorks()
+        .then(setAllWorks)
+        .catch(() => setAllWorks([]));
+    }
+    setSearchOpen(true);
+  }
 
   // Shortcuts:
   //   N       → new agent
@@ -211,7 +230,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         handoffSource !== null ||
         deleteTarget !== null ||
         projectSwitcherOpen ||
-        workSwitcherOpen
+        workSwitcherOpen ||
+        searchOpen
       )
         return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -219,7 +239,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable)
         return;
-      if (e.shiftKey && (e.key === "W" || e.key === "w")) {
+      if (e.shiftKey && (e.key === "F" || e.key === "f" || e.key === "S" || e.key === "s")) {
+        e.preventDefault();
+        openSearch();
+      } else if (e.shiftKey && (e.key === "W" || e.key === "w")) {
         e.preventDefault();
         openWorkSwitcher();
       } else if (e.shiftKey && (e.key === "P" || e.key === "p")) {
@@ -240,6 +263,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     deleteTarget,
     projectSwitcherOpen,
     workSwitcherOpen,
+    searchOpen,
     allProjects,
     allWorks,
   ]);
@@ -444,105 +468,17 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           ? 2
           : 3;
 
+  const projectHue = project ? String(project.color) : undefined;
+  const projectStyleVars: React.CSSProperties | undefined = projectHue
+    ? {
+        ["--proj-h" as string]: projectHue,
+        ["--proj-color" as string]: `oklch(0.62 0.16 ${projectHue})`,
+        ["--proj-soft" as string]: `oklch(0.62 0.16 ${projectHue} / 0.10)`,
+      }
+    : undefined;
+
   return (
-    <div className="work-view">
-      <header className="topbar wv-topbar">
-        <a className="brand brand-link" href="/">
-          <span className="brand-mark" /> Atelier
-        </a>
-        <a className="btn-ghost-sm" href="/">
-          ← Workspace
-        </a>
-        <span className="crumbs">
-          {work.project_slug && (
-            <>
-              <span className="sep">/</span>
-              <a
-                className="crumb-link"
-                href={`/projects/${work.project_slug}`}
-                style={
-                  project
-                    ? { ["--proj-h" as string]: String(project.color) }
-                    : undefined
-                }
-              >
-                {project ? (
-                  <span className="filter-pill-glyph" aria-hidden="true">
-                    {project.glyph}
-                  </span>
-                ) : null}
-                {project?.name ?? work.project_slug}
-              </a>
-              <SwitcherChevron
-                onClick={openProjectSwitcher}
-                title="Switch project (Shift+P)"
-              />
-            </>
-          )}
-          <span className="sep">/</span>
-          <span className="now mono">{work.slug}</span>
-          <SwitcherChevron
-            onClick={openWorkSwitcher}
-            title="Switch work (Shift+W)"
-          />
-        </span>
-        <span className="hint" style={{ marginLeft: "0.5rem" }}>
-          {work.name}
-        </span>
-        <div className="spacer" />
-        {work.status === "active" && (
-          <>
-            <button
-              className="btn-ghost-sm"
-              type="button"
-              onClick={() => {
-                if (allProjects === null) {
-                  listProjects()
-                    .then(setAllProjects)
-                    .catch(() => setAllProjects([]));
-                }
-                setMoveOpen(true);
-              }}
-              title="Move this work to a different project"
-            >
-              Move…
-            </button>
-            <button
-              className="btn-ghost-sm"
-              type="button"
-              onClick={() => setCompleteOpen(true)}
-              title="Mark this work as complete (stops agents, removes worktrees, keeps transcripts)"
-            >
-              ✓ Complete work
-            </button>
-          </>
-        )}
-        {work.status === "completed" && (
-          <span className="chip chip-completed" title="This work is completed">
-            completed
-          </span>
-        )}
-        <button
-          className="folder-pill mono"
-          type="button"
-          title={`Open ${work.atelier_path} in the file browser`}
-          onClick={() => {
-            // Best-effort reveal: the backend tries the platform's file
-            // browser. If it fails (e.g. headless Linux without xdg-open),
-            // we fall back to copying the path to the clipboard so the
-            // user still has it. Either way, no UI for the failure path
-            // — this is a convenience, not a load-bearing action.
-            revealWork(work.slug).catch(() => {
-              navigator.clipboard?.writeText(work.atelier_path).catch(() => {});
-            });
-          }}
-        >
-          {shortenPath(work.atelier_path)}
-        </button>
-        <UpdateChip />
-        <TweaksToggle />
-        <ThemeToggle />
-      </header>
+    <div className="shell-v3 narrow-left work-v3" style={projectStyleVars}>
 
       {completeOpen && (
         <CompleteWorkDialog
@@ -582,44 +518,141 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         />
       )}
 
-      <div className="work-body">
-        <aside className="left-rail">
-          <RailSection title="Active agents" count={orderedAgents.length}>
-            {orderedAgents.length === 0 && (
-              <div className="hint" style={{ padding: "4px 8px" }}>
-                None on the canvas. Launch one via the API.
-              </div>
+      <aside className="shell-left work-rail">
+        <div className="crown">
+          <a className="wordmark" href="/" title="Back to workspace">
+            <span className="wm-mark" aria-hidden>
+              <BrandMark />
+            </span>
+            <span className="wm-rest">telier</span>
+          </a>
+          <div className="crown-actions">
+            <button
+              className="btn-icon"
+              onClick={openSearch}
+              title="Search (⇧F)"
+              aria-label="Search"
+            >
+              <SearchIcon size={12} />
+            </button>
+            <a
+              className="btn-icon"
+              href="/settings"
+              title="Settings (⌘,)"
+              aria-label="Settings"
+            >
+              <SlidersIcon size={12} />
+            </a>
+            <ThemeToggle className="btn-icon" />
+          </div>
+        </div>
+
+        <div className="crumbs-v3">
+          <a className="crumb" href="/">
+            ← workspace
+          </a>
+          {work.project_slug && (
+            <>
+              <span className="sep">/</span>
+              <a className="crumb" href={`/projects/${work.project_slug}`}>
+                {project?.name ?? work.project_slug}
+              </a>
+            </>
+          )}
+          <span className="sep">/</span>
+          <span className="now">{work.slug}</span>
+        </div>
+
+        <div className="work-hero">
+          <div className="id-line">
+            {work.slug} · {formatAge(work.created_at)}
+          </div>
+          <div className="name">{work.name}</div>
+          {work.description && <div className="desc">{work.description}</div>}
+          <div className="pills">
+            {work.status === "active" ? (
+              <button
+                className="btn"
+                onClick={() => setCompleteOpen(true)}
+                title="Mark this work as complete (stops agents, removes worktrees, keeps transcripts)"
+              >
+                <CheckIcon size={11} /> Mark done
+              </button>
+            ) : (
+              <span className="chip chip-completed" title="This work is completed">
+                completed
+              </span>
             )}
-            {orderedAgents.map((a) => (
-              <RailAgentRow
-                key={a.slug}
-                agent={a}
-                focused={focusedSlug === a.slug}
-                closed={closedSlugs.includes(a.slug)}
-                onFocus={() => focusAgent(a.slug)}
-                onDelete={() => setDeleteTarget(a)}
-              />
-            ))}
-          </RailSection>
+            {work.status === "active" && (
+              <button
+                className="btn"
+                onClick={() => {
+                  if (allProjects === null) {
+                    listProjects()
+                      .then(setAllProjects)
+                      .catch(() => setAllProjects([]));
+                  }
+                  setMoveOpen(true);
+                }}
+                title="Move this work to a different project"
+              >
+                Move…
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="v3-rule flush" />
+
+        <div className="scrolly">
+          <div className="v3-shd">
+            <span>
+              Active agents{" "}
+              <span className="num" style={{ marginLeft: 8 }}>
+                {orderedAgents.length}
+              </span>
+            </span>
+            <span className="right">
+              <button onClick={() => setAgentDialogOpen(true)}>
+                + new <span className="kbd" style={{ marginLeft: 4 }}>N</span>
+              </button>
+            </span>
+          </div>
+          {orderedAgents.length === 0 && (
+            <div className="v3-empty">no agents on the canvas.</div>
+          )}
+          {orderedAgents.map((a) => (
+            <V3RailAgentRow
+              key={a.slug}
+              agent={a}
+              focused={focusedSlug === a.slug}
+              closed={closedSlugs.includes(a.slug)}
+              onFocus={() => focusAgent(a.slug)}
+              onDelete={() => setDeleteTarget(a)}
+            />
+          ))}
 
           {work.project_slug && (
-            <RailSection
-              title="Shared folders"
-              count={shares.length}
-              hint={
-                project
-                  ? `Project ${project.name} — manage on project page`
-                  : undefined
-              }
-              hintHref={`/projects/${work.project_slug}`}
-            >
+            <>
+              <div style={{ height: 14 }} />
+              <div className="v3-shd">
+                <span>
+                  Shared folders{" "}
+                  <span className="num" style={{ marginLeft: 8 }}>
+                    {shares.length}
+                  </span>
+                </span>
+                {project && (
+                  <span className="right">
+                    <a href={`/projects/${work.project_slug}`}>manage ↗</a>
+                  </span>
+                )}
+              </div>
               {shares.length === 0 && (
-                <div className="hint" style={{ padding: "4px 8px" }}>
-                  No shared folders for this project yet.
-                </div>
+                <div className="v3-empty">none in this project.</div>
               )}
               {shares.map((s) => (
-                <ShareRailRow
+                <V3RailShareRow
                   key={s.slug}
                   share={s}
                   onCopy={(path) => {
@@ -630,35 +663,106 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   }}
                 />
               ))}
-            </RailSection>
+            </>
           )}
 
-          <RailSection title="Artifacts" count={artifacts.length}>
-            {artifacts.length === 0 && (
-              <div className="hint" style={{ padding: "4px 8px" }}>
-                None tracked yet. Agents will report PRs and tickets here.
+          {artifacts.length > 0 && (
+            <>
+              <div style={{ height: 14 }} />
+              <div className="v3-shd">
+                <span>
+                  Artifacts{" "}
+                  <span className="num" style={{ marginLeft: 8 }}>
+                    {artifacts.length}
+                  </span>
+                </span>
               </div>
-            )}
-            {artifacts.map((a) => (
-              <ArtifactRow key={a.slug} artifact={a} />
-            ))}
-          </RailSection>
-        </aside>
+              {artifacts.map((a) => (
+                <V3RailArtifactRow key={a.slug} artifact={a} />
+              ))}
+            </>
+          )}
+          <div style={{ height: 24 }} />
+        </div>
 
-        <div className="canvas-wrap">
-          <div className="canvas-hd">
-            <div>
-              <div className="canvas-title">{work.name}</div>
-              <div className="canvas-desc">{work.description}</div>
-            </div>
-            <div className="spacer" />
-            <button className="btn primary" onClick={() => setAgentDialogOpen(true)}>
-              + New agent <span className="kbd">N</span>
-            </button>
+        <div className="v3-footstrip">
+          <span className="seg">
+            <span className="dot live" />
+            {orderedAgents.filter((a) => a.status === "live").length} live
+          </span>
+          <span className="seg">
+            {orderedAgents.filter((a) => a.status === "thinking").length} working
+          </span>
+          <span style={{ flex: 1 }} />
+          <button
+            className="btn-icon"
+            title={`Open ${work.atelier_path} in the file browser`}
+            onClick={() => {
+              revealWork(work.slug).catch(() => {
+                navigator.clipboard?.writeText(work.atelier_path).catch(() => {});
+              });
+            }}
+            aria-label="Reveal work folder"
+          >
+            <FolderIcon size={12} />
+          </button>
+        </div>
+      </aside>
+
+      <main className="shell-right work-right">
+        <div className="work-right-hd">
+          <div className="ttl">
+            <span className="t">{work.name}</span>
+            <span className="d">
+              {canvasAgents.length} agent
+              {canvasAgents.length === 1 ? "" : "s"} on canvas
+            </span>
           </div>
+          <div className="spacer" />
+          <button
+            className="btn primary"
+            onClick={() => setAgentDialogOpen(true)}
+          >
+            + New agent <span className="kbd" style={{ marginLeft: 4 }}>N</span>
+          </button>
+        </div>
+
+        {completeOpen && (
+          <CompleteWorkDialog
+            work={work}
+            agentCount={agents.length}
+            onClose={() => setCompleteOpen(false)}
+            onCompleted={(_count) => {
+              window.location.assign("/");
+            }}
+          />
+        )}
+
+        {moveOpen && allProjects !== null && (
+          <MoveWorkDialog
+            work={work}
+            projects={allProjects}
+            onClose={() => setMoveOpen(false)}
+            onMoved={(updated) => {
+              setWork(updated);
+              if (updated.project_slug) {
+                getProject(updated.project_slug)
+                  .then(setProject)
+                  .catch(() => setProject(null));
+                listProjectShares(updated.project_slug)
+                  .then(setShares)
+                  .catch(() => setShares([]));
+              } else {
+                setProject(null);
+                setShares([]);
+              }
+              setMoveOpen(false);
+            }}
+          />
+        )}
 
           <DndContext sensors={dragSensors} onDragEnd={handleDragEnd}>
-            <div className="canvas" data-cols={cols} data-layout={layout}>
+            <div className="work-right-canvas tiles" data-cols={cols}>
               {agents.length === 0 && (
                 <div className="canvas-empty">
                   <div className="em-title">No agents on the canvas</div>
@@ -712,15 +816,31 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         window.location.href = editorUrl(editor, a.worktree_path);
                       }}
                       onOpenInConsole={() => {
-                        // Backend shells out to the platform terminal
-                        // — same fallback shape as reveal: copy the
-                        // path so the user can paste it manually if
-                        // the launch fails.
-                        openAgentInConsole(a.slug, terminal).catch(() => {
-                          navigator.clipboard
-                            ?.writeText(a.worktree_path)
-                            .catch(() => {});
-                        });
+                        // Backend shells out to the platform terminal.
+                        // Surface the actual outcome — earlier the
+                        // failure path was silent (just copied the
+                        // path to clipboard), so a misconfigured
+                        // terminal preference looked like "the button
+                        // does nothing".
+                        openAgentInConsole(a.slug, terminal)
+                          .then(() => {
+                            showToast(
+                              `Opened in ${terminal === "system" ? "your terminal" : terminal}`,
+                            );
+                          })
+                          .catch(async (err) => {
+                            const copied = await navigator.clipboard
+                              ?.writeText(a.worktree_path)
+                              .then(() => true)
+                              .catch(() => false);
+                            const message =
+                              err instanceof Error ? err.message : String(err);
+                            showToast(
+                              copied
+                                ? `Couldn't open terminal — path copied to clipboard. (${message})`
+                                : `Couldn't open terminal: ${message}`,
+                            );
+                          });
                       }}
                       onRevealWorktree={() => {
                         // Best-effort reveal — same fallback shape as the
@@ -738,8 +858,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
               </SortableContext>
             </div>
           </DndContext>
-        </div>
-      </div>
+      </main>
       {agentDialogOpen && (
         <NewAgentDialog
           workSlug={work.slug}
@@ -830,6 +949,16 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           }
         />
       )}
+      {searchOpen && allWorks !== null && (
+        <SearchModal
+          works={allWorks}
+          projects={allProjects ?? []}
+          defaultScope={
+            work.project_slug ? { slug: work.project_slug } : "all"
+          }
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -856,92 +985,9 @@ function chipClassFor(status: string): string {
   return "chip info";
 }
 
-function ArtifactRow({ artifact }: { artifact: ArtifactSummary }) {
-  const isClickable =
-    (artifact.type === "doc" && artifact.doc_path) ||
-    (artifact.type !== "doc" && artifact.url);
-  const handleClick = () => {
-    if (artifact.type === "doc") {
-      if (artifact.doc_path) {
-        // Fire and forget — backend logs failure server-side; the row
-        // stays visible either way. If we ever get a "reveal failed"
-        // toast slot, surface it here.
-        void revealArtifact(artifact.slug).catch(() => {});
-      }
-      return;
-    }
-    if (artifact.url) {
-      window.open(artifact.url, "_blank", "noopener,noreferrer");
-    }
-  };
-  const subtitle =
-    artifact.agent_slug ?? (artifact.repo ?? artifact.url ?? "");
-  return (
-    <button
-      type="button"
-      className="rail-arti"
-      title={artifact.title}
-      onClick={isClickable ? handleClick : undefined}
-      data-clickable={isClickable ? "true" : undefined}
-    >
-      <div className="arti-ico" data-type={artifact.type}>
-        {ARTIFACT_TYPE_LABEL[artifact.type] ?? "AR"}
-      </div>
-      <div className="rail-arti-meta">
-        <div className="rail-arti-title">{artifact.title}</div>
-        <div className="rail-arti-id mono">
-          {artifact.slug}
-          {subtitle ? ` · ${subtitle}` : ""}
-        </div>
-      </div>
-      <ArtifactStatusChips artifact={artifact} />
-    </button>
-  );
-}
+// ─── v3 rail rows ───────────────────────────────────────────────
 
-function ArtifactStatusChips({ artifact }: { artifact: ArtifactSummary }) {
-  // One pill per artifact. The backend's derivation already collapses
-  // location + git into ``status`` for docs (draft = shared, pending /
-  // committed = worktree), so a second location chip would just be
-  // noise in the rail's narrow column.
-  return <span className={chipClassFor(artifact.status)}>{artifact.status}</span>;
-}
-
-function RailSection({
-  title,
-  count,
-  children,
-  hint,
-  hintHref,
-}: {
-  title: string;
-  count: number;
-  children: React.ReactNode;
-  hint?: string;
-  hintHref?: string;
-}) {
-  return (
-    <div className="rail-section">
-      <div className="rail-hd">
-        <span>{title}</span>
-        <span className="count mono">{count}</span>
-        {hint && hintHref && (
-          <a
-            className="rail-hd-link"
-            href={hintHref}
-            title={hint}
-            aria-label={hint}
-          >
-            ↗
-          </a>
-        )}
-      </div>
-      <div className="rail-section-body">{children}</div>
-    </div>
-  );
-}
-
-function RailAgentRow({
+function V3RailAgentRow({
   agent,
   focused,
   closed,
@@ -955,9 +1001,6 @@ function RailAgentRow({
   onDelete: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-
-  // Outside-click closes the popover. Cheap event listener — no portal
-  // needed since the menu is positioned relative to the row.
   useEffect(() => {
     if (!menuOpen) return;
     const handler = () => setMenuOpen(false);
@@ -967,46 +1010,63 @@ function RailAgentRow({
 
   const isDetached = agent.status === "detached";
   const tooltip = isDetached
-    ? "Detached to CLI — click to re-attach (Atelier merges any CLI activity into the transcript)"
+    ? "Detached to CLI — click to re-attach"
     : closed
       ? "Closed — click to reopen"
       : undefined;
 
   return (
     <div
-      className={
-        "rail-agent-row" +
-        (focused ? " focused" : "") +
-        (closed ? " minimized" : "") +
-        (isDetached ? " detached" : "")
-      }
+      className={"v3-agent-row" + (focused ? " focused" : "")}
       data-persona={agent.persona}
+      style={{ position: "relative" }}
     >
       <button
         type="button"
-        className="rail-agent"
         onClick={onFocus}
         title={tooltip}
+        style={{
+          display: "contents",
+          background: "transparent",
+          border: 0,
+          padding: 0,
+          textAlign: "left",
+          cursor: "pointer",
+          font: "inherit",
+          color: "inherit",
+        }}
       >
         <span className="pip">{PERSONA_GLYPH[agent.persona] ?? "AG"}</span>
         <span className="meta">
-          <span className="name mono">{agent.name}</span>
-          <span className="role">
+          <div className="name mono">{agent.name}</div>
+          <div className="role">
             {isDetached ? "in CLI · click to re-attach" : agent.role}
-          </span>
+          </div>
         </span>
-        <span className="status-dot" data-status={agent.status} />
+        <span className="status">
+          <span className={`dot ${agent.status}`} aria-hidden />
+        </span>
       </button>
       <button
         type="button"
-        className="rail-agent-kebab"
         aria-label={`More actions for ${agent.name}`}
         title="More"
         onClick={(e) => {
-          // Don't bubble into the row's focus handler; opening the
-          // menu shouldn't also re-focus the canvas tile.
           e.stopPropagation();
           setMenuOpen((v) => !v);
+        }}
+        style={{
+          position: "absolute",
+          right: 6,
+          top: "50%",
+          transform: "translateY(-50%)",
+          background: "transparent",
+          border: 0,
+          color: "var(--fg-4)",
+          cursor: "pointer",
+          padding: "4px 6px",
+          fontSize: 14,
+          lineHeight: 1,
         }}
       >
         ⋮
@@ -1031,7 +1091,7 @@ function RailAgentRow({
   );
 }
 
-function ShareRailRow({
+function V3RailShareRow({
   share,
   onCopy,
 }: {
@@ -1044,26 +1104,78 @@ function ShareRailRow({
   return (
     <button
       type="button"
-      className="rail-share"
+      className="v3-folder-row compact"
       title={`Click to copy ${realPath}`}
       onClick={() => onCopy(realPath)}
     >
-      <span className="rail-share-glyph" aria-hidden>
-        📁
+      <span className="ico">
+        <FolderIcon size={12} />
       </span>
-      <span className="rail-share-meta">
-        <span className="rail-share-name">
-          {share.name}
-          {share.is_custom_location && (
-            <span className="rail-share-badge" title="Custom location">
-              custom
-            </span>
-          )}
+      <span className="body">
+        <span className="lbl">
+          <span>{share.name}</span>
+          {share.is_custom_location && <span className="tag">custom</span>}
         </span>
-        <span className="rail-share-mount mono">./{share.mount_path}/</span>
+        <span className="path">./{share.mount_path}/</span>
       </span>
     </button>
   );
+}
+
+function V3RailArtifactRow({ artifact }: { artifact: ArtifactSummary }) {
+  const isClickable =
+    (artifact.type === "doc" && artifact.doc_path) ||
+    (artifact.type !== "doc" && artifact.url);
+  const handleClick = () => {
+    if (artifact.type === "doc") {
+      if (artifact.doc_path) {
+        void revealArtifact(artifact.slug).catch(() => {});
+      }
+      return;
+    }
+    if (artifact.url) {
+      window.open(artifact.url, "_blank", "noopener,noreferrer");
+    }
+  };
+  const subtitle = artifact.agent_slug ?? (artifact.repo ?? artifact.url ?? "");
+  return (
+    <button
+      type="button"
+      className="v3-artifact-row"
+      title={artifact.title}
+      onClick={isClickable ? handleClick : undefined}
+    >
+      <span className="ico">{ARTIFACT_TYPE_LABEL[artifact.type] ?? "AR"}</span>
+      <span className="meta">
+        <div className="title">{artifact.title}</div>
+        <div className="sub">
+          <span>{artifact.slug}</span>
+          {subtitle ? <span>· {subtitle}</span> : null}
+          <span className={chipClassFor(artifact.status)}>
+            {artifact.status}
+          </span>
+        </div>
+      </span>
+    </button>
+  );
+}
+
+// Compact relative-time formatter for the work hero id-line.
+function formatAge(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "now";
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d ago`;
+  const w = Math.floor(d / 7);
+  if (w < 5) return `${w}w ago`;
+  const mo = Math.floor(d / 30);
+  return `${mo}mo ago`;
 }
 
 export function shortenPath(p: string): string {

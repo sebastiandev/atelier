@@ -247,11 +247,59 @@ def test_resolve_permission_forwards_to_adapter() -> None:
     assert resolutions == [("req-1", "allow"), ("req-2", "deny")]
 
 
-def test_resolve_permission_to_unknown_agent_raises() -> None:
+def test_register_clears_stale_permission_requests() -> None:
+    """A permission_request without a matching decision is the
+    fingerprint of a backend crash mid-prompt (or a closed tile
+    whose adapter went away). On the next attach, ``register_agent``
+    must publish a synthetic ``deny`` for every orphan so the FE
+    prompt clears and the user can proceed with new input."""
+
+    async def run() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        log = StubTranscriptLog()
+        # Seed the transcript with one resolved + one orphan request.
+        log.events[("WRK-001", "agt-1")] = [
+            {"seq": 1, "type": "permission_request", "request_id": "r1",
+             "tool_name": "Bash"},
+            {"seq": 2, "type": "permission_decision", "request_id": "r1",
+             "decision": "allow"},
+            {"seq": 3, "type": "permission_request", "request_id": "r2",
+             "tool_name": "Write"},
+        ]
+        supervisor = AgentSupervisorService(log)
+        adapter = StubAgentAdapter(scripted_events=[])
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await supervisor.shutdown()
+        events = log.events[("WRK-001", "agt-1")]
+        synthetic = [e for e in events if e.get("stale") is True]
+        return events, synthetic
+
+    events, synthetic = _run(run())
+    # Exactly one synthetic deny landed, for the orphan request only.
+    assert len(synthetic) == 1
+    assert synthetic[0]["type"] == "permission_decision"
+    assert synthetic[0]["request_id"] == "r2"
+    assert synthetic[0]["decision"] == "deny"
+    # The already-resolved request didn't get a duplicate.
+    decisions_for_r1 = [
+        e for e in events
+        if e.get("type") == "permission_decision" and e.get("request_id") == "r1"
+    ]
+    assert len(decisions_for_r1) == 1
+    # Seq is monotonic — the synthetic landed AFTER the seeded events.
+    assert synthetic[0]["seq"] == 4
+
+
+def test_resolve_permission_to_unknown_agent_is_noop() -> None:
+    """A user's click on a stale permission card (backend restarted
+    between request and click) must not surface an error — the FE
+    can't re-route to a future that's been garbage-collected, but
+    the synthetic-deny cleanup at next resume already handles the
+    transcript. ``resolve_permission`` swallows the lookup miss
+    instead of raising so the route returns 204 cleanly."""
+
     async def run() -> None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        with pytest.raises(ValueError, match="not running"):
-            await supervisor.resolve_permission("agt-404", "req-1", "allow")
+        await supervisor.resolve_permission("agt-404", "req-1", "allow")
 
     _run(run())
 

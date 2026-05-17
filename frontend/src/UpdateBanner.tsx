@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+
 import { getUpdateStatus, type UpdateStatus } from "./api";
 
-// The backend poller runs every 2h; the frontend re-checks every 10
-// minutes so a fresh tab catches a "we just became out of date" event
-// without making the user reload.
+// Re-check every 10 minutes from the FE; the backend poller runs
+// every 2h. A fresh tab opened mid-day will catch a "we just became
+// out of date" event without the user reloading.
 const POLL_INTERVAL_MS = 10 * 60 * 1000;
 
 // Per-tab dismiss. sessionStorage survives in-app navigation but not
-// full reload / new tab — that matches "I saw it and want to ignore
-// it for now" without becoming permanent.
-const DISMISS_KEY = "atelier.update-chip.dismissed-sha";
+// full reload / new tab — matches "I saw it, hide it for now"
+// without becoming permanent. Keyed on the upstream SHA so a NEW
+// upstream commit re-surfaces the banner even if previously
+// dismissed.
+const DISMISS_KEY = "atelier.update-banner.dismissed-sha";
 
 function readDismissedSha(): string | null {
   try {
@@ -23,18 +26,22 @@ function writeDismissedSha(sha: string): void {
   try {
     sessionStorage.setItem(DISMISS_KEY, sha);
   } catch {
-    // Quota / privacy mode — chip just won't stay dismissed. Fine.
+    // Quota / privacy mode — banner just won't stay dismissed. Fine.
   }
 }
 
-export function UpdateChip() {
+// Top-of-screen banner. Mounts once in <App>; renders nothing until
+// the backend confirms an update is available AND the SHA hasn't
+// been dismissed this session. Click expands a popover with the
+// repo path + a one-click "copy cd <repo> && claude" action.
+export function UpdateBanner() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [dismissedSha, setDismissedSha] = useState<string | null>(() =>
     readDismissedSha(),
   );
-  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,8 +51,8 @@ export function UpdateChip() {
           if (!cancelled) setStatus(s);
         })
         .catch(() => {
-          // Backend down or route missing on an older build — keep
-          // the chip hidden. No toast; this is informational only.
+          // Backend down / route missing on older build — keep the
+          // banner hidden. No toast; informational only.
         });
     };
     tick();
@@ -56,12 +63,11 @@ export function UpdateChip() {
     };
   }, []);
 
-  // Close popover on outside click.
   useEffect(() => {
     if (!popoverOpen) return;
     const onDocClick = (e: MouseEvent) => {
-      if (!popoverRef.current) return;
-      if (!popoverRef.current.contains(e.target as Node)) {
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target as Node)) {
         setPopoverOpen(false);
       }
     };
@@ -77,9 +83,8 @@ export function UpdateChip() {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // Clipboard API blocked (no HTTPS / no permission). Nothing to
-      // gracefully fall back to in a popover; the path is visible so
-      // the user can copy by hand.
+      // Clipboard API blocked (no HTTPS / no permission). The path
+      // is visible in the popover so the user can copy by hand.
     }
   }, [status]);
 
@@ -91,38 +96,51 @@ export function UpdateChip() {
   }, [status]);
 
   if (!status?.available) return null;
-  // Dismiss is keyed on the upstream SHA — if a *new* upstream commit
-  // lands, the chip reappears even if the user previously dismissed.
   if (status.latest_sha && status.latest_sha === dismissedSha) return null;
 
   return (
-    <div className="update-chip-wrap" ref={popoverRef}>
+    <div className="update-banner-wrap" ref={wrapRef}>
       <button
         type="button"
-        className="update-chip"
+        className="update-banner"
         onClick={() => setPopoverOpen((o) => !o)}
         aria-haspopup="dialog"
         aria-expanded={popoverOpen}
         title="An update is available"
       >
-        <span className="update-chip-dot" aria-hidden />
-        Update available
+        <span className="update-banner-dot" aria-hidden />
+        <span className="update-banner-msg">An update is available</span>
+        <span className="update-banner-hint">click for details</span>
+        <button
+          type="button"
+          className="update-banner-x"
+          aria-label="Dismiss"
+          onClick={(e) => {
+            e.stopPropagation();
+            dismiss();
+          }}
+        >
+          ×
+        </button>
       </button>
-      {popoverOpen ? (
-        <div className="update-popover" role="dialog" aria-label="Update available">
-          <div className="update-popover-hd">An update is available</div>
-          <p className="update-popover-body">
-            Run <code>/update</code> in Claude — it pulls main, installs
-            deps, and runs any pending migrations.
+      {popoverOpen && (
+        <div
+          className="update-banner-popover"
+          role="dialog"
+          aria-label="Update available"
+        >
+          <p className="update-banner-popover-body">
+            Run <code>/update</code> in Claude — it pulls main,
+            installs deps, and runs any pending migrations.
           </p>
-          <div className="update-popover-path">
-            <span className="update-popover-path-label">Repo</span>
+          <div className="update-banner-popover-path">
+            <span className="update-banner-popover-path-label">Repo</span>
             <code>{status.repo_path}</code>
           </div>
-          <div className="update-popover-actions">
+          <div className="update-banner-popover-actions">
             <button
               type="button"
-              className="btn primary update-popover-copy"
+              className="btn primary"
               onClick={copyCommand}
             >
               {copied ? "Copied" : "Copy: cd <repo> && claude"}
@@ -136,7 +154,7 @@ export function UpdateChip() {
             </button>
           </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }

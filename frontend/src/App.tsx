@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 
 import { AgentView } from "./AgentView";
-import { Connections } from "./Connections";
 import { Home } from "./Home";
 import { ProjectScreen } from "./ProjectScreen";
+import { Settings, type SettingsSection } from "./Settings";
 import { useThemeStore } from "./state/theme";
 import { useTweaksStore } from "./state/tweaks";
 import { TweaksPanel } from "./TweaksPanel";
+import { UpdateBanner } from "./UpdateBanner";
 import { WorkView } from "./WorkView";
 
 export function App() {
@@ -17,6 +18,7 @@ export function App() {
   return (
     <>
       <RouteView path={path} />
+      <UpdateBanner />
       <TweaksPanel />
     </>
   );
@@ -36,7 +38,18 @@ function RouteView({ path }: { path: string }) {
     if (slug) return <ProjectScreen projectSlug={slug} />;
   }
   if (path === "/connections") {
-    return <Connections />;
+    // Legacy alias — Connections moved into Settings → Connections.
+    // Use replace so the back button skips the redirect hop.
+    window.location.replace("/settings/connections");
+    return null;
+  }
+  if (path === "/settings" || path.startsWith("/settings/")) {
+    const sub = path.slice("/settings".length).replace(/^\//, "");
+    const section: SettingsSection =
+      sub === "connections" || sub === "appearance" || sub === "about"
+        ? sub
+        : "tools";
+    return <Settings section={section} />;
   }
   return <Home />;
 }

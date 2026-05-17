@@ -15,6 +15,7 @@ import {
   patchConnection,
   verifyConnection,
 } from "./api";
+import { BrandMark } from "./BrandMark";
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
@@ -22,7 +23,7 @@ import { TweaksToggle } from "./TweaksPanel";
 type Draft = Record<string, string>;
 type VerifyState = "idle" | "verifying" | "ok" | "err";
 
-export function Connections() {
+export function Connections({ chromeless = false }: { chromeless?: boolean } = {}) {
   const { descriptors, byType, loading, error: descError } = useConnectionDescriptors();
   const [connections, setConnections] = useState<Connection[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -178,33 +179,36 @@ export function Connections() {
   }
 
   return (
-    <div className="home">
-      <header className="topbar">
-        <a className="brand brand-link" href="/">
-          <span className="brand-mark" /> Atelier
-        </a>
-        <span className="crumbs">
-          <span className="sep">/</span>
-          <a className="crumb-link" href="/">
-            Workspace
-          </a>
-          <span className="sep">/</span>
-          <span className="now">Connections</span>
-        </span>
-        <div className="spacer" />
-        <TweaksToggle />
-        <ThemeToggle />
-      </header>
-
-      <div className="home-hd">
-        <div>
-          <h1>Connections</h1>
-          <p className="tagline">
-            Source creds, saved once. Reused whenever an agent needs to pull a ticket,
-            error, or trace.
-          </p>
-        </div>
-      </div>
+    <div className={chromeless ? "home chromeless settings-conn-host" : "home"}>
+      {!chromeless && (
+        <>
+          <header className="topbar">
+            <a className="brand brand-link" href="/" aria-label="Atelier">
+              <BrandMark />telier
+            </a>
+            <span className="crumbs">
+              <span className="sep">/</span>
+              <a className="crumb-link" href="/">
+                Workspace
+              </a>
+              <span className="sep">/</span>
+              <span className="now">Connections</span>
+            </span>
+            <div className="spacer" />
+            <TweaksToggle />
+            <ThemeToggle />
+          </header>
+          <div className="home-hd">
+            <div>
+              <h1>Connections</h1>
+              <p className="tagline">
+                Source creds, saved once. Reused whenever an agent needs to pull
+                a ticket, error, or trace.
+              </p>
+            </div>
+          </div>
+        </>
+      )}
 
       {loadError && <div className="form-error">{loadError}</div>}
       {descError && <div className="form-error">Couldn't load connection types: {descError}</div>}
