@@ -38,6 +38,11 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class DetachAgentRequest:
     agent_slug: str
+    terminal: str = "system"
+    """The terminal app to launch (matches ``TerminalChoice`` on the FE:
+    ``system`` / ``iterm2`` / ``gnome-terminal`` / ``konsole`` /
+    ``terminator`` / ``tmux``). Unknown values fall back to the system
+    terminal in the launcher."""
 
 
 @dataclass(frozen=True)
@@ -127,7 +132,7 @@ async def execute(
         model=agent.model,
         options=agent.options,
     )
-    result = launch_in_terminal(command)
+    result = launch_in_terminal(command, kind=req.terminal)
     return DetachAgentResult(command=result.command, launched=result.launched)
 
 

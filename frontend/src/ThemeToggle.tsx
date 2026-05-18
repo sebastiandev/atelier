@@ -1,6 +1,6 @@
-import { type Theme, useThemeStore } from "./state/theme";
+import { type Theme, useSettingsStore } from "./state/settings";
 
-// Cycle order matches state/theme.ts → light → dark → ansi → light.
+// Cycle order matches state/settings.ts → light → dark → ansi → light.
 // The toggle icon previews the *next* theme so the affordance reads
 // like "press to go there".
 const NEXT_LABEL: Record<Theme, Theme> = {
@@ -10,8 +10,8 @@ const NEXT_LABEL: Record<Theme, Theme> = {
 };
 
 export function ThemeToggle({ className, labelled }: { className?: string; labelled?: boolean } = {}) {
-  const theme = useThemeStore((s) => s.theme);
-  const toggle = useThemeStore((s) => s.toggleTheme);
+  const theme = useSettingsStore((s) => s.theme);
+  const toggle = useSettingsStore((s) => s.toggleTheme);
   const next = NEXT_LABEL[theme];
   return (
     <button

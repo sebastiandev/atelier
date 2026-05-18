@@ -24,7 +24,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 
 
 class SchemaMismatchError(RuntimeError):
@@ -177,6 +177,13 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
                 text("ALTER TABLE artifacts ADD COLUMN pr_etag TEXT")
             )
             existing = 11
+        if existing == 11:
+            # v11 → v12: introduce ``user_settings`` (singleton, id=1)
+            # to back the FE settings page. Pure-add: ``metadata.create_all``
+            # above creates the table, so this step is a stamp bump only
+            # (per the established pattern — never call ``.create(conn)``
+            # for tables that ``create_all`` already handles).
+            existing = 12
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

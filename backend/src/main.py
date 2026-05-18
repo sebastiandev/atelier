@@ -15,6 +15,7 @@ from src.application.http.routes import (
     health,
     projects,
     providers,
+    settings as settings_route,
     shared_folders,
     update_status,
     works,
@@ -40,6 +41,9 @@ from src.infrastructure.database import (
 )
 from src.infrastructure.database.connection_repository import SqlConnectionRepository
 from src.infrastructure.database.shared_folder_repository import SqlShareRepository
+from src.infrastructure.database.user_settings_repository import (
+    SqlUserSettingsRepository,
+)
 from src.infrastructure.filesystem import (
     FsProjectFiles,
     FsTranscriptLog,
@@ -97,6 +101,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         connection_store = ConnectionStoreService(
             connection_repo, KeyringSecretStore(), verify, fetch_context
         )
+
+        user_settings_repo = SqlUserSettingsRepository(engine)
 
         worktree_manager = GitWorktreeManager(paths)
         # Orphan sweep: agents persist their slug in SQLite, so on
@@ -188,6 +194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.projectstore = projectstore
         app.state.supervisor = supervisor
         app.state.connection_store = connection_store
+        app.state.user_settings_repo = user_settings_repo
         app.state.worktree_manager = worktree_manager
         app.state.workspace_paths = paths
         # Shared folders state for the routes + agent lifecycle hooks.
@@ -239,6 +246,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(git.router, prefix="/api")
     app.include_router(shared_folders.router, prefix="/api")
     app.include_router(update_status.router, prefix="/api")
+    app.include_router(settings_route.router, prefix="/api")
     app.include_router(ws_agents.router, prefix="/api")
     return app
 

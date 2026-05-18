@@ -380,6 +380,24 @@ schema_version_table = Table(
 )
 
 
+# Singleton table holding the user's presentation preferences (editor,
+# terminal, layout, accent hue, theme). One row, ``id=1`` — Atelier is
+# single-user, so multi-row identity isn't meaningful here. Every column
+# is nullable so the row can exist with defaults applied at the read
+# boundary; that lets the FE PATCH individual fields without sending
+# the rest, and keeps the migration story to "stamp bump, no data".
+user_settings_table = Table(
+    "user_settings",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("editor", String, nullable=True),
+    Column("terminal", String, nullable=True),
+    Column("layout", String, nullable=True),
+    Column("accent_hue", Integer, nullable=True),
+    Column("theme", String, nullable=True),
+)
+
+
 __all__ = [
     "JsonDict",
     "PathType",
@@ -393,5 +411,6 @@ __all__ = [
     "schema_version_table",
     "shared_folders_table",
     "transcript_cursor_table",
+    "user_settings_table",
     "works_table",
 ]

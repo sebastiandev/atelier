@@ -164,18 +164,23 @@ async def detach_agent(
     workstore: WorkStoreDep,
     supervisor: SupervisorDep,
     worktree_manager: WorktreeDep,
+    kind: str = "system",
 ) -> DetachResponse:
     """Stop the supervisor's SDK process for this agent, flip its status
     to ``detached``, and shell out to the user's terminal with the
     matching CLI resume command. If the terminal can't be launched (no
     detected emulator on Linux, sandbox restrictions, etc.) the response
-    still includes the command string so the FE can copy-to-clipboard."""
+    still includes the command string so the FE can copy-to-clipboard.
+
+    ``kind`` picks the terminal app — same values as the open-in-console
+    endpoint above (``system`` / ``iterm2`` / ``terminator`` / ...).
+    Unknown values fall back to ``system``."""
     try:
         result = await detach.execute(
             workstore,
             supervisor,
             worktree_manager,
-            detach.DetachAgentRequest(agent_slug=agent_slug),
+            detach.DetachAgentRequest(agent_slug=agent_slug, terminal=kind),
         )
     except detach.AgentNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e

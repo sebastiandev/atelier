@@ -4,14 +4,14 @@ import { type Connection, listConnections } from "./api";
 import { BrandMark } from "./BrandMark";
 import { Connections } from "./Connections";
 import { CheckIcon, SlidersIcon } from "./Icons";
-import { useThemeStore, type Theme } from "./state/theme";
 import {
   EDITOR_OPTS,
   TERMINAL_OPTS,
   type EditorChoice,
   type TerminalChoice,
-  useTweaksStore,
-} from "./state/tweaks";
+  type Theme,
+  useSettingsStore,
+} from "./state/settings";
 
 export type SettingsSection =
   | "tools"
@@ -126,10 +126,10 @@ function SettingsCard({
 // ─── Default tools ──────────────────────────────────────────────
 
 function SettingsTools() {
-  const editor = useTweaksStore((s) => s.editor);
-  const terminal = useTweaksStore((s) => s.terminal);
-  const setEditor = useTweaksStore((s) => s.setEditor);
-  const setTerminal = useTweaksStore((s) => s.setTerminal);
+  const editor = useSettingsStore((s) => s.editor);
+  const terminal = useSettingsStore((s) => s.terminal);
+  const setEditor = useSettingsStore((s) => s.setEditor);
+  const setTerminal = useSettingsStore((s) => s.setTerminal);
   return (
     <>
       <SettingsSectionHd
@@ -249,8 +249,8 @@ function SettingsConnections() {
 // ─── Appearance ─────────────────────────────────────────────────
 
 function SettingsAppearance() {
-  const theme = useThemeStore((s) => s.theme);
-  const setTheme = useThemeStore((s) => s.setTheme);
+  const theme = useSettingsStore((s) => s.theme);
+  const setTheme = useSettingsStore((s) => s.setTheme);
   const themes: { value: Theme; label: string; swatch: string }[] = [
     { value: "light", label: "Light", swatch: "swatch-light" },
     { value: "dark", label: "Dark", swatch: "swatch-dark" },
@@ -295,7 +295,7 @@ function SettingsAppearance() {
 // ─── About ──────────────────────────────────────────────────────
 
 function SettingsAbout() {
-  const theme = useThemeStore((s) => s.theme);
+  const theme = useSettingsStore((s) => s.theme);
   const rows = useMemo(
     () => [
       { label: "Atelier", value: "v3 — quiet shell" },

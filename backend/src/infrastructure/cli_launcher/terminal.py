@@ -1,4 +1,10 @@
-"""Platform-specific terminal launchers for detach-to-CLI."""
+"""Platform-specific terminal launchers for detach-to-CLI.
+
+``kind`` mirrors the values accepted by ``infrastructure.filesystem.terminal.
+open_in_terminal`` so the Settings → Console preference drives both
+flows consistently. Unknown / unsupported values fall back to the
+platform's system terminal.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,6 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -17,30 +22,38 @@ class LaunchResult:
     launched: bool
 
 
-def launch_in_terminal(command: str) -> LaunchResult:
+def launch_in_terminal(command: str, kind: str = "system") -> LaunchResult:
     try:
         if sys.platform == "darwin":
-            launched = _launch_macos(command)
+            launched = _launch_macos(command, kind)
         elif sys.platform == "win32":
             launched = _launch_windows(command)
         else:
-            launched = _launch_linux(command)
+            launched = _launch_linux(command, kind)
     except (OSError, subprocess.SubprocessError):
         launched = False
     return LaunchResult(command=command, launched=launched)
 
 
-def _launch_macos(command: str) -> bool:
-    if Path("/Applications/iTerm.app").exists():
-        script = (
-            'tell application "iTerm" to activate\n'
-            'tell application "iTerm" to create window with default profile\n'
-            'tell application "iTerm" to tell current session of current window '
-            f'to write text "{_applescript_quote(command)}"\n'
-        )
-        result = subprocess.run(["osascript", "-e", script], check=False)
-        if result.returncode == 0:
-            return True
+def _launch_macos(command: str, kind: str) -> bool:
+    if kind == "iterm2":
+        return _applescript_iterm(command)
+    # "system" + any non-macOS kind (konsole etc.) → Terminal.app.
+    return _applescript_terminal(command)
+
+
+def _applescript_iterm(command: str) -> bool:
+    script = (
+        'tell application "iTerm" to activate\n'
+        'tell application "iTerm" to create window with default profile\n'
+        'tell application "iTerm" to tell current session of current window '
+        f'to write text "{_applescript_quote(command)}"\n'
+    )
+    result = subprocess.run(["osascript", "-e", script], check=False)
+    return result.returncode == 0
+
+
+def _applescript_terminal(command: str) -> bool:
     script = (
         f'tell application "Terminal" to activate\n'
         f'tell application "Terminal" to do script "{_applescript_quote(command)}"\n'
@@ -49,22 +62,34 @@ def _launch_macos(command: str) -> bool:
     return result.returncode == 0
 
 
-def _launch_linux(command: str) -> bool:
+def _launch_linux(command: str, kind: str) -> bool:
     payload = f"{command}; exec bash"
-    candidates: list[list[str]] = []
-    if shutil.which("x-terminal-emulator"):
-        candidates.append(["x-terminal-emulator", "-e", "bash", "-c", payload])
-    if shutil.which("gnome-terminal"):
-        candidates.append(["gnome-terminal", "--", "bash", "-c", payload])
-    if shutil.which("konsole"):
-        candidates.append(["konsole", "-e", "bash", "-c", payload])
-    if shutil.which("xterm"):
-        candidates.append(["xterm", "-e", "bash", "-c", payload])
-    for argv in candidates:
-        result = subprocess.run(argv, check=False)
-        if result.returncode == 0:
-            return True
+    explicit = _LINUX_EXPLICIT.get(kind)
+    if explicit is not None:
+        binary, args = explicit
+        if shutil.which(binary):
+            return subprocess.run([binary, *args, "bash", "-c", payload], check=False).returncode == 0
+        return False
+    # "system" / iterm2 / tmux / unknown → first available emulator.
+    for binary, args in _LINUX_FALLBACKS:
+        if shutil.which(binary):
+            if subprocess.run([binary, *args, "bash", "-c", payload], check=False).returncode == 0:
+                return True
     return False
+
+
+_LINUX_EXPLICIT: dict[str, tuple[str, tuple[str, ...]]] = {
+    "gnome-terminal": ("gnome-terminal", ("--",)),
+    "konsole": ("konsole", ("-e",)),
+    "terminator": ("terminator", ("-x",)),
+}
+
+_LINUX_FALLBACKS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("x-terminal-emulator", ("-e",)),
+    ("gnome-terminal", ("--",)),
+    ("konsole", ("-e",)),
+    ("xterm", ("-e",)),
+)
 
 
 def _launch_windows(command: str) -> bool:

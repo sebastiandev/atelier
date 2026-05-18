@@ -609,10 +609,11 @@ def test_detach_flips_status_writes_marker_and_returns_command(
 
     captured: dict[str, object] = {}
 
-    def fake_launch(command: str):  # type: ignore[no-untyped-def]
+    def fake_launch(command: str, kind: str = "system"):  # type: ignore[no-untyped-def]
         from src.infrastructure.cli_launcher import LaunchResult
 
         captured["command"] = command
+        captured["kind"] = kind
         return LaunchResult(command=command, launched=True)
 
     monkeypatch.setattr(
@@ -675,7 +676,7 @@ def test_detach_preserves_amp_allow_all_permission_mode(
     knob detach can actually translate (the others rely on Atelier's
     bridge)."""
 
-    def fake_launch(command: str):  # type: ignore[no-untyped-def]
+    def fake_launch(command: str, kind: str = "system"):  # type: ignore[no-untyped-def]
         from src.infrastructure.cli_launcher import LaunchResult
 
         return LaunchResult(command=command, launched=True)
@@ -716,7 +717,7 @@ def test_detach_returns_clipboard_fallback_when_launch_fails(
     response still carries the command string so the FE copies it to
     the user's clipboard."""
 
-    def fake_launch(command: str):  # type: ignore[no-untyped-def]
+    def fake_launch(command: str, kind: str = "system"):  # type: ignore[no-untyped-def]
         from src.infrastructure.cli_launcher import LaunchResult
 
         return LaunchResult(command=command, launched=False)
@@ -735,6 +736,35 @@ def test_detach_returns_clipboard_fallback_when_launch_fails(
     body = response.json()
     assert body["launched"] is False
     assert body["command"]  # populated for the clipboard path
+
+
+def test_detach_forwards_kind_query_param_to_launcher(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``?kind=`` on the detach route routes through to the launcher so
+    the user's Settings → Console preference picks the terminal app
+    (matches the open-in-console pathway)."""
+
+    captured: dict[str, object] = {}
+
+    def fake_launch(command: str, kind: str = "system"):  # type: ignore[no-untyped-def]
+        from src.infrastructure.cli_launcher import LaunchResult
+
+        captured["kind"] = kind
+        return LaunchResult(command=command, launched=True)
+
+    monkeypatch.setattr(
+        "src.domain.commands.agents.detach.launch_in_terminal", fake_launch
+    )
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    workstore = app_client.app.state.workstore
+    workstore.set_agent_session_id(agent["slug"], "sess-from-test")
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/detach?kind=iterm2")
+    assert response.status_code == 200
+    assert captured["kind"] == "iterm2"
 
 
 # ---------------------------------------------------------------------------

@@ -62,7 +62,7 @@ import {
   useArtifactsRefresh,
 } from "./state/artifactsRefresh";
 import { useClosedStore } from "./state/closed";
-import { editorUrl, useTweaksStore } from "./state/tweaks";
+import { editorUrl, useSettingsStore } from "./state/settings";
 import { ThemeToggle } from "./ThemeToggle";
 
 // Stable singleton so the selector below doesn't return a fresh ref on
@@ -114,8 +114,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const agentOrderOverride = useAgentOrderStore(
     (s) => s.byWork[workSlug],
   );
-  const editor = useTweaksStore((s) => s.editor);
-  const terminal = useTweaksStore((s) => s.terminal);
+  const editor = useSettingsStore((s) => s.editor);
+  const terminal = useSettingsStore((s) => s.terminal);
 
   // 6px activation distance keeps clicks on the grip from firing a drag —
   // matches @dnd-kit's recommended threshold and feels right with the
@@ -405,7 +405,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     closeAgent(workSlug, agentSlug);
     if (focusedSlug === agentSlug) setFocusedSlug(null);
     try {
-      const result = await detachAgent(agentSlug);
+      const result = await detachAgent(agentSlug, terminal);
       if (result.launched) {
         showToast("Detached — opened in your terminal.");
       } else {

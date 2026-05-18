@@ -1,6 +1,6 @@
 /* Design tokens — lifted from design_handoff_atelier/design_files/styles.css.
    Dark is the default at :root; [data-theme="light"] overrides for the
-   light theme. App.tsx sets data-theme on <html> from useThemeStore. */
+   light theme. App.tsx sets data-theme on <html> from useSettingsStore. */
 
 :root {
   color-scheme: dark;

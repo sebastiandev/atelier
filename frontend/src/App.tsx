@@ -4,14 +4,14 @@ import { AgentView } from "./AgentView";
 import { Home } from "./Home";
 import { ProjectScreen } from "./ProjectScreen";
 import { Settings, type SettingsSection } from "./Settings";
-import { useThemeStore } from "./state/theme";
-import { useTweaksStore } from "./state/tweaks";
+import { hydrateSettings, useSettingsStore } from "./state/settings";
 import { TweaksPanel } from "./TweaksPanel";
 import { UpdateBanner } from "./UpdateBanner";
 import { WorkView } from "./WorkView";
 
 export function App() {
   const path = useRoute();
+  useSettingsHydration();
   useThemeAttribute();
   useAccentHueAttribute();
 
@@ -22,6 +22,17 @@ export function App() {
       <TweaksPanel />
     </>
   );
+}
+
+function useSettingsHydration(): void {
+  // Fetch the canonical settings row from the backend once on mount.
+  // The store stays at defaults until hydration resolves — settings
+  // changes mid-load are unlikely, and the alternative (localStorage
+  // cache for fast-paint) would re-introduce the dual-source problem
+  // the DB-backed store was meant to solve.
+  useEffect(() => {
+    void hydrateSettings();
+  }, []);
 }
 
 function RouteView({ path }: { path: string }) {
@@ -65,14 +76,14 @@ function useRoute(): string {
 }
 
 function useThemeAttribute(): void {
-  const theme = useThemeStore((s) => s.theme);
+  const theme = useSettingsStore((s) => s.theme);
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 }
 
 function useAccentHueAttribute(): void {
-  const hue = useTweaksStore((s) => s.accentHue);
+  const hue = useSettingsStore((s) => s.accentHue);
   useEffect(() => {
     document.documentElement.style.setProperty("--accent-h", String(hue));
   }, [hue]);

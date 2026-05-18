@@ -1,6 +1,6 @@
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef } from "react";
 
-import { TWEAKS_DEFAULTS, useTweaksStore } from "./state/tweaks";
+import { SETTINGS_DEFAULTS, useSettingsStore } from "./state/settings";
 
 const PAD = 16;
 const DEV_FLAG_KEY = "atelier:dev-tweaks";
@@ -19,12 +19,12 @@ function isDevTweaksEnabled(): boolean {
 }
 
 export function TweaksPanel() {
-  const open = useTweaksStore((s) => s.panelOpen);
-  const accentHue = useTweaksStore((s) => s.accentHue);
-  const setAccentHue = useTweaksStore((s) => s.setAccentHue);
-  const resetTweaks = useTweaksStore((s) => s.reset);
-  const closePanel = useTweaksStore((s) => s.closePanel);
-  const atDefault = accentHue === TWEAKS_DEFAULTS.accentHue;
+  const open = useSettingsStore((s) => s.panelOpen);
+  const accentHue = useSettingsStore((s) => s.accentHue);
+  const setAccentHue = useSettingsStore((s) => s.setAccentHue);
+  const resetTweaks = useSettingsStore((s) => s.reset);
+  const closePanel = useSettingsStore((s) => s.closePanel);
+  const atDefault = accentHue === SETTINGS_DEFAULTS.accentHue;
 
   const panelRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef({ x: PAD, y: PAD });
@@ -142,8 +142,8 @@ export function TweaksPanel() {
 // Trigger for the panel. Renders only when the dev flag is on so
 // production builds don't carry the gear icon into the v3 shell.
 export function TweaksToggle() {
-  const togglePanel = useTweaksStore((s) => s.togglePanel);
-  const open = useTweaksStore((s) => s.panelOpen);
+  const togglePanel = useSettingsStore((s) => s.togglePanel);
+  const open = useSettingsStore((s) => s.panelOpen);
   if (!isDevTweaksEnabled()) return null;
   return (
     <button
