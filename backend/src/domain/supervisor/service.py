@@ -393,6 +393,23 @@ class AgentSupervisorService:
         """
         return agent_slug in self._states
 
+    def is_lazy_registered(self, agent_slug: str) -> bool:
+        """True when the agent is registered but its provider pump is idle."""
+        state = self._states.get(agent_slug)
+        return state is not None and state.task is None
+
+    async def refresh_seq_from_disk(self, agent_slug: str) -> None:
+        """Advance a lazy state's replay high-water mark after external
+        transcript writes such as CLI catch-up."""
+        state = self._states.get(agent_slug)
+        if state is None:
+            return
+        last_seq = await asyncio.to_thread(
+            self._transcript_log.last_seq, state.work_slug, agent_slug
+        )
+        async with state.publish_lock:
+            state.seq = max(state.seq, last_seq)
+
     # -- internals --
 
     async def _run_agent(self, state: _AgentState) -> None:

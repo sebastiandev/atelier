@@ -128,10 +128,10 @@ class WorkStore(Protocol):
     def find_last_detach_cursor(
         self, work_slug: str, agent_slug: str
     ) -> dict[str, Any] | None:
-        """Walk the NDJSON transcript and return the ``sdk_cursor`` payload
-        from the most recent ``user_detached`` marker, or ``None`` if no
-        detach is recorded. Used by re-attach catch-up to know where the
-        SDK file's "new" entries start."""
+        """Walk the NDJSON transcript and return the latest CLI
+        ``sdk_cursor`` payload, or ``None`` if no CLI sync marker is
+        recorded. Used by re-attach catch-up to know where the SDK
+        file's "new" entries start."""
         ...
 
     def is_session_ingested(

@@ -238,11 +238,50 @@ def test_list_agents_for_work_returns_added_agents() -> None:
     service.create_work(_new_work_request())
     service.add_agent_to_work(_agent_request(name="Architect"))
     service.add_agent_to_work(
-        _agent_request(name="Developer", persona="developer", role="developer", provider="amp", model="smart")
+        _agent_request(
+            name="Developer",
+            persona="developer",
+            role="developer",
+            provider="amp",
+            model="smart",
+        )
     )
 
     agents = service.list_agents_for_work("WRK-001")
     assert [a.slug for a in agents] == ["agt-1", "agt-2"]
+
+
+def test_backfill_missing_session_ids_from_transcripts_restores_latest_session() -> None:
+    service, repo, _, log = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(_agent_request(provider="amp", model="deep"))
+    log.events[("WRK-001", "agt-1")] = [
+        {"seq": 1, "type": "session_established", "session_id": "T-old"},
+        {"seq": 2, "type": "session_established", "session_id": "T-old"},
+        {"seq": 3, "type": "session_established", "session_id": "T-current"},
+    ]
+
+    repaired = service.backfill_missing_session_ids_from_transcripts()
+
+    assert repaired == 1
+    assert repo.agents["agt-1"].session_id == "T-current"
+    assert repo.agents["agt-1"].parent_session_id == "T-old"
+
+
+def test_backfill_missing_session_ids_leaves_existing_sql_session_alone() -> None:
+    service, repo, _, log = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(_agent_request(provider="amp", model="smart"))
+    service.set_agent_session_id("agt-1", "T-db")
+    log.events[("WRK-001", "agt-1")] = [
+        {"seq": 1, "type": "session_established", "session_id": "T-transcript"},
+    ]
+
+    repaired = service.backfill_missing_session_ids_from_transcripts()
+
+    assert repaired == 0
+    assert repo.agents["agt-1"].session_id == "T-db"
+    assert repo.agents["agt-1"].parent_session_id is None
 
 
 def test_list_agents_for_work_raises_when_work_not_found() -> None:

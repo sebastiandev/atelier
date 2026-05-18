@@ -71,10 +71,16 @@ def test_catch_up_without_parent_only_merges_current() -> None:
     workstore, log = _make_workstore()
     agent = _agent(parent_session_id=None)
 
-    with patch(
-        "src.domain.commands.agents.resume.merge_cli_transcript",
-        return_value=[{"type": "user_input", "ts": "t", "text": "hi"}],
-    ) as mock_merge:
+    with (
+        patch(
+            "src.domain.commands.agents.resume.merge_cli_transcript",
+            return_value=[{"type": "user_input", "ts": "t", "text": "hi"}],
+        ) as mock_merge,
+        patch(
+            "src.domain.commands.agents.resume.sdk_cursor_at_detach",
+            return_value={"provider": "codex", "line_count": 9},
+        ),
+    ):
         _catch_up_detached_agent(workstore, "WRK-001", "agt-1", agent, Path("/wd"))
 
     # Only one merge call — for the current session.
@@ -82,6 +88,105 @@ def test_catch_up_without_parent_only_merges_current() -> None:
     assert mock_merge.call_args.args[1] == "sess-current"
     # No sdk_session_merged marker; just the current event + user_reattached.
     assert _types(log.events[("WRK-001", "agt-1")]) == ["user_input", "user_reattached"]
+    marker = log.events[("WRK-001", "agt-1")][-1]
+    assert marker["sdk_cursor"] == {"provider": "codex", "line_count": 9}
+
+
+def test_catch_up_uses_latest_reattach_cursor_on_next_merge() -> None:
+    workstore, log = _make_workstore()
+    log.events[("WRK-001", "agt-1")] = [
+        {
+            "seq": 1,
+            "type": "user_detached",
+            "sdk_cursor": {"provider": "codex", "line_count": 10},
+        },
+        {
+            "seq": 2,
+            "type": "user_reattached",
+            "events_merged": 0,
+            "sdk_cursor": {"provider": "codex", "line_count": 20},
+        },
+    ]
+    agent = _agent(parent_session_id=None)
+
+    with (
+        patch(
+            "src.domain.commands.agents.resume.merge_cli_transcript",
+            return_value=[],
+        ) as mock_merge,
+        patch(
+            "src.domain.commands.agents.resume.sdk_cursor_at_detach",
+            return_value={"provider": "codex", "line_count": 20},
+        ),
+    ):
+        _catch_up_detached_agent(workstore, "WRK-001", "agt-1", agent, Path("/wd"))
+
+    assert mock_merge.call_args.args[3] == {"provider": "codex", "line_count": 20}
+
+
+def test_idle_catch_up_without_new_events_does_not_append_marker() -> None:
+    workstore, log = _make_workstore()
+    log.events[("WRK-001", "agt-1")] = [
+        {
+            "seq": 1,
+            "type": "user_reattached",
+            "events_merged": 0,
+            "sdk_cursor": {"provider": "codex", "line_count": 20},
+        },
+    ]
+    agent = _agent(parent_session_id=None, status=AgentStatus.IDLE)
+
+    with patch(
+        "src.domain.commands.agents.resume.merge_cli_transcript",
+        return_value=[],
+    ):
+        _catch_up_detached_agent(
+            workstore,
+            "WRK-001",
+            "agt-1",
+            agent,
+            Path("/wd"),
+            emit_reattached_marker=False,
+        )
+
+    assert log.events[("WRK-001", "agt-1")] == [
+        {
+            "seq": 1,
+            "type": "user_reattached",
+            "events_merged": 0,
+            "sdk_cursor": {"provider": "codex", "line_count": 20},
+        }
+    ]
+
+
+def test_idle_catch_up_with_new_events_advances_cursor() -> None:
+    workstore, log = _make_workstore()
+    agent = _agent(parent_session_id=None, status=AgentStatus.IDLE)
+
+    with (
+        patch(
+            "src.domain.commands.agents.resume.merge_cli_transcript",
+            return_value=[{"type": "user_input", "ts": "t", "text": "late"}],
+        ),
+        patch(
+            "src.domain.commands.agents.resume.sdk_cursor_at_detach",
+            return_value={"provider": "codex", "line_count": 25},
+        ),
+    ):
+        _catch_up_detached_agent(
+            workstore,
+            "WRK-001",
+            "agt-1",
+            agent,
+            Path("/wd"),
+            emit_reattached_marker=False,
+        )
+
+    assert _types(log.events[("WRK-001", "agt-1")]) == ["user_input", "user_reattached"]
+    assert log.events[("WRK-001", "agt-1")][-1]["sdk_cursor"] == {
+        "provider": "codex",
+        "line_count": 25,
+    }
 
 
 def test_catch_up_with_parent_full_exports_when_unseen() -> None:

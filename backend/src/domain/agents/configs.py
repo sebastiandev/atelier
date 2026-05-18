@@ -176,7 +176,6 @@ class CodexModel(str, Enum):
 
     GPT_5_4 = "gpt-5.4"
     GPT_5_4_PRO = "gpt-5.4-pro"
-    GPT_5_3 = "gpt-5.3"
 
 
 class CodexReasoningEffort(str, Enum):

@@ -48,6 +48,7 @@ import sys
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -269,12 +270,11 @@ class CodexAdapter:
             self._client = None
             raise
         self._thread = thread
-        # Emit ``SessionEstablished`` as soon as the SDK assigns us a
-        # thread id; supervisor persists it for next-time resume.
-        await self._outgoing.put(
-            SessionEstablished(ts=datetime.now(UTC), session_id=thread.id)
-        )
-        self._reported_session_id = thread.id
+        # Resumed threads already have an id. Fresh Codex SDK threads only
+        # receive one after the first ``thread.started`` stream event, so
+        # the input pump emits SessionEstablished there.
+        if thread.id:
+            await self._emit_session_established(thread.id)
         self._started = True
 
     async def send_input(self, text: str) -> None:
@@ -372,6 +372,9 @@ class CodexAdapter:
                 turn = await thread.turn_start(text)
                 self._current_turn = turn
                 async for notification in turn.stream():
+                    thread_id = _thread_id_from_notification(notification)
+                    if thread_id:
+                        await self._emit_session_established(thread_id)
                     per_call = _per_call_prompt_tokens(notification)
                     if per_call is not None:
                         last_prompt_tokens = per_call
@@ -449,6 +452,14 @@ class CodexAdapter:
         if decision == "allow_always":
             self._allow_always.add(canon_name)
         return decision
+
+    async def _emit_session_established(self, session_id: str) -> None:
+        if self._reported_session_id == session_id:
+            return
+        await self._outgoing.put(
+            SessionEstablished(ts=datetime.now(UTC), session_id=session_id)
+        )
+        self._reported_session_id = session_id
 
     async def close(self) -> None:
         if self._closed:
@@ -546,6 +557,174 @@ def _build_atelier_mcp_servers() -> dict[str, Any]:
             ],
         }
     }
+
+
+@dataclass
+class _SdkNotification:
+    type: str
+    params: dict[str, Any]
+
+
+class _CodexSdkClient:
+    """Adapter from openai-codex-sdk 0.1.x to Atelier's local Protocol."""
+
+    def __init__(self, sdk_client: Any) -> None:
+        self._sdk_client = sdk_client
+
+    async def __aenter__(self) -> "_CodexSdkClient":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        return None
+
+    async def thread_start(self, **kwargs: Any) -> "_CodexSdkThread":
+        return _CodexSdkThread(
+            self._sdk_client.start_thread(_thread_options_from_kwargs(kwargs))
+        )
+
+    async def thread_resume(
+        self, thread_id: str, **kwargs: Any
+    ) -> "_CodexSdkThread":
+        return _CodexSdkThread(
+            self._sdk_client.resume_thread(
+                thread_id, _thread_options_from_kwargs(kwargs)
+            )
+        )
+
+    def on_approval_request(self, callback: Callable[[ApprovalRequest], Any]) -> None:
+        # openai-codex-sdk 0.1.x routes approvals through the Codex CLI
+        # approval policy; it does not expose an approval callback.
+        _ = callback
+
+
+class _CodexSdkThread:
+    def __init__(self, sdk_thread: Any) -> None:
+        self._sdk_thread = sdk_thread
+
+    @property
+    def id(self) -> str:
+        return self._sdk_thread.id or ""
+
+    async def turn_start(self, user_message: str) -> "_CodexSdkTurnHandle":
+        try:
+            from openai_codex_sdk import AbortController
+        except ImportError as exc:  # pragma: no cover - covered by factory import
+            raise RuntimeError("openai-codex-sdk is not installed") from exc
+
+        controller = AbortController()
+        streamed = await self._sdk_thread.run_streamed(
+            user_message, {"signal": controller.signal}
+        )
+        return _CodexSdkTurnHandle(streamed.events, controller)
+
+
+class _CodexSdkTurnHandle:
+    def __init__(self, events: AsyncIterator[Any], controller: Any) -> None:
+        self._events = events
+        self._controller = controller
+
+    async def stream(self) -> AsyncIterator[_SdkNotification]:
+        async for event in self._events:
+            yield _normalize_sdk_event(event)
+
+    async def interrupt(self) -> None:
+        self._controller.abort("Interrupted by user")
+
+
+def _thread_options_from_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    overrides = kwargs.get("config_overrides") or {}
+    options: dict[str, Any] = {
+        "model": kwargs.get("model"),
+        "sandboxMode": kwargs.get("sandbox"),
+        "workingDirectory": kwargs.get("cwd"),
+        "approvalPolicy": kwargs.get("approval_mode"),
+        "modelReasoningEffort": overrides.get("model_reasoning_effort"),
+    }
+    # openai-codex-sdk 0.1.x does not expose base instructions or MCP
+    # server registration on ThreadOptions. Keep only supported keys.
+    return {k: v for k, v in options.items() if v is not None}
+
+
+def _normalize_sdk_event(event: Any) -> _SdkNotification:
+    event_type = getattr(event, "type", "")
+    if event_type == "thread.started":
+        return _SdkNotification(
+            "thread/started",
+            {"thread_id": getattr(event, "thread_id", "")},
+        )
+    if event_type == "turn.started":
+        return _SdkNotification("turn/started", {})
+    if event_type == "turn.completed":
+        return _SdkNotification(
+            "turn/completed",
+            {
+                "status": "completed",
+                "usage": _model_dump(getattr(event, "usage", None)),
+            },
+        )
+    if event_type == "turn.failed":
+        error = getattr(event, "error", None)
+        return _SdkNotification(
+            "turn/completed",
+            {
+                "status": "failed",
+                "error": getattr(error, "message", None) or str(error or ""),
+            },
+        )
+    if event_type in {"item.started", "item.updated", "item.completed"}:
+        item = _normalize_sdk_item(getattr(event, "item", None))
+        return _SdkNotification(event_type.replace(".", "/"), {"item": item})
+    if event_type == "error":
+        return _SdkNotification(
+            "turn/completed",
+            {"status": "failed", "error": getattr(event, "message", "")},
+        )
+    return _SdkNotification(event_type.replace(".", "/"), _model_dump(event))
+
+
+def _normalize_sdk_item(item: Any) -> dict[str, Any]:
+    data = _model_dump(item)
+    item_type = data.get("type")
+    if item_type == "agent_message":
+        data["itemType"] = "agentMessage"
+    elif item_type == "reasoning":
+        data["itemType"] = "reasoning"
+    elif item_type == "command_execution":
+        data["itemType"] = "commandExecution"
+        if "aggregated_output" in data:
+            data["output"] = data["aggregated_output"]
+    elif item_type == "file_change":
+        data["itemType"] = "fileChange"
+        changes = data.get("changes")
+        if isinstance(changes, list) and changes:
+            first = changes[0]
+            if isinstance(first, dict):
+                data.setdefault("path", first.get("path"))
+                data.setdefault("result", first.get("kind"))
+    elif item_type == "mcp_tool_call":
+        data["itemType"] = "mcpToolCall"
+    return data
+
+
+def _model_dump(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump()
+    if hasattr(value, "__dict__"):
+        return dict(value.__dict__)
+    return {}
+
+
+def _thread_id_from_notification(notification: Notification) -> str | None:
+    if notification.type == "thread/started":
+        thread_id = notification.params.get("thread_id")
+        if isinstance(thread_id, str) and thread_id:
+            return thread_id
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -893,7 +1072,7 @@ def _coerce_str(value: Any) -> str:
 
 
 def _default_client_factory() -> CodexClient:
-    """Lazy-import the Codex SDK and return a fresh ``AsyncCodex`` client.
+    """Lazy-import the Codex SDK and return a fresh client adapter.
 
     Import happens at call time (not module load) so the adapter module
     stays importable even when ``openai-codex-sdk`` isn't installed —
@@ -902,14 +1081,14 @@ def _default_client_factory() -> CodexClient:
     Amp resolve their SDKs at runtime.
     """
     try:
-        from openai_codex_sdk import AsyncCodex
+        from openai_codex_sdk import Codex
     except ImportError as exc:  # pragma: no cover - exercised on machines without the SDK
         raise RuntimeError(
             "openai-codex-sdk is not installed. Run "
             "``uv add openai-codex-sdk`` (or pip install) in the backend "
             "to enable Codex agents."
         ) from exc
-    client: CodexClient = AsyncCodex()
+    client: CodexClient = _CodexSdkClient(Codex())
     return client
 
 

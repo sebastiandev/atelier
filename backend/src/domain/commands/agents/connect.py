@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.domain.commands.agents import resume
-from src.domain.sharedfolders.ports import ShareProvisioner, SharedFolderStore
+from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
 from src.settings import Settings
@@ -81,6 +81,24 @@ async def execute(
             )
         except resume.AgentNotFound as exc:
             raise AgentNotFound(str(exc)) from exc
+    elif supervisor.is_lazy_registered(req.agent_slug):
+        # A view-only reattach registers lazily. If the user keeps typing
+        # in the external CLI after that, later opens must still import
+        # provider transcript entries before computing the WS replay window.
+        history_work_slug = workstore.get_work_slug_for_agent(req.agent_slug)
+        if history_work_slug is None:
+            raise AgentNotFound(f"agent not found: {req.agent_slug}")
+        try:
+            synced = await resume.catch_up_cli_events(
+                workstore,
+                worktree_manager,
+                work_slug=history_work_slug,
+                agent_slug=req.agent_slug,
+            )
+        except resume.AgentNotFound as exc:
+            raise AgentNotFound(str(exc)) from exc
+        if synced:
+            await supervisor.refresh_seq_from_disk(req.agent_slug)
 
     async with supervisor.subscribe(req.agent_slug, cursor=req.cursor) as sub:
         yield sub

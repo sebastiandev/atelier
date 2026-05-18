@@ -199,16 +199,16 @@ def test_amp_globals_precede_threads_subcommand() -> None:
 
 def test_codex_legacy_call_emits_bare_command() -> None:
     """Older Codex agents whose ``options`` column is NULL get the
-    plain ``codex exec resume <sid>`` invocation — no model flag, no
+    plain ``codex resume <sid>`` invocation — no model flag, no
     sandbox flag, no approval flag, no reasoning effort override."""
     cmd = build_resume_command("codex", _SID, _WORKDIR)
-    assert cmd == "cd '/tmp/agent-1' && codex exec resume 'sess-abc'"
+    assert cmd == "cd '/tmp/agent-1' && codex resume 'sess-abc'"
 
 
 def test_codex_includes_model_flag() -> None:
     cmd = build_resume_command("codex", _SID, _WORKDIR, model="gpt-5.4-pro")
     assert cmd == (
-        "cd '/tmp/agent-1' && codex exec resume 'sess-abc' --model 'gpt-5.4-pro'"
+        "cd '/tmp/agent-1' && codex resume --model 'gpt-5.4-pro' 'sess-abc'"
     )
 
 
@@ -280,7 +280,7 @@ def test_codex_emits_reasoning_effort_via_config_override() -> None:
         model="gpt-5.4",
         options={"reasoning_effort": "high"},
     )
-    assert "-c 'model_reasoning_effort=high'" in cmd
+    assert "-c 'model_reasoning_effort=\"high\"'" in cmd
 
 
 def test_codex_combines_all_flags_in_stable_order() -> None:
@@ -296,11 +296,12 @@ def test_codex_combines_all_flags_in_stable_order() -> None:
         },
     )
     assert cmd == (
-        "cd '/tmp/agent-1' && codex exec resume 'sess-abc' "
+        "cd '/tmp/agent-1' && codex resume "
         "--model 'gpt-5.4-pro' "
         "--sandbox 'read-only' "
         "--ask-for-approval 'untrusted' "
-        "-c 'model_reasoning_effort=high'"
+        "-c 'model_reasoning_effort=\"high\"' "
+        "'sess-abc'"
     )
 
 
