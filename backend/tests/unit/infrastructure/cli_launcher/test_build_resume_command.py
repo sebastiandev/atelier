@@ -18,7 +18,6 @@ import pytest
 
 from src.infrastructure.cli_launcher import build_resume_command
 
-
 _WORKDIR = Path("/tmp/agent-1")
 _SID = "sess-abc"
 
@@ -191,6 +190,119 @@ def test_amp_globals_precede_threads_subcommand() -> None:
     flag_segment = cmd[amp_idx + len(" amp ") : threads_idx]
     assert "--mode" in flag_segment
     assert "--dangerously-allow-all" in flag_segment
+
+
+# ---------------------------------------------------------------------------
+# Codex
+# ---------------------------------------------------------------------------
+
+
+def test_codex_legacy_call_emits_bare_command() -> None:
+    """Older Codex agents whose ``options`` column is NULL get the
+    plain ``codex resume <sid>`` invocation — no model flag, no
+    sandbox flag, no approval flag, no reasoning effort override."""
+    cmd = build_resume_command("codex", _SID, _WORKDIR)
+    assert cmd == "cd '/tmp/agent-1' && codex resume 'sess-abc'"
+
+
+def test_codex_includes_model_flag() -> None:
+    cmd = build_resume_command("codex", _SID, _WORKDIR, model="gpt-5.4-pro")
+    assert cmd == (
+        "cd '/tmp/agent-1' && codex resume --model 'gpt-5.4-pro' 'sess-abc'"
+    )
+
+
+def test_codex_skips_default_sandbox() -> None:
+    """``workspace-write`` is the SDK + CLI default — forwarding it would
+    just add noise to the command string."""
+    cmd = build_resume_command(
+        "codex",
+        _SID,
+        _WORKDIR,
+        model="gpt-5.4",
+        options={"sandbox": "workspace-write"},
+    )
+    assert "--sandbox" not in cmd
+
+
+def test_codex_emits_sandbox_when_non_default() -> None:
+    cmd = build_resume_command(
+        "codex",
+        _SID,
+        _WORKDIR,
+        model="gpt-5.4",
+        options={"sandbox": "read-only"},
+    )
+    assert "--sandbox 'read-only'" in cmd
+
+
+def test_codex_skips_default_approval_mode() -> None:
+    cmd = build_resume_command(
+        "codex",
+        _SID,
+        _WORKDIR,
+        model="gpt-5.4",
+        options={"approval_mode": "on-request"},
+    )
+    assert "--ask-for-approval" not in cmd
+
+
+def test_codex_emits_approval_mode_when_non_default() -> None:
+    cmd = build_resume_command(
+        "codex",
+        _SID,
+        _WORKDIR,
+        model="gpt-5.4",
+        options={"approval_mode": "never"},
+    )
+    assert "--ask-for-approval 'never'" in cmd
+
+
+def test_codex_skips_default_reasoning_effort() -> None:
+    """``medium`` is the CLI default — forwarding it would just add noise."""
+    cmd = build_resume_command(
+        "codex",
+        _SID,
+        _WORKDIR,
+        model="gpt-5.4",
+        options={"reasoning_effort": "medium"},
+    )
+    assert "model_reasoning_effort" not in cmd
+
+
+def test_codex_emits_reasoning_effort_via_config_override() -> None:
+    """Codex's CLI has no dedicated reasoning-effort flag — it accepts
+    arbitrary config overrides via ``-c key=value``. Forward through that."""
+    cmd = build_resume_command(
+        "codex",
+        _SID,
+        _WORKDIR,
+        model="gpt-5.4",
+        options={"reasoning_effort": "high"},
+    )
+    assert "-c 'model_reasoning_effort=\"high\"'" in cmd
+
+
+def test_codex_combines_all_flags_in_stable_order() -> None:
+    cmd = build_resume_command(
+        "codex",
+        _SID,
+        _WORKDIR,
+        model="gpt-5.4-pro",
+        options={
+            "sandbox": "read-only",
+            "approval_mode": "untrusted",
+            "reasoning_effort": "high",
+        },
+    )
+    assert cmd == (
+        "cd '/tmp/agent-1' && codex resume "
+        "--model 'gpt-5.4-pro' "
+        "--sandbox 'read-only' "
+        "--ask-for-approval 'untrusted' "
+        "-c 'model_reasoning_effort=\"high\"' "
+        "'sess-abc'"
+    )
 
 
 # ---------------------------------------------------------------------------

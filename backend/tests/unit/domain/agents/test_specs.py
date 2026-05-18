@@ -23,6 +23,12 @@ from src.domain.agents import (
     ClaudeModel,
     ClaudePermissionMode,
     ClaudeSpec,
+    CodexAgentConfig,
+    CodexApprovalMode,
+    CodexModel,
+    CodexReasoningEffort,
+    CodexSandbox,
+    CodexSpec,
     CommonAgentConfig,
 )
 
@@ -199,9 +205,93 @@ def test_amp_build_rejects_bad_mode() -> None:
 
 
 # ---------------------------------------------------------------------------
+# CodexSpec
+# ---------------------------------------------------------------------------
+
+
+def test_codex_describe_lists_models_and_options() -> None:
+    desc = CodexSpec().describe()
+    assert desc.name == "codex"
+    assert desc.primary_field.label == "Model"
+    assert CodexModel.GPT_5_4.value in desc.primary_field.values
+    assert desc.primary_field.default == CodexModel.GPT_5_4.value
+    assert "reasoning_effort" in desc.options
+    assert "sandbox" in desc.options
+    assert "approval_mode" in desc.options
+    assert (
+        desc.options["approval_mode"].default
+        == CodexApprovalMode.ON_REQUEST.value
+    )
+    assert (
+        desc.options["sandbox"].default == CodexSandbox.WORKSPACE_WRITE.value
+    )
+
+
+def test_codex_describe_has_no_pricing_for_v1() -> None:
+    """Codex pricing is in flux upstream — ship empty ``model_meta`` so
+    the FE shows "—" for cost rather than guessing. Fold pricing in
+    once OpenAI's public list settles."""
+    desc = CodexSpec().describe()
+    assert desc.model_meta == {}
+
+
+def test_codex_describe_explains_dual_permission_layers() -> None:
+    desc = CodexSpec().describe()
+    assert desc.advanced_intro is not None
+    assert "Sandbox" in desc.advanced_intro
+    assert "Approval" in desc.advanced_intro
+
+
+def test_codex_build_with_defaults() -> None:
+    config = CodexSpec().build(_common(), CodexModel.GPT_5_4.value, options={})
+    assert isinstance(config, CodexAgentConfig)
+    assert config.model is CodexModel.GPT_5_4
+    assert config.reasoning_effort is CodexReasoningEffort.MEDIUM
+    assert config.sandbox is CodexSandbox.WORKSPACE_WRITE
+    assert config.approval_mode is CodexApprovalMode.ON_REQUEST
+
+
+def test_codex_build_with_full_options() -> None:
+    config = CodexSpec().build(
+        _common(),
+        CodexModel.GPT_5_4_PRO.value,
+        options={
+            "reasoning_effort": "high",
+            "sandbox": "read-only",
+            "approval_mode": "untrusted",
+        },
+    )
+    assert config.model is CodexModel.GPT_5_4_PRO
+    assert config.reasoning_effort is CodexReasoningEffort.HIGH
+    assert config.sandbox is CodexSandbox.READ_ONLY
+    assert config.approval_mode is CodexApprovalMode.UNTRUSTED
+
+
+def test_codex_build_rejects_unknown_option() -> None:
+    with pytest.raises(ValueError, match="unknown options"):
+        CodexSpec().build(
+            _common(), CodexModel.GPT_5_4.value, options={"bogus": True}
+        )
+
+
+def test_codex_build_rejects_bad_model() -> None:
+    with pytest.raises(ValueError):
+        CodexSpec().build(_common(), "gpt-9000", options={})
+
+
+def test_codex_build_rejects_bad_sandbox() -> None:
+    with pytest.raises(ValueError):
+        CodexSpec().build(
+            _common(),
+            CodexModel.GPT_5_4.value,
+            options={"sandbox": "moon-base"},
+        )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
 
 def test_specs_registry_covers_all_providers() -> None:
-    assert set(SPECS.keys()) == {"claude-code", "amp"}
+    assert set(SPECS.keys()) == {"claude-code", "amp", "codex"}

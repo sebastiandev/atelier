@@ -8,7 +8,7 @@ Conventions used in the diagrams:
 - **Command** = `domain/commands/**/*.py` (the orchestration unit each route delegates to).
 - **WorkStore** = the SQL+FS port composed in `domain/workstore/service.py`.
 - **Supervisor** = `AgentSupervisorService` (one task per running agent).
-- **Adapter** = the per-provider `AgentAdapter` impl (Claude / Amp / Stub).
+- **Adapter** = the per-provider `AgentAdapter` impl (Claude / Amp / Codex / Stub).
 - A box with double border denotes an *external* boundary (the browser, the SDK CLI subprocess, the keychain, the filesystem).
 
 Where a flow has notable concurrency or queueing, look for the side note at the end of the section.
@@ -269,7 +269,7 @@ commands.start.execute(workstore, worktree_manager, settings, req)
    │       └─► non-git folder    → returns folder unchanged
    │   (or WorktreeManager.ensure_forked(...) when fork_from_agent is set — always detached)
    ├─► render_system_prompt(..., is_detached_worktree=worktree_manager.is_detached(workdir))
-   ├─► build_adapter(config, settings)                 ← singledispatch: Claude / Amp / Stub
+   ├─► build_adapter(config, settings)                 ← singledispatch: Claude / Amp / Codex / Stub
    └─► returns StartAgentPlan(agent, adapter, context, first_message?)
                                      │
                                      ▼
@@ -378,7 +378,7 @@ adapter.events()                          supervisor._run_agent
                                                        └─ queue.put_nowait if subscribed
 ```
 
-Both adapters use the same outgoing-queue + pump pattern so synchronous SDK callbacks (Claude's `can_use_tool`, Amp's bridge connection handler) can interleave events with the SDK's own message stream without blocking. See `docs/backend.md` → "Tool permissions: the can_use_tool callback flow" and "Tool permissions for Amp: the delegate-bridge".
+All three adapters use the same outgoing-queue + pump pattern so synchronous SDK callbacks (Claude's `can_use_tool`, Amp's bridge connection handler, Codex's `on_approval_request`) can interleave events with the SDK's own message stream without blocking. Codex's notification stream is a three-state lifecycle per item (`item/started` → `item/agentMessage/delta` / `item/reasoning/summaryTextDelta` → `item/completed`), wrapped by `turn/started` and `turn/completed` frames the adapter maps onto `StatusChange`/`TurnMetrics`. See `docs/backend.md` → "Tool permissions: the can_use_tool callback flow", "Tool permissions for Amp: the delegate-bridge", and "Tool permissions for Codex: native typed approvals".
 
 ---
 

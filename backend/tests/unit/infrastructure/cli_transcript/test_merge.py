@@ -26,7 +26,9 @@ from src.infrastructure.cli_transcript import (
 # ---------------------------------------------------------------------------
 
 
-def test_claude_path_munges_cwd_with_dashes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_claude_path_munges_cwd_with_dashes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     path = sdk_transcript_path(
@@ -40,6 +42,23 @@ def test_amp_returns_no_path_now_that_threads_are_server_side() -> None:
     # export`` instead. ``sdk_transcript_path`` returns None for amp so
     # callers can branch cleanly.
     assert sdk_transcript_path("amp", "T-foo", Path("/x")) is None
+
+
+def test_codex_path_finds_session_jsonl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    session_id = "019e3a62-0bf2-7422-b51e-e1f73944c70e"
+    path = (
+        tmp_path
+        / ".codex"
+        / "sessions"
+        / "2026"
+        / "05"
+        / "18"
+        / f"rollout-2026-05-18T10-19-24-{session_id}.jsonl"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text("", encoding="utf-8")
+    assert sdk_transcript_path("codex", session_id, Path("/x")) == path
 
 
 def test_path_returns_none_for_unknown_provider() -> None:
@@ -60,7 +79,7 @@ def _install_fake_amp(
     returncode: int = 0,
     raises: Exception | None = None,
 ) -> dict[str, Any]:
-    """Replace ``subprocess.run`` inside the cli_transcript module with a
+    """Replace ``subprocess.run`` inside the Amp transcript module with a
     handler that captures the args and returns a synthetic result. Tests
     that need different behaviours can pass different combinations."""
     captured: dict[str, Any] = {}
@@ -76,9 +95,7 @@ def _install_fake_amp(
             argv, returncode, stdout=stdout, stderr=""
         )
 
-    monkeypatch.setattr(
-        "src.infrastructure.cli_transcript.subprocess.run", fake_run
-    )
+    monkeypatch.setattr("src.infrastructure.cli_transcript.amp.subprocess.run", fake_run)
     return captured
 
 
@@ -123,6 +140,23 @@ def test_amp_cursor_returns_zero_when_export_returns_nonzero(
     _install_fake_amp(monkeypatch, returncode=2, stdout="")
     cursor = sdk_cursor_at_detach("amp", "T-missing", Path("/x"))
     assert cursor == {"provider": "amp", "message_count": 0}
+
+
+def test_codex_cursor_returns_line_count(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    session_id = "sess-codex"
+    _write_codex_session(
+        tmp_path,
+        session_id,
+        [
+            _codex_event("user_message", "2026-05-05T10:00:00Z", message="before"),
+            _codex_event("agent_message", "2026-05-05T10:00:01Z", message="reply"),
+        ],
+    )
+    assert sdk_cursor_at_detach("codex", session_id, Path("/x")) == {
+        "provider": "codex",
+        "line_count": 2,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +530,133 @@ def test_amp_merge_with_count_at_end_yields_nothing(
 
 
 # ---------------------------------------------------------------------------
+# Codex merge — reads ~/.codex/sessions/.../rollout-...-<session>.jsonl
+# ---------------------------------------------------------------------------
+
+
+def _write_codex_session(home: Path, session_id: str, lines: list[str]) -> Path:
+    path = (
+        home
+        / ".codex"
+        / "sessions"
+        / "2026"
+        / "05"
+        / "18"
+        / f"rollout-2026-05-18T10-19-24-{session_id}.jsonl"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def _codex_event(event_type: str, ts: str, **payload: Any) -> str:
+    return json.dumps(
+        {
+            "timestamp": ts,
+            "type": "event_msg",
+            "payload": {"type": event_type, **payload},
+        }
+    )
+
+
+def test_codex_merge_emits_only_lines_past_cursor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    session_id = "sess-codex"
+    _write_codex_session(
+        tmp_path,
+        session_id,
+        [
+            _codex_event("user_message", "2026-05-05T10:00:00Z", message="before"),
+            _codex_event("agent_message", "2026-05-05T10:00:01Z", message="before reply"),
+            _codex_event("user_message", "2026-05-05T11:00:00Z", message="after"),
+            _codex_event("agent_message", "2026-05-05T11:00:01Z", message="after reply"),
+        ],
+    )
+    events = merge_cli_transcript(
+        "codex", session_id, Path("/x"), {"provider": "codex", "line_count": 2}
+    )
+    assert [e["type"] for e in events] == ["user_input", "message_complete"]
+    assert events[0]["text"] == "after"
+    assert events[1]["text"] == "after reply"
+
+
+def test_codex_merge_ignores_non_conversation_entries(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    session_id = "sess-codex"
+    _write_codex_session(
+        tmp_path,
+        session_id,
+        [
+            json.dumps({"timestamp": "2026-05-05T10:00:00Z", "type": "session_meta"}),
+            json.dumps(
+                {
+                    "timestamp": "2026-05-05T10:00:01Z",
+                    "type": "response_item",
+                    "payload": {"type": "message"},
+                }
+            ),
+            _codex_event("agent_message", "2026-05-05T10:00:02Z", message="visible"),
+        ],
+    )
+    events = merge_cli_transcript(
+        "codex", session_id, Path("/x"), {"provider": "codex", "line_count": 0}
+    )
+    assert [e["type"] for e in events] == ["message_complete"]
+    assert events[0]["text"] == "visible"
+
+
+def test_codex_merge_emits_turn_metrics_from_task_complete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    session_id = "sess-codex"
+    _write_codex_session(
+        tmp_path,
+        session_id,
+        [
+            _codex_event(
+                "task_complete",
+                "2026-05-05T10:00:02Z",
+                started_at=100,
+                completed_at=103,
+            )
+        ],
+    )
+    events = merge_cli_transcript(
+        "codex", session_id, Path("/x"), {"provider": "codex", "line_count": 0}
+    )
+    assert [e["type"] for e in events] == ["turn_metrics"]
+    assert events[0]["duration_ms"] == 3000
+
+
+def test_codex_merge_accepts_duration_ms_on_task_complete(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    session_id = "sess-codex"
+    _write_codex_session(
+        tmp_path,
+        session_id,
+        [
+            _codex_event(
+                "task_complete",
+                "2026-05-05T10:00:02Z",
+                duration_ms=5845,
+            )
+        ],
+    )
+    events = merge_cli_transcript(
+        "codex", session_id, Path("/x"), {"provider": "codex", "line_count": 0}
+    )
+    assert [e["type"] for e in events] == ["turn_metrics"]
+    assert events[0]["duration_ms"] == 5845
+
+
+# ---------------------------------------------------------------------------
 # Usage → turn_metrics translation
 #
 # CLI-side turns bypass our adapters, so the live ``turn_metrics`` emit
@@ -608,3 +769,38 @@ def test_amp_merge_emits_turn_metrics_from_assistant_usage(
     assert metrics["input_tokens"] == 50
     assert metrics["output_tokens"] == 10
     assert metrics["model"] == "claude-sonnet-4-6"
+
+
+def test_amp_merge_accepts_camelcase_usage_from_threads_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live ``amp threads export`` stores usage keys in camelCase."""
+    payload = _amp_export_payload(
+        "T-foo",
+        [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "usage": {
+                    "inputTokens": 50,
+                    "outputTokens": 10,
+                    "cacheReadInputTokens": 3,
+                    "cacheCreationInputTokens": 7,
+                    "model": "gpt-5",
+                },
+            },
+        ],
+    )
+    _install_fake_amp(monkeypatch, stdout=payload)
+    events = merge_cli_transcript(
+        "amp", "T-foo", Path("/x"), {"provider": "amp", "message_count": 0}
+    )
+
+    assert [e["type"] for e in events] == ["message_complete", "turn_metrics"]
+    metrics = events[1]
+    assert metrics["input_tokens"] == 50
+    assert metrics["output_tokens"] == 10
+    assert metrics["cache_read_input_tokens"] == 3
+    assert metrics["cache_creation_input_tokens"] == 7
+    assert metrics["last_prompt_tokens"] == 60
+    assert metrics["model"] == "gpt-5"

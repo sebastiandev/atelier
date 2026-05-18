@@ -210,6 +210,46 @@ class WorkStoreService:
             self._require_work(work_slug)
             return self._repo.list_agents_for_work(work_slug)
 
+    def backfill_missing_session_ids_from_transcripts(self) -> int:
+        """Repair legacy rows whose runtime session id was lost from SQL.
+
+        Older reconciles treated ``agent.json`` as authoritative for
+        runtime fields and could overwrite SQL ``session_id`` with NULL.
+        The transcript still carries every ``session_established`` event,
+        so replay those ids through the repository's normal setter to
+        restore the current id and one-hop parent lineage.
+        """
+        repaired = 0
+        with self._lock:
+            for work in self._repo.list_works():
+                if work.slug is None:
+                    continue
+                for agent in self._repo.list_agents_for_work(work.slug):
+                    if agent.slug is None or agent.session_id is not None:
+                        continue
+                    session_ids = self._session_ids_from_transcript(
+                        work.slug, agent.slug
+                    )
+                    if not session_ids:
+                        continue
+                    for session_id in session_ids:
+                        self._repo.set_agent_session_id(agent.slug, session_id)
+                    repaired += 1
+        return repaired
+
+    def _session_ids_from_transcript(self, work_slug: str, agent_slug: str) -> list[str]:
+        session_ids: list[str] = []
+        for event in self._transcript_log.read_from_cursor(work_slug, agent_slug, 0):
+            if event.get("type") != "session_established":
+                continue
+            session_id = event.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
+                continue
+            if session_ids and session_ids[-1] == session_id:
+                continue
+            session_ids.append(session_id)
+        return session_ids
+
     def get_work_slug_for_agent(self, agent_slug: str) -> str | None:
         # Used by the WS handler to resolve the transcript path when
         # the supervisor has no live state for an agent (e.g. after a
@@ -279,13 +319,13 @@ class WorkStoreService:
     def find_last_detach_cursor(
         self, work_slug: str, agent_slug: str
     ) -> dict[str, Any] | None:
-        # Walks the full NDJSON to find the most recent ``user_detached``
-        # marker's ``sdk_cursor``. The transcript is bounded in practice
-        # (one user, single-session) so a full read is cheap; if it ever
-        # gets large we can remember the cursor on the agent row instead.
+        # Walks the full NDJSON to find the latest CLI sync cursor. The
+        # transcript is bounded in practice (one user, single-session) so
+        # a full read is cheap; if it ever gets large we can remember the
+        # cursor on the agent row instead.
         cursor: dict[str, Any] | None = None
         for event in self._transcript_log.read_from_cursor(work_slug, agent_slug, 0):
-            if event.get("type") == "user_detached":
+            if event.get("type") in ("user_detached", "user_reattached"):
                 payload = event.get("sdk_cursor")
                 if isinstance(payload, dict):
                     cursor = payload

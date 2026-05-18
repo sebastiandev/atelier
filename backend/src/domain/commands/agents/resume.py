@@ -34,12 +34,12 @@ from src.domain.agents import (
     render_system_prompt,
 )
 from src.domain.models import Agent, AgentStatus
+from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.dtos import WorkRecord
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
-from src.domain.sharedfolders.ports import ShareProvisioner, SharedFolderStore
 from src.infrastructure.agents import build_adapter
-from src.infrastructure.cli_transcript import merge_cli_transcript
+from src.infrastructure.cli_transcript import merge_cli_transcript, sdk_cursor_at_detach
 from src.settings import Settings
 
 if TYPE_CHECKING:
@@ -142,6 +142,16 @@ async def execute(
             agent,
             workdir,
         )
+    elif workstore.find_last_detach_cursor(req.work_slug, req.agent_slug) is not None:
+        await asyncio.to_thread(
+            _catch_up_detached_agent,
+            workstore,
+            req.work_slug,
+            req.agent_slug,
+            agent,
+            workdir,
+            emit_reattached_marker=False,
+        )
 
     try:
         await supervisor.register_agent(
@@ -160,12 +170,55 @@ async def execute(
     return agent
 
 
+async def catch_up_cli_events(
+    workstore: WorkStore,
+    worktree_manager: WorktreeManager,
+    *,
+    work_slug: str,
+    agent_slug: str,
+) -> bool:
+    """Merge any provider CLI transcript entries since the last CLI cursor.
+
+    This is used for lazy-registered agents too: a user can reopen an
+    agent once, continue typing in the external CLI, then reopen again.
+    The row is already ``idle`` by then, so the detached-only path won't
+    run, but the provider transcript may still have new lines.
+    """
+    agent = next(
+        (a for a in workstore.list_agents_for_work(work_slug) if a.slug == agent_slug),
+        None,
+    )
+    if agent is None:
+        raise AgentNotFound(f"agent not found: {agent_slug}")
+    if agent.session_id is None:
+        return False
+    if workstore.find_last_detach_cursor(work_slug, agent_slug) is None:
+        return False
+    workdir = worktree_manager.ensure(
+        work_slug=work_slug,
+        agent_slug=agent_slug,
+        source=agent.folder,
+    )
+    await asyncio.to_thread(
+        _catch_up_detached_agent,
+        workstore,
+        work_slug,
+        agent_slug,
+        agent,
+        workdir,
+        emit_reattached_marker=False,
+    )
+    return True
+
+
 def _catch_up_detached_agent(
     workstore: WorkStore,
     work_slug: str,
     agent_slug: str,
     agent: Agent,
     workdir,  # type: ignore[no-untyped-def]  # pathlib.Path; avoiding extra import
+    *,
+    emit_reattached_marker: bool = True,
 ) -> None:
     """Read the SDK's transcript file(s), append new events to our NDJSON,
     then flip status back to IDLE.
@@ -206,15 +259,19 @@ def _catch_up_detached_agent(
     )
     for event in new_events:
         workstore.append_transcript_event_with_seq(work_slug, agent_slug, event)
-    workstore.append_transcript_event_with_seq(
-        work_slug,
-        agent_slug,
-        {
-            "type": "user_reattached",
-            "ts": datetime.now(UTC).isoformat(),
-            "events_merged": len(new_events),
-        },
-    )
+    if emit_reattached_marker or new_events:
+        workstore.append_transcript_event_with_seq(
+            work_slug,
+            agent_slug,
+            {
+                "type": "user_reattached",
+                "ts": datetime.now(UTC).isoformat(),
+                "events_merged": len(new_events),
+                "sdk_cursor": sdk_cursor_at_detach(
+                    agent.provider, agent.session_id, workdir
+                ),
+            },
+        )
     workstore.set_agent_status(agent_slug, AgentStatus.IDLE)
 
 

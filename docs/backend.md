@@ -35,7 +35,7 @@ Three roles, one unifying registry:
 3. **Adapter** (`infrastructure/agents/`) — implements `AgentAdapter` Protocol from `domain/agents/ports.py`. Selected via singledispatch on the AgentConfig type:
 
    ```python
-   adapter = build_adapter(config, settings)  # routes to ClaudeAdapter, AmpAdapter, …
+   adapter = build_adapter(config, settings)  # routes to ClaudeAdapter, AmpAdapter, CodexAdapter, …
    ```
 
 **Adding a new provider** is five local steps, none of which modify existing files:
@@ -44,7 +44,7 @@ Three roles, one unifying registry:
 2. Write a `<P>Spec` implementing `describe()` + `build()`. Register it in `SPECS`.
 3. Write a `<P>Adapter` implementing `AgentAdapter`. Register a `@build_adapter.register` handler.
 4. Add the literal value to `Provider` in `domain/models.py`.
-5. Add `_convert` unit tests covering the SDK → AgentEvent mapping, plus a manual smoke against the live SDK. (Adapters wrapping external SDKs — Claude, Amp — are exempt from the parametrised contract suite; the `StubAgentAdapter` keeps that suite hermetic. Integration tests that need a deterministic adapter for `provider="amp"` rely on the autouse fixture in `tests/integration/conftest.py`.)
+5. Add `_convert` unit tests covering the SDK → AgentEvent mapping, plus a manual smoke against the live SDK. (Adapters wrapping external SDKs — Claude, Amp, Codex — are exempt from the parametrised contract suite; the `StubAgentAdapter` keeps that suite hermetic. Integration tests that need a deterministic adapter for `provider="amp"` rely on the autouse fixture in `tests/integration/conftest.py`.)
 
 ## AgentEvent union
 
@@ -122,13 +122,15 @@ The ORDER is the load-bearing invariant: **no event reaches a subscriber before 
 There is **one inward path** from the WS endpoint into domain logic:
 
 - **`agents/start.execute`** — REST `POST /api/agents`. Allocates the row, builds the adapter, calls `register_agent` **eagerly** (default), and (if contexts produced a synthesised first message) sends it. Fresh agents have no prior provider session to fork from, so eager is fine.
-- **`agents/connect.execute`** — WS `/api/agents/{slug}/stream`. `@asynccontextmanager` that resolves the agent (calling `resume.execute` if the supervisor has no live state) and yields a `Subscription`. The WS handler is `async with connect.execute(...) as sub`.
+- **`agents/connect.execute`** — WS `/api/agents/{slug}/stream`. `@asynccontextmanager` that resolves the agent (calling `resume.execute` if the supervisor has no live state, or a CLI catch-up pass if the agent is lazy-registered) and yields a `Subscription`. The WS handler is `async with connect.execute(...) as sub`.
 - **`agents/resume.execute`** — Re-attach. Rebuilds the adapter from the persisted row, runs the detach catch-up merge if `status==DETACHED`, and calls `register_agent(..., lazy=True)`. **Lazy** because Amp's `--execute --stream-json` forks on resume — the SDK only spawns once the user actually types.
 - **`agents/handle_user_action.execute`** — Inbound from the WS receive loop. Parses the JSON frame into a typed `UserAction` (`SendInput`, `StopTurn`, `ResolvePermission` from `domain/agents/user_actions.py`) and `match`-dispatches to the corresponding supervisor method. The WS receive loop is five lines.
 
 #### Re-attach (resume) and lazy spawn
 
 When `connect` finds the supervisor has no live state — backend restart, agent closed-to-rail, or `status=DETACHED` — it calls `resume.execute`. Resume runs `register_agent(..., lazy=True)`: the events pump is **not** started. The user sees the existing transcript via the replay window. Only when they type does `send_input` create the pump task and the SDK process spawn. This is the fix for Amp's fork-on-resume bug — a view-only re-attach no longer burns a fork.
+
+If the agent is already lazy-registered, `connect` still runs a lightweight CLI catch-up before subscribing. This covers a user reopening Atelier once, continuing to type in the external CLI, then reopening again: new CLI transcript entries are appended to NDJSON and the supervisor's replay high-water mark is advanced before the WS replay window is computed.
 
 ### Lifecycle: stopping a turn / closing an agent
 
@@ -150,7 +152,7 @@ The 4404 close code is reserved for agents that don't exist on disk at all.
 
 ### Detach to CLI + catch-up
 
-Detaching hands a running agent to a terminal CLI. `agents/detach.execute` stops the supervisor's task, flips status to `DETACHED`, writes a `user_detached` transcript marker carrying an `sdk_cursor` snapshot (Claude: timestamp; Amp: message count), then shells out to the user's preferred terminal with the right resume command.
+Detaching hands a running agent to a terminal CLI. `agents/detach.execute` stops the supervisor's task, flips status to `DETACHED`, writes a `user_detached` transcript marker carrying an `sdk_cursor` snapshot (Claude: timestamp; Amp: message count; Codex: JSONL line count), then shells out to the user's preferred terminal with the right resume command.
 
 The resume command preserves the agent's selector + provider options so the CLI session keeps the user's choice instead of silently dropping to the local CLI default. `infrastructure/cli_launcher/build_resume_command` reads `agent.model` (Claude model id / Amp mode) and `agent.options` (the dict the Spec validated at create time, persisted on the row — see [Persisted provider options](#persisted-provider-options) below) and emits:
 
@@ -158,14 +160,17 @@ The resume command preserves the agent's selector + provider options so the CLI 
 |---|---|---|
 | Claude | `--model <id>` | `--effort <level>` (skipped when `thinking_effort=="off"`); `--permission-mode <m>` (skipped when `permission_mode=="default"`, since the CLI applies that anyway) |
 | Amp | `--mode <mode>` | `--dangerously-allow-all` when `permission_mode=="allow_all"`. Amp's other permission modes (`default`/`custom`) and `custom_allowed_tools` are Atelier-side constructs (the bridge) — they don't translate to CLI flags. |
+| Codex | `--model <id>` | `--sandbox <mode>` (skipped when `workspace-write`, the default); `--ask-for-approval <mode>` (skipped when `on-request`, the default); `-c model_reasoning_effort=<level>` (skipped when `medium`, the default) routed through Codex's TOML config override since the CLI has no dedicated reasoning-effort flag. The resume invocation is interactive `codex resume <sid>` plus the flags; `codex exec resume` is non-interactive and requires a prompt. |
 
-Legacy agents whose `options` column is NULL (rows created before schema v9) detach with the bare `claude --resume <id>` / `amp threads continue <id>` shape — same behaviour as before the column existed. Unit tests in `tests/unit/infrastructure/cli_launcher/test_build_resume_command.py` pin every flag combination.
+Legacy agents whose `options` column is NULL (rows created before schema v9) detach with the bare `claude --resume <id>` / `amp threads continue <id>` / `codex resume <id>` shape — same behaviour as before the column existed. Unit tests in `tests/unit/infrastructure/cli_launcher/test_build_resume_command.py` pin every flag combination.
 
 Re-attach runs through `resume.execute` → `_catch_up_detached_agent`:
 
-- Read the SDK's transcript file/thread (Claude: `~/.claude/projects/<munged-cwd>/<sid>.jsonl`; Amp: `amp threads export <id>`) starting from the `sdk_cursor`. Translate Anthropic-shaped content blocks (`text` / `thinking` / `tool_use` / `tool_result`) into `AgentEvent`-shaped dicts and append to NDJSON.
+- Read the SDK's transcript file/thread (Claude: `~/.claude/projects/<munged-cwd>/<sid>.jsonl`; Amp: `amp threads export <id>`; Codex: `~/.codex/sessions/YYYY/MM/DD/rollout-...-<sid>.jsonl`) starting from the `sdk_cursor`. Translate provider entries into `AgentEvent`-shaped dicts and append to NDJSON.
 - If `agent.parent_session_id` is set and not already ingested, also export the parent session in full and emit a `sdk_session_merged` marker. Dedup is via `WorkStore.is_session_ingested`, which scans NDJSON for a `session_established` event (supervisor streamed the parent live) or a previous `sdk_session_merged` marker. Only depth-1 — the agent row stores one parent.
-- Emit a `user_reattached` marker; flip status back to `IDLE`.
+- Emit a `user_reattached` marker carrying the advanced `sdk_cursor`; flip status back to `IDLE`. Future catch-up passes start from that newer cursor, so late CLI output after an earlier view-only reattach does not duplicate already-imported entries.
+
+Provider-specific CLI behavior is kept in provider modules, mirroring the adapter layout: `infrastructure/cli_transcript/{claude,amp,codex}.py` own cursor/path/merge details. Claude owns the Anthropic message/block translator; Amp imports it because `amp threads export` currently uses a Claude-compatible envelope (`role`, `content`, `text` / `thinking` / `tool_use` / `tool_result`) for both Anthropic-backed and GPT-backed modes. Provider identity shows up inside block metadata (`provider: "anthropic"` / `"openai"`) and usage fields, not as a different outer transcript schema. Resume command construction follows the same pattern under `infrastructure/cli_launcher/{claude,amp,codex}.py`; terminal-window launching is isolated in `cli_launcher/terminal.py`.
 
 `agents.parent_session_id` (schema v6) is set atomically inside `set_agent_session_id`: when the new sid differs from the current, the previous sid is captured as parent. This linked-list lineage exists so providers that fork on resume (Amp) can recover the original transcript from the orphaned ancestor.
 
@@ -265,6 +270,23 @@ We use ``delegate`` to gate Bash specifically. The other tools (Read/Edit/Write/
 - The bridge is fail-closed. Missing socket, missing env var, malformed handshake → exits non-zero with a stderr message.
 
 The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib-only — it ships in the source tree but runs as a detached child of the Amp CLI, so it must not import any Atelier modules (the CLI's invocation env doesn't carry our virtualenv).
+
+### Tool permissions for Codex: native typed approvals
+
+Codex is the best-instrumented of the three providers for fine-grained permissions. The Codex JSON-RPC protocol natively distinguishes ``commandExecution`` approvals from ``fileChange`` approvals, and the SDK routes each server-initiated request through a typed callback we register at thread-start. No bridge socket needed — the SDK handles framing, reconnect, and decision round-trip.
+
+``CodexAdapter._handle_approval_request(request)`` is the entry point: canonicalises the tool name + input via ``tool_canonical``, short-circuits on the session-only ``_allow_always`` set, otherwise creates a future + publishes a ``PermissionRequest`` event onto ``_outgoing`` and blocks. The decision arrives via ``resolve_permission`` (same uniform path as Claude), flips ``allow``/``allow_always``/``deny`` to Codex's ``accept``/``decline`` at the boundary, and the SDK forwards the answer.
+
+Two layers sit on top of the per-tool callback:
+
+- **``CodexSandbox``** — OS-level filesystem gating (``read-only`` / ``workspace-write`` (default) / ``danger-full-access``). Forwarded as the ``sandbox`` param to ``thread_start``; the Codex subprocess enforces it. Orthogonal to the per-tool prompt: a tool inside the sandbox still routes through the approval callback if the approval mode says so.
+- **``CodexApprovalMode``** — when to prompt. ``on-request`` (the default) is what routes Codex's prompts to Atelier's UI; ``never`` auto-runs everything, ``untrusted`` prompts on every tool.
+
+Atelier's worktree (``~/Atelier/works/<slug>/worktrees/<agent>/``) is the right grain for ``workspace-write`` — Codex writes stay scoped to the agent's worktree with no extra config.
+
+### SDK seam
+
+Production wires the real ``openai-codex-sdk`` via a lazy ``_default_client_factory`` that only imports the SDK at first call (so the adapter module stays loadable on machines where the SDK isn't installed; the missing dep only fails the agent actually creating a Codex session). Tests inject a fake factory matching the local ``CodexClient`` / ``CodexThread`` / ``CodexTurnHandle`` Protocols — see ``tests/unit/infrastructure/agents/test_codex_adapter.py`` for the fixture set. Same shape as Amp's ``executor`` DI seam.
 
 ### Slow-subscriber drop
 

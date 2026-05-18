@@ -8,7 +8,7 @@ def test_lists_registered_providers(app_client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     names = [p["name"] for p in body]
-    assert names == ["claude-code", "amp"]
+    assert names == ["claude-code", "amp", "codex"]
 
 
 def test_claude_descriptor_includes_thinking_effort(app_client: TestClient) -> None:
@@ -76,3 +76,21 @@ def test_amp_descriptor_exposes_per_mode_context_window(app_client: TestClient) 
     # Pricing isn't published per mode — kept null so the FE shows "—".
     assert meta["smart"]["input_per_mtok"] is None
     assert meta["smart"]["output_per_mtok"] is None
+
+
+def test_codex_descriptor_has_dual_permission_layers(app_client: TestClient) -> None:
+    """Codex exposes ``sandbox`` (OS-level filesystem gating) AND
+    ``approval_mode`` (when to prompt) as independent enum pickers.
+    Both knobs are visible on the wire so the FE renders them both."""
+    response = app_client.get("/api/providers")
+    codex = next(p for p in response.json() if p["name"] == "codex")
+    assert codex["primary_field"]["label"] == "Model"
+    assert "gpt-5.4" in codex["primary_field"]["values"]
+    assert "sandbox" in codex["options"]
+    assert "approval_mode" in codex["options"]
+    assert "reasoning_effort" in codex["options"]
+    assert codex["options"]["sandbox"]["default"] == "workspace-write"
+    assert codex["options"]["approval_mode"]["default"] == "on-request"
+    assert "Sandbox" in codex["advanced_intro"]
+    # No pricing for v1 — OpenAI's public list is in flux. FE renders "—".
+    assert codex["model_meta"] == {}

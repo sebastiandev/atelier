@@ -28,6 +28,7 @@ from src.domain.projectstore import reconcile as reconcile_projects
 from src.domain.sharedfolders import SharedFolderStoreService
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore import WorkStoreService, reconcile
+from src.infrastructure.artifacts.pr_status_poller import PrStatusPoller
 from src.infrastructure.connections import KeyringSecretStore, fetch_context, verify
 from src.infrastructure.database import (
     SqlProjectRepository,
@@ -46,7 +47,6 @@ from src.infrastructure.filesystem import (
     WorkspacePaths,
 )
 from src.infrastructure.filesystem.share_provisioner import FsShareProvisioner
-from src.infrastructure.artifacts.pr_status_poller import PrStatusPoller
 from src.infrastructure.git import GitWorktreeManager
 from src.infrastructure.summarizer import build_summarizer
 from src.infrastructure.update_check import GitUpdateChecker, UpdateCheckPoller
@@ -68,6 +68,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # construct the app see the same view.
     if resolved.anthropic_api_key and not os.environ.get("ANTHROPIC_API_KEY"):
         os.environ["ANTHROPIC_API_KEY"] = resolved.anthropic_api_key
+    if resolved.openai_api_key and not os.environ.get("OPENAI_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = resolved.openai_api_key
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -102,6 +104,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # set is left over from a previous run that crashed before
         # tear-down or a soft-deleted work. Run once per work_slug.
         workstore = WorkStoreService(repo, files, transcript_log)
+        workstore.backfill_missing_session_ids_from_transcripts()
 
         # Shared folders: project-scoped, persistent across agent
         # worktrees. Provisioner owns the filesystem side (canonical
