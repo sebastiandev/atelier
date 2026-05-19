@@ -43,7 +43,13 @@ export type Theme = "dark" | "light" | "ansi";
 const THEMES: readonly Theme[] = ["light", "dark", "ansi"] as const;
 
 export const SETTINGS_DEFAULTS = {
-  accentHue: 250,
+  // 278° in OKLCH is the soft purple of the Atelier dock icon
+  // (#5B5BD6). The rest of the accent ramp is derived via oklch() in
+  // styles.css; keep this in lockstep with the :root ``--accent-h``
+  // token and the backend route's DEFAULTS dict so a fresh install,
+  // a missing settings row, and the SSR-less initial paint all land
+  // on the same hue.
+  accentHue: 278,
   editor: "vscode" as EditorChoice,
   terminal: "system" as TerminalChoice,
   theme: "ansi" as Theme,

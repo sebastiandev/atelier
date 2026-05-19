@@ -26,7 +26,10 @@ DEFAULTS: dict[str, object] = {
     "editor": "vscode",
     "terminal": "system",
     "layout": "tiles",
-    "accent_hue": 250,
+    # 278° = OKLCH hue of the Atelier dock icon (#5B5BD6). Match
+    # ``SETTINGS_DEFAULTS.accentHue`` on the FE and the ``--accent-h``
+    # token in styles.css.
+    "accent_hue": 278,
     "theme": "ansi",
 }
 

@@ -22,7 +22,7 @@ def test_get_settings_returns_defaults_on_fresh_install(
         "editor": "vscode",
         "terminal": "system",
         "layout": "tiles",
-        "accent_hue": 250,
+        "accent_hue": 278,
         "theme": "ansi",
     }
 

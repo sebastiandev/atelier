@@ -8,7 +8,7 @@
   /* Accent — indigo. Drives buttons, focus rings, the brand mark, and
      anything outside the agent chat. The hue is user-tweakable via the
      Tweaks panel slider (the rest of the ramp is `oklch()` derived). */
-  --accent-h: 250;
+  --accent-h: 278;
   --accent: oklch(0.62 0.18 var(--accent-h));
   --accent-soft: oklch(0.62 0.18 var(--accent-h) / 0.18);
   --accent-line: oklch(0.62 0.18 var(--accent-h) / 0.45);
