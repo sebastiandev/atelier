@@ -487,3 +487,12 @@ backend/tests/
 ```
 
 Run with `uv run pytest -q` from `backend/`.
+
+## Known upstream workarounds
+
+Patches we ship against third-party libs because the upstream fix isn't in yet. **Check these periodically** (≈ every couple of `uv sync` bumps) — when upstream lands the fix, drop the patch + raise the floor in `pyproject.toml`.
+
+| Patch | Lib + version | Symptom we worked around | Upstream status |
+| --- | --- | --- | --- |
+| `backend/src/infrastructure/agents/_amp_sdk_patch.py` | `amp-sdk == 0.1.5` | `amp_sdk.core._read_process_output` reads stdout via `proc.stdout.readline()` with the default 64 KiB `asyncio.StreamReader` buffer. A single tool-result JSON line >64 KiB (`rg -l` against a large tree, multi-MB `Read`, ...) raises `LimitOverrunError("Separator is not found, and chunk exceed the limit", ...)`, the SDK pump dies, and the agent's turn ends mid-flight. The patch bumps `proc.stdout._limit` to 64 MiB before the read loop. | _Report TBD_ — the package metadata only links `ampcode.com` (no public repo URL); file at `dev@ampcode.com` or via the Amp app's feedback channel. |
+

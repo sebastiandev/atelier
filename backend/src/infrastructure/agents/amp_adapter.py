@@ -97,6 +97,14 @@ from amp_sdk import (
 )
 from amp_sdk.types import MCPConfig
 
+# Bump amp_sdk's stdout line-buffer limit at module load — the upstream
+# default (64 KiB) is too small for tool-result lines (e.g. ``rg -l``
+# against a large tree). See ``_amp_sdk_patch`` for the gory details
+# and the upstream-fix reminder.
+from src.infrastructure.agents import _amp_sdk_patch as _amp_sdk_patch
+
+_amp_sdk_patch.install()
+
 from src.domain.agents import (
     AMP_DEFAULT_AUTO_ALLOWED_TOOLS,
     AgentAdapter,
