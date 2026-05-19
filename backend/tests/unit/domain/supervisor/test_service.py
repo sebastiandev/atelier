@@ -443,6 +443,52 @@ def test_double_register_raises() -> None:
     _run(run())
 
 
+def test_register_evicts_state_when_adapter_start_raises() -> None:
+    """If ``adapter.start`` raises, the supervisor must not leave a
+    half-registered ``_states`` entry behind. A lingering ghost would
+    make every subsequent ``connect`` see ``is_registered == True``
+    and skip resume, leaving the agent looking stuck on the FE."""
+
+    class _StartFailingAdapter:
+        def __init__(self) -> None:
+            self.start_calls = 0
+            self.closed = False
+
+        async def start(self, context: AgentStartContext) -> None:
+            self.start_calls += 1
+            raise RuntimeError("permission socket bind failed")
+
+        async def send_input(self, text: str) -> None: ...
+
+        async def events(self):  # type: ignore[no-untyped-def]
+            if False:
+                yield  # pragma: no cover
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def run() -> tuple[bool, bool, bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = _StartFailingAdapter()
+        with pytest.raises(RuntimeError, match="permission socket bind"):
+            await _start(
+                supervisor, "WRK-001", "agt-1", adapter, _start_context()
+            )
+        first_registered = "agt-1" in supervisor._states
+        # A second register attempt must now succeed — the slot was
+        # freed and the new adapter takes over.
+        ok_adapter = StubAgentAdapter([])
+        await _start(supervisor, "WRK-001", "agt-1", ok_adapter, _start_context())
+        second_registered = "agt-1" in supervisor._states
+        await supervisor.shutdown()
+        return first_registered, second_registered, adapter.closed
+
+    first, second, closed = _run(run())
+    assert first is False
+    assert second is True
+    assert closed is True
+
+
 def test_shutdown_closes_all_adapters() -> None:
     async def run() -> tuple[bool, bool]:
         supervisor = AgentSupervisorService(StubTranscriptLog())

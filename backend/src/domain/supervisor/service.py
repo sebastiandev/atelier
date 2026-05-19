@@ -238,7 +238,21 @@ class AgentSupervisorService:
                 seq=seed_seq,
             )
             self._states[agent_slug] = state
-        await adapter.start(context)
+        # If ``adapter.start`` raises, evict the half-registered state
+        # before propagating: otherwise the slot stays occupied with a
+        # dead adapter, subsequent ``connect``s see ``is_registered ==
+        # True`` and skip resume entirely, and the agent looks "stuck
+        # thinking" on the FE forever. The cleanup path also closes the
+        # adapter so any partial setup (Amp's permission socket, tempdir,
+        # bridge wrapper) doesn't leak.
+        try:
+            await adapter.start(context)
+        except BaseException:
+            async with self._registry_lock:
+                self._states.pop(agent_slug, None)
+            with suppress(Exception):
+                await adapter.close()
+            raise
         state.started = True
         # Stale permission cleanup: a permission_request whose decision
         # never landed (backend crashed mid-prompt, adapter died on
