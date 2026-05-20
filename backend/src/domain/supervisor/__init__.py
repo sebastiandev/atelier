@@ -4,6 +4,12 @@ from src.domain.supervisor.service import (
     SUBSCRIBER_QUEUE_MAX,
     AgentSubscription,
     AgentSupervisorService,
+    AgentTerminated,
 )
 
-__all__ = ["SUBSCRIBER_QUEUE_MAX", "AgentSubscription", "AgentSupervisorService"]
+__all__ = [
+    "SUBSCRIBER_QUEUE_MAX",
+    "AgentSubscription",
+    "AgentSupervisorService",
+    "AgentTerminated",
+]

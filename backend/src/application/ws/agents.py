@@ -23,7 +23,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from src.domain.agents import parse_user_action
 from src.domain.commands.agents import add_contexts, connect, handle_user_action
 from src.domain.connections import ConnectionStore, ContextFetchError
-from src.domain.supervisor import AgentSubscription, AgentSupervisorService
+from src.domain.supervisor import (
+    AgentSubscription,
+    AgentSupervisorService,
+    AgentTerminated,
+)
 from src.domain.workstore.ports import WorkStore
 
 router = APIRouter()
@@ -31,6 +35,11 @@ router = APIRouter()
 # WS close codes — see docs/backend.md → WS protocol.
 _CLOSE_AGENT_NOT_RUNNING = 4404
 _CLOSE_SLOW_SUBSCRIBER = 4408
+# Supervisor's event pump ended (subprocess died, upstream 429, EOF)
+# and we caught ``AgentTerminated`` while routing a user input. The
+# FE retries with backoff which lands in the resume path and rebuilds
+# the adapter; semantically identical to 4408's reconnect.
+_CLOSE_ADAPTER_TERMINATED = 4409
 
 
 @router.websocket("/agents/{agent_slug}/stream")
@@ -124,6 +133,23 @@ async def _receive_inputs(
                 await websocket.send_json(
                     {"type": "client_error", "message": f"Add context failed: {exc}"}
                 )
+        except AgentTerminated as exc:
+            # The pump exited (upstream rate limit, provider EOF,
+            # subprocess crash). Tell the FE briefly, then close the
+            # socket so its reconnect-with-backoff lands in resume
+            # and rebuilds the adapter.
+            with suppress(Exception):
+                await websocket.send_json(
+                    {
+                        "type": "client_error",
+                        "message": (
+                            "Agent's underlying process ended. "
+                            "Reconnecting…"
+                        ),
+                    }
+                )
+            await websocket.close(code=_CLOSE_ADAPTER_TERMINATED)
+            return
 
 
 def _parse_cursor(value: str | None) -> int:

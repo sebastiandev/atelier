@@ -110,7 +110,13 @@ def stub_amp_dispatch() -> Iterator[None]:
     original = build_adapter.dispatch(AmpAgentConfig)
 
     def _stub(config: AmpAgentConfig, settings: Settings) -> StubAgentAdapter:
-        return StubAgentAdapter(_canned_demo_events())
+        # keep_alive: production AmpAdapter stays in events() across
+        # turns until the CLI subprocess dies. The integration WS tests
+        # send input frames AFTER the canned 15-event demo has played,
+        # so the stub needs the same multi-turn shape — otherwise the
+        # supervisor's auto-eviction-on-pump-end would tear the
+        # registration down before those inputs arrive.
+        return StubAgentAdapter(_canned_demo_events(), keep_alive=True)
 
     build_adapter.register(AmpAgentConfig)(_stub)
     try:

@@ -120,6 +120,15 @@ _log = logging.getLogger(__name__)
 SUBSCRIBER_QUEUE_MAX = 256
 
 
+class AgentTerminated(RuntimeError):
+    """Raised by ``send_input`` when the agent's event pump has ended
+    (subprocess died, upstream 429, provider stream EOF) but the
+    eviction-after-pump-end cleanup hasn't completed yet. The WS layer
+    catches this and closes the socket so the FE reconnects, which
+    triggers a fresh resume + adapter build against the same session_id.
+    """
+
+
 @dataclasses.dataclass
 class AgentSubscription:
     """Handle returned by ``AgentSupervisorService.subscribe``.
@@ -271,6 +280,17 @@ class AgentSupervisorService:
 
     async def send_input(self, agent_slug: str, text: str) -> None:
         state = self._require_state(agent_slug)
+        if state.task is not None and state.task.done():
+            # The pump has terminated (subprocess died, upstream 429,
+            # provider stream EOF) and the eviction-after-pump-end task
+            # is in flight but hasn't won the registry lock yet. Don't
+            # write a ``user_input`` event we can't deliver — raise so
+            # the WS layer can close the socket; the FE reconnects and
+            # the resume path rebuilds the adapter against the same
+            # session_id.
+            raise AgentTerminated(
+                f"agent {agent_slug} pump ended; reconnect to rebuild"
+            )
         if state.task is None:
             # Lazy spawn: register_agent deferred the pump (re-attach
             # path). Start it now, before publishing user_input, so the
@@ -451,6 +471,34 @@ class AgentSupervisorService:
                     "message": f"adapter task crashed: {exc!r}",
                 },
             )
+        finally:
+            # Pump returned — the adapter is unusable for any further
+            # turns (subprocess died, error path drained _outgoing,
+            # provider stream EOF). Without this eviction the state
+            # lingers with a dead adapter, and the next ``send_input``
+            # writes to a closed stdin transport with a cryptic
+            # ``WriteUnixTransport closed`` error. Evicting frees the
+            # slot so the next ``connect`` builds a fresh adapter via
+            # the resume path. Skipped silently if a concurrent
+            # ``stop_agent`` / ``shutdown`` already cleaned us up.
+            await self._evict_after_pump_end(state)
+
+    async def _evict_after_pump_end(self, state: _AgentState) -> None:
+        async with self._registry_lock:
+            current = self._states.get(state.agent_slug)
+            if current is not state:
+                return
+            del self._states[state.agent_slug]
+        # Kick the live WS subscription (if any) so the handler closes
+        # the socket and the FE reconnects — that fresh open lands in
+        # ``connect`` → ``resume`` and rebuilds the adapter. Reuses the
+        # slow-subscriber kick channel; the close code on the FE side
+        # is the same retry-with-backoff path.
+        sub = state.subscriber
+        if sub is not None:
+            sub.kicked.set()
+        with suppress(Exception):
+            await state.adapter.close()
 
     async def _clear_stale_permission_requests(
         self, state: _AgentState

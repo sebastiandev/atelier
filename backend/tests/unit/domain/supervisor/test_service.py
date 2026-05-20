@@ -6,6 +6,7 @@ inside the supervisor is a deterministic synchronisation point.
 """
 
 import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
@@ -22,7 +23,11 @@ from src.domain.agents import (
     StatusChange,
 )
 from src.domain.models import Artifact, PrArtifact
-from src.domain.supervisor import SUBSCRIBER_QUEUE_MAX, AgentSupervisorService
+from src.domain.supervisor import (
+    SUBSCRIBER_QUEUE_MAX,
+    AgentSupervisorService,
+    AgentTerminated,
+)
 from src.infrastructure.agents import StubAgentAdapter
 from tests.unit.domain.workstore._stubs import StubTranscriptLog
 
@@ -54,10 +59,40 @@ def _scripted() -> list[AgentEvent]:
 
 
 async def _await_agent(supervisor: AgentSupervisorService, agent_slug: str) -> None:
-    """Wait for the agent's adapter task to drain (test helper)."""
-    state = supervisor._states[agent_slug]
-    if state.task is not None:
-        await state.task
+    """Wait for the agent's adapter task to drain (test helper).
+
+    Tolerant of the supervisor's auto-eviction firing mid-await: if the
+    pump finished and ``_evict_after_pump_end`` already removed the
+    state by the time we look, there's nothing left to wait on."""
+    state = supervisor._states.get(agent_slug)
+    if state is None or state.task is None:
+        return
+    task = state.task
+    with suppress(asyncio.CancelledError):
+        await task
+
+
+async def _await_seq(
+    supervisor: AgentSupervisorService, agent_slug: str, target_seq: int
+) -> None:
+    """Wait until the agent has published at least ``target_seq`` events.
+
+    Used by tests whose adapter is ``keep_alive=True`` — the pump
+    doesn't exit naturally, so ``_await_agent`` would hang waiting on
+    a task that never returns. Polling the published-seq high-water
+    mark is the right synchronisation point: events have hit the
+    transcript log + subscriber queue by the time ``state.seq`` reaches
+    the target."""
+    for _ in range(1000):
+        state = supervisor._states.get(agent_slug)
+        if state is None:
+            return
+        if state.seq >= target_seq:
+            return
+        await asyncio.sleep(0.001)
+    raise TimeoutError(
+        f"agent {agent_slug} did not reach seq {target_seq} within 1s"
+    )
 
 
 async def _start(
@@ -173,7 +208,7 @@ def test_log_receives_every_event() -> None:
 def test_send_input_writes_user_input_then_forwards_to_adapter() -> None:
     async def run() -> tuple[dict[str, Any], list[str]]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        adapter = StubAgentAdapter([])  # no scripted events
+        adapter = StubAgentAdapter([], keep_alive=True)  # no scripted events
         await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
         async with supervisor.subscribe("agt-1") as sub:
@@ -204,7 +239,7 @@ def test_stop_turn_writes_user_stop_and_forwards_to_adapter() -> None:
     async def run() -> tuple[dict[str, Any], int]:
         log = StubTranscriptLog()
         supervisor = AgentSupervisorService(log)
-        adapter = StubAgentAdapter([])
+        adapter = StubAgentAdapter([], keep_alive=True)
         await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
         async with supervisor.subscribe("agt-1") as sub:
@@ -236,7 +271,7 @@ def test_stop_turn_to_unknown_agent_raises() -> None:
 def test_resolve_permission_forwards_to_adapter() -> None:
     async def run() -> list[tuple[str, str]]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        adapter = StubAgentAdapter([])
+        adapter = StubAgentAdapter([], keep_alive=True)
         await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
         await supervisor.resolve_permission("agt-1", "req-1", "allow")
         await supervisor.resolve_permission("agt-1", "req-2", "deny")
@@ -316,7 +351,7 @@ def test_resubscribe_replaces_previous_subscriber() -> None:
 
     async def run() -> tuple[bool, str]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        adapter = StubAgentAdapter([])
+        adapter = StubAgentAdapter([], keep_alive=True)
         await _start(supervisor,
             "WRK-001", "agt-1", adapter, _start_context()
         )
@@ -344,7 +379,7 @@ def test_outer_subscribe_finally_does_not_clear_inner_slot() -> None:
 
     async def run() -> bool:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        adapter = StubAgentAdapter([])
+        adapter = StubAgentAdapter([], keep_alive=True)
         await _start(supervisor,
             "WRK-001", "agt-1", adapter, _start_context()
         )
@@ -380,11 +415,15 @@ def test_outer_subscribe_finally_does_not_clear_inner_slot() -> None:
 def test_late_subscriber_with_cursor_sees_only_post_subscription_events() -> None:
     async def run() -> tuple[int, list[dict[str, Any]], bool]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        adapter = StubAgentAdapter(_scripted())
+        # keep_alive: the test subscribes AFTER draining the scripted
+        # events; without keeping the pump alive, the supervisor's
+        # auto-eviction would remove the registration first and
+        # ``subscribe`` would raise ``"agent not running"``.
+        adapter = StubAgentAdapter(_scripted(), keep_alive=True)
         await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
         # Wait for all five scripted events to be published + flushed.
-        await _await_agent(supervisor, "agt-1")
+        await _await_seq(supervisor, "agt-1", 5)
 
         # Subscribe with cursor=5 ("I've already seen seqs 1..5"). The
         # replay window (5, ∞) is empty on disk, the queue is empty too
@@ -414,9 +453,11 @@ def test_subscribe_with_cursor_zero_replays_full_disk_history() -> None:
 
     async def run() -> list[int]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        adapter = StubAgentAdapter(_scripted())
+        # keep_alive: subscribe runs after the events drain; without it
+        # the auto-eviction races us and ``subscribe`` raises.
+        adapter = StubAgentAdapter(_scripted(), keep_alive=True)
         await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
-        await _await_agent(supervisor, "agt-1")
+        await _await_seq(supervisor, "agt-1", 5)
 
         async with supervisor.subscribe("agt-1", cursor=0) as sub:
             seqs = [e["seq"] for e in sub.replay]
@@ -435,9 +476,9 @@ def test_subscribe_with_cursor_zero_replays_full_disk_history() -> None:
 def test_double_register_raises() -> None:
     async def run() -> None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([], keep_alive=True), _start_context())
         with pytest.raises(RuntimeError, match="already registered"):
-            await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+            await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([], keep_alive=True), _start_context())
         await supervisor.shutdown()
 
     _run(run())
@@ -477,7 +518,7 @@ def test_register_evicts_state_when_adapter_start_raises() -> None:
         first_registered = "agt-1" in supervisor._states
         # A second register attempt must now succeed — the slot was
         # freed and the new adapter takes over.
-        ok_adapter = StubAgentAdapter([])
+        ok_adapter = StubAgentAdapter([], keep_alive=True)
         await _start(supervisor, "WRK-001", "agt-1", ok_adapter, _start_context())
         second_registered = "agt-1" in supervisor._states
         await supervisor.shutdown()
@@ -492,8 +533,8 @@ def test_register_evicts_state_when_adapter_start_raises() -> None:
 def test_shutdown_closes_all_adapters() -> None:
     async def run() -> tuple[bool, bool]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        a1 = StubAgentAdapter([])
-        a2 = StubAgentAdapter([])
+        a1 = StubAgentAdapter([], keep_alive=True)
+        a2 = StubAgentAdapter([], keep_alive=True)
         await _start(supervisor, "WRK-001", "agt-1", a1, _start_context())
         await _start(supervisor, "WRK-001", "agt-2", a2, _start_context())
         await supervisor.shutdown()
@@ -603,6 +644,123 @@ def test_adapter_task_error_emits_error_event() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Pump-end eviction (provider session ends, subprocess died, 429, ...)
+# ---------------------------------------------------------------------------
+
+
+def test_pump_clean_exit_evicts_state_and_closes_adapter() -> None:
+    """When ``adapter.events()`` returns normally (provider stream EOF,
+    subprocess exited cleanly), the supervisor must drop the registry
+    slot and close the adapter. Without this, the next ``send_input``
+    writes to a dead transport — the user sees the cryptic
+    ``WriteUnixTransport closed`` chain we hit on Vertex 429s."""
+
+    async def run() -> tuple[bool, bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter(_scripted(), keep_alive=False)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.shutdown()
+        return adapter.closed, "agt-1" in supervisor._states
+
+    closed, still_registered = _run(run())
+    assert closed is True
+    assert still_registered is False
+
+
+def test_pump_crash_evicts_state_after_publishing_error() -> None:
+    """The error event must reach subscribers BEFORE the registry slot
+    is freed, so the UI gets a chance to render it; then the slot drops
+    so the next connect rebuilds the adapter."""
+
+    async def run() -> tuple[list[dict[str, Any]], bool, bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = _CrashingAdapter()
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+
+        async with supervisor.subscribe("agt-1") as sub:
+            queue = sub.queue
+            first = await queue.get()
+            second = await queue.get()
+
+        # Give the finally-block eviction one tick to land before we
+        # observe state.
+        await asyncio.sleep(0)
+        still_registered = "agt-1" in supervisor._states
+        await supervisor.shutdown()
+        return [first, second], adapter.closed, still_registered
+
+    events, closed, still_registered = _run(run())
+    assert events[0]["type"] == "status_change"
+    assert events[1]["type"] == "error"
+    assert closed is True
+    assert still_registered is False
+
+
+def test_pump_end_kicks_active_subscription() -> None:
+    """When eviction fires while a WS subscription is open, the
+    subscription's ``kicked`` event must be set so the WS handler
+    closes the socket and the FE reconnects → fresh resume +
+    fresh adapter."""
+
+    async def run() -> bool:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter(_scripted(), keep_alive=False)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        # Grab the task reference before eviction removes the state —
+        # we want to wait for the pump's finally to land the kick on
+        # the live subscription.
+        task = supervisor._states["agt-1"].task
+        async with supervisor.subscribe("agt-1") as sub:
+            # Drain the scripted events.
+            for _ in range(5):
+                await sub.queue.get()
+            if task is not None:
+                await task
+            kicked = sub.kicked.is_set()
+        await supervisor.shutdown()
+        return kicked
+
+    assert _run(run()) is True
+
+
+def test_send_input_raises_agent_terminated_when_pump_done() -> None:
+    """Race window: the pump finished but the eviction-after-pump-end
+    cleanup hasn't completed yet. A send_input arriving in that gap
+    must NOT silently write to the dead adapter — it raises
+    ``AgentTerminated`` so the WS layer closes the socket and the FE
+    reconnects rather than the user seeing the raw
+    ``WriteUnixTransport closed`` error.
+
+    We synthesize the gap by patching the eviction helper to a no-op
+    so the state lingers with a done task — the same shape the
+    natural race window would produce."""
+
+    async def run() -> None:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter(_scripted(), keep_alive=False)
+
+        async def _noop_evict(state: Any) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+        supervisor._evict_after_pump_end = _noop_evict  # type: ignore[method-assign]
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        state = supervisor._states.get("agt-1")
+        assert state is not None
+        assert state.task is not None
+        assert state.task.done()
+        with pytest.raises(AgentTerminated):
+            await supervisor.send_input("agt-1", "hello?")
+        # Manually evict so shutdown doesn't try to cancel a finished
+        # task on a state whose adapter we want to close.
+        supervisor._states.pop("agt-1", None)
+        await adapter.close()
+
+    _run(run())
+
+
+# ---------------------------------------------------------------------------
 # Slow-subscriber drop policy
 # ---------------------------------------------------------------------------
 
@@ -613,7 +771,7 @@ def test_subscription_queue_is_bounded() -> None:
 
     async def run() -> int:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([], keep_alive=True), _start_context())
         async with supervisor.subscribe("agt-1") as sub:
             maxsize = sub.queue.maxsize
         await supervisor.shutdown()
@@ -629,7 +787,7 @@ def test_slow_subscriber_is_kicked_and_slot_cleared() -> None:
 
     async def run() -> tuple[bool, bool, bool]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        adapter = StubAgentAdapter([])  # publish via send_input only
+        adapter = StubAgentAdapter([], keep_alive=True)  # publish via send_input only
         await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
 
         async with supervisor.subscribe("agt-1") as sub:
@@ -656,7 +814,7 @@ def test_kicked_subscriber_does_not_block_further_publishing() -> None:
     async def run() -> int:
         log = StubTranscriptLog()
         supervisor = AgentSupervisorService(log)
-        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([]), _start_context())
+        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([], keep_alive=True), _start_context())
 
         async with supervisor.subscribe("agt-1") as sub:
             for i in range(SUBSCRIBER_QUEUE_MAX + 1):
@@ -823,7 +981,7 @@ def test_lazy_register_calls_adapter_start_with_context() -> None:
 
     async def run() -> AgentStartContext | None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        adapter = StubAgentAdapter([])
+        adapter = StubAgentAdapter([], keep_alive=True)
         ctx = _start_context()
         await supervisor.register_agent("WRK-001", "agt-1", adapter, ctx, lazy=True)
         await supervisor.shutdown()

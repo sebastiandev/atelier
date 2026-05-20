@@ -399,9 +399,12 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 | --- | --- |
 | 4404 | Agent slug isn't in the supervisor *and* doesn't exist on disk. Terminal — frontend surfaces "stopped" (typically a stale localStorage reference). |
 | 4408 | Slow subscriber — the per-subscription queue overflowed. Frontend retries with backoff and resumes from `?cursor=N`. |
+| 4409 | Adapter pump terminated mid-session (upstream rate limit, subprocess died, provider stream EOF) and `send_input` hit a dead transport. Frontend retries; the resume path rebuilds the adapter. Same recovery shape as 4408. |
 | 1000/1001/etc. | Transient (network, server restart). Frontend retries with exponential backoff. |
 
 **Resume on reconnect.** When the slug is in SQLite but the supervisor has no live state, `connect.execute` calls `resume.execute(...)` to rebuild the adapter (passing through the persisted `session_id`) and `register_agent(..., lazy=True)` to attach without firing the SDK pump. A normal replay-then-live then proceeds — the client doesn't need to know whether it's connecting to a fresh adapter, an in-flight one, or a freshly-resumed (lazy) one.
+
+**Auto-eviction on pump end.** When `_run_agent`'s event loop returns for any reason (subprocess died, upstream error, provider stream EOF, ...), the supervisor evicts the agent's state from `_states` and closes the adapter (`service.py` → `_evict_after_pump_end`). Any live subscription's `kicked` event is set so the WS handler closes with 4409; the FE reconnects and lands in the resume path, which rebuilds a fresh adapter against the same `session_id`. Without this, the dead adapter lingered and the next `send_input` wrote to a closed stdin transport — surfaced to users as the cryptic `WriteUnixTransport closed=True` chain triggered by upstream 429s.
 
 ## WorktreeManager
 

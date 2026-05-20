@@ -24,14 +24,27 @@ class StubAgentAdapter:
         scripted_events: list[AgentEvent],
         *,
         delay_seconds: float = 0.0,
+        keep_alive: bool = False,
     ) -> None:
         self._scripted = list(scripted_events)
         self._delay = delay_seconds
+        # When ``True``, ``events()`` blocks after the scripted list
+        # has been replayed instead of returning — mirrors how real
+        # adapters keep their pump alive across turns until ``close()``
+        # (or task cancellation) signals shutdown. Tests that exercise
+        # ``send_input`` / ``subscribe`` against a still-live agent
+        # AFTER the scripted events drain need this set, otherwise the
+        # supervisor's auto-eviction-on-pump-end fires before the next
+        # interaction. Default is ``False`` so tests using
+        # ``_await_agent`` to drain a scripted run still terminate
+        # naturally.
+        self._keep_alive = keep_alive
         self.start_context: AgentStartContext | None = None
         self.received_inputs: list[str] = []
         self.stop_turn_calls: int = 0
         self.permission_resolutions: list[tuple[str, PermissionDecisionValue]] = []
         self.closed: bool = False
+        self._closed_evt = asyncio.Event()
 
     async def start(self, context: AgentStartContext) -> None:
         if self.start_context is not None:
@@ -64,10 +77,13 @@ class StubAgentAdapter:
                 yield dataclasses.replace(event, ts=datetime.now(UTC))
             else:
                 yield event
+        if self._keep_alive:
+            await self._closed_evt.wait()
 
     async def close(self) -> None:
         # Idempotent — safe to call repeatedly.
         self.closed = True
+        self._closed_evt.set()
 
 
 __all__ = ["StubAgentAdapter"]
