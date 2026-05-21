@@ -20,12 +20,14 @@ from src.application.http.schemas import (
     AgentSummary,
     DetachResponse,
     NewAgentRequest,
+    PatchAgentRequest,
     SwitchThreadRequest,
 )
 from src.domain.commands.agents import (
     delete,
     detach,
     list_for_work,
+    rename,
     start,
     switch_thread,
 )
@@ -187,6 +189,42 @@ async def detach_agent(
     except detach.AgentNotResumable as e:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     return DetachResponse(command=result.command, launched=result.launched)
+
+
+@router.patch("/agents/{agent_slug}", response_model=AgentSummary)
+def patch_agent_endpoint(
+    agent_slug: str,
+    payload: PatchAgentRequest,
+    workstore: WorkStoreDep,
+    settings: SettingsDep,
+) -> AgentSummary:
+    """Update mutable fields on an agent. Today only ``name`` is mutable;
+    every other field on the agent shape is FS-canonical and set once at
+    create time."""
+    work_slug = workstore.get_work_slug_for_agent(agent_slug)
+    if work_slug is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+        )
+    if payload.name is not None:
+        try:
+            agent = rename.execute(
+                workstore,
+                rename.RenameAgentRequest(agent_slug=agent_slug, name=payload.name),
+            )
+        except rename.AgentNotFound as exc:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    else:
+        agent = next(
+            (a for a in workstore.list_agents_for_work(work_slug) if a.slug == agent_slug),
+            None,
+        )
+        if agent is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+            )
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    return _to_summary(work_slug, agent, paths)
 
 
 @router.delete("/agents/{agent_slug}", status_code=status.HTTP_204_NO_CONTENT)

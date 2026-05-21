@@ -196,6 +196,24 @@ export async function deleteAgent(agentSlug: string): Promise<void> {
   }
 }
 
+/** Partial update for an agent. Today only ``name`` is mutable; other
+ *  fields are FS-canonical and set at create time. */
+export async function patchAgent(
+  agentSlug: string,
+  patch: { name?: string },
+): Promise<AgentSummary> {
+  const r = await fetch(`/api/agents/${agentSlug}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`Patch failed (${r.status}): ${detail}`);
+  }
+  return jsonOrThrow<AgentSummary>(r);
+}
+
 export const PERSONA_GLYPH: Record<Persona, string> = {
   architect: "AR",
   developer: "DV",

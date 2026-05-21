@@ -976,24 +976,41 @@ body {
   font-weight: 500;
 }
 
-/* Folder input row (text field + browse button) ------------------------ */
+/* Folder input row (text field + overlaid browse button) ---------------- */
 
 .folder-input-row {
-  display: flex;
-  align-items: stretch;
-  gap: 0.4rem;
+  position: relative;
 }
 .folder-input-row .input {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  /* Leaves room for the inset picker button (1.7rem wide + 0.5rem gap). */
+  padding-right: 2.2rem;
 }
 .folder-input-pick {
-  flex: 0 0 auto;
-  width: 2.1rem;
-  height: 2.1rem;
+  position: absolute;
+  right: 0.25rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1.7rem;
+  height: 1.7rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--fg-3);
+  cursor: pointer;
+  transition: background 80ms, color 80ms;
+}
+.folder-input-pick:hover:not(:disabled),
+.folder-input-pick:focus-visible {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+.folder-input-pick:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Two-up field row (e.g. Working folder + Branch in NewAgentDialog).
@@ -1337,6 +1354,32 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Inline rename input in the tile header. Matches the h2 typography so
+ * the header doesn't reflow when editing toggles on/off. Border colour
+ * picks up the project / persona accent for parity with the rail. */
+.agent-tile header .tile-name-input {
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  background: var(--bg-1);
+  color: var(--fg);
+  border: 1px solid var(--p-color, var(--accent));
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin: -2px 0;
+  min-width: 0;
+  max-width: 22rem;
+  outline: none;
+}
+.agent-tile header .tile-rename-err {
+  font-size: 11px;
+  color: var(--danger, #c33);
+  background: var(--bg-1);
+  border: 1px solid var(--danger, #c33);
+  border-radius: 3px;
+  padding: 1px 6px;
 }
 .agent-tile header .tile-header-meta {
   display: inline-flex;
@@ -5161,7 +5204,10 @@ h5.md-h {
   grid-template-columns: 26px 1fr auto;
   gap: 10px;
   align-items: center;
-  padding: 8px 18px;
+  /* Extra right-padding reserves a column for the kebab button (which
+   * is absolutely positioned at right:8px). Without this the status
+   * pill + blinking dot crowd into the kebab. */
+  padding: 8px 34px 8px 18px;
   cursor: pointer;
   background: transparent;
   border: 0;
@@ -5204,6 +5250,64 @@ h5.md-h {
   color: var(--fg-3);
   font-size: 10.5px;
   font-family: var(--font-mono);
+}
+
+/* Kebab "more actions" trigger on each agent rail row. Always visible
+ * (the only entry point to delete), so it sits at fg-3 rather than the
+ * dimmer fg-4 the previous inline style used. Hover lifts to fg + a
+ * soft background to telegraph it's interactive. */
+.rail-agent-kebab {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: 0;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 4px;
+  transition: background 80ms, color 80ms;
+}
+.rail-agent-kebab:hover,
+.rail-agent-kebab:focus-visible {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+
+/* Inline rename input inside an agent rail row. Matches the surrounding
+ * ``.name`` typography so the row's vertical rhythm doesn't shift when
+ * editing. Solid background + subtle border telegraphs "this is editable
+ * now"; Esc cancels, Enter / blur saves (logic in WorkView.tsx). */
+.rail-agent-name-input {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  background: var(--bg-1);
+  color: var(--fg);
+  border: 1px solid var(--p-color, var(--accent));
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin: -2px -4px;
+  width: 100%;
+  min-width: 0;
+  outline: none;
+}
+.rail-agent-rename-err {
+  position: absolute;
+  left: 18px;
+  bottom: -4px;
+  transform: translateY(100%);
+  background: var(--bg-1);
+  color: var(--danger, #c33);
+  border: 1px solid var(--danger, #c33);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10.5px;
+  z-index: 1;
 }
 
 /* ─── Artifact row (Work rail) ─── */

@@ -95,6 +95,14 @@ class NewAgentRequest(BaseModel):
     branch_name: str | None = None
 
 
+class PatchAgentRequest(BaseModel):
+    """Partial update for an agent's mutable display fields. Today only
+    ``name`` is mutable; the rest of the agent shape is FS-canonical and
+    only set at create time."""
+
+    name: str | None = Field(default=None, min_length=1)
+
+
 class AgentSummary(BaseModel):
     slug: str
     work_slug: str
@@ -308,6 +316,7 @@ __all__ = [
     "HandoffSummary",
     "NewAgentRequest",
     "NewConnectionRequest",
+    "PatchAgentRequest",
     "NewHandoffRequest",
     "NewProjectRequest",
     "NewWorkRequest",

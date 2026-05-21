@@ -174,6 +174,8 @@ https://github.com/user-attachments/assets/dc22bbe0-60d8-4a04-9730-df4e4069be7e
 Atelier surfaces a small set of actions in the agent toolbar:
  - **Detach** — detach the agent to the CLI
  - **Hand off** — hand off to a new agent
+ - **Open in console** — open the agent's worktree in your terminal
+ - **Open in editor** — open the agent's worktree in your editor
  - **Maximize** — zoom the agent to fill the canvas
  - **Close** — pin the agent to the rail
 

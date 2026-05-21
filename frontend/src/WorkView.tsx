@@ -34,6 +34,7 @@ import {
   listProjects,
   listWorks,
   openAgentInConsole,
+  patchAgent,
   revealAgent,
   revealArtifact,
   revealWork,
@@ -629,6 +630,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
               closed={closedSlugs.includes(a.slug)}
               onFocus={() => focusAgent(a.slug)}
               onDelete={() => setDeleteTarget(a)}
+              onRename={(name) =>
+                setAgents((curr) =>
+                  curr.map((x) => (x.slug === a.slug ? { ...x, name } : x)),
+                )
+              }
             />
           ))}
 
@@ -852,6 +858,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                             .catch(() => {});
                         });
                       }}
+                      onRename={(name) =>
+                        setAgents((curr) =>
+                          curr.map((x) =>
+                            x.slug === a.slug ? { ...x, name } : x,
+                          ),
+                        )
+                      }
                     />
                   </SortableCanvasCell>
                 ))}
@@ -993,20 +1006,62 @@ function V3RailAgentRow({
   closed,
   onFocus,
   onDelete,
+  onRename,
 }: {
   agent: AgentSummary;
   focused: boolean;
   closed: boolean;
   onFocus: () => void;
   onDelete: () => void;
+  onRename: (name: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(agent.name);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     if (!menuOpen) return;
     const handler = () => setMenuOpen(false);
     window.addEventListener("click", handler);
     return () => window.removeEventListener("click", handler);
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  function startRename() {
+    setDraftName(agent.name);
+    setRenameError(null);
+    setEditing(true);
+  }
+
+  function cancelRename() {
+    setEditing(false);
+    setDraftName(agent.name);
+    setRenameError(null);
+  }
+
+  async function commitRename() {
+    const next = draftName.trim();
+    if (!next || next === agent.name) {
+      cancelRename();
+      return;
+    }
+    try {
+      const updated = await patchAgent(agent.slug, { name: next });
+      onRename(updated.name);
+      setEditing(false);
+      setRenameError(null);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   const isDetached = agent.status === "detached";
   const tooltip = isDetached
@@ -1023,22 +1078,59 @@ function V3RailAgentRow({
     >
       <button
         type="button"
-        onClick={onFocus}
-        title={tooltip}
+        onClick={editing ? undefined : onFocus}
+        title={editing ? undefined : tooltip}
+        disabled={editing}
         style={{
           display: "contents",
           background: "transparent",
           border: 0,
           padding: 0,
           textAlign: "left",
-          cursor: "pointer",
+          cursor: editing ? "default" : "pointer",
           font: "inherit",
           color: "inherit",
         }}
       >
         <span className="pip">{PERSONA_GLYPH[agent.persona] ?? "AG"}</span>
         <span className="meta">
-          <div className="name mono">{agent.name}</div>
+          {editing ? (
+            <input
+              ref={inputRef}
+              className="rail-agent-name-input mono"
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              onKeyDown={(e) => {
+                // Esc here cancels the rename. The global "stop agent"
+                // Esc binding sees the event after this handler returns;
+                // we stopPropagation so it doesn't fire on a successful
+                // cancel (the user's intent was to bail out of the
+                // input, not stop the agent's turn).
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cancelRename();
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  void commitRename();
+                }
+              }}
+              onBlur={() => void commitRename()}
+              onClick={(e) => e.stopPropagation()}
+              aria-label="Rename agent"
+            />
+          ) : (
+            <div
+              className="name mono"
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                startRename();
+              }}
+              title="Double-click to rename"
+            >
+              {agent.name}
+            </div>
+          )}
           <div className="role">
             {isDetached ? "in CLI · click to re-attach" : agent.role}
           </div>
@@ -1047,35 +1139,37 @@ function V3RailAgentRow({
           <span className={`dot ${agent.status}`} aria-hidden />
         </span>
       </button>
-      <button
-        type="button"
-        aria-label={`More actions for ${agent.name}`}
-        title="More"
-        onClick={(e) => {
-          e.stopPropagation();
-          setMenuOpen((v) => !v);
-        }}
-        style={{
-          position: "absolute",
-          right: 6,
-          top: "50%",
-          transform: "translateY(-50%)",
-          background: "transparent",
-          border: 0,
-          color: "var(--fg-4)",
-          cursor: "pointer",
-          padding: "4px 6px",
-          fontSize: 14,
-          lineHeight: 1,
-        }}
-      >
-        ⋮
-      </button>
+      {renameError && !editing && (
+        <div className="rail-agent-rename-err">{renameError}</div>
+      )}
+      {!editing && (
+        <button
+          type="button"
+          className="rail-agent-kebab"
+          aria-label={`More actions for ${agent.name}`}
+          title="More"
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuOpen((v) => !v);
+          }}
+        >
+          ⋮
+        </button>
+      )}
       {menuOpen && (
         <div
           className="rail-agent-menu"
           onClick={(e) => e.stopPropagation()}
         >
+          <button
+            className="menu-item"
+            onClick={() => {
+              setMenuOpen(false);
+              startRename();
+            }}
+          >
+            Rename
+          </button>
           <button
             className="menu-item danger"
             onClick={() => {

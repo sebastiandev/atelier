@@ -2,12 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type FolderListing, listFolder } from "./api";
 
+type PickerMode = "folder" | "file";
+
 type Props = {
   /** Where to land when the modal opens. Falls back to the user's
    *  $HOME on the backend when empty / null. */
   initialPath?: string | null;
+  /** ``"folder"`` (default) picks a directory; file rows are visible but
+   *  not selectable. ``"file"`` flips it: clicking a file picks it
+   *  immediately; the "Use this folder" footer disappears. */
+  mode?: PickerMode;
   onCancel: () => void;
-  /** Called with the absolute path of the picked folder. */
+  /** Called with the absolute path of the picked folder or file. */
   onPick: (path: string) => void;
 };
 
@@ -30,7 +36,12 @@ type Props = {
  *   - Enter: drill into the highlighted directory (no-op on a file row)
  *   - The "Use this folder" button picks the current directory itself.
  */
-export function FolderPickerDialog({ initialPath, onCancel, onPick }: Props) {
+export function FolderPickerDialog({
+  initialPath,
+  mode = "folder",
+  onCancel,
+  onPick,
+}: Props) {
   const [listing, setListing] = useState<FolderListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showHidden, setShowHidden] = useState(false);
@@ -97,12 +108,14 @@ export function FolderPickerDialog({ initialPath, onCancel, onPick }: Props) {
         if (target?.is_dir) {
           const next = joinPath(listing.path, target.name);
           void load(next, showHidden);
+        } else if (target && mode === "file") {
+          onPick(joinPath(listing.path, target.name));
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [listing, highlight, showHidden, load, onCancel]);
+  }, [listing, highlight, showHidden, load, mode, onCancel, onPick]);
 
   // Keep the highlighted row in view when arrow-keys push it past the
   // visible window of the scroll container.
@@ -129,7 +142,7 @@ export function FolderPickerDialog({ initialPath, onCancel, onPick }: Props) {
       >
         <div className="modal-hd">
           <div>
-            <h3>Pick a folder</h3>
+            <h3>{mode === "file" ? "Pick a file" : "Pick a folder"}</h3>
             <p className="sub">
               {listing ? listing.path : "Loading…"}
             </p>
@@ -182,8 +195,14 @@ export function FolderPickerDialog({ initialPath, onCancel, onPick }: Props) {
                     <button
                       type="button"
                       className="folder-picker-row-btn"
-                      disabled={!isDir}
-                      onClick={() => isDir && void load(next, showHidden)}
+                      disabled={!isDir && mode === "folder"}
+                      onClick={() => {
+                        if (isDir) {
+                          void load(next, showHidden);
+                        } else if (mode === "file") {
+                          onPick(next);
+                        }
+                      }}
                       onMouseEnter={() => setHighlight(idx)}
                     >
                       <span className="folder-picker-glyph" aria-hidden>
@@ -210,14 +229,16 @@ export function FolderPickerDialog({ initialPath, onCancel, onPick }: Props) {
           <button className="btn" type="button" onClick={onCancel}>
             Cancel
           </button>
-          <button
-            className="btn primary"
-            type="button"
-            disabled={!pendingPath}
-            onClick={() => pendingPath && onPick(pendingPath)}
-          >
-            Use this folder
-          </button>
+          {mode === "folder" && (
+            <button
+              className="btn primary"
+              type="button"
+              disabled={!pendingPath}
+              onClick={() => pendingPath && onPick(pendingPath)}
+            >
+              Use this folder
+            </button>
+          )}
         </div>
       </div>
     </div>

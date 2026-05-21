@@ -28,6 +28,7 @@ import {
   PERSONA_GLYPH,
   type Persona,
   listConnections,
+  patchAgent,
   switchAgentThread,
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
@@ -91,6 +92,13 @@ type AgentTileProps = {
    *  user can review diffs without leaving their normal IDE flow.
    *  When omitted, the IDE button is hidden. */
   onOpenInIde?: () => void;
+  /** Called with the agent's new name after a successful PATCH. Parent
+   *  uses it to keep its ``agents`` state in sync so the rail / tile
+   *  re-render with the new label. When omitted, the inline rename
+   *  affordance on the tile header is disabled (double-click is a
+   *  no-op) — useful for the standalone ``/agents/{slug}`` mount that
+   *  doesn't have a parent list to update. */
+  onRename?: (name: string) => void;
   /** Open the agent's worktree in a terminal session — same target as
    *  ``onRevealWorktree`` but lands the user at a shell prompt rather
    *  than a file browser. When omitted, the console button is hidden. */
@@ -126,6 +134,7 @@ export function AgentTile({
   onRevealWorktree,
   onOpenInIde,
   onOpenInConsole,
+  onRename,
   worktreePath,
 }: AgentTileProps) {
   const {
@@ -156,6 +165,59 @@ export function AgentTile({
   // mouseenter, clear via mouseleave — single predictable location for
   // hover descriptions, no positioning headaches, no native ~700ms delay.
   const [hint, setHint] = useState<string | null>(null);
+
+  // Inline rename of the agent's display name. Triggered by double-click
+  // on the title; same Enter-saves / Esc-cancels semantics as the rail
+  // row in WorkView. Skipped entirely when the parent didn't wire
+  // ``onRename`` (e.g. standalone /agents/{slug} mount).
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState<string>(agentName ?? "");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (editingName) {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    }
+  }, [editingName]);
+  // Keep the local draft in sync with parent updates (e.g. the rail
+  // renamed the same agent) so reopening the editor uses the current
+  // name as the default value.
+  useEffect(() => {
+    if (!editingName) setDraftName(agentName ?? "");
+  }, [agentName, editingName]);
+
+  function startRename() {
+    if (!onRename) return;
+    setDraftName(agentName ?? "");
+    setRenameError(null);
+    setEditingName(true);
+  }
+
+  function cancelRename() {
+    setEditingName(false);
+    setRenameError(null);
+  }
+
+  async function commitRename() {
+    if (!onRename) {
+      cancelRename();
+      return;
+    }
+    const next = draftName.trim();
+    if (!next || next === (agentName ?? "")) {
+      cancelRename();
+      return;
+    }
+    try {
+      const updated = await patchAgent(agentSlug, { name: next });
+      onRename(updated.name);
+      setEditingName(false);
+      setRenameError(null);
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : String(err));
+    }
+  }
   const hintHandlers = (text: string) => ({
     onMouseEnter: () => setHint(text),
     onMouseLeave: () => setHint((current) => (current === text ? null : current)),
@@ -475,7 +537,46 @@ export function AgentTile({
         <div className="tile-header-left">
           {persona && <span className="persona-pip">{PERSONA_GLYPH[persona]}</span>}
           <span className="status-dot" data-status={dotStatus} />
-          <h2>{title}</h2>
+          {editingName ? (
+            <input
+              ref={nameInputRef}
+              className="tile-name-input"
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  cancelRename();
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  void commitRename();
+                }
+              }}
+              onBlur={() => void commitRename()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              aria-label="Rename agent"
+            />
+          ) : (
+            <h2
+              onDoubleClick={
+                onRename
+                  ? (e) => {
+                      e.stopPropagation();
+                      startRename();
+                    }
+                  : undefined
+              }
+              title={onRename ? "Double-click to rename" : undefined}
+              style={onRename ? { cursor: "text" } : undefined}
+            >
+              {title}
+            </h2>
+          )}
+          {renameError && !editingName && (
+            <span className="tile-rename-err">{renameError}</span>
+          )}
         </div>
         <div className="tile-header-meta">
           {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}

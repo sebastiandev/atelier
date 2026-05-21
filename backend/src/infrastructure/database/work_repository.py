@@ -176,6 +176,14 @@ class SqlWorkRepository:
                 .values(status=status)
             )
 
+    def set_agent_name(self, agent_slug: str, name: str) -> None:
+        with self._txn() as session:
+            session.execute(
+                update(agents_table)
+                .where(agents_table.c.slug == agent_slug)
+                .values(name=name)
+            )
+
     def delete_agent(self, agent_slug: str) -> None:
         with self._txn() as session:
             existing = session.execute(
