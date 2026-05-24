@@ -416,6 +416,103 @@ def test_ensure_with_branch_name_also_symlinks_devtime_artifacts(
     assert link.resolve() == venv.resolve()
 
 
+def test_ensure_symlinks_top_level_env_local_into_worktree(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """``.env.local`` at the source root is gitignored; without a
+    symlink the agent's app can't see secrets. Vite's compile-time
+    ``define`` substitution is especially nasty here — empty values get
+    baked in silently if the file is missing at server start."""
+    env_file = repo / ".env.local"
+    env_file.write_text("OPENAI_API_KEY=sk-test\nSUPABASE_URL=https://x\n")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    link = workdir / ".env.local"
+    assert link.is_symlink()
+    assert link.resolve() == env_file.resolve()
+    assert "OPENAI_API_KEY=sk-test" in link.read_text()
+
+
+def test_ensure_symlinks_all_env_file_variants(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """The full ``.env*`` set Vite / pydantic-settings / Next.js look
+    for, not just ``.env.local`` — repos commonly mix several."""
+    for name in (".env", ".env.development", ".env.production"):
+        (repo / name).write_text(f"# {name}\n")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    for name in (".env", ".env.development", ".env.production"):
+        link = workdir / name
+        assert link.is_symlink(), f"missing symlink for {name}"
+        assert link.resolve() == (repo / name).resolve()
+
+
+def test_ensure_symlinks_nested_env_file_for_monorepos(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """``backend/.env.local`` + ``frontend/.env.local`` cover the
+    common monorepo split (per-component env files). Same scope as the
+    nested venv / node_modules case — only fires when the subdir
+    already exists in the worktree (has tracked files)."""
+    backend = repo / "backend"
+    backend.mkdir()
+    (backend / "main.py").write_text("pass\n")
+    _git(repo, "add", "backend/main.py")
+    _git(repo, "commit", "-q", "-m", "add backend")
+
+    backend_env = backend / ".env.local"
+    backend_env.write_text("BACKEND=1\n")
+
+    frontend = repo / "frontend"
+    frontend.mkdir()
+    (frontend / "index.html").write_text("<html></html>\n")
+    _git(repo, "add", "frontend/index.html")
+    _git(repo, "commit", "-q", "-m", "add frontend")
+
+    frontend_env = frontend / ".env.local"
+    frontend_env.write_text("VITE_API_URL=http://x\n")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    backend_link = workdir / "backend" / ".env.local"
+    assert backend_link.is_symlink()
+    assert backend_link.resolve() == backend_env.resolve()
+
+    frontend_link = workdir / "frontend" / ".env.local"
+    assert frontend_link.is_symlink()
+    assert frontend_link.resolve() == frontend_env.resolve()
+
+
+def test_ensure_skips_env_file_when_source_is_missing(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """No ``.env*`` at source → no symlink in the worktree. Quiet
+    no-op, no error."""
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    for name in (".env", ".env.local", ".env.development"):
+        assert not (workdir / name).exists()
+        assert not (workdir / name).is_symlink()
+
+
+def test_ensure_skips_env_file_when_source_path_is_a_directory(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """A directory named ``.env.local`` (unusual but possible) must
+    not be mirrored — the file-variant of the symlink helper only
+    mirrors regular files, symmetric with how ``_maybe_symlink``
+    refuses to mirror anything that isn't a directory."""
+    (repo / ".env.local").mkdir()
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    assert not (workdir / ".env.local").exists()
+    assert not (workdir / ".env.local").is_symlink()
+
+
 def test_ensure_forked_symlinks_devtime_artifacts(
     manager: GitWorktreeManager, repo: Path
 ) -> None:

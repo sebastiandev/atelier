@@ -368,19 +368,41 @@ def _overlay_working_state(src: Path, dst: Path) -> None:
 # sibling's lockfile); the system prompt should warn about this. Names
 # match the canonical conventions across uv/poetry/pipenv/npm/yarn.
 _DEVTIME_ARTIFACT_NAMES = (".venv", "venv", "node_modules")
+# Env files are gitignored too, but they're plain files rather than
+# directories. They're load-bearing in a different way: the backend's
+# pydantic-settings reads them at startup, and Vite's ``loadEnv`` reads
+# them at dev-server start (then ``define`` bakes the values into the
+# bundle at build time). Same names every common toolchain looks for —
+# dotenv, pydantic-settings, Vite, Next.js, etc.
+_DEVTIME_ENV_FILES = (
+    ".env",
+    ".env.local",
+    ".env.development",
+    ".env.development.local",
+    ".env.production",
+    ".env.production.local",
+)
 
 
 def _symlink_devtime_artifacts(source: Path, target: Path) -> None:
-    """Mirror any ``.venv`` / ``venv`` / ``node_modules`` from ``source``
-    into ``target`` as symlinks. Looks at the top level and one level
-    down (so monorepos like ``backend/.venv`` + ``frontend/node_modules``
-    are covered). No-op for non-Python / non-Node repos that don't have
-    these directories.
+    """Mirror gitignored dev-time artifacts from ``source`` into ``target``
+    as symlinks. Two classes:
+
+      - **Dirs** — ``.venv`` / ``venv`` / ``node_modules`` (per
+        ``_DEVTIME_ARTIFACT_NAMES``). Saves a multi-GB reinstall per
+        agent and lets siblings share one env.
+      - **Files** — ``.env*`` (per ``_DEVTIME_ENV_FILES``). Without
+        these the agent's app can't boot (pydantic raises on required
+        fields, Vite silently bakes empty strings via ``define``).
+
+    Both classes are scanned at the source's top level and one level
+    down (so monorepos with ``backend/.venv`` + ``frontend/.env.local``
+    are covered). No-op for any name the source doesn't have.
 
     Failures are logged and swallowed — the worktree itself is already
     provisioned by the time we run, and a missing convenience symlink is
-    a degradation (the agent can ``uv sync`` to recover), not a reason
-    to fail the agent launch.
+    a degradation (the agent can ``uv sync`` or ``cp .env.local`` to
+    recover), not a reason to fail the agent launch.
     """
     try:
         _link_top_level(source, target)
@@ -397,6 +419,8 @@ def _symlink_devtime_artifacts(source: Path, target: Path) -> None:
 def _link_top_level(source: Path, target: Path) -> None:
     for name in _DEVTIME_ARTIFACT_NAMES:
         _maybe_symlink(source / name, target / name)
+    for name in _DEVTIME_ENV_FILES:
+        _maybe_symlink_file(source / name, target / name)
 
 
 def _link_one_level_deep(source: Path, target: Path) -> None:
@@ -415,6 +439,8 @@ def _link_one_level_deep(source: Path, target: Path) -> None:
             continue
         for name in _DEVTIME_ARTIFACT_NAMES:
             _maybe_symlink(child / name, target_child / name)
+        for name in _DEVTIME_ENV_FILES:
+            _maybe_symlink_file(child / name, target_child / name)
 
 
 def _maybe_symlink(src: Path, link: Path) -> None:
@@ -427,6 +453,19 @@ def _maybe_symlink(src: Path, link: Path) -> None:
     if link.exists() or link.is_symlink():
         return
     link.symlink_to(src, target_is_directory=True)
+
+
+def _maybe_symlink_file(src: Path, link: Path) -> None:
+    # Peer of ``_maybe_symlink`` for plain files (env files only today).
+    # ``is_file`` excludes dirs and broken symlinks; we deliberately
+    # don't chase symlinks at the source — those are rare and could
+    # create surprising link chains. Same don't-clobber rule as the
+    # dir variant.
+    if not src.is_file():
+        return
+    if link.exists() or link.is_symlink():
+        return
+    link.symlink_to(src, target_is_directory=False)
 
 
 def _is_git_repo(path: Path) -> bool:
