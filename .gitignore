@@ -31,6 +31,7 @@ frontend/.vite/
 *.swp
 
 # Work-local artifacts (not version-controlled)
+_bmad/
 _bmad-output/
 design/
 
