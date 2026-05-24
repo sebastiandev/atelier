@@ -81,8 +81,12 @@ _DOC_INPUT_SCHEMA: dict[str, Any] = {
         "title": {"type": "string"},
         "status": {
             "type": "string",
-            "enum": ["draft", "published"],
-            "description": "Defaults to 'draft' if omitted.",
+            "enum": ["draft"],
+            "description": (
+                "Always 'draft' — Atelier derives 'pending' / 'committed' "
+                "for worktree-resident docs from git state. Safe to omit; "
+                "defaults to 'draft' when missing."
+            ),
         },
     },
     "required": ["path", "title"],

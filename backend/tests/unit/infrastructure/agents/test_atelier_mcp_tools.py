@@ -64,7 +64,9 @@ def test_schemas_enforce_status_enum() -> None:
     assert "merged" not in jira_status["enum"]
 
     doc_status = TOOL_SCHEMAS[TOOL_RECORD_DOC]["properties"]["status"]
-    assert doc_status["enum"] == ["draft", "published"]
+    # ``pending`` and ``committed`` are derived by Atelier from git state
+    # (see ``domain/artifacts/status.py``) — agents only ever set ``draft``.
+    assert doc_status["enum"] == ["draft"]
 
 
 def test_required_fields_match_design() -> None:

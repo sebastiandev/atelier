@@ -34,7 +34,8 @@ Prefer the dedicated tool when it's available:
       status ∈ todo | in_progress | in_review | done | blocked
   - atelier__record_doc(path, title, status?)
       path: relative to your working directory; the file must already exist
-      status ∈ draft | published (default: draft)
+      status: omit (always 'draft'); Atelier derives 'pending' / 'committed'
+      from git state for worktree-resident docs.
       Only call this for documents you AUTHORED in this turn (a new file
       you just wrote — via Write, Edit, create_file, apply_patch, or
       whatever file-authoring tool your client surfaces). Don't record
