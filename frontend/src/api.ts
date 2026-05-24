@@ -452,19 +452,29 @@ export function switchAgentThread(
 }
 
 /**
- * Open the agent's worktree (or source folder, if no worktree was
- * provisioned) in the OS file browser. Same shell-out pattern as
- * ``revealWork``.
+ * Open one of the agent's filesystem locations in the OS file browser.
+ * Same shell-out pattern as ``revealWork``.
+ *
+ * ``kind`` picks the target:
+ *   - ``worktree`` (default) — the per-agent git worktree (or source
+ *     folder fallback) where the SDK runs.
+ *   - ``atelier`` — Atelier's per-agent bookkeeping dir under
+ *     ``~/Atelier/works/<work>/agents/<agent>/`` (transcript, agent.json,
+ *     contexts/).
  */
-export function revealAgent(agentSlug: string): Promise<void> {
-  return fetch(`/api/agents/${agentSlug}/reveal`, { method: "POST" }).then(
-    async (r) => {
-      if (!r.ok) {
-        const body = await r.text().catch(() => "");
-        throw new Error(`${r.status} ${r.statusText}: ${body}`);
-      }
-    },
-  );
+export function revealAgent(
+  agentSlug: string,
+  kind: "worktree" | "atelier" = "worktree",
+): Promise<void> {
+  const qs = kind === "worktree" ? "" : `?kind=${encodeURIComponent(kind)}`;
+  return fetch(`/api/agents/${agentSlug}/reveal${qs}`, {
+    method: "POST",
+  }).then(async (r) => {
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`${r.status} ${r.statusText}: ${body}`);
+    }
+  });
 }
 
 /**

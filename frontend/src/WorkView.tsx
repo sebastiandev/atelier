@@ -858,6 +858,20 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                             .catch(() => {});
                         });
                       }}
+                      onRevealAtelierDir={() => {
+                        // No clipboard fallback here — the user can't
+                        // easily reconstruct the Atelier-side path
+                        // (deterministic but not visible in the UI), and
+                        // the failure mode (no file browser to spawn) is
+                        // rare on desktop. Surface as a toast instead.
+                        revealAgent(a.slug, "atelier").catch((err) => {
+                          showToast(
+                            `Couldn't open Atelier folder: ${
+                              err instanceof Error ? err.message : String(err)
+                            }`,
+                          );
+                        });
+                      }}
                       onRename={(name) =>
                         setAgents((curr) =>
                           curr.map((x) =>

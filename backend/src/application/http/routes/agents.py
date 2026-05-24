@@ -250,12 +250,24 @@ async def delete_agent_endpoint(
 
 @router.post("/agents/{agent_slug}/reveal", status_code=status.HTTP_204_NO_CONTENT)
 def reveal_agent_endpoint(
-    agent_slug: str, workstore: WorkStoreDep, settings: SettingsDep
+    agent_slug: str,
+    workstore: WorkStoreDep,
+    settings: SettingsDep,
+    kind: str = "worktree",
 ) -> None:
-    """Open the agent's worktree (or source folder, if no worktree was
-    provisioned) in the OS file browser. Symmetric with the work-level
-    reveal — this one targets the dir where the adapter's CLI actually
-    runs, so the user can poke at the agent's working tree."""
+    """Open one of the agent's filesystem locations in the OS file browser.
+
+    ``kind`` picks which dir to reveal:
+      - ``worktree`` (default) — the per-agent git worktree (or source
+        folder fallback) where the SDK process runs. Most-useful for
+        poking at code the agent produced.
+      - ``atelier`` — Atelier's per-agent bookkeeping dir under
+        ``~/Atelier/works/<work>/agents/<agent>/`` (transcript.ndjson,
+        agent.json, contexts/). Useful for inspecting the canonical
+        Atelier state.
+
+    Unknown values fall back to ``worktree`` to preserve the legacy
+    no-arg call shape."""
     work_slug = workstore.get_work_slug_for_agent(agent_slug)
     if work_slug is None:
         raise HTTPException(
@@ -270,7 +282,10 @@ def reveal_agent_endpoint(
             status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
         )
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
-    target = _resolve_worktree_path(paths, work_slug, agent_slug, agent.folder)
+    if kind == "atelier":
+        target = paths.agent_dir(work_slug, agent_slug)
+    else:
+        target = _resolve_worktree_path(paths, work_slug, agent_slug, agent.folder)
     try:
         open_in_file_browser(str(target))
     except (OSError, subprocess.SubprocessError) as exc:

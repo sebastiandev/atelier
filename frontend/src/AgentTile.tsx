@@ -103,6 +103,11 @@ type AgentTileProps = {
    *  ``onRevealWorktree`` but lands the user at a shell prompt rather
    *  than a file browser. When omitted, the console button is hidden. */
   onOpenInConsole?: () => void;
+  /** Reveal Atelier's per-agent bookkeeping dir
+   *  (``~/Atelier/works/<work>/agents/<agent>/`` — transcript, agent.json,
+   *  contexts/) in the OS file browser. Surfaced via a right-click menu
+   *  on the folder pill; when omitted the menu item is hidden. */
+  onRevealAtelierDir?: () => void;
   /** The worktree path (or source-folder fallback) — used purely for
    *  the reveal button's tooltip. */
   worktreePath?: string;
@@ -134,6 +139,7 @@ export function AgentTile({
   onRevealWorktree,
   onOpenInIde,
   onOpenInConsole,
+  onRevealAtelierDir,
   onRename,
   worktreePath,
 }: AgentTileProps) {
@@ -165,6 +171,25 @@ export function AgentTile({
   // mouseenter, clear via mouseleave — single predictable location for
   // hover descriptions, no positioning headaches, no native ~700ms delay.
   const [hint, setHint] = useState<string | null>(null);
+
+  // Folder-pill right-click menu. Anchored at the cursor position so
+  // it renders next to the actual click rather than the pill — same
+  // shape as a native OS context menu. Closes on any click outside
+  // (or a click on a menu item). Esc is intentionally NOT bound:
+  // Esc is reserved for stop-agent across the app.
+  const [folderMenu, setFolderMenu] = useState<{ x: number; y: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!folderMenu) return;
+    const handler = () => setFolderMenu(null);
+    window.addEventListener("click", handler);
+    window.addEventListener("scroll", handler, true);
+    return () => {
+      window.removeEventListener("click", handler);
+      window.removeEventListener("scroll", handler, true);
+    };
+  }, [folderMenu]);
 
   // Inline rename of the agent's display name. Triggered by double-click
   // on the title; same Enter-saves / Esc-cancels semantics as the rail
@@ -596,11 +621,52 @@ export function AgentTile({
               className="folder-pill mono"
               aria-label={`Reveal worktree — ${worktreePath}`}
               onClick={onRevealWorktree}
+              onContextMenu={
+                onRevealAtelierDir
+                  ? (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setFolderMenu({ x: e.clientX, y: e.clientY });
+                    }
+                  : undefined
+              }
               disabled={!onRevealWorktree}
-              {...hintHandlers(`Reveal in Finder · ${worktreePath}`)}
+              {...hintHandlers(
+                onRevealAtelierDir
+                  ? `Reveal in Finder · ${worktreePath} · right-click for more`
+                  : `Reveal in Finder · ${worktreePath}`,
+              )}
             >
               {shortenPath(worktreePath)}
             </button>
+          )}
+          {folderMenu && (
+            <div
+              className="folder-pill-menu"
+              style={{ left: folderMenu.x, top: folderMenu.y }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                className="menu-item"
+                onClick={() => {
+                  setFolderMenu(null);
+                  onRevealWorktree?.();
+                }}
+              >
+                Open worktree
+              </button>
+              <button
+                type="button"
+                className="menu-item"
+                onClick={() => {
+                  setFolderMenu(null);
+                  onRevealAtelierDir?.();
+                }}
+              >
+                Open Atelier folder
+              </button>
+            </div>
           )}
         </div>
         <div className="tile-header-right">
