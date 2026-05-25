@@ -378,7 +378,7 @@ adapter.events()                          supervisor._run_agent
                                                        └─ queue.put_nowait if subscribed
 ```
 
-All three adapters use the same outgoing-queue + pump pattern so synchronous SDK callbacks (Claude's `can_use_tool`, Amp's bridge connection handler, Codex's `on_approval_request`) can interleave events with the SDK's own message stream without blocking. Codex's notification stream is a three-state lifecycle per item (`item/started` → `item/agentMessage/delta` / `item/reasoning/summaryTextDelta` → `item/completed`), wrapped by `turn/started` and `turn/completed` frames the adapter maps onto `StatusChange`/`TurnMetrics`. See `docs/backend.md` → "Tool permissions: the can_use_tool callback flow", "Tool permissions for Amp: the delegate-bridge", and "Tool permissions for Codex: native typed approvals".
+All three adapters use the same outgoing-queue + pump pattern so provider-side callbacks/bridges can interleave events with the SDK's own message stream without blocking. Claude uses `can_use_tool`; Amp gates Bash through the bridge; the current Codex SDK path does not expose approval callbacks to Atelier, so Atelier only forwards Codex's approval policy. Codex's notification stream is a three-state lifecycle per item (`item/started` → `item/agentMessage/delta` / `item/reasoning/summaryTextDelta` → `item/completed`), wrapped by `turn/started` and `turn/completed` frames the adapter maps onto `StatusChange`/`TurnMetrics`. See `docs/backend.md` → "Tool permissions: the can_use_tool callback flow", "Tool permissions for Amp: the delegate-bridge", and "Tool permissions for Codex: SDK approval-policy limits".
 
 ---
 

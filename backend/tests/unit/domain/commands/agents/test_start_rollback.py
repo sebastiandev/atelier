@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from src.domain.commands.agents import start
+from src.domain.models import SharedFolder
 from src.domain.workstore import CreateWorkRequest, WorkStoreService
 from src.domain.worktrees import WorktreeProvisionFailed
 from src.settings import Settings
@@ -186,3 +187,62 @@ def test_start_rolls_back_agent_when_worktree_provisioning_fails(
     # Supervisor was never asked to register an agent that couldn't get
     # a workdir — keeps the supervisor's view of the world consistent.
     assert supervisor.registered == []
+
+
+def test_mount_project_shares_returns_resolved_writable_roots(
+    tmp_path: Path,
+) -> None:
+    external = tmp_path / "external-share"
+    external.mkdir()
+    canonical = tmp_path / "canonical-share"
+    canonical.symlink_to(external, target_is_directory=True)
+
+    share = SharedFolder(
+        slug="shr-1",
+        project_id=1,
+        name="BMAD",
+        mount_path="_bmad-output",
+        created_at=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+    )
+
+    class Sharestore:
+        def list_for_project(self, project_slug: str) -> list[SharedFolder]:
+            assert project_slug == "PRJ-001"
+            return [share]
+
+    class Provisioner:
+        def __init__(self) -> None:
+            self.mounts: list[tuple[str, str, str, Path]] = []
+
+        def share_canonical_path(
+            self, project_slug: str, share_slug: str
+        ) -> Path:
+            assert (project_slug, share_slug) == ("PRJ-001", "shr-1")
+            return canonical
+
+        def mount_in_worktree(
+            self,
+            work_slug: str,
+            agent_slug: str,
+            mount_path: str,
+            target: Path,
+        ) -> None:
+            self.mounts.append((work_slug, agent_slug, mount_path, target))
+
+    provisioner = Provisioner()
+
+    mounted = start._mount_project_shares(
+        sharestore=Sharestore(),
+        provisioner=provisioner,
+        project_slug="PRJ-001",
+        work_slug="WRK-001",
+        agent_slug="agt-1",
+    )
+
+    assert [(s.name, s.mount_path) for s in mounted.summaries] == [
+        ("BMAD", "_bmad-output")
+    ]
+    assert mounted.writable_roots == (external,)
+    assert provisioner.mounts == [
+        ("WRK-001", "agt-1", "_bmad-output", canonical)
+    ]

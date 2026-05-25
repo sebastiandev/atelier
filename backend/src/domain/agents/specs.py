@@ -137,7 +137,7 @@ def _reject_unknown(provider: Provider, options: dict[str, Any], allowed: set[st
 
 _CLAUDE_MODEL_META: dict[str, ModelMeta] = {
     # Anthropic public list pricing per million tokens (USD). Cache write
-    # ≈ 1.25× input, cache read ≈ 0.10× input — encoded explicitly here
+    # ~1.25x input, cache read ~0.10x input - encoded explicitly here
     # so the FE doesn't have to derive it.
     #
     # The ``[1m]`` Opus variant uses the same per-token rates as the
@@ -366,10 +366,10 @@ class CodexSpec:
         "Codex has two independent permission layers. Sandbox restricts "
         "what the agent can touch on disk regardless of model intent — "
         "``workspace-write`` (the default) confines writes to the agent's "
-        "worktree. Approval picks when Codex asks before running a command "
-        "or applying a patch: ``on request`` routes Codex's prompts "
-        "through Atelier, ``never`` auto-runs everything, ``untrusted`` "
-        "prompts on every tool."
+        "worktree plus any mounted project shared folders. Approval picks "
+        "Codex's own ask policy before running commands or applying "
+        "patches; the current Codex SDK does not surface those prompts "
+        "through Atelier's Allow / Deny UI."
     )
 
     def describe(self) -> ProviderDescriptor:

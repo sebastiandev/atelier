@@ -3,7 +3,7 @@
 Wraps ``openai-codex-sdk`` so the supervisor can drive a Codex session
 through the project's ``AgentAdapter`` Protocol. Mirrors the structure of
 the Claude and Amp adapters — pump-pattern queues, in-process artifact
-MCP wiring (subprocess form, same as Amp), per-tool permission gating —
+MCP wiring (subprocess form, same as Amp), shared AgentEvent mapping —
 adapted to Codex's JSON-RPC notification shapes.
 
 Lifecycle:
@@ -12,14 +12,13 @@ Lifecycle:
                   No first turn is kicked off; the first user input drives
                   ``turn_start``.
   events()      — async generator: drain ``_outgoing`` (fed by a side
-                  pump task that forwards Codex notifications + approval
-                  events into the queue). Same decoupling rationale as
-                  the Claude adapter — server-initiated approvals run
-                  inline on the SDK transport and must publish a
-                  ``PermissionRequest`` and then await a future without
-                  starving the supervisor.
+                  pump task that forwards Codex notifications into the
+                  queue). The current openai-codex-sdk path does not
+                  expose approval callbacks to Atelier; approval policy
+                  is forwarded to Codex itself.
   send_input(t) — enqueue user text; pump consumes and forwards
   resolve_permission(rid, decision) — answers an open approval request
+                  when tests/future SDKs provide a callback
   stop_turn()   — ``turn.interrupt()`` against the in-flight turn (real
                   cancel, not a no-op like Amp)
   close()       — exit the SDK context (closes the Codex subprocess);
@@ -58,6 +57,7 @@ from src.domain.agents import (
     AgentStartContext,
     ArtifactMarker,
     CodexAgentConfig,
+    CodexSandbox,
     Error,
     MessageComplete,
     MessageDelta,
@@ -128,7 +128,8 @@ class CodexTurnHandle(Protocol):
 class CodexThread(Protocol):
     """Live thread — what ``client.thread_start`` / ``thread_resume`` returns."""
 
-    id: str
+    @property
+    def id(self) -> str: ...
 
     async def turn_start(self, user_message: str) -> CodexTurnHandle: ...
 
@@ -150,6 +151,7 @@ class CodexClient(Protocol):
         base_instructions: str | None = None,
         mcp_servers: dict[str, Any] | None = None,
         config_overrides: dict[str, Any] | None = None,
+        additional_directories: list[str] | None = None,
     ) -> CodexThread: ...
 
     async def thread_resume(
@@ -163,19 +165,17 @@ class CodexClient(Protocol):
         base_instructions: str | None = None,
         mcp_servers: dict[str, Any] | None = None,
         config_overrides: dict[str, Any] | None = None,
+        additional_directories: list[str] | None = None,
     ) -> CodexThread: ...
 
     def on_approval_request(
         self, callback: Callable[[ApprovalRequest], Any]
     ) -> None:
-        """Register an async callback the SDK invokes when Codex asks for
-        approval. The callback must return ``"accept"`` or ``"decline"``.
+        """Register an async approval callback when an SDK exposes one.
 
-        The SDK exposes server-initiated approvals either as a callback or
-        as a special notification in the turn stream; the plan describes
-        both shapes. We use the callback path because it's the cleaner
-        seam — the adapter resolves the future from inside the callback
-        and the SDK round-trips the response itself.
+        ``openai-codex-sdk`` 0.1.x does not currently expose this in
+        production; the fake test client uses the seam and future SDKs may
+        wire it for real.
         """
 
 
@@ -249,9 +249,9 @@ class CodexAdapter:
         client = self._client_factory()
         await client.__aenter__()
         self._client = client
-        # Register the approval callback before any turn starts so an
-        # approval that fires on the very first turn can't race the
-        # registration.
+        # Register the approval callback before any turn starts when the
+        # concrete client supports it. The current SDK wrapper no-ops;
+        # fake tests and future SDKs use the same seam.
         client.on_approval_request(self._handle_approval_request)
 
         try:
@@ -516,6 +516,8 @@ class CodexAdapter:
         Wires:
           - ``model``           — primary selector
           - ``cwd``             — agent's workdir (sandbox root)
+          - ``additional_directories`` — shared-folder targets that
+                                  Codex should treat as writable roots
           - ``sandbox``         — OS-level filesystem gating tier
           - ``approval_mode``   — when-to-prompt policy
           - ``base_instructions`` — Atelier-built system prompt
@@ -528,7 +530,7 @@ class CodexAdapter:
         a single ``system_prompt`` via ``domain/agents/system_prompt.py``
         and feeds it through ``CommonAgentConfig``.
         """
-        return {
+        kwargs: dict[str, Any] = {
             "model": self._config.model.value,
             "cwd": str(self._config.common.workdir),
             "sandbox": self._config.sandbox.value,
@@ -539,6 +541,14 @@ class CodexAdapter:
                 "model_reasoning_effort": self._config.reasoning_effort.value,
             },
         }
+        if (
+            self._config.sandbox is CodexSandbox.WORKSPACE_WRITE
+            and self._config.common.writable_roots
+        ):
+            kwargs["additional_directories"] = [
+                str(root) for root in self._config.common.writable_roots
+            ]
+        return kwargs
 
 
 def _build_atelier_mcp_servers() -> dict[str, Any]:
@@ -579,17 +589,63 @@ class _CodexSdkClient:
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         return None
 
-    async def thread_start(self, **kwargs: Any) -> _CodexSdkThread:
+    async def thread_start(
+        self,
+        *,
+        model: str,
+        cwd: str,
+        sandbox: str,
+        approval_mode: str,
+        base_instructions: str | None = None,
+        mcp_servers: dict[str, Any] | None = None,
+        config_overrides: dict[str, Any] | None = None,
+        additional_directories: list[str] | None = None,
+    ) -> CodexThread:
         return _CodexSdkThread(
-            self._sdk_client.start_thread(_thread_options_from_kwargs(kwargs))
+            self._sdk_client.start_thread(
+                _thread_options_from_kwargs(
+                    {
+                        "model": model,
+                        "cwd": cwd,
+                        "sandbox": sandbox,
+                        "approval_mode": approval_mode,
+                        "base_instructions": base_instructions,
+                        "mcp_servers": mcp_servers,
+                        "config_overrides": config_overrides,
+                        "additional_directories": additional_directories,
+                    }
+                )
+            )
         )
 
     async def thread_resume(
-        self, thread_id: str, **kwargs: Any
-    ) -> _CodexSdkThread:
+        self,
+        thread_id: str,
+        *,
+        model: str,
+        cwd: str,
+        sandbox: str,
+        approval_mode: str,
+        base_instructions: str | None = None,
+        mcp_servers: dict[str, Any] | None = None,
+        config_overrides: dict[str, Any] | None = None,
+        additional_directories: list[str] | None = None,
+    ) -> CodexThread:
         return _CodexSdkThread(
             self._sdk_client.resume_thread(
-                thread_id, _thread_options_from_kwargs(kwargs)
+                thread_id,
+                _thread_options_from_kwargs(
+                    {
+                        "model": model,
+                        "cwd": cwd,
+                        "sandbox": sandbox,
+                        "approval_mode": approval_mode,
+                        "base_instructions": base_instructions,
+                        "mcp_servers": mcp_servers,
+                        "config_overrides": config_overrides,
+                        "additional_directories": additional_directories,
+                    }
+                ),
             )
         )
 
@@ -641,9 +697,11 @@ def _thread_options_from_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
         "workingDirectory": kwargs.get("cwd"),
         "approvalPolicy": kwargs.get("approval_mode"),
         "modelReasoningEffort": overrides.get("model_reasoning_effort"),
+        "additionalDirectories": kwargs.get("additional_directories"),
     }
-    # openai-codex-sdk 0.1.x does not expose base instructions or MCP
-    # server registration on ThreadOptions. Keep only supported keys.
+    # openai-codex-sdk 0.1.x exposes sandbox/approval/additional dirs
+    # but not base instructions or MCP server registration on ThreadOptions.
+    # Keep only supported keys.
     return {k: v for k, v in options.items() if v is not None}
 
 
@@ -721,7 +779,8 @@ def _model_dump(value: Any) -> dict[str, Any]:
         return dict(value)
     dump = getattr(value, "model_dump", None)
     if callable(dump):
-        return dump()
+        dumped = dump()
+        return dict(dumped) if isinstance(dumped, dict) else {}
     if hasattr(value, "__dict__"):
         return dict(value.__dict__)
     return {}

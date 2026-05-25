@@ -22,6 +22,7 @@ Steps:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -38,8 +39,8 @@ from src.domain.models import Agent, Context, Persona, Provider
 from src.domain.sharedfolders.dtos import ShareSummary
 from src.domain.sharedfolders.ports import (
     MountConflict,
-    ShareProvisioner,
     SharedFolderStore,
+    ShareProvisioner,
 )
 from src.domain.workstore.dtos import AddAgentRequest
 from src.domain.workstore.ports import WorkStore
@@ -49,8 +50,6 @@ from src.settings import Settings
 
 if TYPE_CHECKING:
     from src.domain.supervisor import AgentSupervisorService
-
-import logging
 
 _log = logging.getLogger(__name__)
 
@@ -82,6 +81,19 @@ class StartAgentRequest:
     # checking out anything else. Ignored when ``fork_from_agent`` is
     # set — forks are always detached.
     branch_name: str | None = None
+
+
+@dataclass(frozen=True)
+class MountedProjectShares:
+    """Mounted project shares split by audience.
+
+    ``summaries`` are prompt-safe and only name the worktree mount path.
+    ``writable_roots`` are internal sandbox roots for providers that need
+    the resolved target path to write through the symlink.
+    """
+
+    summaries: tuple[ShareSummary, ...] = ()
+    writable_roots: tuple[Path, ...] = ()
 
 
 class WorkNotFound(ValueError):
@@ -227,11 +239,12 @@ async def execute(
 
         common = CommonAgentConfig(
             workdir=workdir,
+            writable_roots=mounted_shares.writable_roots,
             system_prompt=render_system_prompt(
                 req.persona,
                 req.role,
                 workdir=workdir,
-                shares=mounted_shares,
+                shares=mounted_shares.summaries,
                 is_detached_worktree=worktree_manager.is_detached(workdir),
                 shared_envs=detect_shared_envs(workdir),
             ),
@@ -274,11 +287,11 @@ def _rollback_agent(
     one the user needs to see."""
     try:
         worktree_manager.remove(work_slug, agent_slug)
-    except Exception:  # noqa: BLE001 — best-effort housekeeping
+    except Exception:
         _log.warning("rollback: worktree.remove failed for %s/%s", work_slug, agent_slug)
     try:
         workstore.delete_agent(agent_slug)
-    except Exception:  # noqa: BLE001 — best-effort housekeeping
+    except Exception:
         _log.warning("rollback: workstore.delete_agent failed for %s", agent_slug)
 
 
@@ -289,18 +302,19 @@ def _mount_project_shares(
     project_slug: str | None,
     work_slug: str,
     agent_slug: str,
-) -> list[ShareSummary]:
+) -> MountedProjectShares:
     """Mount each project share into the agent's worktree as a symlink.
 
     Idempotent — re-mounting an existing correctly-targeted symlink is
     a no-op. Mount conflicts (existing dir/file at the path) are
     logged and skipped; the share is omitted from the returned summary
-    so the agent's system prompt doesn't promise something the
-    filesystem doesn't deliver.
+    and writable roots so the agent's system prompt and sandbox config
+    don't promise something the filesystem doesn't deliver.
     """
     if project_slug is None:
-        return []
-    mounted: list[ShareSummary] = []
+        return MountedProjectShares()
+    summaries: list[ShareSummary] = []
+    writable_roots: list[Path] = []
     for share in sharestore.list_for_project(project_slug):
         if share.slug is None:
             continue
@@ -318,15 +332,20 @@ def _mount_project_shares(
                 exc,
             )
             continue
-        mounted.append(
+        summaries.append(
             ShareSummary(name=share.name, mount_path=share.mount_path)
         )
-    return mounted
+        writable_roots.append(target.resolve(strict=False))
+    return MountedProjectShares(
+        summaries=tuple(summaries),
+        writable_roots=tuple(dict.fromkeys(writable_roots)),
+    )
 
 
 __all__ = [
     "AgentFolderMissing",
     "InvalidProviderConfig",
+    "MountedProjectShares",
     "StartAgentRequest",
     "WorkNotFound",
     "execute",

@@ -161,7 +161,7 @@ The resume command preserves the agent's selector + provider options so the CLI 
 |---|---|---|
 | Claude | `--model <id>` | `--effort <level>` (skipped when `thinking_effort=="off"`); `--permission-mode <m>` (skipped when `permission_mode=="default"`, since the CLI applies that anyway) |
 | Amp | `--mode <mode>` | `--dangerously-allow-all` when `permission_mode=="allow_all"`. Amp's other permission modes (`default`/`custom`) and `custom_allowed_tools` are Atelier-side constructs (the bridge) — they don't translate to CLI flags. |
-| Codex | `--model <id>` | `--sandbox <mode>` (skipped when `workspace-write`, the default); `--ask-for-approval <mode>` (skipped when `on-request`, the default); `-c model_reasoning_effort=<level>` (skipped when `medium`, the default) routed through Codex's TOML config override since the CLI has no dedicated reasoning-effort flag. The resume invocation is interactive `codex resume <sid>` plus the flags; `codex exec resume` is non-interactive and requires a prompt. |
+| Codex | `--model <id>` | `--add-dir <resolved-share-root>` for mounted project shared folders when sandbox is `workspace-write`; `--sandbox <mode>` (skipped when `workspace-write`, the default); `--ask-for-approval <mode>` (skipped when `on-request`, the default); `-c model_reasoning_effort=<level>` (skipped when `medium`, the default) routed through Codex's TOML config override since the CLI has no dedicated reasoning-effort flag. The resume invocation is interactive `codex resume <sid>` plus the flags; `codex exec resume` is non-interactive and requires a prompt. |
 
 Legacy agents whose `options` column is NULL (rows created before schema v9) detach with the bare `claude --resume <id>` / `amp threads continue <id>` / `codex resume <id>` shape — same behaviour as before the column existed. Unit tests in `tests/unit/infrastructure/cli_launcher/test_build_resume_command.py` pin every flag combination.
 
@@ -272,18 +272,18 @@ We use ``delegate`` to gate Bash specifically. The other tools (Read/Edit/Write/
 
 The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib-only — it ships in the source tree but runs as a detached child of the Amp CLI, so it must not import any Atelier modules (the CLI's invocation env doesn't carry our virtualenv).
 
-### Tool permissions for Codex: native typed approvals
+### Tool permissions for Codex: SDK approval-policy limits
 
-Codex is the best-instrumented of the three providers for fine-grained permissions. The Codex JSON-RPC protocol natively distinguishes ``commandExecution`` approvals from ``fileChange`` approvals, and the SDK routes each server-initiated request through a typed callback we register at thread-start. No bridge socket needed — the SDK handles framing, reconnect, and decision round-trip.
+Codex has a native approval-policy concept, but the current ``openai-codex-sdk`` 0.1.x path Atelier uses does not expose those approval callbacks to the backend. Atelier forwards ``approvalPolicy``/``--ask-for-approval`` and lets Codex's runtime decide when to ask; unlike Claude's ``can_use_tool`` and Amp's Bash bridge, those prompts are not surfaced as Atelier ``PermissionRequest`` UI today.
 
-``CodexAdapter._handle_approval_request(request)`` is the entry point: canonicalises the tool name + input via ``tool_canonical``, short-circuits on the session-only ``_allow_always`` set, otherwise creates a future + publishes a ``PermissionRequest`` event onto ``_outgoing`` and blocks. The decision arrives via ``resolve_permission`` (same uniform path as Claude), flips ``allow``/``allow_always``/``deny`` to Codex's ``accept``/``decline`` at the boundary, and the SDK forwards the answer.
+``CodexAdapter._handle_approval_request(request)`` remains as a compatibility seam for tests and a future SDK that exposes callbacks: it canonicalises the tool name + input, publishes a ``PermissionRequest``, waits for ``resolve_permission``, and maps Atelier's decision to Codex's ``accept``/``decline``. The production ``_CodexSdkClient.on_approval_request`` is currently a no-op.
 
-Two layers sit on top of the per-tool callback:
+Two layers sit on top of Codex execution:
 
-- **``CodexSandbox``** — OS-level filesystem gating (``read-only`` / ``workspace-write`` (default) / ``danger-full-access``). Forwarded as the ``sandbox`` param to ``thread_start``; the Codex subprocess enforces it. Orthogonal to the per-tool prompt: a tool inside the sandbox still routes through the approval callback if the approval mode says so.
-- **``CodexApprovalMode``** — when to prompt. ``on-request`` (the default) is what routes Codex's prompts to Atelier's UI; ``never`` auto-runs everything, ``untrusted`` prompts on every tool.
+- **``CodexSandbox``** — OS-level filesystem gating (``read-only`` / ``workspace-write`` (default) / ``danger-full-access``). Forwarded as ``sandboxMode`` to ``ThreadOptions`` and ``--sandbox`` on detach-to-CLI; Codex enforces it before approval policy can help.
+- **``CodexApprovalMode``** — Codex's own ask policy. ``on-request`` is the default, ``never`` auto-runs everything, and ``untrusted`` asks Codex to prompt on every tool. With SDK 0.1.x, these prompts do not round-trip through Atelier's WS permission frame.
 
-Atelier's worktree (``~/Atelier/works/<slug>/worktrees/<agent>/``) is the right grain for ``workspace-write`` — Codex writes stay scoped to the agent's worktree with no extra config.
+Atelier's worktree (``~/Atelier/works/<slug>/worktrees/<agent>/``) is the primary writable root for ``workspace-write``. Project shared folders are symlinks whose resolved targets live outside that worktree, so start/resume/detach collect mounted share targets into ``CommonAgentConfig.writable_roots`` and forward them as Codex ``additionalDirectories`` / CLI ``--add-dir`` values. That keeps shared-folder writes working without switching the whole agent to ``danger-full-access``.
 
 ### SDK seam
 

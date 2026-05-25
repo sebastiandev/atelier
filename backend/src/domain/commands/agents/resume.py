@@ -24,6 +24,7 @@ import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.domain.agents import (
@@ -106,11 +107,12 @@ async def execute(
 
     common = CommonAgentConfig(
         workdir=workdir,
+        writable_roots=mounted_shares.writable_roots,
         system_prompt=render_system_prompt(
             agent.persona,
             agent.role,
             workdir=workdir,
-            shares=mounted_shares,
+            shares=mounted_shares.summaries,
             is_detached_worktree=worktree_manager.is_detached(workdir),
             shared_envs=detect_shared_envs(workdir),
         ),
@@ -216,7 +218,7 @@ def _catch_up_detached_agent(
     work_slug: str,
     agent_slug: str,
     agent: Agent,
-    workdir,  # type: ignore[no-untyped-def]  # pathlib.Path; avoiding extra import
+    workdir: Path,
     *,
     emit_reattached_marker: bool = True,
 ) -> None:

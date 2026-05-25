@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -14,18 +15,29 @@ def build_command(
     *,
     model: str | None = None,
     options: dict[str, Any] | None = None,
+    additional_directories: Sequence[Path] = (),
 ) -> str:
     cwd = shell_quote(str(workdir))
     sid = shell_quote(session_id)
-    flags = _flags(model, options or {})
+    flags = _flags(model, options or {}, additional_directories)
     return f"cd {cwd} && codex resume{flags} {sid}"
 
 
-def _flags(model: str | None, options: dict[str, Any]) -> str:
+def _flags(
+    model: str | None,
+    options: dict[str, Any],
+    additional_directories: Sequence[Path] = (),
+) -> str:
     parts: list[str] = []
     if model:
         parts.append(f"--model {shell_quote(model)}")
     sandbox = options.get("sandbox")
+    sandbox_mode = (
+        sandbox if isinstance(sandbox, str) and sandbox else "workspace-write"
+    )
+    if sandbox_mode == "workspace-write":
+        for directory in additional_directories:
+            parts.append(f"--add-dir {shell_quote(str(directory))}")
     if isinstance(sandbox, str) and sandbox and sandbox != "workspace-write":
         parts.append(f"--sandbox {shell_quote(sandbox)}")
     approval = options.get("approval_mode")

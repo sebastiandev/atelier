@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -24,12 +25,21 @@ def build_resume_command(
     *,
     model: str | None = None,
     options: dict[str, Any] | None = None,
+    additional_directories: Sequence[Path] = (),
 ) -> str:
     """Return the shell command that resumes the provider CLI session."""
     impl = _PROVIDERS.get(provider)
     if impl is None:
         raise ValueError(f"unknown provider for CLI resume: {provider!r}")
-    return impl.build_command(session_id, workdir, model=model, options=options)
+    if provider == "codex":
+        return codex.build_command(
+            session_id,
+            workdir,
+            model=model,
+            options=options,
+            additional_directories=additional_directories,
+        )
+    return str(impl.build_command(session_id, workdir, model=model, options=options))
 
 
 __all__ = ["LaunchResult", "build_resume_command", "launch_in_terminal"]

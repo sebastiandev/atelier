@@ -212,6 +212,26 @@ def test_codex_includes_model_flag() -> None:
     )
 
 
+def test_codex_includes_additional_directories() -> None:
+    cmd = build_resume_command(
+        "codex",
+        _SID,
+        _WORKDIR,
+        model="gpt-5.5",
+        additional_directories=(
+            Path("/Users/me/Atelier/projects/PRJ-001/shared/bmad"),
+            Path("/Volumes/shared/specs"),
+        ),
+    )
+    assert cmd == (
+        "cd '/tmp/agent-1' && codex resume "
+        "--model 'gpt-5.5' "
+        "--add-dir '/Users/me/Atelier/projects/PRJ-001/shared/bmad' "
+        "--add-dir '/Volumes/shared/specs' "
+        "'sess-abc'"
+    )
+
+
 def test_codex_skips_default_sandbox() -> None:
     """``workspace-write`` is the SDK + CLI default — forwarding it would
     just add noise to the command string."""
@@ -234,6 +254,18 @@ def test_codex_emits_sandbox_when_non_default() -> None:
         options={"sandbox": "read-only"},
     )
     assert "--sandbox 'read-only'" in cmd
+
+
+def test_codex_skips_additional_directories_outside_workspace_write() -> None:
+    cmd = build_resume_command(
+        "codex",
+        _SID,
+        _WORKDIR,
+        model="gpt-5.5",
+        options={"sandbox": "read-only"},
+        additional_directories=(Path("/tmp/shared"),),
+    )
+    assert "--add-dir" not in cmd
 
 
 def test_codex_skips_default_approval_mode() -> None:

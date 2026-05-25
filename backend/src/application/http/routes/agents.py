@@ -33,10 +33,10 @@ from src.domain.commands.agents import (
 )
 from src.domain.connections import ConnectionStore, ContextFetchError
 from src.domain.models import Agent, Context
+from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager, WorktreeProvisionFailed
-from src.domain.sharedfolders.ports import ShareProvisioner, SharedFolderStore
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 from src.infrastructure.filesystem.terminal import open_in_terminal
@@ -166,6 +166,8 @@ async def detach_agent(
     workstore: WorkStoreDep,
     supervisor: SupervisorDep,
     worktree_manager: WorktreeDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
     kind: str = "system",
 ) -> DetachResponse:
     """Stop the supervisor's SDK process for this agent, flip its status
@@ -183,6 +185,8 @@ async def detach_agent(
             supervisor,
             worktree_manager,
             detach.DetachAgentRequest(agent_slug=agent_slug, terminal=kind),
+            sharestore=sharestore,
+            share_provisioner=share_provisioner,
         )
     except detach.AgentNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e

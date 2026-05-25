@@ -18,9 +18,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.domain.models import Agent, AgentStatus
+from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
 from src.infrastructure.cli_launcher import build_resume_command, launch_in_terminal
@@ -75,6 +77,8 @@ async def execute(
     supervisor: AgentSupervisorService,
     worktree_manager: WorktreeManager,
     req: DetachAgentRequest,
+    sharestore: SharedFolderStore | None = None,
+    share_provisioner: ShareProvisioner | None = None,
 ) -> DetachAgentResult:
     work_slug = workstore.get_work_slug_for_agent(req.agent_slug)
     if work_slug is None:
@@ -96,13 +100,31 @@ async def execute(
         agent_slug=req.agent_slug,
         source=agent.folder,
     )
-
     # Stop the supervisor's SDK process before launching CLI. ``stop_agent``
     # is idempotent — if the agent isn't currently running (e.g. user
     # already closed-to-rail) it's a no-op. We deliberately stop before
     # writing the marker so the supervisor's seq counter doesn't race
     # the marker we're about to append.
     await supervisor.stop_agent(req.agent_slug)
+
+    additional_directories: tuple[Path, ...] = ()
+    if sharestore is not None and share_provisioner is not None:
+        record = workstore.get_work(work_slug)
+        project_slug = record.work.project_slug if record is not None else None
+
+        # Keep detach-to-CLI sandbox roots in sync with in-app Codex runs.
+        # The helper is idempotent, so it also repairs missing share symlinks
+        # before the CLI opens.
+        from src.domain.commands.agents.start import _mount_project_shares
+
+        mounted_shares = _mount_project_shares(
+            sharestore=sharestore,
+            provisioner=share_provisioner,
+            project_slug=project_slug,
+            work_slug=work_slug,
+            agent_slug=req.agent_slug,
+        )
+        additional_directories = mounted_shares.writable_roots
 
     # Flip status + write a marker. The marker carries an ``sdk_cursor``
     # snapshot (provider-specific shape) that the catch-up merge later
@@ -131,6 +153,7 @@ async def execute(
         workdir,
         model=agent.model,
         options=agent.options,
+        additional_directories=additional_directories,
     )
     result = launch_in_terminal(command, kind=req.terminal)
     return DetachAgentResult(command=result.command, launched=result.launched)

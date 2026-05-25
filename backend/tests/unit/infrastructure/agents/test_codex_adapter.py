@@ -48,6 +48,7 @@ from src.infrastructure.agents.codex_adapter import (
     _file_change_canonical,
     _normalize_sdk_event,
     _per_call_prompt_tokens,
+    _thread_options_from_kwargs,
 )
 
 # ---------------------------------------------------------------------------
@@ -157,10 +158,13 @@ class FakeClient:
 # ---------------------------------------------------------------------------
 
 
-def _common() -> CommonAgentConfig:
+def _common(
+    *, writable_roots: tuple[Path, ...] = ()
+) -> CommonAgentConfig:
     return CommonAgentConfig(
         workdir=Path("/tmp/codex-adapter-test"),
         system_prompt="you are a test agent",
+        writable_roots=writable_roots,
     )
 
 
@@ -170,9 +174,10 @@ def _config(
     sandbox: CodexSandbox = CodexSandbox.WORKSPACE_WRITE,
     approval_mode: CodexApprovalMode = CodexApprovalMode.ON_REQUEST,
     reasoning_effort: CodexReasoningEffort = CodexReasoningEffort.MEDIUM,
+    writable_roots: tuple[Path, ...] = (),
 ) -> CodexAgentConfig:
     return CodexAgentConfig(
-        common=_common(),
+        common=_common(writable_roots=writable_roots),
         model=model,
         reasoning_effort=reasoning_effort,
         sandbox=sandbox,
@@ -708,6 +713,64 @@ def test_start_emits_session_established_with_thread_id() -> None:
     assert client.start_kwargs["config_overrides"] == {
         "model_reasoning_effort": "medium"
     }
+
+
+def test_start_forwards_writable_roots_as_additional_directories() -> None:
+    thread = FakeThread(thread_id="thread-abc", turns=[])
+    client = FakeClient(thread)
+    adapter = CodexAdapter(
+        _config(
+            writable_roots=(
+                Path("/Users/me/Atelier/projects/PRJ-001/shared/bmad"),
+                Path("/Volumes/shared/specs"),
+            )
+        ),
+        client_factory=lambda: client,
+    )
+
+    async def session() -> None:
+        await adapter.start(_start_context())
+        await adapter.close()
+
+    asyncio.run(session())
+    assert client.start_kwargs is not None
+    assert client.start_kwargs["additional_directories"] == [
+        "/Users/me/Atelier/projects/PRJ-001/shared/bmad",
+        "/Volumes/shared/specs",
+    ]
+
+
+def test_start_skips_writable_roots_outside_workspace_write() -> None:
+    thread = FakeThread(thread_id="thread-abc", turns=[])
+    client = FakeClient(thread)
+    adapter = CodexAdapter(
+        _config(
+            sandbox=CodexSandbox.READ_ONLY,
+            writable_roots=(Path("/tmp/shared"),),
+        ),
+        client_factory=lambda: client,
+    )
+
+    async def session() -> None:
+        await adapter.start(_start_context())
+        await adapter.close()
+
+    asyncio.run(session())
+    assert client.start_kwargs is not None
+    assert "additional_directories" not in client.start_kwargs
+
+
+def test_thread_options_forward_additional_directories_to_sdk_alias() -> None:
+    options = _thread_options_from_kwargs(
+        {
+            "model": "gpt-5.5",
+            "cwd": "/tmp/worktree",
+            "sandbox": "workspace-write",
+            "approval_mode": "on-request",
+            "additional_directories": ["/tmp/shared"],
+        }
+    )
+    assert options["additionalDirectories"] == ["/tmp/shared"]
 
 
 def test_resume_calls_thread_resume_with_session_id() -> None:

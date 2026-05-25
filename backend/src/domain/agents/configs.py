@@ -14,6 +14,10 @@ rather than subclassing CommonAgentConfig. Frozen dataclass + ABC +
 field defaults play badly together; composition sidesteps it.
 """
 
+# Keep ``str, Enum`` rather than ``StrEnum`` for backward-compatible
+# stringification in persisted/config-adjacent paths.
+# ruff: noqa: UP042
+
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -134,6 +138,10 @@ class CommonAgentConfig:
 
     workdir: Path
     system_prompt: str
+    # Extra directories an adapter may add to its sandbox. Today this is
+    # used by Codex so workspace-write agents can write project shared
+    # folders whose symlink targets live outside the per-agent worktree.
+    writable_roots: tuple[Path, ...] = ()
 
 
 DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob")
@@ -213,12 +221,13 @@ class CodexSandbox(str, Enum):
 
 
 class CodexApprovalMode(str, Enum):
-    """Approval policy for Codex's typed approval requests.
+    """Approval policy forwarded to Codex.
 
-    Maps directly to Codex's ``--ask-for-approval`` ladder. ``on-request``
-    is the value that routes file/command approvals to Atelier's
-    ``PermissionRequest`` event path; ``never`` auto-runs everything and
-    ``untrusted`` is paranoid (every tool prompts).
+    Maps directly to Codex's ``--ask-for-approval`` ladder. With the
+    current ``openai-codex-sdk`` path, approval prompts are handled by
+    Codex's own runtime rather than Atelier's ``PermissionRequest`` UI;
+    ``never`` auto-runs everything and ``untrusted`` is paranoid (every
+    tool prompts).
     """
 
     NEVER = "never"
