@@ -278,9 +278,9 @@ def test_codex_emits_reasoning_effort_via_config_override() -> None:
         _SID,
         _WORKDIR,
         model="gpt-5.4",
-        options={"reasoning_effort": "high"},
+        options={"reasoning_effort": "minimal"},
     )
-    assert "-c 'model_reasoning_effort=\"high\"'" in cmd
+    assert "-c 'model_reasoning_effort=\"minimal\"'" in cmd
 
 
 def test_codex_combines_all_flags_in_stable_order() -> None:
@@ -292,7 +292,7 @@ def test_codex_combines_all_flags_in_stable_order() -> None:
         options={
             "sandbox": "read-only",
             "approval_mode": "untrusted",
-            "reasoning_effort": "high",
+            "reasoning_effort": "minimal",
         },
     )
     assert cmd == (
@@ -300,7 +300,7 @@ def test_codex_combines_all_flags_in_stable_order() -> None:
         "--model 'gpt-5.4-pro' "
         "--sandbox 'read-only' "
         "--ask-for-approval 'untrusted' "
-        "-c 'model_reasoning_effort=\"high\"' "
+        "-c 'model_reasoning_effort=\"minimal\"' "
         "'sess-abc'"
     )
 

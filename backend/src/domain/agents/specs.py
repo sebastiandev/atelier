@@ -175,6 +175,39 @@ _CLAUDE_MODEL_META: dict[str, ModelMeta] = {
     ),
 }
 
+_CODEX_MODEL_META: dict[str, ModelMeta] = {
+    # Pricing comes from OpenAI's public API model pages. Context windows
+    # are only filled when OpenAI has documented the Codex-side limit or
+    # the default non-experimental window for Codex specifically; API
+    # windows can be larger than what Codex uses in practice.
+    CodexModel.GPT_5_5.value: ModelMeta(
+        context_window=400_000,
+        input_per_mtok=5.0,
+        output_per_mtok=30.0,
+        cache_read_per_mtok=0.50,
+    ),
+    CodexModel.GPT_5_5_PRO.value: ModelMeta(
+        input_per_mtok=30.0,
+        output_per_mtok=180.0,
+        # GPT-5.5 Pro has no cached-input discount.
+        cache_read_per_mtok=30.0,
+        cache_write_per_mtok=30.0,
+    ),
+    CodexModel.GPT_5_4.value: ModelMeta(
+        context_window=272_000,
+        input_per_mtok=2.50,
+        output_per_mtok=15.0,
+        cache_read_per_mtok=0.25,
+    ),
+    CodexModel.GPT_5_4_PRO.value: ModelMeta(
+        input_per_mtok=30.0,
+        output_per_mtok=180.0,
+        # GPT-5.4 Pro has no cached-input discount.
+        cache_read_per_mtok=30.0,
+        cache_write_per_mtok=30.0,
+    ),
+}
+
 
 class ClaudeSpec:
     name: ClassVar[Provider] = "claude-code"
@@ -340,16 +373,13 @@ class CodexSpec:
     )
 
     def describe(self) -> ProviderDescriptor:
-        # ``model_meta`` is empty for v1: OpenAI's public pricing for
-        # Codex models is in flux; the FE renders "—" for cost (same as
-        # Amp). Fold in pricing when it settles upstream.
         return ProviderDescriptor(
             name=self.name,
             label=self.label,
             primary_field=EnumOption(
                 label="Model",
                 values=_enum_values(CodexModel),
-                default=CodexModel.GPT_5_4.value,
+                default=CodexModel.GPT_5_5.value,
             ),
             options={
                 "reasoning_effort": EnumOption(
@@ -380,6 +410,7 @@ class CodexSpec:
                 ),
             },
             advanced_intro=self._CODEX_ADVANCED_INTRO,
+            model_meta=dict(_CODEX_MODEL_META),
         )
 
     def build(

@@ -361,13 +361,11 @@ class CodexAdapter:
                 StatusChange(ts=datetime.now(UTC), status="thinking")
             )
             # Track the prompt size of the latest sub-call for ctx%
-            # display. Codex's ``turn/completed`` payload typically
-            # exposes cumulative tokens; if per-call usage is unavailable
-            # the helper falls back to ``input + cache_read +
-            # cache_creation`` from the latest item with usage. Same
-            # accuracy/clarity caveat as Claude — documented on
-            # ``TurnMetrics``.
+            # display. Codex emits ``event_msg/token_count`` frames with
+            # ``last_token_usage``; older/future SDK shapes may still hang
+            # usage off an agent-message item, so the helper accepts both.
             last_prompt_tokens = 0
+            context_window: int | None = None
             try:
                 turn = await thread.turn_start(text)
                 self._current_turn = turn
@@ -375,13 +373,17 @@ class CodexAdapter:
                     thread_id = _thread_id_from_notification(notification)
                     if thread_id:
                         await self._emit_session_established(thread_id)
-                    per_call = _per_call_prompt_tokens(notification)
+                    per_call = _prompt_tokens_from_notification(notification)
                     if per_call is not None:
                         last_prompt_tokens = per_call
+                    window = _context_window_from_notification(notification)
+                    if window is not None:
+                        context_window = window
                     for ev in _convert(
                         notification,
                         model=model,
                         last_prompt_tokens=last_prompt_tokens,
+                        context_window=context_window,
                     ):
                         await self._outgoing.put(ev)
             except Exception as exc:
@@ -571,20 +573,20 @@ class _CodexSdkClient:
     def __init__(self, sdk_client: Any) -> None:
         self._sdk_client = sdk_client
 
-    async def __aenter__(self) -> "_CodexSdkClient":
+    async def __aenter__(self) -> _CodexSdkClient:
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         return None
 
-    async def thread_start(self, **kwargs: Any) -> "_CodexSdkThread":
+    async def thread_start(self, **kwargs: Any) -> _CodexSdkThread:
         return _CodexSdkThread(
             self._sdk_client.start_thread(_thread_options_from_kwargs(kwargs))
         )
 
     async def thread_resume(
         self, thread_id: str, **kwargs: Any
-    ) -> "_CodexSdkThread":
+    ) -> _CodexSdkThread:
         return _CodexSdkThread(
             self._sdk_client.resume_thread(
                 thread_id, _thread_options_from_kwargs(kwargs)
@@ -605,7 +607,7 @@ class _CodexSdkThread:
     def id(self) -> str:
         return self._sdk_thread.id or ""
 
-    async def turn_start(self, user_message: str) -> "_CodexSdkTurnHandle":
+    async def turn_start(self, user_message: str) -> _CodexSdkTurnHandle:
         try:
             from openai_codex_sdk import AbortController
         except ImportError as exc:  # pragma: no cover - covered by factory import
@@ -679,6 +681,12 @@ def _normalize_sdk_event(event: Any) -> _SdkNotification:
             "turn/completed",
             {"status": "failed", "error": getattr(event, "message", "")},
         )
+    if event_type == "event_msg":
+        data = _model_dump(event)
+        payload = data.get("payload")
+        if isinstance(payload, dict) and payload.get("type") == "token_count":
+            return _SdkNotification("token_count", payload)
+        return _SdkNotification("event_msg", data)
     return _SdkNotification(event_type.replace(".", "/"), _model_dump(event))
 
 
@@ -737,6 +745,7 @@ def _convert(
     *,
     model: str | None = None,
     last_prompt_tokens: int = 0,
+    context_window: int | None = None,
 ) -> Iterable[AgentEvent]:
     """Map one Codex notification onto zero-or-more ``AgentEvent``.
 
@@ -748,7 +757,8 @@ def _convert(
 
     ``model`` lets the adapter stamp per-turn metrics with the configured
     Codex model id. ``last_prompt_tokens`` is the prompt size of the
-    latest sub-call — see ``TurnMetrics`` for the full rationale.
+    latest sub-call; ``context_window`` is the CLI's effective runtime
+    window when it reports one. See ``TurnMetrics`` for the full rationale.
     """
     now = datetime.now(UTC)
     t = notification.type
@@ -828,7 +838,13 @@ def _convert(
                 or "(unknown turn failure)"
             )
             yield Error(ts=now, message=str(err))
-        yield from _metrics_from_turn(params, now, model, last_prompt_tokens)
+        yield from _metrics_from_turn(
+            params,
+            now,
+            model,
+            last_prompt_tokens,
+            context_window,
+        )
         yield StatusChange(ts=now, status="idle")
         return
 
@@ -991,32 +1007,44 @@ def _metrics_from_turn(
     now: datetime,
     model: str | None,
     last_prompt_tokens: int,
+    context_window: int | None = None,
 ) -> Iterable[TurnMetrics]:
     usage = params.get("usage") or {}
+    input_tokens, cache_read_tokens = _split_prompt_usage(usage)
     yield TurnMetrics(
         ts=now,
         duration_ms=int(params.get("duration_ms", 0) or 0),
-        input_tokens=int(usage.get("input_tokens", 0) or 0),
-        output_tokens=int(usage.get("output_tokens", 0) or 0),
-        cache_read_input_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
-        cache_creation_input_tokens=int(
-            usage.get("cache_creation_input_tokens", 0) or 0
+        input_tokens=input_tokens,
+        output_tokens=_non_negative_int(usage.get("output_tokens")),
+        cache_read_input_tokens=cache_read_tokens,
+        cache_creation_input_tokens=_non_negative_int(
+            usage.get("cache_creation_input_tokens")
         ),
         last_prompt_tokens=last_prompt_tokens,
         model=model,
+        context_window=context_window,
     )
 
 
+def _prompt_tokens_from_notification(notification: Notification) -> int | None:
+    """Return the latest prompt snapshot Codex exposes, if any."""
+    if notification.type == "token_count":
+        info = notification.params.get("info")
+        if not isinstance(info, dict):
+            return None
+        usage = info.get("last_token_usage")
+        if not isinstance(usage, dict):
+            return None
+        return _prompt_tokens_from_usage(usage)
+    return _per_call_prompt_tokens(notification)
+
+
 def _per_call_prompt_tokens(notification: Notification) -> int | None:
-    """Pull ``input + cache_read + cache_creation`` off a per-call usage
-    payload if Codex surfaces one mid-turn, else ``None``.
+    """Pull a prompt snapshot off an agent-message usage payload, if present.
 
     Codex's ``item/completed`` for ``agentMessage`` *may* carry a
-    ``usage`` block (the SDK's per-call shape mirrors Anthropic's). If
-    it's absent we leave ``last_prompt_tokens`` at the previous value;
-    the ``turn/completed`` aggregate is the fallback documented in the
-    plan (cumulative-as-approximation). See ``TurnMetrics`` for the
-    rationale on why this is the right denominator for ctx%.
+    ``usage`` block. If it's absent we leave ``last_prompt_tokens`` at
+    the previous value rather than using cumulative turn totals.
     """
     if notification.type != "item/completed":
         return None
@@ -1026,11 +1054,60 @@ def _per_call_prompt_tokens(notification: Notification) -> int | None:
     usage = item.get("usage")
     if not isinstance(usage, dict):
         return None
+    return _prompt_tokens_from_usage(usage)
+
+
+def _context_window_from_notification(notification: Notification) -> int | None:
+    if notification.type != "token_count":
+        return None
+    info = notification.params.get("info")
+    if not isinstance(info, dict):
+        return None
+    return _positive_int(info.get("model_context_window"))
+
+
+def _prompt_tokens_from_usage(usage: dict[str, Any]) -> int:
+    """OpenAI's ``input_tokens`` already includes cached input tokens.
+
+    Anthropic-style shapes split prompt categories into non-overlapping
+    ``input`` / ``cache_read`` / ``cache_creation`` buckets. Codex's
+    token-count event follows OpenAI usage semantics where
+    ``cached_input_tokens`` is a subset of ``input_tokens``, so for context
+    we prefer the full prompt input count and only fall back to summing
+    split buckets for older/future shapes.
+    """
+    input_tokens = _non_negative_int(usage.get("input_tokens"))
+    if "cached_input_tokens" in usage:
+        return input_tokens
     return (
-        int(usage.get("input_tokens", 0) or 0)
-        + int(usage.get("cache_read_input_tokens", 0) or 0)
-        + int(usage.get("cache_creation_input_tokens", 0) or 0)
+        input_tokens
+        + _non_negative_int(usage.get("cache_read_input_tokens"))
+        + _non_negative_int(usage.get("cache_creation_input_tokens"))
     )
+
+
+def _split_prompt_usage(usage: dict[str, Any]) -> tuple[int, int]:
+    """Map Codex/OpenAI prompt usage into Atelier's non-overlapping buckets."""
+    input_tokens = _non_negative_int(usage.get("input_tokens"))
+    cached_tokens = _non_negative_int(usage.get("cached_input_tokens"))
+    if cached_tokens:
+        return max(0, input_tokens - cached_tokens), cached_tokens
+    return input_tokens, _non_negative_int(usage.get("cache_read_input_tokens"))
+
+
+def _non_negative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        return max(0, int(value))
+    return 0
+
+
+def _positive_int(value: Any) -> int | None:
+    parsed = _non_negative_int(value)
+    return parsed if parsed > 0 else None
 
 
 def _coerce_str(value: Any) -> str:
@@ -1081,6 +1158,9 @@ def _default_client_factory() -> CodexClient:
     Amp resolve their SDKs at runtime.
     """
     try:
+        from src.infrastructure.agents import _codex_sdk_patch
+
+        _codex_sdk_patch.install()
         from openai_codex_sdk import Codex
     except ImportError as exc:  # pragma: no cover - exercised on machines without the SDK
         raise RuntimeError(

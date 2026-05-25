@@ -223,6 +223,11 @@ class TurnMetrics:
       sub-calls multiplies the same content N times. ``last_prompt_tokens``
       is a one-frame snapshot taken at end-of-turn, after every sub-call
       has fired.
+
+    - ``context_window`` is optional runtime metadata from the provider.
+      Static provider descriptors publish best-effort model windows, but
+      some CLIs reserve part of the API window. When present, consumers
+      should prefer this value for context percentage.
     """
 
     type: Literal["turn_metrics"] = "turn_metrics"
@@ -234,6 +239,7 @@ class TurnMetrics:
     cache_creation_input_tokens: int = 0
     last_prompt_tokens: int = 0
     model: str | None = None
+    context_window: int | None = None
 
 
 AgentEvent = (

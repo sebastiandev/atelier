@@ -633,6 +633,8 @@ def _event_to_dict(event: AgentEvent) -> dict[str, Any]:
     """Flatten a frozen variant into a JSON-friendly dict, ts as ISO-8601."""
     d = dataclasses.asdict(event)
     d["ts"] = event.ts.isoformat()
+    if d.get("type") == "turn_metrics" and d.get("context_window") is None:
+        d.pop("context_window", None)
     return d
 
 

@@ -85,12 +85,26 @@ def test_codex_descriptor_has_dual_permission_layers(app_client: TestClient) -> 
     response = app_client.get("/api/providers")
     codex = next(p for p in response.json() if p["name"] == "codex")
     assert codex["primary_field"]["label"] == "Model"
+    assert codex["primary_field"]["default"] == "gpt-5.5"
     assert "gpt-5.4" in codex["primary_field"]["values"]
+    assert "gpt-5.5" in codex["primary_field"]["values"]
+    assert "gpt-5.5-pro" in codex["primary_field"]["values"]
+    assert "gpt-5.4-pro" in codex["primary_field"]["values"]
     assert "sandbox" in codex["options"]
     assert "approval_mode" in codex["options"]
     assert "reasoning_effort" in codex["options"]
+    assert codex["options"]["reasoning_effort"]["values"] == [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    ]
+    assert codex["options"]["reasoning_effort"]["default"] == "medium"
     assert codex["options"]["sandbox"]["default"] == "workspace-write"
     assert codex["options"]["approval_mode"]["default"] == "on-request"
     assert "Sandbox" in codex["advanced_intro"]
-    # No pricing for v1 — OpenAI's public list is in flux. FE renders "—".
-    assert codex["model_meta"] == {}
+    assert codex["model_meta"]["gpt-5.5"]["context_window"] == 400_000
+    assert codex["model_meta"]["gpt-5.5"]["input_per_mtok"] == 5.0
+    assert codex["model_meta"]["gpt-5.5"]["output_per_mtok"] == 30.0
+    assert codex["model_meta"]["gpt-5.4"]["context_window"] == 272_000
+    assert codex["model_meta"]["gpt-5.4-pro"]["input_per_mtok"] == 30.0

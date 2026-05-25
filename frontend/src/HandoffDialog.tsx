@@ -30,6 +30,9 @@ export function HandoffDialog({
 }: Props) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const canInterruptActiveCodexTurn =
+    source.provider === "codex" &&
+    (source.status === "thinking" || source.status === "live");
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -92,6 +95,14 @@ export function HandoffDialog({
             work via a forked worktree (detached HEAD; no auto-branch).{" "}
             {source.name} stays alive — close it manually once you're done.
           </div>
+          {canInterruptActiveCodexTurn && (
+            <div className="hint">
+              Note: wait for the current Codex turn to finish before detaching
+              this agent to the CLI. Detaching while it is still running
+              interrupts that turn, and the CLI will resume from the
+              interrupted state.
+            </div>
+          )}
           {error && <div className="form-error">{error}</div>}
         </div>
 

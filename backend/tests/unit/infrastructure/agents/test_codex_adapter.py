@@ -46,6 +46,7 @@ from src.infrastructure.agents.codex_adapter import (
     _command_execution_args,
     _convert,
     _file_change_canonical,
+    _normalize_sdk_event,
     _per_call_prompt_tokens,
 )
 
@@ -416,6 +417,39 @@ def test_file_change_completed_emits_tool_result() -> None:
     assert event.is_error is False
 
 
+def test_normalize_sdk_event_keeps_unknown_file_change_fields() -> None:
+    @dataclass
+    class FakeUnknownFileChange:
+        id: str
+        type: str
+        status: str
+        changes: list[dict[str, str]]
+
+    @dataclass
+    class FakeSdkEvent:
+        type: str
+        item: FakeUnknownFileChange
+
+    notification = _normalize_sdk_event(
+        FakeSdkEvent(
+            "item.started",
+            FakeUnknownFileChange(
+                id="fc-1",
+                type="file_change",
+                status="in_progress",
+                changes=[{"path": "artifact.md", "kind": "add"}],
+            ),
+        )
+    )
+
+    assert notification.type == "item/started"
+    item = notification.params["item"]
+    assert item["itemType"] == "fileChange"
+    assert item["status"] == "in_progress"
+    assert item["path"] == "artifact.md"
+    assert item["result"] == "add"
+
+
 def test_mcp_tool_call_emits_tool_call() -> None:
     events = list(
         _convert(
@@ -490,6 +524,7 @@ def test_turn_completed_emits_metrics_then_idle() -> None:
             ),
             model="gpt-5.4",
             last_prompt_tokens=98_400,
+            context_window=258_400,
         )
     )
     assert len(events) == 2
@@ -502,6 +537,7 @@ def test_turn_completed_emits_metrics_then_idle() -> None:
     assert metrics.cache_creation_input_tokens == 3
     assert metrics.last_prompt_tokens == 98_400
     assert metrics.model == "gpt-5.4"
+    assert metrics.context_window == 258_400
     assert isinstance(idle, StatusChange)
     assert idle.status == "idle"
 
@@ -524,6 +560,29 @@ def test_turn_completed_failed_emits_error_before_metrics() -> None:
     assert idle.status == "idle"
 
 
+def test_turn_completed_splits_codex_cached_input_usage() -> None:
+    events = list(
+        _convert(
+            FakeNotification(
+                "turn/completed",
+                {
+                    "status": "completed",
+                    "usage": {
+                        "input_tokens": 1_000,
+                        "cached_input_tokens": 775,
+                        "output_tokens": 80,
+                    },
+                },
+            ),
+        )
+    )
+    metrics = events[0]
+    assert isinstance(metrics, TurnMetrics)
+    assert metrics.input_tokens == 225
+    assert metrics.cache_read_input_tokens == 775
+    assert metrics.output_tokens == 80
+
+
 def test_turn_started_emits_no_events() -> None:
     """The pump already published ``StatusChange("thinking")`` when it
     popped the user's message — emitting a second one would just create
@@ -536,6 +595,29 @@ def test_unknown_notification_type_is_dropped() -> None:
     future variants) drop silently. Same posture as the Claude/Amp
     adapters take for SDK-internal frames."""
     assert list(_convert(FakeNotification("session/heartbeat", {}))) == []
+
+
+def test_normalize_sdk_event_keeps_codex_token_count_payload() -> None:
+    @dataclass
+    class FakeSdkEvent:
+        type: str
+        payload: dict[str, Any]
+
+    event = FakeSdkEvent(
+        "event_msg",
+        {
+            "type": "token_count",
+            "info": {
+                "last_token_usage": {"input_tokens": 240},
+                "model_context_window": 258_400,
+            },
+        },
+    )
+
+    notification = _normalize_sdk_event(event)
+
+    assert notification.type == "token_count"
+    assert notification.params["info"]["model_context_window"] == 258_400
 
 
 def test_per_call_prompt_tokens_pulls_from_agent_message_completion() -> None:
@@ -553,6 +635,24 @@ def test_per_call_prompt_tokens_pulls_from_agent_message_completion() -> None:
                     "output_tokens": 40,
                     "cache_read_input_tokens": 11_500,
                     "cache_creation_input_tokens": 320,
+                },
+            }
+        },
+    )
+    assert _per_call_prompt_tokens(n) == 12_000
+
+
+def test_per_call_prompt_tokens_treats_codex_cached_as_input_subset() -> None:
+    n = FakeNotification(
+        "item/completed",
+        {
+            "item": {
+                "itemType": "agentMessage",
+                "text": "hi",
+                "usage": {
+                    "input_tokens": 12_000,
+                    "cached_input_tokens": 11_500,
+                    "output_tokens": 40,
                 },
             }
         },
@@ -676,6 +776,60 @@ def test_full_lifecycle_translates_scripted_session() -> None:
         StatusChange,  # idle
     ]
     assert thread.received_inputs == ["hi"]
+
+
+def test_full_lifecycle_uses_codex_token_count_for_context_snapshot() -> None:
+    notifications = [
+        FakeNotification("turn/started", {}),
+        FakeNotification(
+            "token_count",
+            {
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 1_000,
+                        "cached_input_tokens": 775,
+                        "output_tokens": 80,
+                    },
+                    "last_token_usage": {
+                        "input_tokens": 240,
+                        "cached_input_tokens": 120,
+                        "output_tokens": 18,
+                    },
+                    "model_context_window": 258_400,
+                }
+            },
+        ),
+        FakeNotification(
+            "turn/completed",
+            {
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 1_000,
+                    "cached_input_tokens": 775,
+                    "output_tokens": 80,
+                },
+            },
+        ),
+    ]
+    thread = FakeThread("thread-1", [FakeTurn(notifications)])
+    client = FakeClient(thread)
+    adapter = CodexAdapter(_config(), client_factory=lambda: client)
+
+    async def session() -> TurnMetrics:
+        await adapter.start(_start_context())
+        await adapter.send_input("hi")
+        async for ev in adapter.events():
+            if isinstance(ev, TurnMetrics):
+                await adapter.close()
+                return ev
+        raise AssertionError("missing metrics")
+
+    metrics = asyncio.run(session())
+    assert metrics.input_tokens == 225
+    assert metrics.cache_read_input_tokens == 775
+    assert metrics.output_tokens == 80
+    assert metrics.last_prompt_tokens == 240
+    assert metrics.context_window == 258_400
 
 
 def test_close_is_idempotent() -> None:

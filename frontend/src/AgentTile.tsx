@@ -1324,11 +1324,11 @@ type TurnRollup = {
    *  name, this is the running total of context currently in the
    *  model's window — every sub-call's prompt replays the full
    *  conversation history, so the last sub-call's prompt = everything
-   *  loaded right now. The "should I /clear?" number. Zero on legacy
-   *  turn_metrics recorded before the fix; FE falls back to the
-   *  cumulative sum in that case. */
+   *  loaded right now. The "should I /clear?" number. Zero means the
+   *  provider did not expose a reliable snapshot. */
   lastPromptTokens: number;
   model: string | null;
+  contextWindow: number;
 };
 
 /**
@@ -1407,6 +1407,7 @@ function latestMetrics(events: AgentEvent[]): TurnRollup | null {
       cacheCreationTokens: numberField(ev, "cache_creation_input_tokens"),
       lastPromptTokens: numberField(ev, "last_prompt_tokens"),
       model: typeof ev.model === "string" ? ev.model : null,
+      contextWindow: numberField(ev, "context_window"),
     };
   }
   return null;
@@ -1507,25 +1508,19 @@ function TurnMetricsBar({
     metrics.outputTokens +
     metrics.cacheReadTokens +
     metrics.cacheCreationTokens;
-  // Context %: prompt size of the *last model call* in the turn (=
-  // total context currently in the window, since each sub-call's
-  // prompt replays the full conversation history), over the model's
-  // context window. The cumulative ``input + cache_read +
-  // cache_creation`` of ResultMessage.usage is inflated by the
-  // number of sub-calls — would balloon ctx% past 100% on tool-heavy
-  // turns. We ride on ``last_prompt_tokens`` which the adapter pulls
-  // off the final AssistantMessage. Legacy turn_metrics emitted
-  // before that field existed fall back to the old (over-counted) sum
-  // so the display doesn't go blank on resumed agents.
-  const promptTokens =
-    metrics.lastPromptTokens > 0
-      ? metrics.lastPromptTokens
-      : metrics.inputTokens +
-        metrics.cacheReadTokens +
-        metrics.cacheCreationTokens;
+  // Context %: prompt size of the *last model call* in the turn over the
+  // model's window. Do not fall back to cumulative input/cache tokens:
+  // those are billing totals across sub-calls and can exceed the window.
+  const promptTokens = metrics.lastPromptTokens > 0 ? metrics.lastPromptTokens : null;
+  const contextWindow =
+    metrics.contextWindow > 0
+      ? metrics.contextWindow
+      : meta?.context_window && meta.context_window > 0
+        ? meta.context_window
+        : null;
   const ctxPct =
-    meta?.context_window && meta.context_window > 0
-      ? (promptTokens / meta.context_window) * 100
+    promptTokens !== null && contextWindow !== null
+      ? (promptTokens / contextWindow) * 100
       : null;
   const ctxLevel = ctxLevelFor(ctxPct);
   const sessionCost = computeSessionCost(session, meta);
@@ -1536,10 +1531,12 @@ function TurnMetricsBar({
     `Cache read: ${metrics.cacheReadTokens.toLocaleString()}`,
     `Cache write: ${metrics.cacheCreationTokens.toLocaleString()}`,
   ];
-  if (ctxPct !== null && meta?.context_window) {
+  if (promptTokens !== null && ctxPct !== null && contextWindow !== null) {
     tooltipLines.push(
-      `Context: ${promptTokens.toLocaleString()} / ${meta.context_window.toLocaleString()} (${ctxPct.toFixed(1)}%)`,
+      `Context: ${promptTokens.toLocaleString()} / ${contextWindow.toLocaleString()} (${ctxPct.toFixed(1)}%)`,
     );
+  } else if (contextWindow !== null) {
+    tooltipLines.push("Context: unavailable for this turn");
   }
   if (sessionCost !== null) {
     tooltipLines.push(
@@ -1556,11 +1553,11 @@ function TurnMetricsBar({
       <span className="turn-metrics-item">{formatDuration(metrics.durationMs)}</span>
       <span className="turn-metrics-sep">·</span>
       <span className="turn-metrics-item">↓ {formatTokens(totalTokens)} tokens</span>
-      {ctxPct !== null && (
+      {contextWindow !== null && (
         <>
           <span className="turn-metrics-sep">·</span>
           <span className={`turn-metrics-item turn-metrics-ctx ${ctxLevel}`}>
-            ctx {ctxPct.toFixed(0)}%
+            {ctxPct !== null ? `ctx ${ctxPct.toFixed(0)}%` : "ctx —"}
           </span>
         </>
       )}

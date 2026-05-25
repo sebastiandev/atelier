@@ -656,6 +656,51 @@ def test_codex_merge_accepts_duration_ms_on_task_complete(
     assert events[0]["duration_ms"] == 5845
 
 
+def test_codex_merge_uses_token_count_for_turn_metrics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    session_id = "sess-codex"
+    _write_codex_session(
+        tmp_path,
+        session_id,
+        [
+            _codex_event(
+                "token_count",
+                "2026-05-05T10:00:01Z",
+                info={
+                    "total_token_usage": {
+                        "input_tokens": 1_000,
+                        "cached_input_tokens": 775,
+                        "output_tokens": 80,
+                    },
+                    "last_token_usage": {
+                        "input_tokens": 240,
+                        "cached_input_tokens": 120,
+                        "output_tokens": 18,
+                    },
+                    "model_context_window": 258_400,
+                },
+            ),
+            _codex_event(
+                "task_complete",
+                "2026-05-05T10:00:02Z",
+                duration_ms=5845,
+            ),
+        ],
+    )
+    events = merge_cli_transcript(
+        "codex", session_id, Path("/x"), {"provider": "codex", "line_count": 0}
+    )
+    assert [e["type"] for e in events] == ["turn_metrics"]
+    assert events[0]["duration_ms"] == 5845
+    assert events[0]["input_tokens"] == 225
+    assert events[0]["cache_read_input_tokens"] == 775
+    assert events[0]["output_tokens"] == 80
+    assert events[0]["last_prompt_tokens"] == 240
+    assert events[0]["context_window"] == 258_400
+
+
 # ---------------------------------------------------------------------------
 # Usage → turn_metrics translation
 #

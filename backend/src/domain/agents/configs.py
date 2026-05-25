@@ -174,6 +174,8 @@ class CodexModel(str, Enum):
     keeps the new-agent dialog deterministic.
     """
 
+    GPT_5_5 = "gpt-5.5"
+    GPT_5_5_PRO = "gpt-5.5-pro"
     GPT_5_4 = "gpt-5.4"
     GPT_5_4_PRO = "gpt-5.4-pro"
 
@@ -181,10 +183,11 @@ class CodexModel(str, Enum):
 class CodexReasoningEffort(str, Enum):
     """Codex reasoning effort ladder.
 
-    Mirrors the Codex CLI's ``model_reasoning_effort`` knob. ``high`` grants
-    a longer reasoning budget at the cost of latency + tokens billed.
+    Mirrors the Codex CLI's ``model_reasoning_effort`` knob. Higher values
+    grant a longer reasoning budget at the cost of latency + tokens billed.
     """
 
+    MINIMAL = "minimal"
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
@@ -235,7 +238,7 @@ class CodexAgentConfig:
     """
 
     common: CommonAgentConfig
-    model: CodexModel = CodexModel.GPT_5_4
+    model: CodexModel = CodexModel.GPT_5_5
     reasoning_effort: CodexReasoningEffort = CodexReasoningEffort.MEDIUM
     sandbox: CodexSandbox = CodexSandbox.WORKSPACE_WRITE
     approval_mode: CodexApprovalMode = CodexApprovalMode.ON_REQUEST

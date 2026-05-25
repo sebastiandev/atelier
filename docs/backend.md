@@ -31,6 +31,7 @@ Three roles, one unifying registry:
 1. **Config** (`domain/agents/configs.py`) — typed runtime instance. `CommonAgentConfig` carries the cross-provider bits (workdir, system_prompt). Each provider gets a frozen dataclass that wraps `common: CommonAgentConfig` and adds its own knobs (`ClaudeAgentConfig` has `model: ClaudeModel`, `thinking_effort: ClaudeEffort`, ...). Composition over inheritance — frozen dataclasses + ABC + defaults play badly together.
 
 2. **Spec** (`domain/agents/specs.py`) — descriptor + builder. `Spec.describe()` returns a `ProviderDescriptor` that the new-agent dialog renders into form fields. `Spec.build(common, model, options)` validates the wire-format dict into a typed `AgentConfig`. Same Spec instance powers `GET /api/providers` and `POST /api/works/<slug>/agents`, so descriptor and validator can't drift. The `SPECS` registry maps `provider name → Spec`.
+   Codex's descriptor also publishes `model_meta` so agent tiles can estimate session cost from OpenAI's published per-model pricing; context windows are only populated where the Codex-side limit is documented, because API windows and Codex windows do not always match.
 
 3. **Adapter** (`infrastructure/agents/`) — implements `AgentAdapter` Protocol from `domain/agents/ports.py`. Selected via singledispatch on the AgentConfig type:
 
@@ -58,7 +59,7 @@ Each has a `Literal` `type` discriminator; the frontend pattern-matches on it.
 
 `TurnMetrics` carries two flavours of token counts, and they aren't interchangeable. `input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens` are **cumulative** across every model sub-call in a turn — a turn that fires 20 tool-uses makes 20 API calls and the SDK's `ResultMessage` aggregates them. Summed across turns these equal what Anthropic billed, so they drive **session cost**.
 
-`last_prompt_tokens` is named misleadingly: it's the prompt size of the *last* sub-call, but because each sub-call's prompt replays the entire conversation history (system + every prior user/assistant/tool-use/tool-result + this turn's new user msg + any in-turn tool round-trips), that value equals the **total context currently in the model's window** — the running total, growing monotonically across turns. This is the "should I /clear?" number, used for the **ctx %** badge. Don't sum it across sub-calls or across turns; it's a snapshot. See `domain/agents/events.py:TurnMetrics` for the full docstring; the FE picks it up in `frontend/src/AgentTile.tsx` (`latestMetrics` → `TurnMetricsBar`).
+`last_prompt_tokens` is named misleadingly: it's the prompt size of the *last* sub-call, but because each sub-call's prompt replays the entire conversation history (system + every prior user/assistant/tool-use/tool-result + this turn's new user msg + any in-turn tool round-trips), that value equals the **total context currently in the model's window** — the running total, growing monotonically across turns. This is the "should I /clear?" number, used for the **ctx %** badge. Don't sum it across sub-calls or across turns; it's a snapshot. If a provider reports an effective runtime `context_window` on the turn, the FE uses it over static `model_meta` because CLIs can reserve part of the API window. See `domain/agents/events.py:TurnMetrics` for the full docstring; the FE picks it up in `frontend/src/AgentTile.tsx` (`latestMetrics` → `TurnMetricsBar`).
 
 ### Canonical tool shape
 
@@ -500,4 +501,3 @@ Patches we ship against third-party libs because the upstream fix isn't in yet. 
 | Patch | Lib + version | Symptom we worked around | Upstream status |
 | --- | --- | --- | --- |
 | `backend/src/infrastructure/agents/_amp_sdk_patch.py` | `amp-sdk == 0.1.5` | `amp_sdk.core._read_process_output` reads stdout via `proc.stdout.readline()` with the default 64 KiB `asyncio.StreamReader` buffer. A single tool-result JSON line >64 KiB (`rg -l` against a large tree, multi-MB `Read`, ...) raises `LimitOverrunError("Separator is not found, and chunk exceed the limit", ...)`, the SDK pump dies, and the agent's turn ends mid-flight. The patch bumps `proc.stdout._limit` to 64 MiB before the read loop. | _Report TBD_ — the package metadata only links `ampcode.com` (no public repo URL); file at `dev@ampcode.com` or via the Amp app's feedback channel. |
-
