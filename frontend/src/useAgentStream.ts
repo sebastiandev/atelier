@@ -64,6 +64,7 @@ export function useAgentStream(agentSlug: string) {
   const wsRef = useRef<WebSocket | null>(null);
   const lastSeqRef = useRef(0);
   const retryAttemptRef = useRef(0);
+  const connectionIdRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -76,15 +77,39 @@ export function useAgentStream(agentSlug: string) {
     setStatus("connecting");
     lastSeqRef.current = 0;
     retryAttemptRef.current = 0;
+    connectionIdRef.current += 1;
 
-    function scheduleReconnect() {
+    function isCurrentConnection(ws: WebSocket, connectionId: number): boolean {
+      return (
+        !cancelled &&
+        wsRef.current === ws &&
+        connectionIdRef.current === connectionId
+      );
+    }
+
+    function clearRetry() {
+      if (retryHandle !== null) {
+        window.clearTimeout(retryHandle);
+        retryHandle = null;
+      }
+    }
+
+    function scheduleReconnect(connectionId: number) {
+      clearRetry();
       const delay = delayForAttempt(retryAttemptRef.current);
       retryAttemptRef.current += 1;
-      retryHandle = window.setTimeout(connect, delay);
+      retryHandle = window.setTimeout(() => {
+        retryHandle = null;
+        if (cancelled || connectionIdRef.current !== connectionId) return;
+        connect();
+      }, delay);
     }
 
     function connect() {
       if (cancelled) return;
+      clearRetry();
+      const connectionId = connectionIdRef.current + 1;
+      connectionIdRef.current = connectionId;
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       const url =
         `${proto}//${window.location.host}` +
@@ -94,13 +119,13 @@ export function useAgentStream(agentSlug: string) {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        if (cancelled) return;
+        if (!isCurrentConnection(ws, connectionId)) return;
         retryAttemptRef.current = 0;
         setStatus("connected");
       };
 
       ws.onmessage = (msg) => {
-        if (cancelled) return;
+        if (!isCurrentConnection(ws, connectionId)) return;
         try {
           const event = JSON.parse(msg.data) as AgentEvent;
           if (typeof event.seq === "number") {
@@ -113,17 +138,18 @@ export function useAgentStream(agentSlug: string) {
       };
 
       ws.onclose = (ev) => {
-        if (cancelled) return;
+        if (!isCurrentConnection(ws, connectionId)) return;
+        wsRef.current = null;
         if (ev.code === CLOSE_CODE_AGENT_NOT_RUNNING) {
           setStatus("stopped");
           return;
         }
         setStatus("closed");
-        scheduleReconnect();
+        scheduleReconnect(connectionId);
       };
 
       ws.onerror = () => {
-        if (cancelled) return;
+        if (!isCurrentConnection(ws, connectionId)) return;
         setStatus("error");
         ws.close();
       };
@@ -133,7 +159,8 @@ export function useAgentStream(agentSlug: string) {
 
     return () => {
       cancelled = true;
-      if (retryHandle !== null) window.clearTimeout(retryHandle);
+      connectionIdRef.current += 1;
+      clearRetry();
       wsRef.current?.close();
       wsRef.current = null;
     };

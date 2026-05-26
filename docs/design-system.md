@@ -118,6 +118,21 @@ Mono + `--fg-3` keeps badges visually subordinate to the title and
 description. Always show the number even when zero — consistency reads
 better than conditional empty states on a glanceable card.
 
+## Agent Composer Status
+
+Agent tiles use the composer chrome for two persistent signals. The
+context budget is a 2px top-edge gauge on `.composer`, filled by
+`--ctx-pct` and tinted with `--info`, `--warn`, or `--danger` through
+`data-ctx-tone`. The agent activity signal is a separate 2px bottom-edge
+rail that uses `--p-color` and only sweeps while `.composer.is-working`
+is present. Keep those signals on opposite edges: top means context
+capacity, bottom means live activity.
+
+The compact action belongs in the mono status row above the composer,
+not in a second alert strip. It appears at the warning threshold and
+uses the same tone as the `ctx N%` label and top-edge gauge so the three
+parts read as one compaction affordance.
+
 ## Persona / project tinting
 
 Components that need per-persona or per-project hue declare it inline as a

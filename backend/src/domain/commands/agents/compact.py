@@ -249,6 +249,10 @@ async def execute(
                 "error": repr(exc),
             },
         )
+        # A browser reconnect can race the long-running compaction window and
+        # lazily register the agent after the initial stop. Evict that stale
+        # state so resume below seeds from the transcript we just wrote.
+        await supervisor.stop_agent(req.agent_slug)
         await _reregister(
             workstore,
             supervisor,
@@ -303,6 +307,11 @@ async def execute(
         },
     )
 
+    # See the failure path above: if the frontend reconnected while we were
+    # summarizing or seeding, the supervisor may now hold a lazy state whose
+    # replay high-water predates the final compaction boundary. Stop it before
+    # re-registering so the next WS replay includes `context_compacted`.
+    await supervisor.stop_agent(req.agent_slug)
     await _reregister(
         workstore,
         supervisor,

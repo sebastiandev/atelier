@@ -1,4 +1,5 @@
 import {
+  type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -50,8 +51,8 @@ import { shortenPath } from "./WorkView";
 
 const COMPOSER_MAX_HEIGHT = 200;
 const COMPACTION_NOTICE_PCT = 70;
-const COMPACTION_RECOMMENDED_PCT = 85;
-const COMPACTION_URGENT_PCT = 95;
+const COMPACTION_RECOMMENDED_PCT = 75;
+const COMPACTION_URGENT_PCT = 86;
 const COMPACTION_BLOCKED_PCT = 100;
 
 const SIMPLE_PICKER_TYPES: { id: SimpleContextType; label: string }[] = [
@@ -374,24 +375,16 @@ export function AgentTile({
     [lastMetrics, modelMeta, staleMetricsSeq],
   );
   const compactionLevel = compactionLevelFor(contextSnapshot?.pct ?? null);
-  const compactionSeverity = compactionSeverityFor(compactionLevel);
   const compactionBlocked = compactionLevel === "blocked";
   const [compacting, setCompacting] = useState(false);
   const [manualCompactionOpen, setManualCompactionOpen] = useState(false);
-  const [deferredCompactionSeverity, setDeferredCompactionSeverity] =
-    useState<number | null>(null);
   const [compactionError, setCompactionError] = useState<string | null>(null);
   const shouldOpenCompactionModal =
     contextSnapshot !== null &&
-    (manualCompactionOpen ||
-      (compactionSeverity >= compactionSeverityFor("recommended") &&
-        (compactionBlocked ||
-          deferredCompactionSeverity === null ||
-          compactionSeverity > deferredCompactionSeverity)));
+    (manualCompactionOpen || compactionBlocked);
 
   useEffect(() => {
     if (compactionLevel === "none" || compactionLevel === "notice") {
-      setDeferredCompactionSeverity(null);
       setCompactionError(null);
     }
   }, [compactionLevel]);
@@ -408,19 +401,12 @@ export function AgentTile({
         lastMetrics ? Math.max(prev ?? 0, lastMetrics.seq) : prev,
       );
       setManualCompactionOpen(false);
-      setDeferredCompactionSeverity(null);
     } catch (err) {
       setCompactionError(err instanceof Error ? err.message : String(err));
+      setManualCompactionOpen(true);
     } finally {
       setCompacting(false);
     }
-  }
-
-  function handleDeferCompaction() {
-    if (compactionBlocked) return;
-    setDeferredCompactionSeverity(compactionSeverity);
-    setManualCompactionOpen(false);
-    setCompactionError(null);
   }
 
   // When the user clicks "Load older", capture the pre-expansion scroll
@@ -610,6 +596,12 @@ export function AgentTile({
   const isCurrentlyActive =
     status === "connected" &&
     (thinkingSinceSeq !== null || isAgentActive(events));
+  const composerActivity = isCurrentlyActive ? activityPhase ?? "thinking…" : null;
+  const composerTone = contextToneFor(contextSnapshot?.pct ?? null);
+  const composerPct = clampPct(contextSnapshot?.pct ?? 0);
+  const composerStyle = {
+    "--ctx-pct": `${composerPct}%`,
+  } as CSSProperties;
   const isStopped = status === "stopped";
   // Send only works when the WS is OPEN — otherwise sendInput silently
   // no-ops. Disable the composer for every non-connected state so the
@@ -858,22 +850,10 @@ export function AgentTile({
             metrics={lastMetrics}
             session={sessionTotals}
             meta={modelMeta}
-            activityPhase={activityPhase}
+            activityPhase={composerActivity}
             context={contextSnapshot}
-            onCompact={() => {
-              setManualCompactionOpen(true);
-              setCompactionError(null);
-            }}
-          />
-        )}
-        {contextSnapshot && compactionLevel !== "none" && !shouldOpenCompactionModal && (
-          <CompactionInlineWarning
-            context={contextSnapshot}
-            level={compactionLevel}
-            onCompact={() => {
-              setManualCompactionOpen(true);
-              setCompactionError(null);
-            }}
+            compacting={compacting}
+            onCompact={() => void handleCompact()}
           />
         )}
         {pendingPermissions.length > 0 && (
@@ -910,7 +890,20 @@ export function AgentTile({
             }}
           />
         )}
-        <form className="composer" onSubmit={handleSubmit}>
+        <form
+          className={`composer${composerActivity ? " is-working" : ""}`}
+          data-ctx-tone={composerTone}
+          style={composerStyle}
+          onSubmit={handleSubmit}
+        >
+          {contextSnapshot && (
+            <div className="composer-context-gauge" aria-hidden>
+              <span />
+            </div>
+          )}
+          <div className="composer-activity-rail" aria-hidden>
+            {composerActivity && <span />}
+          </div>
           {pendingContexts.length > 0 && (
             <div className="composer-contexts">
               {pendingContexts.map((c, i) =>
@@ -1001,7 +994,9 @@ export function AgentTile({
           error={compactionError}
           canHandoff={Boolean(onHandoff)}
           onCompact={() => void handleCompact()}
-          onDefer={compactionBlocked ? undefined : handleDeferCompaction}
+          onClose={
+            compactionBlocked ? undefined : () => setManualCompactionOpen(false)
+          }
           onHandoff={onHandoff}
         />
       )}
@@ -1623,21 +1618,6 @@ function compactionLevelFor(pct: number | null): CompactionLevel {
   return "none";
 }
 
-function compactionSeverityFor(level: CompactionLevel): number {
-  switch (level) {
-    case "blocked":
-      return 4;
-    case "urgent":
-      return 3;
-    case "recommended":
-      return 2;
-    case "notice":
-      return 1;
-    case "none":
-      return 0;
-  }
-}
-
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const totalSec = Math.round(ms / 1000);
@@ -1660,6 +1640,7 @@ function TurnMetricsBar({
   meta,
   activityPhase,
   context,
+  compacting,
   onCompact,
 }: {
   metrics: TurnRollup | null;
@@ -1667,22 +1648,23 @@ function TurnMetricsBar({
   meta: ModelMeta | null;
   activityPhase: string | null;
   context: ContextSnapshot | null;
-  onCompact: () => void;
+  compacting: boolean;
+  onCompact?: () => void;
 }) {
-  // Persona-tinted wave that spans from the last metric segment to
-  // the right margin. Renders only while the agent is mid-turn so a
-  // settled bar reads as "done".
-  const activityNode = activityPhase ? (
+  const activityNode = (
     <span
-      className="turn-metrics-activity"
-      aria-hidden
-      title={activityPhase}
+      className="turn-metrics-activity-label"
+      data-active={activityPhase ? "true" : "false"}
     >
-      <span className="turn-metrics-activity-track">
-        <span className="turn-metrics-activity-fill" />
-      </span>
+      {activityPhase ?? "idle"}
     </span>
-  ) : null;
+  );
+  const ctxTone = contextToneFor(context?.pct ?? null);
+  const showCompact =
+    context !== null &&
+    context.pct >= COMPACTION_RECOMMENDED_PCT &&
+    Boolean(onCompact) &&
+    !compacting;
   // First-turn-in-progress path: no ``turn_metrics`` event yet so the
   // rollup is null. Render an em-dash placeholder for each segment so
   // the bar still shows up (with the activity phase + shimmer); the
@@ -1714,7 +1696,6 @@ function TurnMetricsBar({
   const promptTokens = context?.promptTokens ?? null;
   const contextWindow = context?.contextWindow ?? null;
   const ctxPct = context?.pct ?? null;
-  const ctxLevel = ctxLevelFor(ctxPct);
   const sessionCost = computeSessionCost(session, meta);
   const tooltipLines = [
     `Duration: ${formatDuration(metrics.durationMs)}`,
@@ -1748,8 +1729,16 @@ function TurnMetricsBar({
       {contextWindow !== null && (
         <>
           <span className="turn-metrics-sep">·</span>
-          <span className={`turn-metrics-item turn-metrics-ctx ${ctxLevel}`}>
-            {ctxPct !== null ? `ctx ${ctxPct.toFixed(0)}%` : "ctx —"}
+          <span
+            className={`turn-metrics-item turn-metrics-ctx is-${ctxTone}${
+              compacting ? " is-compacting" : ""
+            }`}
+          >
+            {compacting
+              ? "compacting…"
+              : ctxPct !== null
+                ? `ctx ${ctxPct.toFixed(0)}%`
+                : "ctx —"}
           </span>
         </>
       )}
@@ -1759,10 +1748,11 @@ function TurnMetricsBar({
           <span className="turn-metrics-item">{formatCost(sessionCost)}</span>
         </>
       )}
-      {context !== null && (
+      {showCompact && (
         <button
           type="button"
           className="turn-metrics-compact"
+          data-tone={ctxTone}
           onClick={onCompact}
           title="Compact this agent's context"
         >
@@ -1774,11 +1764,18 @@ function TurnMetricsBar({
   );
 }
 
-function ctxLevelFor(pct: number | null): string {
-  if (pct === null) return "";
-  if (pct >= 85) return "is-danger";
-  if (pct >= 70) return "is-warn";
-  return "";
+type ContextTone = "ok" | "warn" | "crit";
+
+function contextToneFor(pct: number | null): ContextTone {
+  if (pct === null) return "ok";
+  if (pct >= COMPACTION_URGENT_PCT) return "crit";
+  if (pct >= COMPACTION_RECOMMENDED_PCT) return "warn";
+  return "ok";
+}
+
+function clampPct(pct: number): number {
+  if (!Number.isFinite(pct)) return 0;
+  return Math.max(0, Math.min(100, pct));
 }
 
 function computeSessionCost(
@@ -2665,39 +2662,6 @@ function inferLanguage(path: string): string {
   return map[ext] ?? "";
 }
 
-function CompactionInlineWarning({
-  context,
-  level,
-  onCompact,
-}: {
-  context: ContextSnapshot;
-  level: CompactionLevel;
-  onCompact: () => void;
-}) {
-  const text =
-    level === "notice"
-      ? "Context is getting full."
-      : level === "recommended"
-        ? "Context compaction is recommended."
-        : level === "urgent"
-          ? "Context is nearly full."
-          : "Context is full.";
-  return (
-    <div className="compaction-inline-warning" data-level={level}>
-      <div>
-        <span className="compaction-inline-title">{text}</span>{" "}
-        <span className="compaction-inline-meta">
-          {formatTokens(context.promptTokens)} /{" "}
-          {formatTokens(context.contextWindow)} tokens
-        </span>
-      </div>
-      <button type="button" className="btn sm" onClick={onCompact}>
-        Compact
-      </button>
-    </div>
-  );
-}
-
 function CompactionModal({
   context,
   level,
@@ -2705,7 +2669,7 @@ function CompactionModal({
   error,
   canHandoff,
   onCompact,
-  onDefer,
+  onClose,
   onHandoff,
 }: {
   context: ContextSnapshot;
@@ -2714,7 +2678,7 @@ function CompactionModal({
   error: string | null;
   canHandoff: boolean;
   onCompact: () => void;
-  onDefer?: () => void;
+  onClose?: () => void;
   onHandoff?: () => void;
 }) {
   const blocked = level === "blocked";
@@ -2765,14 +2729,14 @@ function CompactionModal({
               Handoff
             </button>
           )}
-          {onDefer && (
+          {onClose && (
             <button
               type="button"
               className="btn sm ghost"
-              onClick={onDefer}
+              onClick={onClose}
               disabled={compacting}
             >
-              Defer
+              Close
             </button>
           )}
           <button

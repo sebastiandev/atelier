@@ -182,10 +182,11 @@ async def test_compact_replaces_session_and_records_boundary(tmp_path: Path) -> 
     service, repo, files, transcript = _workstore()
     _seed_agent(service, repo, tmp_path)
     session_client = FakeSessionClient()
+    supervisor = FakeSupervisor()
 
     result = await compact.execute(
         service,
-        FakeSupervisor(),  # type: ignore[arg-type]
+        supervisor,  # type: ignore[arg-type]
         FakeWorktreeManager(tmp_path),  # type: ignore[arg-type]
         FakeShareStore(),  # type: ignore[arg-type]
         FakeShareProvisioner(),  # type: ignore[arg-type]
@@ -203,6 +204,7 @@ async def test_compact_replaces_session_and_records_boundary(tmp_path: Path) -> 
     assert result.new_session_id == "new-session"
     assert result.breadcrumb_written is True
     assert result.summary_path.endswith("/compactions/20260526-120000.md")
+    assert supervisor.stopped == ["agt-1", "agt-1"]
     assert repo.agents["agt-1"].session_id == "new-session"
     assert repo.agents["agt-1"].parent_session_id == "old-session"
     assert repo.agents["agt-1"].status == AgentStatus.IDLE
