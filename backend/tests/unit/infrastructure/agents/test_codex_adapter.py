@@ -11,6 +11,7 @@ the suite hermetic + fast and exercises every notification variant.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,12 +44,14 @@ from src.domain.agents import (
 )
 from src.infrastructure.agents.codex_adapter import (
     CodexAdapter,
+    _CodexTokenSnapshotTail,
     _command_execution_args,
     _convert,
     _file_change_canonical,
     _normalize_sdk_event,
     _per_call_prompt_tokens,
     _thread_options_from_kwargs,
+    _TokenSnapshot,
 )
 
 # ---------------------------------------------------------------------------
@@ -841,7 +844,7 @@ def test_full_lifecycle_translates_scripted_session() -> None:
     assert thread.received_inputs == ["hi"]
 
 
-def test_full_lifecycle_uses_codex_token_count_for_context_snapshot() -> None:
+def test_full_lifecycle_uses_codex_token_count_for_turn_metrics_context() -> None:
     notifications = [
         FakeNotification("turn/started", {}),
         FakeNotification(
@@ -893,6 +896,97 @@ def test_full_lifecycle_uses_codex_token_count_for_context_snapshot() -> None:
     assert metrics.output_tokens == 80
     assert metrics.last_prompt_tokens == 240
     assert metrics.context_window == 258_400
+
+
+def test_full_lifecycle_polls_codex_session_for_turn_metrics_context() -> None:
+    """The SDK can omit token_count frames while Codex writes them to JSONL."""
+    notifications = [
+        FakeNotification("turn/started", {}),
+        FakeNotification(
+            "turn/completed",
+            {
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 1_000,
+                    "cached_input_tokens": 775,
+                    "output_tokens": 80,
+                },
+            },
+        ),
+    ]
+    thread = FakeThread("thread-1", [FakeTurn(notifications)])
+    client = FakeClient(thread)
+    # First poll primes the adapter at turn start; second poll sees the
+    # current turn's token_count snapshot before turn/completed converts.
+    snapshots = iter([None, _TokenSnapshot(240, 258_400), None])
+    adapter = CodexAdapter(
+        _config(),
+        client_factory=lambda: client,
+        token_snapshot_poller=lambda _session_id: next(snapshots, None),
+    )
+
+    async def session() -> TurnMetrics:
+        await adapter.start(_start_context())
+        await adapter.send_input("hi")
+        async for ev in adapter.events():
+            if isinstance(ev, TurnMetrics):
+                await adapter.close()
+                return ev
+        raise AssertionError("missing metrics")
+
+    metrics = asyncio.run(session())
+    assert metrics.last_prompt_tokens == 240
+    assert metrics.context_window == 258_400
+
+
+def test_codex_token_snapshot_tail_reads_incremental_session_jsonl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    session_id = "session-1"
+    path = (
+        tmp_path
+        / ".codex"
+        / "sessions"
+        / "2026"
+        / "05"
+        / "25"
+        / f"rollout-2026-05-25T12-00-00-{session_id}.jsonl"
+    )
+    path.parent.mkdir(parents=True)
+
+    def write_token_count(input_tokens: int) -> None:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(
+                json.dumps(
+                    {
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {
+                                "last_token_usage": {
+                                    "input_tokens": input_tokens,
+                                    "cached_input_tokens": input_tokens - 10,
+                                    "output_tokens": 1,
+                                },
+                                "model_context_window": 258_400,
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+    write_token_count(100)
+    tail = _CodexTokenSnapshotTail()
+
+    first = tail.poll(session_id)
+    assert first == _TokenSnapshot(last_prompt_tokens=100, context_window=258_400)
+
+    write_token_count(240)
+    second = tail.poll(session_id)
+    assert second == _TokenSnapshot(last_prompt_tokens=240, context_window=258_400)
+    assert tail.poll(session_id) is None
 
 
 def test_close_is_idempotent() -> None:

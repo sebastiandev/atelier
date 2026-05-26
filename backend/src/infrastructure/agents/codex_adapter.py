@@ -49,6 +49,7 @@ from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 
 from src.domain.agents import (
@@ -198,6 +199,15 @@ ClientFactory = Callable[[], CodexClient]
 """DI seam — tests inject a factory returning a fake CodexClient."""
 
 
+@dataclass(frozen=True)
+class _TokenSnapshot:
+    last_prompt_tokens: int
+    context_window: int | None = None
+
+
+TokenSnapshotPoller = Callable[[str], _TokenSnapshot | None]
+
+
 # ---------------------------------------------------------------------------
 # Adapter
 # ---------------------------------------------------------------------------
@@ -211,6 +221,7 @@ class CodexAdapter:
         config: CodexAgentConfig,
         *,
         client_factory: ClientFactory | None = None,
+        token_snapshot_poller: TokenSnapshotPoller | None = None,
     ) -> None:
         self._config = config
         # Production builder injects ``_default_client_factory`` (lazy SDK
@@ -218,6 +229,9 @@ class CodexAdapter:
         # the ``CodexClient`` Protocol.
         self._client_factory: ClientFactory = (
             client_factory or _default_client_factory
+        )
+        self._token_snapshot_poller: TokenSnapshotPoller = (
+            token_snapshot_poller or _CodexTokenSnapshotTail().poll
         )
         self._client: CodexClient | None = None
         self._thread: CodexThread | None = None
@@ -369,16 +383,23 @@ class CodexAdapter:
             try:
                 turn = await thread.turn_start(text)
                 self._current_turn = turn
+                if self._reported_session_id:
+                    # Avoid carrying a previous turn's JSONL token_count
+                    # into this turn's terminal TurnMetrics.
+                    self._token_snapshot_poller(self._reported_session_id)
                 async for notification in turn.stream():
                     thread_id = _thread_id_from_notification(notification)
                     if thread_id:
                         await self._emit_session_established(thread_id)
-                    per_call = _prompt_tokens_from_notification(notification)
-                    if per_call is not None:
-                        last_prompt_tokens = per_call
-                    window = _context_window_from_notification(notification)
-                    if window is not None:
-                        context_window = window
+                    snapshot = _token_snapshot_from_notification(notification)
+                    if snapshot is None and self._reported_session_id:
+                        snapshot = self._token_snapshot_poller(
+                            self._reported_session_id
+                        )
+                    if snapshot is not None:
+                        last_prompt_tokens = snapshot.last_prompt_tokens
+                        if snapshot.context_window is not None:
+                            context_window = snapshot.context_window
                     for ev in _convert(
                         notification,
                         model=model,
@@ -575,6 +596,50 @@ def _build_atelier_mcp_servers() -> dict[str, Any]:
 class _SdkNotification:
     type: str
     params: dict[str, Any]
+
+
+class _CodexTokenSnapshotTail:
+    """Incrementally read Codex's session JSONL for token_count frames.
+
+    The Python SDK's experimental-json stream currently exposes terminal
+    usage, but Codex's richer ``last_token_usage`` snapshots are written
+    to ``~/.codex/sessions``. Polling the append-only file lets the
+    adapter enrich the next terminal ``TurnMetrics`` with the same
+    context fields Claude/Amp attach from their SDK streams.
+    """
+
+    def __init__(self) -> None:
+        self._path: Path | None = None
+        self._offset = 0
+
+    def poll(self, session_id: str) -> _TokenSnapshot | None:
+        path = self._path
+        if path is None or not path.exists():
+            path = _codex_session_transcript_path(session_id)
+            if path is None:
+                return None
+            self._path = path
+            self._offset = 0
+
+        latest: _TokenSnapshot | None = None
+        try:
+            if path.stat().st_size < self._offset:
+                self._offset = 0
+            with path.open("r", encoding="utf-8") as f:
+                f.seek(self._offset)
+                while raw := f.readline():
+                    try:
+                        entry = json.loads(raw)
+                    except ValueError:
+                        continue
+                    snapshot = _token_snapshot_from_raw_entry(entry)
+                    if snapshot is not None:
+                        latest = snapshot
+                self._offset = f.tell()
+        except OSError:
+            return None
+
+        return latest
 
 
 class _CodexSdkClient:
@@ -784,6 +849,29 @@ def _model_dump(value: Any) -> dict[str, Any]:
     if hasattr(value, "__dict__"):
         return dict(value.__dict__)
     return {}
+
+
+def _codex_session_transcript_path(session_id: str) -> Path | None:
+    if not session_id:
+        return None
+    sessions_root = Path.home() / ".codex" / "sessions"
+    if not sessions_root.exists():
+        return None
+    matches = sorted(
+        sessions_root.glob(f"**/rollout-*-{session_id}.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    return matches[0] if matches else None
+
+
+def _token_snapshot_from_raw_entry(entry: dict[str, Any]) -> _TokenSnapshot | None:
+    if entry.get("type") != "event_msg":
+        return None
+    payload = entry.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "token_count":
+        return None
+    return _token_snapshot_from_token_count_payload(payload)
 
 
 def _thread_id_from_notification(notification: Notification) -> str | None:
@@ -1085,17 +1173,32 @@ def _metrics_from_turn(
     )
 
 
-def _prompt_tokens_from_notification(notification: Notification) -> int | None:
-    """Return the latest prompt snapshot Codex exposes, if any."""
+def _token_snapshot_from_notification(
+    notification: Notification,
+) -> _TokenSnapshot | None:
     if notification.type == "token_count":
-        info = notification.params.get("info")
-        if not isinstance(info, dict):
-            return None
-        usage = info.get("last_token_usage")
-        if not isinstance(usage, dict):
-            return None
-        return _prompt_tokens_from_usage(usage)
-    return _per_call_prompt_tokens(notification)
+        return _token_snapshot_from_token_count_payload(notification.params)
+    prompt_tokens = _per_call_prompt_tokens(notification)
+    if prompt_tokens is None:
+        return None
+    return _TokenSnapshot(
+        last_prompt_tokens=prompt_tokens,
+    )
+
+
+def _token_snapshot_from_token_count_payload(
+    payload: dict[str, Any],
+) -> _TokenSnapshot | None:
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None
+    usage = info.get("last_token_usage")
+    if not isinstance(usage, dict):
+        return None
+    return _TokenSnapshot(
+        last_prompt_tokens=_prompt_tokens_from_usage(usage),
+        context_window=_positive_int(info.get("model_context_window")),
+    )
 
 
 def _per_call_prompt_tokens(notification: Notification) -> int | None:
@@ -1114,15 +1217,6 @@ def _per_call_prompt_tokens(notification: Notification) -> int | None:
     if not isinstance(usage, dict):
         return None
     return _prompt_tokens_from_usage(usage)
-
-
-def _context_window_from_notification(notification: Notification) -> int | None:
-    if notification.type != "token_count":
-        return None
-    info = notification.params.get("info")
-    if not isinstance(info, dict):
-        return None
-    return _positive_int(info.get("model_context_window"))
 
 
 def _prompt_tokens_from_usage(usage: dict[str, Any]) -> int:
