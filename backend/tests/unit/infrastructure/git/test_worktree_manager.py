@@ -351,6 +351,25 @@ def test_describe_state_handles_non_git_folder(
     assert state.status == ""
 
 
+def test_sandbox_writable_roots_include_external_git_common_dir(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    roots = manager.sandbox_writable_roots(workdir)
+
+    assert roots == ((repo / ".git").resolve(),)
+
+
+def test_sandbox_writable_roots_empty_for_non_git_folder(
+    manager: GitWorktreeManager, tmp_path: Path
+) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    assert manager.sandbox_writable_roots(plain) == ()
+
+
 # --- devtime artifact symlinks ----------------------------------------------
 
 

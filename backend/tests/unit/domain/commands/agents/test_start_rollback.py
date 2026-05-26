@@ -246,3 +246,24 @@ def test_mount_project_shares_returns_resolved_writable_roots(
     assert provisioner.mounts == [
         ("WRK-001", "agt-1", "_bmad-output", canonical)
     ]
+
+
+def test_agent_writable_roots_merges_shares_and_worktree_roots(
+    tmp_path: Path,
+) -> None:
+    share_root = tmp_path / "share"
+    git_root = tmp_path / "repo" / ".git"
+    workdir = tmp_path / "worktree"
+
+    class Worktrees:
+        def sandbox_writable_roots(self, received_workdir: Path) -> tuple[Path, ...]:
+            assert received_workdir == workdir
+            return (git_root, share_root)
+
+    roots = start._agent_writable_roots(
+        start.MountedProjectShares(writable_roots=(share_root,)),
+        Worktrees(),  # type: ignore[arg-type]
+        workdir,
+    )
+
+    assert roots == (share_root, git_root)

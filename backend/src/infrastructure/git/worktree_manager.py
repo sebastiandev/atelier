@@ -204,6 +204,23 @@ class GitWorktreeManager:
             untracked_files=tuple(untracked),
         )
 
+    def sandbox_writable_roots(self, workdir: Path) -> tuple[Path, ...]:
+        workdir = workdir.resolve(strict=False)
+        if not _is_git_repo(workdir):
+            return ()
+
+        common_dir = _git_out(
+            workdir, "rev-parse", "--path-format=absolute", "--git-common-dir"
+        )
+        if not common_dir:
+            return ()
+        common_path = Path(common_dir).resolve(strict=False)
+        try:
+            common_path.relative_to(workdir)
+        except ValueError:
+            return (common_path,)
+        return ()
+
     def ensure_forked(
         self,
         work_slug: str,

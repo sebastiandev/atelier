@@ -16,6 +16,8 @@ The seam stays narrow on purpose:
     returns the existing path.
   - ``is_detached(workdir)`` / ``describe_state(workdir)`` — read-only
     state for prompts and compaction summaries.
+  - ``sandbox_writable_roots(workdir)`` — extra filesystem roots an
+    adapter sandbox needs to mutate this worktree correctly.
   - ``remove(work_slug, agent_slug)`` — tear down. Quiet on missing.
   - ``sweep_orphans(work_slug, live_agent_slugs)`` — startup cleanup;
     removes worktrees under the work that don't appear in the live set.
@@ -85,6 +87,16 @@ class WorktreeManager(Protocol):
 
         Non-git folders are valid workdirs; implementations should return
         ``is_git_repo=False`` rather than raising.
+        """
+        ...
+
+    def sandbox_writable_roots(self, workdir: Path) -> tuple[Path, ...]:
+        """Extra writable roots required by sandboxed providers.
+
+        Git worktrees can store mutable metadata outside ``workdir`` in the
+        source repo's shared ``.git`` directory. Providers such as Codex
+        need that directory in their sandbox to create branches from a
+        detached worktree. Non-git folders should return ``()``.
         """
         ...
 

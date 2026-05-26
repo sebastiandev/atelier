@@ -95,7 +95,10 @@ async def execute(
     # Re-mount shared folders in case the user added shares since the
     # agent's last start. Idempotent — existing correctly-targeted
     # symlinks are left alone; conflicts are logged + skipped.
-    from src.domain.commands.agents.start import _mount_project_shares
+    from src.domain.commands.agents.start import (
+        _agent_writable_roots,
+        _mount_project_shares,
+    )
 
     mounted_shares = _mount_project_shares(
         sharestore=sharestore,
@@ -107,7 +110,9 @@ async def execute(
 
     common = CommonAgentConfig(
         workdir=workdir,
-        writable_roots=mounted_shares.writable_roots,
+        writable_roots=_agent_writable_roots(
+            mounted_shares, worktree_manager, workdir
+        ),
         system_prompt=render_system_prompt(
             agent.persona,
             agent.role,

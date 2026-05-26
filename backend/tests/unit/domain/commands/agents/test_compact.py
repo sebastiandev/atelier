@@ -50,6 +50,9 @@ class FakeWorktreeManager:
     def is_detached(self, _workdir: Path) -> bool:
         return True
 
+    def sandbox_writable_roots(self, _workdir: Path) -> tuple[Path, ...]:
+        return ()
+
     def describe_state(self, workdir: Path) -> WorktreeState:
         assert workdir == self.workdir
         return WorktreeState(

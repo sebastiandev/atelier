@@ -239,7 +239,9 @@ async def execute(
 
         common = CommonAgentConfig(
             workdir=workdir,
-            writable_roots=mounted_shares.writable_roots,
+            writable_roots=_agent_writable_roots(
+                mounted_shares, worktree_manager, workdir
+            ),
             system_prompt=render_system_prompt(
                 req.persona,
                 req.role,
@@ -339,6 +341,21 @@ def _mount_project_shares(
     return MountedProjectShares(
         summaries=tuple(summaries),
         writable_roots=tuple(dict.fromkeys(writable_roots)),
+    )
+
+
+def _agent_writable_roots(
+    mounted_shares: MountedProjectShares,
+    worktree_manager: WorktreeManager,
+    workdir: Path,
+) -> tuple[Path, ...]:
+    return tuple(
+        dict.fromkeys(
+            (
+                *mounted_shares.writable_roots,
+                *worktree_manager.sandbox_writable_roots(workdir),
+            )
+        )
     )
 
 

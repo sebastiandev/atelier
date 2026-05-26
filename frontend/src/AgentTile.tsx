@@ -1760,7 +1760,6 @@ function TurnMetricsBar({
           <span className="turn-metrics-item">{formatCost(sessionCost)}</span>
         </>
       )}
-      {activityNode}
       {context !== null && (
         <button
           type="button"
@@ -1771,6 +1770,7 @@ function TurnMetricsBar({
           Compact
         </button>
       )}
+      {activityNode}
     </div>
   );
 }

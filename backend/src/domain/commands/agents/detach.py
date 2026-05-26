@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.domain.models import Agent, AgentStatus
@@ -107,7 +106,13 @@ async def execute(
     # the marker we're about to append.
     await supervisor.stop_agent(req.agent_slug)
 
-    additional_directories: tuple[Path, ...] = ()
+    from src.domain.commands.agents.start import (
+        MountedProjectShares,
+        _agent_writable_roots,
+        _mount_project_shares,
+    )
+
+    mounted_shares = MountedProjectShares()
     if sharestore is not None and share_provisioner is not None:
         record = workstore.get_work(work_slug)
         project_slug = record.work.project_slug if record is not None else None
@@ -115,8 +120,6 @@ async def execute(
         # Keep detach-to-CLI sandbox roots in sync with in-app Codex runs.
         # The helper is idempotent, so it also repairs missing share symlinks
         # before the CLI opens.
-        from src.domain.commands.agents.start import _mount_project_shares
-
         mounted_shares = _mount_project_shares(
             sharestore=sharestore,
             provisioner=share_provisioner,
@@ -124,7 +127,9 @@ async def execute(
             work_slug=work_slug,
             agent_slug=req.agent_slug,
         )
-        additional_directories = mounted_shares.writable_roots
+    additional_directories = _agent_writable_roots(
+        mounted_shares, worktree_manager, workdir
+    )
 
     # Flip status + write a marker. The marker carries an ``sdk_cursor``
     # snapshot (provider-specific shape) that the catch-up merge later
