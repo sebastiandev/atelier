@@ -92,5 +92,8 @@ class WorkspacePaths:
     def agent_context_index(self, work_slug: str, agent_slug: str) -> Path:
         return self.agent_dir(work_slug, agent_slug) / "context.md"
 
+    def agent_compactions_dir(self, work_slug: str, agent_slug: str) -> Path:
+        return self.agent_dir(work_slug, agent_slug) / "compactions"
+
 
 __all__ = ["WorkspacePaths"]

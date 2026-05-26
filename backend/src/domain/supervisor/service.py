@@ -407,6 +407,8 @@ class AgentSupervisorService:
             state = self._states.pop(agent_slug, None)
         if state is None:
             return
+        if state.subscriber is not None:
+            state.subscriber.kicked.set()
         if state.task is not None:
             state.task.cancel()
             with suppress(asyncio.CancelledError):

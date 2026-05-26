@@ -1293,6 +1293,7 @@ body {
 /* Agent tile ------------------------------------------------------------- */
 
 .agent-tile {
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -1301,6 +1302,19 @@ body {
      container query instead of a media query. The narrow-tile rules
      live further down under ``@container`` blocks. */
   container-type: inline-size;
+}
+.agent-tile-body {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  transition: filter 140ms ease, opacity 140ms ease;
+}
+.agent-tile-body.is-compaction-blurred {
+  filter: blur(2px);
+  opacity: 0.58;
+  pointer-events: none;
+  user-select: none;
 }
 .agent-tile.mode-page {
   height: 100vh;
@@ -1676,6 +1690,30 @@ body {
   line-height: 1.5;
 }
 
+.transcript-previous-session {
+  margin: 0 0 0.25rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--bg-2) 78%, transparent);
+}
+.transcript-previous-session > summary {
+  cursor: pointer;
+  color: var(--fg-3);
+  font-size: 12px;
+  user-select: none;
+}
+.transcript-previous-session > summary span {
+  margin-left: 0.45rem;
+  color: var(--muted);
+}
+.transcript-previous-session-body {
+  margin-top: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
 .msg {
   white-space: pre-wrap;
   word-wrap: break-word;
@@ -2035,6 +2073,66 @@ h5.md-h {
   color: var(--status-error);
 }
 
+.msg-compaction {
+  margin: 0.35rem 0;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid color-mix(in oklch, var(--warn) 32%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--warn) 8%, var(--bg-2));
+  color: var(--fg-2);
+}
+.msg-compaction-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+}
+.msg-compaction-body {
+  margin-top: 0.2rem;
+  font-size: 11.5px;
+  color: var(--fg-3);
+}
+.msg-compaction-meta {
+  margin-top: 0.2rem;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.msg-compaction-summary-toggle {
+  margin-top: 0.45rem;
+  padding: 0.22rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.msg-compaction-summary-toggle:hover:not(:disabled) {
+  color: var(--fg-1);
+  border-color: var(--accent-line);
+}
+.msg-compaction-summary-toggle:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.msg-compaction-summary {
+  margin-top: 0.55rem;
+  max-height: min(46vh, 520px);
+  overflow: auto;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  white-space: normal;
+}
+.msg-compaction-summary-state {
+  color: var(--fg-3);
+}
+.msg-compaction-summary-error {
+  color: var(--status-error);
+}
+
 /* Todo checklist (Claude's TodoWrite tool) ------------------------------- */
 
 .msg-todos {
@@ -2104,6 +2202,20 @@ h5.md-h {
   background: var(--bg-elev);
   cursor: help;
 }
+.turn-metrics-compact {
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in oklch, var(--warn) 32%, var(--border));
+  background: color-mix(in oklch, var(--warn) 8%, transparent);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.turn-metrics-compact:hover {
+  color: var(--fg);
+  background: color-mix(in oklch, var(--warn) 14%, var(--bg-1));
+}
 .turn-metrics-sep {
   opacity: 0.5;
 }
@@ -2159,6 +2271,121 @@ h5.md-h {
 }
 @media (prefers-reduced-motion: reduce) {
   .turn-metrics-activity-fill { animation: none; opacity: 0.4; }
+}
+
+/* Context compaction ----------------------------------------------------- */
+
+.compaction-inline-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 1rem;
+  border-top: 1px solid color-mix(in oklch, var(--warn) 28%, var(--border));
+  background: color-mix(in oklch, var(--warn) 7%, var(--bg-elev));
+  color: var(--fg-2);
+  font-size: 12px;
+}
+.compaction-inline-warning[data-level="urgent"],
+.compaction-inline-warning[data-level="blocked"] {
+  border-top-color: color-mix(in oklch, var(--danger) 36%, var(--border));
+  background: color-mix(in oklch, var(--danger) 8%, var(--bg-elev));
+}
+.compaction-inline-title {
+  font-weight: 600;
+}
+.compaction-inline-meta {
+  color: var(--fg-3);
+}
+.compaction-modal-layer {
+  position: absolute;
+  inset: 49px 0 0;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: color-mix(in oklch, var(--bg) 54%, transparent);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+.compaction-modal {
+  width: min(420px, 100%);
+  border: 1px solid color-mix(in oklch, var(--warn) 40%, var(--border));
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--fg);
+  box-shadow: var(--shadow-pop);
+}
+.compaction-modal-layer[data-level="urgent"] .compaction-modal,
+.compaction-modal-layer[data-level="blocked"] .compaction-modal {
+  border-color: color-mix(in oklch, var(--danger) 42%, var(--border));
+}
+.compaction-modal-hd {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem 1rem 0.7rem;
+}
+.compaction-modal-hd svg {
+  flex: 0 0 auto;
+  color: var(--warn);
+  margin-top: 0.1rem;
+}
+.compaction-modal-layer[data-level="urgent"] .compaction-modal-hd svg,
+.compaction-modal-layer[data-level="blocked"] .compaction-modal-hd svg {
+  color: var(--danger);
+}
+.compaction-modal-hd h3 {
+  margin: 0 0 0.35rem;
+  font-size: 15px;
+  line-height: 1.25;
+}
+.compaction-modal-hd p {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.compaction-modal-meter {
+  height: 6px;
+  margin: 0 1rem;
+  border-radius: 999px;
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.compaction-modal-meter span {
+  display: block;
+  height: 100%;
+  background: var(--warn);
+}
+.compaction-modal-layer[data-level="urgent"] .compaction-modal-meter span,
+.compaction-modal-layer[data-level="blocked"] .compaction-modal-meter span {
+  background: var(--danger);
+}
+.compaction-modal-stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem 0;
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+.compaction-modal-error {
+  margin: 0.75rem 1rem 0;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid color-mix(in oklch, var(--danger) 38%, var(--border));
+  border-radius: 5px;
+  background: color-mix(in oklch, var(--danger) 8%, var(--bg-2));
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.compaction-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem 1rem;
 }
 
 /* Permission prompts (above composer) ----------------------------------- */

@@ -18,7 +18,6 @@ from src.domain.agents.handoffs import (
 from src.domain.models import Agent, Handoff, Work
 from src.domain.workstore.dtos import RecordHandoffRequest, WorkRecord
 
-
 # ---------------------------------------------------------------------------
 # Structural summarizer
 # ---------------------------------------------------------------------------
@@ -38,11 +37,12 @@ def test_structural_summarizer_includes_required_sections() -> None:
     for header in (
         "## Goal",
         "## Decisions",
-        "## Open questions",
         "## Key files",
         "## Blockers",
     ):
         assert header in out
+    assert "## Open questions" not in out
+    assert "Edit this section" not in out
 
 
 def test_structural_summarizer_extracts_user_inputs_as_decisions() -> None:
@@ -53,6 +53,52 @@ def test_structural_summarizer_extracts_user_inputs_as_decisions() -> None:
     out = structural_summarizer(events, _ctx())
     assert "AES-256-GCM" in out
     assert "batches of 100" in out
+
+
+def test_structural_summarizer_includes_recent_agent_findings() -> None:
+    events = [
+        {"type": "user_input", "text": "Start Move LPN kernel work."},
+        {
+            "type": "message_complete",
+            "text": (
+                "Stopped implementation and updated the story.\n\n"
+                "- Move is strictly between locations for an already-placed LPN.\n"
+                "- Port the existing `shiphero_app` move primitive into kernel first.\n"
+                "- Destination item bins are created only if missing."
+            ),
+        },
+    ]
+
+    out = structural_summarizer(events, _ctx())
+
+    assert "Recent agent findings and handoff points:" in out
+    assert "Move is strictly between locations" in out
+    assert "move primitive into kernel first" in out
+    assert "Destination item bins are created only if missing" in out
+
+
+def test_structural_summarizer_deduplicates_replayed_events() -> None:
+    events = [
+        {"type": "user_input", "seq": 1, "ts": "a", "text": "Start Move LPN work."},
+        {"type": "user_input", "seq": 2, "ts": "b", "text": "Start Move LPN work."},
+        {
+            "type": "message_complete",
+            "seq": 3,
+            "ts": "a",
+            "text": "Port the move primitive first.",
+        },
+        {
+            "type": "message_complete",
+            "seq": 4,
+            "ts": "b",
+            "text": "Port the move primitive first.",
+        },
+    ]
+
+    out = structural_summarizer(events, _ctx())
+
+    assert out.count("Start Move LPN work") == 1
+    assert out.count("Port the move primitive first") == 1
 
 
 def test_structural_summarizer_lists_files_from_tool_calls() -> None:

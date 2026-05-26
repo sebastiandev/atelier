@@ -17,16 +17,23 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import (
+    AgentCompactionSummaryResponse,
     AgentSummary,
+    CompactAgentRequest,
+    CompactAgentResponse,
     DetachResponse,
     NewAgentRequest,
     PatchAgentRequest,
     SwitchThreadRequest,
 )
+from src.domain.agents.compactions import CompactionSessionClient
+from src.domain.agents.handoffs import Summarizer
 from src.domain.commands.agents import (
+    compact,
     delete,
     detach,
     list_for_work,
+    read_compaction_summary,
     rename,
     start,
     switch_thread,
@@ -73,6 +80,14 @@ def get_share_provisioner(request: Request) -> ShareProvisioner:
     return request.app.state.share_provisioner  # type: ignore[no-any-return]
 
 
+def get_summarizer(request: Request) -> Summarizer:
+    return request.app.state.summarizer  # type: ignore[no-any-return]
+
+
+def get_compaction_session_client(request: Request) -> CompactionSessionClient:
+    return request.app.state.compaction_session_client  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
 WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
@@ -80,10 +95,14 @@ SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 ConnectionStoreDep = Annotated[ConnectionStore, Depends(get_connection_store)]
 ShareStoreDep = Annotated[SharedFolderStore, Depends(get_sharestore)]
 ShareProvisionerDep = Annotated[ShareProvisioner, Depends(get_share_provisioner)]
+SummarizerDep = Annotated[Summarizer, Depends(get_summarizer)]
+CompactionSessionClientDep = Annotated[
+    CompactionSessionClient, Depends(get_compaction_session_client)
+]
 
 
 @router.get("/works/{work_slug}/agents", response_model=list[AgentSummary])
-def list_agents_for_work_endpoint(
+def list_agents_for_work(
     work_slug: str, workstore: WorkStoreDep, settings: SettingsDep
 ) -> list[AgentSummary]:
     try:
@@ -196,7 +215,7 @@ async def detach_agent(
 
 
 @router.patch("/agents/{agent_slug}", response_model=AgentSummary)
-def patch_agent_endpoint(
+def patch_agent(
     agent_slug: str,
     payload: PatchAgentRequest,
     workstore: WorkStoreDep,
@@ -210,6 +229,7 @@ def patch_agent_endpoint(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
         )
+    agent: Agent | None
     if payload.name is not None:
         try:
             agent = rename.execute(
@@ -223,16 +243,16 @@ def patch_agent_endpoint(
             (a for a in workstore.list_agents_for_work(work_slug) if a.slug == agent_slug),
             None,
         )
-        if agent is None:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
-            )
+    if agent is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+        )
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
     return _to_summary(work_slug, agent, paths)
 
 
 @router.delete("/agents/{agent_slug}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent_endpoint(
+async def delete_agent(
     agent_slug: str,
     workstore: WorkStoreDep,
     supervisor: SupervisorDep,
@@ -253,7 +273,7 @@ async def delete_agent_endpoint(
 
 
 @router.post("/agents/{agent_slug}/reveal", status_code=status.HTTP_204_NO_CONTENT)
-def reveal_agent_endpoint(
+def reveal_agent(
     agent_slug: str,
     workstore: WorkStoreDep,
     settings: SettingsDep,
@@ -303,7 +323,7 @@ def reveal_agent_endpoint(
     "/agents/{agent_slug}/open-in-console",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-def open_agent_in_console_endpoint(
+def open_agent_in_console(
     agent_slug: str,
     workstore: WorkStoreDep,
     settings: SettingsDep,
@@ -377,6 +397,82 @@ async def switch_agent_thread(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except switch_thread.InvalidThreadId as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+
+@router.post("/agents/{agent_slug}/compact", response_model=CompactAgentResponse)
+async def compact_agent(
+    agent_slug: str,
+    payload: CompactAgentRequest,
+    workstore: WorkStoreDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    settings: SettingsDep,
+    summarizer: SummarizerDep,
+    session_client: CompactionSessionClientDep,
+) -> CompactAgentResponse:
+    try:
+        result = await compact.execute(
+            workstore,
+            supervisor,
+            worktree_manager,
+            sharestore,
+            share_provisioner,
+            settings,
+            summarizer,
+            session_client,
+            compact.CompactAgentRequest(
+                agent_slug=agent_slug,
+                reason=payload.reason,
+            ),
+        )
+    except compact.AgentNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except compact.AgentNotCompactable as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except compact.AgentBusy as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    return CompactAgentResponse(
+        agent_slug=result.agent_slug,
+        work_slug=result.work_slug,
+        provider=result.provider,
+        old_session_id=result.old_session_id,
+        new_session_id=result.new_session_id,
+        summary_path=result.summary_path,
+        breadcrumb_written=result.breadcrumb_written,
+        breadcrumb_error=result.breadcrumb_error,
+    )
+
+
+@router.get(
+    "/agents/{agent_slug}/compactions/{filename}",
+    response_model=AgentCompactionSummaryResponse,
+)
+def get_agent_compaction_summary(
+    agent_slug: str, filename: str, workstore: WorkStoreDep
+) -> AgentCompactionSummaryResponse:
+    try:
+        result = read_compaction_summary.execute(
+            workstore,
+            read_compaction_summary.ReadCompactionSummaryRequest(
+                agent_slug=agent_slug,
+                filename=filename,
+            ),
+        )
+    except read_compaction_summary.AgentNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except read_compaction_summary.CompactionSummaryNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
+    return AgentCompactionSummaryResponse(
+        agent_slug=result.agent_slug,
+        work_slug=result.work_slug,
+        filename=result.filename,
+        summary_path=result.summary_path,
+        content=result.content,
+    )
 
 
 def _to_summary(work_slug: str, agent: Agent, paths: WorkspacePaths) -> AgentSummary:

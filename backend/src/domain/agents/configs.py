@@ -162,6 +162,7 @@ class ClaudeAgentConfig:
     thinking_effort: ClaudeEffort = ClaudeEffort.OFF
     permission_mode: ClaudePermissionMode = ClaudePermissionMode.DEFAULT
     allowed_tools: tuple[str, ...] = DEFAULT_ALLOWED_TOOLS
+    summary_only: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -172,6 +173,7 @@ class AmpAgentConfig:
     # Only meaningful when ``permission_mode == CUSTOM``. Bash stays gated
     # through the bridge regardless — including ``"Bash"`` here is a no-op.
     custom_allowed_tools: tuple[str, ...] = ()
+    summary_only: bool = False
 
 
 class CodexModel(str, Enum):
@@ -251,6 +253,7 @@ class CodexAgentConfig:
     reasoning_effort: CodexReasoningEffort = CodexReasoningEffort.MEDIUM
     sandbox: CodexSandbox = CodexSandbox.WORKSPACE_WRITE
     approval_mode: CodexApprovalMode = CodexApprovalMode.ON_REQUEST
+    summary_only: bool = False
 
 
 AgentConfig = ClaudeAgentConfig | AmpAgentConfig | CodexAgentConfig

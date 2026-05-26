@@ -15,10 +15,12 @@ from src.application.http.routes import (
     health,
     projects,
     providers,
-    settings as settings_route,
     shared_folders,
     update_status,
     works,
+)
+from src.application.http.routes import (
+    settings as settings_route,
 )
 from src.application.ws import agents as ws_agents
 from src.domain.agents import record_artifact
@@ -29,6 +31,9 @@ from src.domain.projectstore import reconcile as reconcile_projects
 from src.domain.sharedfolders import SharedFolderStoreService
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore import WorkStoreService, reconcile
+from src.infrastructure.agents.compaction_sessions import (
+    AdapterCompactionSessionClient,
+)
 from src.infrastructure.artifacts.pr_status_poller import PrStatusPoller
 from src.infrastructure.connections import KeyringSecretStore, fetch_context, verify
 from src.infrastructure.database import (
@@ -206,6 +211,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Anthropic-backed when an API key is set, structural fallback
         # otherwise — keeps the handoff feature usable offline.
         app.state.summarizer = build_summarizer(resolved.anthropic_api_key)
+        app.state.compaction_session_client = AdapterCompactionSessionClient(
+            resolved
+        )
 
         # Background loop that refreshes non-terminal PR artifact
         # statuses against GitHub every 5 minutes. No-op when the user

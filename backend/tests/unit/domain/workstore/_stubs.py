@@ -126,7 +126,7 @@ class StubRepository:
     def get_artifact_by_slug(self, slug: str) -> Artifact | None:
         return self.artifacts.get(slug)
 
-    def list_non_terminal_pr_artifacts(self) -> list[tuple[str, "Artifact"]]:
+    def list_non_terminal_pr_artifacts(self) -> list[tuple[str, Artifact]]:
         work_by_id = {w.id: w for w in self.works.values()}
         out: list[tuple[str, Artifact]] = []
         for artifact in self.artifacts.values():
@@ -178,6 +178,7 @@ class StubFiles:
         self.briefs: dict[str, str] = {}
         self.agent_jsons: dict[tuple[str, str], dict[str, Any]] = {}
         self.handoff_docs: dict[tuple[str, str], str] = {}
+        self.compaction_docs: dict[tuple[str, str, str], str] = {}
         self.context_files: dict[tuple[str, str, str], str] = {}
         self.context_indexes: dict[tuple[str, str], str] = {}
 
@@ -213,6 +214,23 @@ class StubFiles:
     def write_handoff_doc(self, work_slug: str, filename: str, content: str) -> str:
         self.handoff_docs[(work_slug, filename)] = content
         return f"/stub/works/{work_slug}/handoffs/{filename}"
+
+    def write_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str, content: str
+    ) -> str:
+        self.compaction_docs[(work_slug, agent_slug, filename)] = content
+        return f"/stub/works/{work_slug}/agents/{agent_slug}/compactions/{filename}"
+
+    def read_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str
+    ) -> tuple[str, str] | None:
+        content = self.compaction_docs.get((work_slug, agent_slug, filename))
+        if content is None:
+            return None
+        return (
+            f"/stub/works/{work_slug}/agents/{agent_slug}/compactions/{filename}",
+            content,
+        )
 
     def write_agent_context_file(
         self, work_slug: str, agent_slug: str, filename: str, content: str

@@ -402,6 +402,37 @@ The terminal launch is best-effort — when it can't fire (Linux without a detec
 
 ---
 
+## `POST /api/agents/{slug}/compact`
+
+```
+Browser ──► Router (agents.py) ──► commands.compact.execute(...)
+                                       │
+                                       ├─► WorkStore.get_work_slug_for_agent(slug)  ← 404
+                                       ├─► reject missing session / mid-turn         ← 409
+                                       ├─► WorktreeManager.ensure(...)
+                                       ├─► WorktreeManager.describe_state(workdir)
+                                       ├─► await supervisor.stop_agent(slug)
+                                       ├─► summarizer(transcript, work/agent context)
+                                       ├─► WorkStore.write_agent_compaction_doc(...)
+                                       ├─► CompactionSessionClient.start_fresh_session(...)
+                                       │       ╔══════════════════════╗
+                                       │       ║ provider SDK session ║
+                                       │       ╚══════════════════════╝
+                                       ├─► CompactionSessionClient.write_breadcrumb(old_sid)
+                                      ├─► WorkStore.set_agent_session_id(new_sid, mirror_agent_json=True)
+                                      ├─► append context_compacted transcript event
+                                      └─► resume.execute(..., lazy=True)
+                                  Router formats CompactAgentResponse
+```
+
+The HTTP handler is thin: all workflow decisions live in the domain command, and provider-specific seed/breadcrumb mechanics sit behind the domain `CompactionSessionClient` port. The summary file is additive metadata under `agents/<slug>/compactions/`; the agent worktree is reused, not recreated.
+
+## `GET /api/agents/{slug}/compactions/{filename}`
+
+The browser calls this from the `context_compacted` transcript boundary when the user opens **View summary**. The route delegates to `commands.read_compaction_summary.execute(...)`, which resolves the agent's work, reads only `agents/<slug>/compactions/<filename>` through `WorkStore`, and returns `{agent_slug, work_slug, filename, summary_path, content}`. The filename is path-segment scoped; callers do not send the absolute `summary_path` back as input.
+
+---
+
 ## `POST /api/agents/{slug}/reveal`
 
 ```

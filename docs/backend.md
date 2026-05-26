@@ -114,7 +114,7 @@ The ORDER is the load-bearing invariant: **no event reaches a subscriber before 
 3. **`await adapter.start(context)`** — cheap per-adapter setup: Amp stands up the permission Unix socket; Claude connects its SDK control channel. The CLI subprocess is NOT spawned here.
 4. **Spawn the events-pump task** — `asyncio.create_task(self._run_agent(state))`. Iterating `adapter.events()` is what actually fires the underlying CLI. **Skipped when `lazy=True`** — the first `send_input` creates the task instead.
 
-`_run_agent` is the consumer side: `async for event in adapter.events()`. For `SessionEstablished` events it calls `_set_session_id` (the WorkStore hook) so the SDK's session/thread ID gets persisted to SQL — that's the resume handle. Every event gets `_publish`-ed.
+`_run_agent` is the consumer side: `async for event in adapter.events()`. For `SessionEstablished` events it calls `_set_session_id` (the WorkStore hook) so the SDK's session/thread ID gets persisted to SQL — the canonical resume handle. This supervisor hot path intentionally does not rewrite `agent.json`; command-driven session replacement flows opt into that filesystem mirror when they need user-visible lineage. Every event gets `_publish`-ed.
 
 `is_registered(agent_slug) -> bool` lets callers (`connect`, `resume`) check whether to attach to existing state or rebuild the adapter; replaces an earlier side-channel that returned the work slug for the same purpose.
 
@@ -136,7 +136,7 @@ If the agent is already lazy-registered, `connect` still runs a lightweight CLI 
 ### Lifecycle: stopping a turn / closing an agent
 
 - **`stop_turn(agent_slug)`** writes a `user_stop` transcript line (so the user's intent is durable even if the SDK call fails), then `await state.adapter.stop_turn()`. Claude calls `interrupt()` over the SDK control protocol; Amp no-ops today (its CLI exposes no per-turn cancel).
-- **`stop_agent(agent_slug)`** pops the state from the registry, cancels the agent task, awaits it (suppressing `CancelledError`), and calls `adapter.close()`. Idempotent on the slug.
+- **`stop_agent(agent_slug)`** pops the state from the registry, kicks any active subscriber so the browser reconnects/replays from disk, cancels the agent task, awaits it (suppressing `CancelledError`), and calls `adapter.close()`. Idempotent on the slug.
 - **`shutdown()`** stops every running agent — called from the FastAPI lifespan teardown.
 
 ### Resume after a backend restart
@@ -174,6 +174,12 @@ Re-attach runs through `resume.execute` → `_catch_up_detached_agent`:
 Provider-specific CLI behavior is kept in provider modules, mirroring the adapter layout: `infrastructure/cli_transcript/{claude,amp,codex}.py` own cursor/path/merge details. Claude owns the Anthropic message/block translator; Amp imports it because `amp threads export` currently uses a Claude-compatible envelope (`role`, `content`, `text` / `thinking` / `tool_use` / `tool_result`) for both Anthropic-backed and GPT-backed modes. Provider identity shows up inside block metadata (`provider: "anthropic"` / `"openai"`) and usage fields, not as a different outer transcript schema. Resume command construction follows the same pattern under `infrastructure/cli_launcher/{claude,amp,codex}.py`; terminal-window launching is isolated in `cli_launcher/terminal.py`.
 
 `agents.parent_session_id` (schema v6) is set atomically inside `set_agent_session_id`: when the new sid differs from the current, the previous sid is captured as parent. This linked-list lineage exists so providers that fork on resume (Amp) can recover the original transcript from the orphaned ancestor.
+
+### Context compaction
+
+`POST /api/agents/{slug}/compact` is a same-agent, same-worktree session replacement. The route delegates directly to `domain/commands/agents/compact.py`. The command stops the supervisor state, summarizes the Atelier transcript plus `WorktreeManager.describe_state(workdir)`, writes `agents/<slug>/compactions/<timestamp>.md`, starts a fresh provider session through the domain `CompactionSessionClient` port, writes a breadcrumb into the old provider session best-effort, persists the new `agents.session_id` plus parent lineage through `WorkStore.set_agent_session_id(..., mirror_agent_json=True)`, and appends compaction boundary events to `transcript.ndjson`. `GET /api/agents/{slug}/compactions/{filename}` delegates to `domain/commands/agents/read_compaction_summary.py` so the UI can show the saved seed summary without accepting arbitrary filesystem paths.
+
+Provider mechanics stay behind `infrastructure/agents/compaction_sessions.py`, which uses the normal `AgentAdapter` factory for Claude, Amp, and Codex. The command does not mutate provider-owned history in place; Atelier's append-only transcript remains canonical, and `parent_session_id` captures the previous provider session when `set_agent_session_id` swaps to the new one.
 
 ### How the SDK adapters fit in
 
@@ -313,6 +319,7 @@ Production wires the real ``openai-codex-sdk`` via a lazy ``_default_client_fact
             └── <agent_slug>/
                 ├── agent.json
                 ├── transcript.ndjson
+                ├── compactions/          ← same-agent provider-session summaries
                 ├── context.md            ← index (sections per type, links to files)
                 └── context/              ← per-source files
                     ├── text-1.md
@@ -409,7 +416,7 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 
 ## WorktreeManager
 
-`domain/worktrees/`. Provisions a per-agent workdir so each agent gets its own checkout without stepping on the user's main one. Operations: `ensure`, `ensure_forked`, `is_detached`, `remove`, `sweep_orphans`. The implementation (`infrastructure/git/worktree_manager.py`) shells out to `git worktree` — a few subprocess calls beat pulling in gitpython.
+`domain/worktrees/`. Provisions a per-agent workdir so each agent gets its own checkout without stepping on the user's main one. Operations: `ensure`, `ensure_forked`, `is_detached`, `describe_state`, `remove`, `sweep_orphans`. The implementation (`infrastructure/git/worktree_manager.py`) shells out to `git worktree` — a few subprocess calls beat pulling in gitpython.
 
 **Layout** mirrors the architecture: `<workspace_root>/works/<work_slug>/worktrees/<agent_slug>/`.
 

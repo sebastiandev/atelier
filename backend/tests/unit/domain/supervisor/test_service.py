@@ -476,9 +476,21 @@ def test_subscribe_with_cursor_zero_replays_full_disk_history() -> None:
 def test_double_register_raises() -> None:
     async def run() -> None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([], keep_alive=True), _start_context())
+        await _start(
+            supervisor,
+            "WRK-001",
+            "agt-1",
+            StubAgentAdapter([], keep_alive=True),
+            _start_context(),
+        )
         with pytest.raises(RuntimeError, match="already registered"):
-            await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([], keep_alive=True), _start_context())
+            await _start(
+                supervisor,
+                "WRK-001",
+                "agt-1",
+                StubAgentAdapter([], keep_alive=True),
+                _start_context(),
+            )
         await supervisor.shutdown()
 
     _run(run())
@@ -557,6 +569,18 @@ def test_stop_agent_removes_state_and_closes_adapter() -> None:
     closed, still_registered = _run(run())
     assert closed is True
     assert still_registered is False
+
+
+def test_stop_agent_kicks_active_subscriber() -> None:
+    async def run() -> bool:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter(_scripted(), keep_alive=True)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        async with supervisor.subscribe("agt-1") as sub:
+            await supervisor.stop_agent("agt-1")
+            return sub.kicked.is_set()
+
+    assert _run(run()) is True
 
 
 def test_stop_agent_unknown_is_noop() -> None:
@@ -771,7 +795,13 @@ def test_subscription_queue_is_bounded() -> None:
 
     async def run() -> int:
         supervisor = AgentSupervisorService(StubTranscriptLog())
-        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([], keep_alive=True), _start_context())
+        await _start(
+            supervisor,
+            "WRK-001",
+            "agt-1",
+            StubAgentAdapter([], keep_alive=True),
+            _start_context(),
+        )
         async with supervisor.subscribe("agt-1") as sub:
             maxsize = sub.queue.maxsize
         await supervisor.shutdown()
@@ -814,7 +844,13 @@ def test_kicked_subscriber_does_not_block_further_publishing() -> None:
     async def run() -> int:
         log = StubTranscriptLog()
         supervisor = AgentSupervisorService(log)
-        await _start(supervisor, "WRK-001", "agt-1", StubAgentAdapter([], keep_alive=True), _start_context())
+        await _start(
+            supervisor,
+            "WRK-001",
+            "agt-1",
+            StubAgentAdapter([], keep_alive=True),
+            _start_context(),
+        )
 
         async with supervisor.subscribe("agt-1") as sub:
             for i in range(SUBSCRIBER_QUEUE_MAX + 1):

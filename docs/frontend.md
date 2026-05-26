@@ -102,6 +102,12 @@ The mode is a structural switch, not a theming switch. Splitting into two compon
 
 The standalone worktree-icon button (formerly between conn-status and tile-controls) was removed — the folder pill is itself the reveal affordance. `shortenPath` is exported from `WorkView.tsx` for reuse.
 
+### Context compaction warning
+
+`AgentTile` derives context pressure from the latest `turn_metrics.last_prompt_tokens` snapshot plus the provider/model context window (`frontend/src/AgentTile.tsx`). At 70% it shows a compact inline warning near the metrics bar; at 85% it blurs the agent body and opens a tile-local compaction modal with **Compact now** / **Defer**; at 95% it reopens even after an 85% defer; at 100% it blocks normal sends and offers compaction plus handoff when the parent supplied `onHandoff`.
+
+This is intentionally not styled like a tool permission prompt. Permission prompts stay inline above the composer and use tool/security language; compaction uses context/cost language, a meter, and a focused modal because it changes the provider session behind the same agent. Manual compaction is also available from the metrics bar when a context snapshot is present. The frontend calls `POST /api/agents/{slug}/compact` through `api.compactAgent`; the supervisor kicks the active websocket on session replacement so `useAgentStream` reconnects and replays the `context_compacted` transcript marker. `AgentTile` renders that marker as a session boundary: the previous transcript units collapse into a disclosure, and **View summary** lazy-loads the saved compaction doc via `GET /api/agents/{slug}/compactions/{filename}`.
+
 ## View-toggle pattern
 
 `Tiles | List` segmented control used on both Project and Home. Implementation pattern:

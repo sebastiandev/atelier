@@ -557,14 +557,16 @@ class CodexAdapter:
             "sandbox": self._config.sandbox.value,
             "approval_mode": self._config.approval_mode.value,
             "base_instructions": context.system_prompt,
-            "mcp_servers": _build_atelier_mcp_servers(),
             "config_overrides": {
                 "model_reasoning_effort": self._config.reasoning_effort.value,
             },
         }
+        if not self._config.summary_only:
+            kwargs["mcp_servers"] = _build_atelier_mcp_servers()
         if (
             self._config.sandbox is CodexSandbox.WORKSPACE_WRITE
             and self._config.common.writable_roots
+            and not self._config.summary_only
         ):
             kwargs["additional_directories"] = [
                 str(root) for root in self._config.common.writable_roots

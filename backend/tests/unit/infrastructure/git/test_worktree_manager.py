@@ -192,9 +192,10 @@ def test_sweep_orphans_removes_worktrees_not_in_live_set(
     manager.sweep_orphans("WRK-001", live_agent_slugs={"agt-2"})
 
     base = repo
-    assert (manager._paths.workspace_root / "works" / "WRK-001" / "worktrees" / "agt-2").exists()
-    assert not (manager._paths.workspace_root / "works" / "WRK-001" / "worktrees" / "agt-1").exists()
-    assert not (manager._paths.workspace_root / "works" / "WRK-001" / "worktrees" / "agt-3").exists()
+    worktrees = manager._paths.workspace_root / "works" / "WRK-001" / "worktrees"
+    assert (worktrees / "agt-2").exists()
+    assert not (worktrees / "agt-1").exists()
+    assert not (worktrees / "agt-3").exists()
     # The source repo's git worktree registry should be pruned along
     # with the dirs — re-ensuring agt-1 should succeed.
     revived = manager.ensure("WRK-001", "agt-1", base)
@@ -317,6 +318,37 @@ def test_is_detached_returns_false_for_non_git_folder(
     plain = tmp_path / "plain"
     plain.mkdir()
     assert manager.is_detached(plain) is False
+
+
+def test_describe_state_reports_branch_and_changes(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure("WRK-001", "agt-1", repo, branch_name="feature-x")
+    (workdir / "README.md").write_text("modified\n")
+    (workdir / "notes.md").write_text("new\n")
+
+    state = manager.describe_state(workdir)
+
+    assert state.is_git_repo is True
+    assert state.branch == "feature-x"
+    assert state.head is not None
+    assert " M README.md" in state.status
+    assert "?? notes.md" in state.status
+    assert state.changed_files == ("README.md",)
+    assert state.untracked_files == ("notes.md",)
+
+
+def test_describe_state_handles_non_git_folder(
+    manager: GitWorktreeManager, tmp_path: Path
+) -> None:
+    plain = tmp_path / "plain"
+    plain.mkdir()
+
+    state = manager.describe_state(plain)
+
+    assert state.workdir == plain
+    assert state.is_git_repo is False
+    assert state.status == ""
 
 
 # --- devtime artifact symlinks ----------------------------------------------

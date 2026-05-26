@@ -192,6 +192,42 @@ def test_list_agents_for_work_404_for_unknown_work(app_client: TestClient) -> No
     assert response.status_code == 404
 
 
+def test_get_agent_compaction_summary_returns_saved_doc(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    app_client.app.state.workstore.write_agent_compaction_doc(
+        work["slug"],
+        agent["slug"],
+        "20260526-120000.md",
+        "# Compaction summary\n\nSeed context.",
+    )
+
+    response = app_client.get(
+        f"/api/agents/{agent['slug']}/compactions/20260526-120000.md"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_slug"] == agent["slug"]
+    assert body["work_slug"] == work["slug"]
+    assert body["filename"] == "20260526-120000.md"
+    assert body["summary_path"].endswith("/compactions/20260526-120000.md")
+    assert body["content"] == "# Compaction summary\n\nSeed context."
+
+
+def test_get_agent_compaction_summary_404_for_missing_doc(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+
+    response = app_client.get(f"/api/agents/{agent['slug']}/compactions/missing.md")
+
+    assert response.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # WS: replay + live
 # ---------------------------------------------------------------------------

@@ -451,6 +451,52 @@ export function switchAgentThread(
   });
 }
 
+export type CompactAgentReason = "manual" | "forced_context_limit";
+
+export type CompactAgentResponse = {
+  agent_slug: string;
+  work_slug: string;
+  provider: string;
+  old_session_id: string;
+  new_session_id: string;
+  summary_path: string;
+  breadcrumb_written: boolean;
+  breadcrumb_error: string | null;
+};
+
+export type AgentCompactionSummary = {
+  agent_slug: string;
+  work_slug: string;
+  filename: string;
+  summary_path: string;
+  content: string;
+};
+
+/**
+ * Summarize the current provider session, persist the compaction document,
+ * write transcript markers, and re-register the agent against the new
+ * provider session.
+ */
+export function compactAgent(
+  agentSlug: string,
+  reason: CompactAgentReason = "manual",
+): Promise<CompactAgentResponse> {
+  return fetch(`/api/agents/${agentSlug}/compact`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  }).then((r) => jsonOrThrow<CompactAgentResponse>(r));
+}
+
+export function getAgentCompactionSummary(
+  agentSlug: string,
+  filename: string,
+): Promise<AgentCompactionSummary> {
+  return fetch(
+    `/api/agents/${agentSlug}/compactions/${encodeURIComponent(filename)}`,
+  ).then((r) => jsonOrThrow<AgentCompactionSummary>(r));
+}
+
 /**
  * Open one of the agent's filesystem locations in the OS file browser.
  * Same shell-out pattern as ``revealWork``.

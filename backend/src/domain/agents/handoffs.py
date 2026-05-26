@@ -38,6 +38,22 @@ from src.domain.workstore.ports import TranscriptLog, WorkStore
 # they're the most informative for the next agent.
 TRANSCRIPT_CHAR_CAP = 750_000
 
+SUMMARY_SYSTEM_PROMPT = """\
+You are summarizing one agent's recent transcript so a fresh agent can pick \
+up the work without losing context. Output Markdown only — no preamble or \
+sign-off. Use these sections, in this order:
+
+## Goal
+## Decisions
+## Open questions (only when there are actual unresolved questions)
+## Key files
+## Blockers
+
+Be concrete. Preserve recent user decisions, corrections, file names, \
+commands, and implementation constraints. If Key files or Blockers has \
+nothing to report, say so in one sentence rather than padding. Omit Open \
+questions entirely when there are no actual unresolved questions."""
+
 
 @dataclass(frozen=True)
 class SummaryContext:
@@ -131,6 +147,58 @@ def build_handoff(
     )
 
 
+def format_summary_prompt(
+    events: list[dict[str, Any]], context: SummaryContext
+) -> str:
+    header = (
+        f"Work: {context.work_name}\n"
+        f"Description: {context.work_description}\n"
+        f"Source agent: {context.source_agent_name} "
+        f"({context.source_agent_role})\n\n"
+    )
+    transcript_lines: list[str] = []
+    for ev in events:
+        transcript_lines.append(_event_to_line(ev))
+    return (
+        f"{header}"
+        f"Transcript ({len(events)} events, oldest first):\n\n"
+        + "\n".join(transcript_lines)
+    )
+
+
+def _event_to_line(ev: dict[str, Any]) -> str:
+    """Compact per-event projection. Drops fields the summarizer doesn't
+    need (seq, ts) and keeps the type + the meaningful text/payload."""
+    t = ev.get("type")
+    if t == "user_input":
+        return f"[user] {ev.get('text', '')}"
+    if t == "message_complete":
+        return f"[agent] {ev.get('text', '')}"
+    if t == "previous_compaction_summary":
+        return f"[previous_compaction_summary]\n{ev.get('content', '')}"
+    if t == "tool_call":
+        name = ev.get("name", "?")
+        args = ev.get("arguments") or {}
+        return f"[tool_call:{name}] {args}"
+    if t == "tool_result":
+        is_err = " (error)" if ev.get("is_error") else ""
+        return f"[tool_result{is_err}] {ev.get('content', '')}"
+    if t == "error":
+        return f"[error] {ev.get('message', '')}"
+    if t == "permission_decision":
+        return (
+            f"[permission_decision] "
+            f"{ev.get('tool_name', '?')} -> {ev.get('decision', '?')}"
+        )
+    if t == "artifact_recorded":
+        artifact = ev.get("artifact") or {}
+        return (
+            f"[artifact_recorded] {artifact.get('type', '?')} "
+            f"{artifact.get('title', '')} ({artifact.get('status', '')})"
+        )
+    return f"[{t}]"
+
+
 # ---------------------------------------------------------------------------
 # Structural fallback summarizer — no LLM required.
 # ---------------------------------------------------------------------------
@@ -147,9 +215,17 @@ def structural_summarizer(
     when the agent has emitted clear ToolCalls and Errors. The user can
     edit the doc before the new agent reads it.
     """
+    events = _dedupe_events(events)
     user_inputs = [e for e in events if e.get("type") == "user_input"]
+    agent_messages = [e for e in events if e.get("type") == "message_complete"]
     tool_calls = [e for e in events if e.get("type") == "tool_call"]
     errors = [e for e in events if e.get("type") == "error"]
+    previous_summaries = [
+        str(e.get("content", "")).strip()
+        for e in events
+        if e.get("type") == "previous_compaction_summary"
+        and str(e.get("content", "")).strip()
+    ]
     permission_denies = [
         e
         for e in events
@@ -176,21 +252,23 @@ def structural_summarizer(
     lines.append("")
 
     lines.append("## Decisions")
+    if previous_summaries:
+        lines.append("Previous compacted context:")
+        lines.append(_truncate(previous_summaries[-1], 1400))
+        lines.append("")
     if user_inputs:
         lines.append("Latest user instructions to the source agent:")
-        for ev in user_inputs[-5:]:
-            text = str(ev.get("text", "")).strip()
+        for text in _unique_tail_texts(user_inputs, "text", limit=5):
             if text:
                 lines.append(f"- {_truncate(text, 240)}")
     else:
         lines.append("_No user instructions were recorded in the captured slice._")
-    lines.append("")
-
-    lines.append("## Open questions")
-    lines.append(
-        "_The structural summarizer can't infer open questions. "
-        "Edit this section before the new agent reads it._"
-    )
+    recent_agent_messages = _unique_tail_texts(agent_messages, "text", limit=5)
+    if recent_agent_messages:
+        lines.append("")
+        lines.append("Recent agent findings and handoff points:")
+        for text in recent_agent_messages:
+            lines.append(f"- {_truncate(text, 1400)}")
     lines.append("")
 
     lines.append("## Key files")
@@ -255,18 +333,78 @@ def _path_from_tool_call(event: dict[str, Any]) -> str | None:
     return None
 
 
+def _dedupe_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop exact replay duplicates while preserving first-seen order.
+
+    CLI catch-up can replay already-recorded events with new seq/timestamp
+    values. For a structural summary, repeated semantic content is noise:
+    it crowds out the actual final decisions.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for event in events:
+        key = _event_semantic_key(event)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(event)
+    return out
+
+
+def _event_semantic_key(event: dict[str, Any]) -> tuple[str, str]:
+    event_type = str(event.get("type", ""))
+    if event_type in {"user_input", "message_complete", "error"}:
+        return event_type, _normalize_text(str(event.get("text") or event.get("message") or ""))
+    if event_type == "tool_call":
+        return event_type, json.dumps(
+            {
+                "name": event.get("name"),
+                "arguments": event.get("arguments"),
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+    if event_type == "tool_result":
+        return event_type, _normalize_text(str(event.get("content") or ""))
+    return event_type, json.dumps(event, sort_keys=True, ensure_ascii=False)
+
+
+def _unique_tail_texts(
+    events: list[dict[str, Any]], field: str, *, limit: int
+) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+    for event in reversed(events):
+        text = str(event.get(field, "")).strip()
+        key = _normalize_text(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        selected.append(text)
+        if len(selected) >= limit:
+            break
+    selected.reverse()
+    return selected
+
+
+def _normalize_text(text: str) -> str:
+    return " ".join(text.split())
+
+
 def _truncate(text: str, limit: int) -> str:
-    text = " ".join(text.split())
+    text = _normalize_text(text)
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
 
 
 __all__ = [
+    "SUMMARY_SYSTEM_PROMPT",
     "TRANSCRIPT_CHAR_CAP",
     "BuildHandoffRequest",
     "Summarizer",
     "SummaryContext",
     "build_handoff",
+    "format_summary_prompt",
     "structural_summarizer",
 ]

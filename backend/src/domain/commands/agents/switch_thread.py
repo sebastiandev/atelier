@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING
 
 from src.domain.commands.agents import resume
 from src.domain.models import AgentStatus
-from src.domain.sharedfolders.ports import ShareProvisioner, SharedFolderStore
+from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
 from src.settings import Settings
@@ -92,7 +92,9 @@ async def execute(
     # overwrite the new id back to the old one).
     await supervisor.stop_agent(req.agent_slug)
 
-    workstore.set_agent_session_id(req.agent_slug, req.new_thread_id)
+    workstore.set_agent_session_id(
+        req.agent_slug, req.new_thread_id, mirror_agent_json=True
+    )
     workstore.set_agent_status(req.agent_slug, AgentStatus.IDLE)
     workstore.append_transcript_event_with_seq(
         work_slug,

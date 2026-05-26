@@ -74,6 +74,7 @@ A quick tour of the surface area:
 - [Rich tool rendering](#rich-tool-rendering) — paired call+result, syntax-highlighted diffs
 - [Persistent everything](#persistent-everything) — transcripts on disk, conversations resume
 - [Token + cost rollup](#token--cost-rollup) — context %, session spend, per-tile
+- [Provider-agnostic context compaction](#provider-agnostic-context-compaction) — shrink long sessions without switching agents
 - [Projects](#projects) — optional grouping with shared defaults
 
 ### One workspace, many agents
@@ -243,6 +244,31 @@ from the backend's provider spec, so they stay correct as new models are
 added — and Opus 4.7 ships with the 1M extended-context tier as the default.
 Detached turns count too: when an agent comes back from CLI, the merge pulls
 usage off each assistant message so the cost rollup never has gaps.
+
+### Provider-agnostic context compaction
+
+Long sessions eventually fill the provider's context window. Atelier can
+compact an agent in place: it summarizes the visible transcript plus the
+agent's worktree state, saves that summary under the agent's Atelier folder,
+starts a fresh provider session, and keeps the same agent tile, worktree, and
+transcript history.
+
+The flow is provider-agnostic. Claude, Amp, and Codex each summarize with the
+same provider/model or mode that is being compacted, then start the fresh
+session through their own adapter. HTTP calls the compaction command, the
+command writes the summary and boundary events, and provider-specific session
+mechanics stay behind the adapter port. If provider summary generation fails,
+Atelier falls back to its app-level summarizer.
+
+When an agent is compacted again, Atelier does not resummarize the whole
+historical transcript. It reads the previous compaction summary and combines it
+with only the transcript events after the last compaction boundary, keeping the
+summary cumulative without replaying stale context.
+
+After compaction, the transcript shows a clear boundary. The previous session
+collapses behind a disclosure, the new session starts below it, and **View
+summary** lets you inspect the saved seed context that was used to start the
+fresh provider session.
 
 ### Projects
 

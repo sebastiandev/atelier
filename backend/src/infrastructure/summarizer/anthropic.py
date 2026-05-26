@@ -19,8 +19,10 @@ from typing import Any
 import httpx
 
 from src.domain.agents.handoffs import (
+    SUMMARY_SYSTEM_PROMPT,
     Summarizer,
     SummaryContext,
+    format_summary_prompt,
     structural_summarizer,
 )
 
@@ -30,21 +32,6 @@ _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _DEFAULT_MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 4096
 _TIMEOUT_SECONDS = 60.0
-
-_SYSTEM_PROMPT = """\
-You are summarizing one agent's recent transcript so a fresh agent can pick \
-up the work without losing context. Output Markdown only — no preamble or \
-sign-off. Use exactly these five sections, in this order:
-
-## Goal
-## Decisions
-## Open questions
-## Key files
-## Blockers
-
-Be concrete. If a section has nothing to report, say so in one sentence \
-rather than padding."""
-
 
 class AnthropicSummarizer:
     def __init__(
@@ -63,7 +50,7 @@ class AnthropicSummarizer:
     def __call__(
         self, events: list[dict[str, Any]], context: SummaryContext
     ) -> str:
-        prompt = _format_prompt(events, context)
+        prompt = format_summary_prompt(events, context)
         try:
             client = self._client or httpx.Client(timeout=_TIMEOUT_SECONDS)
             response = client.post(
@@ -76,7 +63,7 @@ class AnthropicSummarizer:
                 json={
                     "model": self._model,
                     "max_tokens": _MAX_TOKENS,
-                    "system": _SYSTEM_PROMPT,
+                    "system": SUMMARY_SYSTEM_PROMPT,
                     "messages": [{"role": "user", "content": prompt}],
                 },
             )
@@ -102,53 +89,3 @@ def build_summarizer(api_key: str | None) -> Summarizer:
     if api_key:
         return AnthropicSummarizer(api_key)
     return structural_summarizer
-
-
-def _format_prompt(
-    events: list[dict[str, Any]], context: SummaryContext
-) -> str:
-    header = (
-        f"Work: {context.work_name}\n"
-        f"Description: {context.work_description}\n"
-        f"Source agent: {context.source_agent_name} "
-        f"({context.source_agent_role})\n\n"
-    )
-    transcript_lines: list[str] = []
-    for ev in events:
-        transcript_lines.append(_event_to_line(ev))
-    return (
-        f"{header}"
-        f"Transcript ({len(events)} events, oldest first):\n\n"
-        + "\n".join(transcript_lines)
-    )
-
-
-def _event_to_line(ev: dict[str, Any]) -> str:
-    """Compact per-event projection. Drops fields the summarizer doesn't
-    need (seq, ts) and keeps the type + the meaningful text/payload."""
-    t = ev.get("type")
-    if t == "user_input":
-        return f"[user] {ev.get('text', '')}"
-    if t == "message_complete":
-        return f"[agent] {ev.get('text', '')}"
-    if t == "tool_call":
-        name = ev.get("name", "?")
-        args = ev.get("arguments") or {}
-        return f"[tool_call:{name}] {args}"
-    if t == "tool_result":
-        is_err = " (error)" if ev.get("is_error") else ""
-        return f"[tool_result{is_err}] {ev.get('content', '')}"
-    if t == "error":
-        return f"[error] {ev.get('message', '')}"
-    if t == "permission_decision":
-        return (
-            f"[permission_decision] "
-            f"{ev.get('tool_name', '?')} → {ev.get('decision', '?')}"
-        )
-    if t == "artifact_recorded":
-        artifact = ev.get("artifact") or {}
-        return (
-            f"[artifact_recorded] {artifact.get('type', '?')} "
-            f"{artifact.get('title', '')} ({artifact.get('status', '')})"
-        )
-    return f"[{t}]"

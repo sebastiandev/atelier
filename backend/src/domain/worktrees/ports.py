@@ -9,16 +9,19 @@ checkout. When the folder is *not* a git repo, the manager falls back to
 returning the folder itself: agents that don't need branch isolation
 keep working.
 
-The seam stays narrow on purpose — three operations:
+The seam stays narrow on purpose:
 
   - ``ensure(work_slug, agent_slug, source, base_ref)`` — provision and
     return the workdir. Idempotent: re-calling for the same agent_slug
     returns the existing path.
+  - ``is_detached(workdir)`` / ``describe_state(workdir)`` — read-only
+    state for prompts and compaction summaries.
   - ``remove(work_slug, agent_slug)`` — tear down. Quiet on missing.
   - ``sweep_orphans(work_slug, live_agent_slugs)`` — startup cleanup;
     removes worktrees under the work that don't appear in the live set.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
@@ -37,6 +40,18 @@ class WorktreeProvisionFailed(RuntimeError):
     def __init__(self, message: str, *, stderr: str = "") -> None:
         super().__init__(message)
         self.stderr = stderr
+
+
+@dataclass(frozen=True)
+class WorktreeState:
+    workdir: Path
+    is_git_repo: bool
+    branch: str | None = None
+    head: str | None = None
+    status: str = ""
+    changed_files: tuple[str, ...] = ()
+    untracked_files: tuple[str, ...] = ()
+    error: str | None = None
 
 
 class WorktreeManager(Protocol):
@@ -63,6 +78,14 @@ class WorktreeManager(Protocol):
         """Whether ``workdir`` is currently checked out in detached HEAD.
         Returns ``False`` for non-git folders so callers can use it as a
         soft hint without branching on the git-vs-not-git case."""
+        ...
+
+    def describe_state(self, workdir: Path) -> WorktreeState:
+        """Return branch/status information for compaction and handoff docs.
+
+        Non-git folders are valid workdirs; implementations should return
+        ``is_git_repo=False`` rather than raising.
+        """
         ...
 
     def ensure_forked(

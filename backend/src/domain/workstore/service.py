@@ -273,15 +273,51 @@ class WorkStoreService:
                 work_slug, agent_slug, serialize_agent(agent, contexts)
             )
 
-    def set_agent_session_id(self, agent_slug: str, session_id: str) -> None:
-        # Hot path: called by the supervisor on the first SessionEstablished
-        # event (and any subsequent change). Single UPDATE — agent.json
-        # stays stale until the next full upsert; the SQL row is the
-        # canonical resume handle.
+    def write_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str, content: str
+    ) -> str:
         with self._lock:
-            self._repo.set_agent_session_id(agent_slug, session_id)
+            if self._repo.get_agent_by_slug(agent_slug) is None:
+                raise ValueError(f"agent not found: {agent_slug}")
+            if self._repo.get_work_slug_for_agent(agent_slug) != work_slug:
+                raise ValueError(f"agent {agent_slug} is not in work {work_slug}")
+            return self._files.write_agent_compaction_doc(
+                work_slug, agent_slug, filename, content
+            )
 
-    def set_agent_status(self, agent_slug: str, status: str) -> None:
+    def read_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str
+    ) -> tuple[str, str] | None:
+        with self._lock:
+            if self._repo.get_agent_by_slug(agent_slug) is None:
+                raise ValueError(f"agent not found: {agent_slug}")
+            if self._repo.get_work_slug_for_agent(agent_slug) != work_slug:
+                raise ValueError(f"agent {agent_slug} is not in work {work_slug}")
+            return self._files.read_agent_compaction_doc(
+                work_slug, agent_slug, filename
+            )
+
+    def set_agent_session_id(
+        self, agent_slug: str, session_id: str, *, mirror_agent_json: bool = False
+    ) -> None:
+        # The supervisor hot path calls this from SessionEstablished events;
+        # keep that DB-only. Explicit same-agent session replacement commands
+        # opt into mirroring so FS-side inspection sees the new lineage too.
+        with self._lock:
+            work_slug = self._repo.get_work_slug_for_agent(agent_slug)
+            self._repo.set_agent_session_id(agent_slug, session_id)
+            if not mirror_agent_json or work_slug is None:
+                return
+            agent = self._repo.get_agent_by_slug(agent_slug)
+            if agent is None:
+                return
+            data = self._files.read_agent_json(work_slug, agent_slug)
+            contexts = deserialize_contexts(data) if data is not None else []
+            self._files.write_agent_json(
+                work_slug, agent_slug, serialize_agent(agent, contexts)
+            )
+
+    def set_agent_status(self, agent_slug: str, status: AgentStatus) -> None:
         # Used by the detach flow (→ "detached") and the WS re-attach
         # path that pulls an agent back from CLI (→ "idle"). Same single-
         # UPDATE shape as set_agent_session_id; agent.json is allowed to

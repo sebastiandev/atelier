@@ -50,6 +50,24 @@ class FsWorkspaceFiles:
         atomic_write_text(target, content)
         return str(target)
 
+    def write_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str, content: str
+    ) -> str:
+        _validate_filename(filename)
+        target = self._paths.agent_compactions_dir(work_slug, agent_slug) / filename
+        atomic_write_text(target, content)
+        return str(target)
+
+    def read_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str
+    ) -> tuple[str, str] | None:
+        _validate_filename(filename)
+        target = self._paths.agent_compactions_dir(work_slug, agent_slug) / filename
+        try:
+            return str(target), target.read_text()
+        except FileNotFoundError:
+            return None
+
     def write_agent_context_file(
         self, work_slug: str, agent_slug: str, filename: str, content: str
     ) -> str:

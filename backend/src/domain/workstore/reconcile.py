@@ -101,10 +101,11 @@ def _reconcile_agents_for_work(
             #   DB-canonical  — runtime fields (session_id,
             #                   parent_session_id, status). These flip
             #                   on every SessionEstablished / detach /
-            #                   resume, and the supervisor writes
-            #                   straight to SQL (set_agent_session_id /
-            #                   set_agent_status) without touching
-            #                   agent.json.
+            #                   resume. Command-driven session replacement
+            #                   flows may also mirror lineage into
+            #                   agent.json for observability, but reconcile
+            #                   still treats SQL as authority if the file
+            #                   lags or predates the mirror.
             #
             # The previous reconcile treated the entire row as FS-
             # canonical and clobbered the runtime fields with whatever

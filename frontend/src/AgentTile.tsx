@@ -21,6 +21,8 @@ const TRANSCRIPT_CAP_INITIAL = 500;
 const TRANSCRIPT_CAP_STEP = 500;
 
 import {
+  compactAgent,
+  getAgentCompactionSummary,
   type Connection,
   type ConnectionType,
   type ContextEntry,
@@ -47,6 +49,10 @@ import {
 import { shortenPath } from "./WorkView";
 
 const COMPOSER_MAX_HEIGHT = 200;
+const COMPACTION_NOTICE_PCT = 70;
+const COMPACTION_RECOMMENDED_PCT = 85;
+const COMPACTION_URGENT_PCT = 95;
+const COMPACTION_BLOCKED_PCT = 100;
 
 const SIMPLE_PICKER_TYPES: { id: SimpleContextType; label: string }[] = [
   { id: "text", label: "Text" },
@@ -348,6 +354,75 @@ export function AgentTile({
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const { byName: providersByName } = useProviderDescriptors();
   const modelMeta = lookupModelMeta(providersByName, provider, model);
+  const latestCompactionSeq = useMemo(
+    () => latestEventSeq(events, "context_compacted"),
+    [events],
+  );
+  const [compactedMetricsSeq, setCompactedMetricsSeq] = useState<number | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!lastMetrics || latestCompactionSeq <= lastMetrics.seq) return;
+    setCompactedMetricsSeq((prev) => Math.max(prev ?? 0, lastMetrics.seq));
+  }, [lastMetrics, latestCompactionSeq]);
+  const contextSnapshot = useMemo(
+    () =>
+      lastMetrics &&
+      compactedMetricsSeq !== null &&
+      lastMetrics.seq <= compactedMetricsSeq
+        ? null
+        : contextSnapshotFor(lastMetrics, modelMeta),
+    [lastMetrics, modelMeta, compactedMetricsSeq],
+  );
+  const compactionLevel = compactionLevelFor(contextSnapshot?.pct ?? null);
+  const compactionSeverity = compactionSeverityFor(compactionLevel);
+  const compactionBlocked = compactionLevel === "blocked";
+  const [compacting, setCompacting] = useState(false);
+  const [manualCompactionOpen, setManualCompactionOpen] = useState(false);
+  const [deferredCompactionSeverity, setDeferredCompactionSeverity] =
+    useState<number | null>(null);
+  const [compactionError, setCompactionError] = useState<string | null>(null);
+  const shouldOpenCompactionModal =
+    contextSnapshot !== null &&
+    (manualCompactionOpen ||
+      (compactionSeverity >= compactionSeverityFor("recommended") &&
+        (compactionBlocked ||
+          deferredCompactionSeverity === null ||
+          compactionSeverity > deferredCompactionSeverity)));
+
+  useEffect(() => {
+    if (compactionLevel === "none" || compactionLevel === "notice") {
+      setDeferredCompactionSeverity(null);
+      setCompactionError(null);
+    }
+  }, [compactionLevel]);
+
+  async function handleCompact() {
+    setCompacting(true);
+    setCompactionError(null);
+    try {
+      await compactAgent(
+        agentSlug,
+        compactionBlocked ? "forced_context_limit" : "manual",
+      );
+      setCompactedMetricsSeq((prev) =>
+        lastMetrics ? Math.max(prev ?? 0, lastMetrics.seq) : prev,
+      );
+      setManualCompactionOpen(false);
+      setDeferredCompactionSeverity(null);
+    } catch (err) {
+      setCompactionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCompacting(false);
+    }
+  }
+
+  function handleDeferCompaction() {
+    if (compactionBlocked) return;
+    setDeferredCompactionSeverity(compactionSeverity);
+    setManualCompactionOpen(false);
+    setCompactionError(null);
+  }
 
   // When the user clicks "Load older", capture the pre-expansion scroll
   // metrics so we can restore their reading position after React commits
@@ -447,6 +522,10 @@ export function AgentTile({
   function submit() {
     const text = draft.trim();
     if (!text) return;
+    if (compactionBlocked) {
+      setManualCompactionOpen(true);
+      return;
+    }
     sendInput(text, submittableContexts);
     setDraft("");
     setPendingContexts([]);
@@ -537,10 +616,13 @@ export function AgentTile({
   // no-ops. Disable the composer for every non-connected state so the
   // user never thinks a click landed.
   const composerDisabled = status !== "connected";
+  const sendDisabled = composerDisabled || compacting || compactionBlocked;
   const tileClass = `agent-tile mode-${mode}` + (maximized ? " maximized" : "");
   const title = agentName || agentSlug;
   const composerPlaceholder =
-    status === "stopped"
+    compactionBlocked
+      ? "Compact or handoff before sending"
+      : status === "stopped"
       ? "Agent unavailable"
       : status === "connecting"
         ? "Connecting to agent…"
@@ -745,152 +827,185 @@ export function AgentTile({
           </div>
         </div>
       </header>
-      {isStopped && (
-        <div className="tile-banner">
-          This agent slug isn't known to the server. Close it to clear from the rail.
-        </div>
-      )}
-      <div className="transcript" ref={transcriptRef}>
-        {olderEventCount > 0 && (
-          <button
-            type="button"
-            className="transcript-load-older"
-            onClick={handleLoadOlder}
-          >
-            Load {Math.min(TRANSCRIPT_CAP_STEP, olderEventCount)} older
-            {olderEventCount > TRANSCRIPT_CAP_STEP
-              ? ` · ${olderEventCount} hidden`
-              : ""}
-          </button>
-        )}
-        {units.map((unit) => (
-          <Unit key={unit.key} unit={unit} />
-        ))}
-      </div>
-      {(lastMetrics || isCurrentlyActive) && (
-        <TurnMetricsBar
-          metrics={lastMetrics}
-          session={sessionTotals}
-          meta={modelMeta}
-          activityPhase={activityPhase}
-        />
-      )}
-      {pendingPermissions.length > 0 && (
-        <div className="permission-prompts">
-          {pendingPermissions.map((p) => (
-            <PermissionPrompt
-              key={p.request_id}
-              prompt={p}
-              onDecide={sendPermission}
-            />
-          ))}
-        </div>
-      )}
-      {pendingHandoff && (
-        <HandoffPrompt
-          threadId={pendingHandoff.new_thread_id}
-          switching={handoffSwitching}
-          error={handoffError}
-          onSwitch={async () => {
-            setHandoffError(null);
-            setHandoffSwitching(true);
-            try {
-              await switchAgentThread(agentSlug, pendingHandoff.new_thread_id);
-              // The backend appends `handoff_accepted` to the transcript,
-              // which clears `pendingHandoff` via the WS replay. We leave
-              // `switching` true until the new event arrives so the
-              // button doesn't flash back to "Continue".
-            } catch (err) {
-              setHandoffError(
-                err instanceof Error ? err.message : String(err),
-              );
-              setHandoffSwitching(false);
-            }
-          }}
-        />
-      )}
-      <form className="composer" onSubmit={handleSubmit}>
-        {pendingContexts.length > 0 && (
-          <div className="composer-contexts">
-            {pendingContexts.map((c, i) =>
-              isSimpleType(c.type) ? (
-                <SimpleContextRow
-                  key={i}
-                  context={c}
-                  onChange={(next) => patchPendingContext(i, next)}
-                  onRemove={() => removePendingContext(i)}
-                />
-              ) : (
-                <ContextRow
-                  key={i}
-                  context={c}
-                  connections={connections}
-                  onChange={(next) => patchPendingContext(i, next)}
-                  onRemove={() => removePendingContext(i)}
-                  onConnectionSaved={upsertConnection}
-                />
-              ),
-            )}
+      <div
+        className={
+          "agent-tile-body" +
+          (shouldOpenCompactionModal ? " is-compaction-blurred" : "")
+        }
+        aria-hidden={shouldOpenCompactionModal}
+      >
+        {isStopped && (
+          <div className="tile-banner">
+            This agent slug isn't known to the server. Close it to clear from the rail.
           </div>
         )}
-        <textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={composerPlaceholder}
-          rows={1}
-          disabled={composerDisabled}
-          autoFocus={mode === "page"}
-        />
-        <div className="composer-actions">
-          <div className="composer-add-context">
+        <div className="transcript" ref={transcriptRef}>
+          {olderEventCount > 0 && (
             <button
               type="button"
-              className="composer-tool"
-              onClick={() => setPickerOpen((o) => !o)}
-              title="Attach context to your next message — appended to context.md when you Send"
-              aria-expanded={pickerOpen}
+              className="transcript-load-older"
+              onClick={handleLoadOlder}
             >
-              + Add context
+              Load {Math.min(TRANSCRIPT_CAP_STEP, olderEventCount)} older
+              {olderEventCount > TRANSCRIPT_CAP_STEP
+                ? ` · ${olderEventCount} hidden`
+                : ""}
             </button>
-            {pickerOpen && (
-              <div className="composer-context-picker">
-                {SIMPLE_PICKER_TYPES.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className="btn sm"
-                    data-source={s.id}
-                    onClick={() => addSimpleContext(s.id)}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-                {fetchableTypes.map((d) => (
-                  <button
-                    key={d.type}
-                    type="button"
-                    className="btn sm"
-                    data-source={d.type}
-                    onClick={() => addConnectionContext(d.type)}
-                  >
-                    {d.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <span className="spacer" />
-          <button
-            type="submit"
-            className="composer-send"
-            disabled={composerDisabled || !draft.trim()}
-          >
-            Send
-          </button>
+          )}
+          <TranscriptUnits units={units} agentSlug={agentSlug} />
         </div>
-      </form>
+        {(lastMetrics || isCurrentlyActive) && (
+          <TurnMetricsBar
+            metrics={lastMetrics}
+            session={sessionTotals}
+            meta={modelMeta}
+            activityPhase={activityPhase}
+            context={contextSnapshot}
+            onCompact={() => {
+              setManualCompactionOpen(true);
+              setCompactionError(null);
+            }}
+          />
+        )}
+        {contextSnapshot && compactionLevel !== "none" && !shouldOpenCompactionModal && (
+          <CompactionInlineWarning
+            context={contextSnapshot}
+            level={compactionLevel}
+            onCompact={() => {
+              setManualCompactionOpen(true);
+              setCompactionError(null);
+            }}
+          />
+        )}
+        {pendingPermissions.length > 0 && (
+          <div className="permission-prompts">
+            {pendingPermissions.map((p) => (
+              <PermissionPrompt
+                key={p.request_id}
+                prompt={p}
+                onDecide={sendPermission}
+              />
+            ))}
+          </div>
+        )}
+        {pendingHandoff && (
+          <HandoffPrompt
+            threadId={pendingHandoff.new_thread_id}
+            switching={handoffSwitching}
+            error={handoffError}
+            onSwitch={async () => {
+              setHandoffError(null);
+              setHandoffSwitching(true);
+              try {
+                await switchAgentThread(agentSlug, pendingHandoff.new_thread_id);
+                // The backend appends `handoff_accepted` to the transcript,
+                // which clears `pendingHandoff` via the WS replay. We leave
+                // `switching` true until the new event arrives so the
+                // button doesn't flash back to "Continue".
+              } catch (err) {
+                setHandoffError(
+                  err instanceof Error ? err.message : String(err),
+                );
+                setHandoffSwitching(false);
+              }
+            }}
+          />
+        )}
+        <form className="composer" onSubmit={handleSubmit}>
+          {pendingContexts.length > 0 && (
+            <div className="composer-contexts">
+              {pendingContexts.map((c, i) =>
+                isSimpleType(c.type) ? (
+                  <SimpleContextRow
+                    key={i}
+                    context={c}
+                    onChange={(next) => patchPendingContext(i, next)}
+                    onRemove={() => removePendingContext(i)}
+                  />
+                ) : (
+                  <ContextRow
+                    key={i}
+                    context={c}
+                    connections={connections}
+                    onChange={(next) => patchPendingContext(i, next)}
+                    onRemove={() => removePendingContext(i)}
+                    onConnectionSaved={upsertConnection}
+                  />
+                ),
+              )}
+            </div>
+          )}
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={composerPlaceholder}
+            rows={1}
+            disabled={composerDisabled}
+            autoFocus={mode === "page"}
+          />
+          <div className="composer-actions">
+            <div className="composer-add-context">
+              <button
+                type="button"
+                className="composer-tool"
+                onClick={() => setPickerOpen((o) => !o)}
+                title="Attach context to your next message — appended to context.md when you Send"
+                aria-expanded={pickerOpen}
+              >
+                + Add context
+              </button>
+              {pickerOpen && (
+                <div className="composer-context-picker">
+                  {SIMPLE_PICKER_TYPES.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="btn sm"
+                      data-source={s.id}
+                      onClick={() => addSimpleContext(s.id)}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                  {fetchableTypes.map((d) => (
+                    <button
+                      key={d.type}
+                      type="button"
+                      className="btn sm"
+                      data-source={d.type}
+                      onClick={() => addConnectionContext(d.type)}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span className="spacer" />
+            <button
+              type="submit"
+              className="composer-send"
+              disabled={sendDisabled || !draft.trim()}
+            >
+              Send
+            </button>
+          </div>
+        </form>
+      </div>
+      {shouldOpenCompactionModal && contextSnapshot && (
+        <CompactionModal
+          context={contextSnapshot}
+          level={compactionLevel}
+          compacting={compacting}
+          error={compactionError}
+          canHandoff={Boolean(onHandoff)}
+          onCompact={() => void handleCompact()}
+          onDefer={compactionBlocked ? undefined : handleDeferCompaction}
+          onHandoff={onHandoff}
+        />
+      )}
     </div>
   );
 }
@@ -1043,6 +1158,13 @@ type RenderUnit =
   | { kind: "status"; key: number; status: string }
   | { kind: "artifact"; key: number; payload: unknown }
   | { kind: "error"; key: number; message: string }
+  | {
+      kind: "compaction";
+      key: number;
+      oldSessionId: string;
+      newSessionId: string;
+      summaryPath: string;
+    }
   | { kind: "permission_resolved"; key: number; decision: PermissionDecision; tool_name: string };
 
 function groupEvents(events: AgentEvent[]): RenderUnit[] {
@@ -1260,6 +1382,20 @@ function renderUnitFor(ev: AgentEvent): RenderUnit | null {
         key: ev.seq,
         message: stringField(ev, "message"),
       };
+    case "context_compacted":
+      return {
+        kind: "compaction",
+        key: ev.seq,
+        oldSessionId: stringField(ev, "old_session_id"),
+        newSessionId: stringField(ev, "new_session_id"),
+        summaryPath: stringField(ev, "summary_path"),
+      };
+    case "compaction_failed":
+      return {
+        kind: "error",
+        key: ev.seq,
+        message: `Compaction failed: ${stringField(ev, "message")}`,
+      };
     default:
       return null;
   }
@@ -1315,6 +1451,7 @@ function latestStatus(events: AgentEvent[]): string {
 }
 
 type TurnRollup = {
+  seq: number;
   durationMs: number;
   inputTokens: number;
   outputTokens: number;
@@ -1330,6 +1467,14 @@ type TurnRollup = {
   model: string | null;
   contextWindow: number;
 };
+
+type ContextSnapshot = {
+  pct: number;
+  promptTokens: number;
+  contextWindow: number;
+};
+
+type CompactionLevel = "none" | "notice" | "recommended" | "urgent" | "blocked";
 
 /**
  * Best-effort label for what the agent is doing *right now*, derived
@@ -1400,6 +1545,7 @@ function latestMetrics(events: AgentEvent[]): TurnRollup | null {
     const ev = events[i];
     if (ev.type !== "turn_metrics") continue;
     return {
+      seq: ev.seq,
       durationMs: numberField(ev, "duration_ms"),
       inputTokens: numberField(ev, "input_tokens"),
       outputTokens: numberField(ev, "output_tokens"),
@@ -1411,6 +1557,13 @@ function latestMetrics(events: AgentEvent[]): TurnRollup | null {
     };
   }
   return null;
+}
+
+function latestEventSeq(events: AgentEvent[], type: string): number {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].type === type) return events[i].seq;
+  }
+  return 0;
 }
 
 type SessionTotals = {
@@ -1442,6 +1595,50 @@ function numberField(ev: AgentEvent, key: string): number {
   return typeof value === "number" ? value : 0;
 }
 
+function contextSnapshotFor(
+  metrics: TurnRollup | null,
+  meta: ModelMeta | null,
+): ContextSnapshot | null {
+  if (!metrics) return null;
+  const promptTokens = metrics.lastPromptTokens > 0 ? metrics.lastPromptTokens : null;
+  const contextWindow =
+    metrics.contextWindow > 0
+      ? metrics.contextWindow
+      : meta?.context_window && meta.context_window > 0
+        ? meta.context_window
+        : null;
+  if (promptTokens === null || contextWindow === null) return null;
+  return {
+    pct: (promptTokens / contextWindow) * 100,
+    promptTokens,
+    contextWindow,
+  };
+}
+
+function compactionLevelFor(pct: number | null): CompactionLevel {
+  if (pct === null) return "none";
+  if (pct >= COMPACTION_BLOCKED_PCT) return "blocked";
+  if (pct >= COMPACTION_URGENT_PCT) return "urgent";
+  if (pct >= COMPACTION_RECOMMENDED_PCT) return "recommended";
+  if (pct >= COMPACTION_NOTICE_PCT) return "notice";
+  return "none";
+}
+
+function compactionSeverityFor(level: CompactionLevel): number {
+  switch (level) {
+    case "blocked":
+      return 4;
+    case "urgent":
+      return 3;
+    case "recommended":
+      return 2;
+    case "notice":
+      return 1;
+    case "none":
+      return 0;
+  }
+}
+
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   const totalSec = Math.round(ms / 1000);
@@ -1463,11 +1660,15 @@ function TurnMetricsBar({
   session,
   meta,
   activityPhase,
+  context,
+  onCompact,
 }: {
   metrics: TurnRollup | null;
   session: SessionTotals;
   meta: ModelMeta | null;
   activityPhase: string | null;
+  context: ContextSnapshot | null;
+  onCompact: () => void;
 }) {
   // Persona-tinted wave that spans from the last metric segment to
   // the right margin. Renders only while the agent is mid-turn so a
@@ -1511,17 +1712,9 @@ function TurnMetricsBar({
   // Context %: prompt size of the *last model call* in the turn over the
   // model's window. Do not fall back to cumulative input/cache tokens:
   // those are billing totals across sub-calls and can exceed the window.
-  const promptTokens = metrics.lastPromptTokens > 0 ? metrics.lastPromptTokens : null;
-  const contextWindow =
-    metrics.contextWindow > 0
-      ? metrics.contextWindow
-      : meta?.context_window && meta.context_window > 0
-        ? meta.context_window
-        : null;
-  const ctxPct =
-    promptTokens !== null && contextWindow !== null
-      ? (promptTokens / contextWindow) * 100
-      : null;
+  const promptTokens = context?.promptTokens ?? null;
+  const contextWindow = context?.contextWindow ?? null;
+  const ctxPct = context?.pct ?? null;
   const ctxLevel = ctxLevelFor(ctxPct);
   const sessionCost = computeSessionCost(session, meta);
   const tooltipLines = [
@@ -1568,6 +1761,16 @@ function TurnMetricsBar({
         </>
       )}
       {activityNode}
+      {context !== null && (
+        <button
+          type="button"
+          className="turn-metrics-compact"
+          onClick={onCompact}
+          title="Compact this agent's context"
+        >
+          Compact
+        </button>
+      )}
     </div>
   );
 }
@@ -1575,7 +1778,7 @@ function TurnMetricsBar({
 function ctxLevelFor(pct: number | null): string {
   if (pct === null) return "";
   if (pct >= 85) return "is-danger";
-  if (pct >= 60) return "is-warn";
+  if (pct >= 70) return "is-warn";
   return "";
 }
 
@@ -1629,7 +1832,50 @@ function lastUnitText(units: RenderUnit[]): string {
 // Renderers
 // ---------------------------------------------------------------------------
 
-function Unit({ unit }: { unit: RenderUnit }) {
+function TranscriptUnits({
+  units,
+  agentSlug,
+}: {
+  units: RenderUnit[];
+  agentSlug: string;
+}) {
+  const compactionIndex = findLastUnitIndex(units, (unit) => unit.kind === "compaction");
+  if (compactionIndex <= 0) {
+    return (
+      <>
+        {units.map((unit) => (
+          <Unit key={unit.key} unit={unit} agentSlug={agentSlug} />
+        ))}
+      </>
+    );
+  }
+
+  const previousUnits = units.slice(0, compactionIndex);
+  const boundary = units[compactionIndex];
+  const newUnits = units.slice(compactionIndex + 1);
+
+  return (
+    <>
+      <details className="transcript-previous-session">
+        <summary>
+          Previous session before compaction
+          <span>{previousUnits.length} items</span>
+        </summary>
+        <div className="transcript-previous-session-body">
+          {previousUnits.map((unit) => (
+            <Unit key={unit.key} unit={unit} agentSlug={agentSlug} />
+          ))}
+        </div>
+      </details>
+      <Unit unit={boundary} agentSlug={agentSlug} />
+      {newUnits.map((unit) => (
+        <Unit key={unit.key} unit={unit} agentSlug={agentSlug} />
+      ))}
+    </>
+  );
+}
+
+function Unit({ unit, agentSlug }: { unit: RenderUnit; agentSlug: string }) {
   switch (unit.kind) {
     case "assistant":
       return (
@@ -1671,6 +1917,8 @@ function Unit({ unit }: { unit: RenderUnit }) {
       );
     case "error":
       return <div className="msg msg-error">{unit.message}</div>;
+    case "compaction":
+      return <CompactionBoundary unit={unit} agentSlug={agentSlug} />;
     case "permission_resolved":
       return (
         <div className="msg msg-permission" data-decision={unit.decision}>
@@ -1682,6 +1930,101 @@ function Unit({ unit }: { unit: RenderUnit }) {
         </div>
       );
   }
+}
+
+function CompactionBoundary({
+  unit,
+  agentSlug,
+}: {
+  unit: Extract<RenderUnit, { kind: "compaction" }>;
+  agentSlug: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [summary, setSummary] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const filename = compactionSummaryFilename(unit.summaryPath);
+
+  useEffect(() => {
+    if (!isOpen || summary !== null || !filename) return;
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+    getAgentCompactionSummary(agentSlug, filename)
+      .then((result) => {
+        if (!cancelled) setSummary(result.content);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentSlug, filename, isOpen, summary]);
+
+  return (
+    <div className="msg msg-compaction">
+      <div className="msg-compaction-title">Context compacted</div>
+      <div className="msg-compaction-body">
+        New session started from summary.
+      </div>
+      <div className="msg-compaction-meta">
+        <span className="mono">{shortSessionId(unit.oldSessionId)}</span>
+        <span aria-hidden> → </span>
+        <span className="mono">{shortSessionId(unit.newSessionId)}</span>
+        {unit.summaryPath && (
+          <>
+            <span aria-hidden> · </span>
+            <span className="mono">{shortenPath(unit.summaryPath)}</span>
+          </>
+        )}
+      </div>
+      <button
+        type="button"
+        className="msg-compaction-summary-toggle"
+        disabled={!filename}
+        onClick={() => setIsOpen((value) => !value)}
+      >
+        {isOpen ? "Hide summary" : "View summary"}
+      </button>
+      {isOpen && (
+        <div className="msg-compaction-summary">
+          {isLoading && (
+            <div className="msg-compaction-summary-state">Loading summary...</div>
+          )}
+          {error && <div className="msg-compaction-summary-error">{error}</div>}
+          {summary !== null && <MarkdownText text={summary} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function findLastUnitIndex(
+  units: RenderUnit[],
+  predicate: (unit: RenderUnit) => boolean,
+): number {
+  for (let index = units.length - 1; index >= 0; index -= 1) {
+    if (predicate(units[index])) return index;
+  }
+  return -1;
+}
+
+function compactionSummaryFilename(summaryPath: string): string {
+  if (!summaryPath) return "";
+  const parts = summaryPath.split(/[\\/]/);
+  return parts[parts.length - 1] ?? "";
+}
+
+function shortSessionId(sessionId: string): string {
+  if (!sessionId) return "session";
+  if (sessionId.length <= 14) return sessionId;
+  return `${sessionId.slice(0, 6)}…${sessionId.slice(-5)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2321,6 +2664,145 @@ function inferLanguage(path: string): string {
     sql: "sql",
   };
   return map[ext] ?? "";
+}
+
+function CompactionInlineWarning({
+  context,
+  level,
+  onCompact,
+}: {
+  context: ContextSnapshot;
+  level: CompactionLevel;
+  onCompact: () => void;
+}) {
+  const text =
+    level === "notice"
+      ? "Context is getting full."
+      : level === "recommended"
+        ? "Context compaction is recommended."
+        : level === "urgent"
+          ? "Context is nearly full."
+          : "Context is full.";
+  return (
+    <div className="compaction-inline-warning" data-level={level}>
+      <div>
+        <span className="compaction-inline-title">{text}</span>{" "}
+        <span className="compaction-inline-meta">
+          {formatTokens(context.promptTokens)} /{" "}
+          {formatTokens(context.contextWindow)} tokens
+        </span>
+      </div>
+      <button type="button" className="btn sm" onClick={onCompact}>
+        Compact
+      </button>
+    </div>
+  );
+}
+
+function CompactionModal({
+  context,
+  level,
+  compacting,
+  error,
+  canHandoff,
+  onCompact,
+  onDefer,
+  onHandoff,
+}: {
+  context: ContextSnapshot;
+  level: CompactionLevel;
+  compacting: boolean;
+  error: string | null;
+  canHandoff: boolean;
+  onCompact: () => void;
+  onDefer?: () => void;
+  onHandoff?: () => void;
+}) {
+  const blocked = level === "blocked";
+  const urgent = level === "urgent" || blocked;
+  const title = blocked
+    ? "Context limit reached"
+    : urgent
+      ? "Context is nearly full"
+      : "Compact this agent soon";
+  const body = blocked
+    ? "This agent needs a compacted session before it can receive another message."
+    : urgent
+      ? "Compacting now will preserve the working state before the next turn risks hitting the model limit."
+      : "The transcript is large enough that the next few turns may become brittle or expensive.";
+  return (
+    <div
+      className="compaction-modal-layer"
+      role="presentation"
+      data-level={level}
+    >
+      <div
+        className="compaction-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
+        <div className="compaction-modal-hd">
+          <CompactionIcon />
+          <div>
+            <h3>{title}</h3>
+            <p>{body}</p>
+          </div>
+        </div>
+        <div className="compaction-modal-meter" aria-hidden>
+          <span style={{ width: `${Math.min(context.pct, 100)}%` }} />
+        </div>
+        <div className="compaction-modal-stats">
+          <span>{context.pct.toFixed(0)}% used</span>
+          <span className="mono">
+            {formatTokens(context.promptTokens)} /{" "}
+            {formatTokens(context.contextWindow)}
+          </span>
+        </div>
+        {error && <div className="compaction-modal-error">{error}</div>}
+        <div className="compaction-modal-actions">
+          {blocked && canHandoff && (
+            <button type="button" className="btn sm" onClick={onHandoff}>
+              Handoff
+            </button>
+          )}
+          {onDefer && (
+            <button
+              type="button"
+              className="btn sm ghost"
+              onClick={onDefer}
+              disabled={compacting}
+            >
+              Defer
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn sm primary"
+            onClick={onCompact}
+            disabled={compacting}
+          >
+            {compacting ? "Compacting…" : "Compact now"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CompactionIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden>
+      <path
+        d="M4 3h8M4 13h8M6 6h4M6 10h4M3 4.5L6 8l-3 3.5M13 4.5L10 8l3 3.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        fill="none"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function PermissionPrompt({

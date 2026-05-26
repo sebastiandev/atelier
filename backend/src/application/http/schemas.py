@@ -161,6 +161,31 @@ class SwitchThreadRequest(BaseModel):
     thread_id: str = Field(min_length=1)
 
 
+class CompactAgentRequest(BaseModel):
+    """Body for POST /agents/{slug}/compact."""
+
+    reason: Literal["manual", "forced_context_limit"] = "manual"
+
+
+class CompactAgentResponse(BaseModel):
+    agent_slug: str
+    work_slug: str
+    provider: Provider
+    old_session_id: str
+    new_session_id: str
+    summary_path: str
+    breadcrumb_written: bool
+    breadcrumb_error: str | None = None
+
+
+class AgentCompactionSummaryResponse(BaseModel):
+    agent_slug: str
+    work_slug: str
+    filename: str
+    summary_path: str
+    content: str
+
+
 class JiraConfigSchema(BaseModel):
     type: Literal["jira"]
     url: str = Field(min_length=1)
@@ -227,10 +252,10 @@ class VerifyResponse(BaseModel):
 class NewProjectRequest(BaseModel):
     name: str = Field(min_length=1)
     description: str = ""
-    # 1–2 char monogram. FE derives it from name; required on the wire so
+    # 1-2 char monogram. FE derives it from name; required on the wire so
     # the backend doesn't have to know the FE's derivation rules.
     glyph: str = Field(min_length=1, max_length=2)
-    # OKLCH hue 0–360 (inclusive lower, exclusive upper); enforced wider
+    # OKLCH hue 0-360 (inclusive lower, exclusive upper); enforced wider
     # than the prototype's 7-swatch palette so future palette tweaks don't
     # need a schema bump.
     color: int = Field(ge=0, le=360)
@@ -316,10 +341,10 @@ __all__ = [
     "HandoffSummary",
     "NewAgentRequest",
     "NewConnectionRequest",
-    "PatchAgentRequest",
     "NewHandoffRequest",
     "NewProjectRequest",
     "NewWorkRequest",
+    "PatchAgentRequest",
     "PatchConnectionRequest",
     "PatchProjectRequest",
     "PatchWorkRequest",

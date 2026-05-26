@@ -63,6 +63,8 @@ follow-up will route an ``amp`` connection's token through
 ``AmpOptions.env``.
 """
 
+# ruff: noqa: E402
+
 import asyncio
 import json
 import logging
@@ -285,7 +287,10 @@ class AmpAdapter:
         # The permission socket is only needed when Bash is gated through
         # the bridge (DEFAULT and CUSTOM modes). ALLOW_ALL passes
         # ``--dangerously-allow-all`` and never invokes our shim.
-        if self._config.permission_mode is not AmpPermissionMode.ALLOW_ALL:
+        if (
+            self._config.permission_mode is not AmpPermissionMode.ALLOW_ALL
+            and not self._config.summary_only
+        ):
             # Stand it up before any CLI invocation so the agent's first
             # Bash can't outrace our bind. ``mkdtemp`` mode is 0700.
             self._socket_dir = tempfile.mkdtemp(prefix="atelier-amp-")
@@ -485,6 +490,22 @@ class AmpAdapter:
         }
         if self._resume_thread_id is not None:
             opts["continue_thread"] = self._resume_thread_id
+
+        if self._config.summary_only:
+            return {
+                "cwd": str(self._config.common.workdir),
+                "mode": self._config.mode.value,
+                "dangerously_allow_all": False,
+                "permissions": [
+                    Permission(
+                        tool="*",
+                        matches=None,
+                        action="reject",
+                        context=None,
+                        to=None,
+                    )
+                ],
+            }
 
         if self._config.permission_mode is AmpPermissionMode.ALLOW_ALL:
             opts["dangerously_allow_all"] = True
@@ -693,13 +714,35 @@ def _build_permissions(
     would defeat the entire reason this knob exists.)
     """
     rules: list[Permission] = [
-        Permission(tool="Bash", action="delegate", to=bridge_cmd),
+        Permission(
+            tool="Bash",
+            matches=None,
+            action="delegate",
+            context=None,
+            to=bridge_cmd,
+        ),
     ]
     for tool in allowed_tools:
         if tool == "Bash":
             continue
-        rules.append(Permission(tool=tool, action="allow"))
-    rules.append(Permission(tool="*", action="allow"))
+        rules.append(
+            Permission(
+                tool=tool,
+                matches=None,
+                action="allow",
+                context=None,
+                to=None,
+            )
+        )
+    rules.append(
+        Permission(
+            tool="*",
+            matches=None,
+            action="allow",
+            context=None,
+            to=None,
+        )
+    )
     return rules
 
 
@@ -779,11 +822,11 @@ def _convert(
             elif isinstance(asst_block, ToolUseContent):
                 # Atelier artifact tools produce a marker on the side; the
                 # ToolCall still flows so the chat shows the agent's call.
-                payload = marker_payload_for_tool(
+                marker_payload = marker_payload_for_tool(
                     asst_block.name, dict(asst_block.input)
                 )
-                if payload is not None:
-                    yield ArtifactMarker(ts=now, payload=payload)
+                if marker_payload is not None:
+                    yield ArtifactMarker(ts=now, payload=marker_payload)
                 canon_name, canon_args = canonicalize_tool(
                     asst_block.name, dict(asst_block.input)
                 )

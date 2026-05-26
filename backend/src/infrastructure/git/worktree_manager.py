@@ -27,7 +27,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from src.domain.worktrees.ports import WorktreeProvisionFailed
+from src.domain.worktrees.ports import WorktreeProvisionFailed, WorktreeState
 from src.infrastructure.filesystem.paths import WorkspacePaths
 
 _log = logging.getLogger(__name__)
@@ -170,6 +170,39 @@ class GitWorktreeManager:
             return False
         except subprocess.CalledProcessError:
             return True
+
+    def describe_state(self, workdir: Path) -> WorktreeState:
+        if not workdir.exists():
+            return WorktreeState(
+                workdir=workdir,
+                is_git_repo=False,
+                error=f"workdir does not exist: {workdir}",
+            )
+        if not _is_git_repo(workdir):
+            return WorktreeState(workdir=workdir, is_git_repo=False)
+
+        branch = _git_out(workdir, "branch", "--show-current") or None
+        head = _git_out(workdir, "rev-parse", "--short", "HEAD") or None
+        status = _git_stdout(workdir, "status", "--short")
+        changed: list[str] = []
+        untracked: list[str] = []
+        for line in status.splitlines():
+            if not line:
+                continue
+            path = line[3:] if len(line) > 3 else line.strip()
+            if line.startswith("?? "):
+                untracked.append(path)
+            else:
+                changed.append(path)
+        return WorktreeState(
+            workdir=workdir,
+            is_git_repo=True,
+            branch=branch,
+            head=head,
+            status=status,
+            changed_files=tuple(changed),
+            untracked_files=tuple(untracked),
+        )
 
     def ensure_forked(
         self,
@@ -493,6 +526,17 @@ def _run_git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
     )
+
+
+def _git_out(cwd: Path, *args: str) -> str:
+    return _git_stdout(cwd, *args).strip()
+
+
+def _git_stdout(cwd: Path, *args: str) -> str:
+    try:
+        return _run_git(cwd, *args).stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
 
 
 def _stderr(exc: subprocess.CalledProcessError) -> str:

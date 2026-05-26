@@ -101,7 +101,24 @@ class WorkStore(Protocol):
         written the new per-source files."""
         ...
 
-    def set_agent_session_id(self, agent_slug: str, session_id: str) -> None: ...
+    def write_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str, content: str
+    ) -> str:
+        """Persist a compaction summary under the agent's Atelier state dir.
+
+        The summary is additive metadata (`agents/<slug>/compactions/*.md`);
+        it is not part of the user's worktree and old installs simply
+        ignore the directory.
+        """
+        ...
+
+    def read_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str
+    ) -> tuple[str, str] | None: ...
+
+    def set_agent_session_id(
+        self, agent_slug: str, session_id: str, *, mirror_agent_json: bool = False
+    ) -> None: ...
 
     def set_agent_status(self, agent_slug: str, status: AgentStatus) -> None: ...
 
@@ -258,6 +275,14 @@ class WorkspaceFiles(Protocol):
     def read_agent_json(self, work_slug: str, agent_slug: str) -> dict[str, Any] | None: ...
 
     def write_handoff_doc(self, work_slug: str, filename: str, content: str) -> str: ...
+
+    def write_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str, content: str
+    ) -> str: ...
+
+    def read_agent_compaction_doc(
+        self, work_slug: str, agent_slug: str, filename: str
+    ) -> tuple[str, str] | None: ...
 
     def write_agent_context_file(
         self, work_slug: str, agent_slug: str, filename: str, content: str

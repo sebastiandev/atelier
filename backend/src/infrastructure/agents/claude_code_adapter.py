@@ -330,6 +330,22 @@ class ClaudeCodeAdapter:
             await self._client.disconnect()
 
     def _build_options(self) -> ClaudeAgentOptions:
+        if self._config.summary_only:
+            summary_kwargs: dict[str, Any] = {
+                "model": self._config.model.value,
+                "system_prompt": self._config.common.system_prompt,
+                "cwd": str(self._config.common.workdir),
+                "permission_mode": self._config.permission_mode.value,
+                "allowed_tools": [],
+                "mcp_servers": {},
+                "can_use_tool": self._can_use_tool,
+            }
+            if self._config.thinking_effort is not ClaudeEffort.OFF:
+                summary_kwargs["effort"] = self._config.thinking_effort.value
+            if self._resume_session_id is not None:
+                summary_kwargs["resume"] = self._resume_session_id
+            return ClaudeAgentOptions(**summary_kwargs)
+
         # Atelier's artifact-recording tools — registered as an in-process
         # MCP server. Auto-allowed: they're side-effect-free from the SDK's
         # POV (the actual recording is triggered by the supervisor on the
@@ -426,9 +442,9 @@ def _convert(
                 # Atelier artifact-tool calls produce a marker on the side;
                 # the regular ToolCall still flows through so the user sees
                 # the agent's exact invocation in the chat transcript.
-                payload = marker_payload_for_tool(block.name, dict(block.input))
-                if payload is not None:
-                    yield ArtifactMarker(ts=now, payload=payload)
+                marker_payload = marker_payload_for_tool(block.name, dict(block.input))
+                if marker_payload is not None:
+                    yield ArtifactMarker(ts=now, payload=marker_payload)
                 canon_name, canon_args = canonicalize_tool(
                     block.name, dict(block.input)
                 )

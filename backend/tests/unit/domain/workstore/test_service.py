@@ -251,6 +251,37 @@ def test_list_agents_for_work_returns_added_agents() -> None:
     assert [a.slug for a in agents] == ["agt-1", "agt-2"]
 
 
+def test_set_agent_session_id_mirrors_agent_json_only_when_requested() -> None:
+    service, repo, files, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(
+        AddAgentRequest(
+            work_slug="WRK-001",
+            name="Developer",
+            persona="developer",
+            role="dev",
+            provider="codex",
+            model="gpt-5.5",
+            folder=Path("/code/foo"),
+            contexts=(Context(type="text", value="handoff"),),
+            options={"reasoning_effort": "high"},
+        )
+    )
+
+    service.set_agent_session_id("agt-1", "old-session")
+    assert files.agent_jsons[("WRK-001", "agt-1")]["session_id"] is None
+
+    service.set_agent_session_id("agt-1", "new-session", mirror_agent_json=True)
+
+    assert repo.agents["agt-1"].session_id == "new-session"
+    assert repo.agents["agt-1"].parent_session_id == "old-session"
+    persisted = files.agent_jsons[("WRK-001", "agt-1")]
+    assert persisted["session_id"] == "new-session"
+    assert persisted["parent_session_id"] == "old-session"
+    assert persisted["contexts"] == [{"type": "text", "value": "handoff"}]
+    assert persisted["options"] == {"reasoning_effort": "high"}
+
+
 def test_backfill_missing_session_ids_from_transcripts_restores_latest_session() -> None:
     service, repo, _, log = _make_service()
     service.create_work(_new_work_request())

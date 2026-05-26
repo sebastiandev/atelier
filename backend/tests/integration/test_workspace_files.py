@@ -74,6 +74,37 @@ def test_write_handoff_doc_rejects_bad_filename(files: FsWorkspaceFiles) -> None
         files.write_handoff_doc("WRK-001", "", "x")
 
 
+def test_write_agent_compaction_doc_returns_path(
+    files: FsWorkspaceFiles, tmp_path: Path
+) -> None:
+    path_str = files.write_agent_compaction_doc(
+        "WRK-001", "agt-1", "20260526-120000.md", "# compacted"
+    )
+    expected = (
+        tmp_path
+        / "Atelier"
+        / "works"
+        / "WRK-001"
+        / "agents"
+        / "agt-1"
+        / "compactions"
+        / "20260526-120000.md"
+    )
+    assert Path(path_str) == expected
+    assert expected.read_text() == "# compacted"
+
+
+def test_write_agent_compaction_doc_rejects_bad_filename(
+    files: FsWorkspaceFiles,
+) -> None:
+    with pytest.raises(ValueError):
+        files.write_agent_compaction_doc("WRK-001", "agt-1", "../escape.md", "x")
+    with pytest.raises(ValueError):
+        files.write_agent_compaction_doc("WRK-001", "agt-1", ".hidden", "x")
+    with pytest.raises(ValueError):
+        files.write_agent_compaction_doc("WRK-001", "agt-1", "", "x")
+
+
 def test_list_work_slugs_returns_subdirs_only(files: FsWorkspaceFiles, tmp_path: Path) -> None:
     files.ensure_work_dir("WRK-001")
     files.ensure_work_dir("WRK-002")
