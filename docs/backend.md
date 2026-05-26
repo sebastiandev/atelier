@@ -275,6 +275,7 @@ We use ``delegate`` to gate Bash specifically. The other tools (Read/Edit/Write/
 - ``allow_always`` is per-tool, session-only. A "Allow always" click on Bash means *every* subsequent Bash invocation runs without asking. The session-only scope means restarting the agent restores the prompt.
 - The CLI's default for un-listed tools is ``ask``, which would hang. So the adapter **enumerates** every tool the agent uses. If a brand-new Amp tool ships and isn't in our list, the agent will block; the fix is adding it to ``AMP_DEFAULT_AUTO_ALLOWED_TOOLS``. Failing closed beats silent auto-allow.
 - The bridge is fail-closed. Missing socket, missing env var, malformed handshake → exits non-zero with a stderr message.
+- Amp may attach ``discoveredGuidanceFiles`` to tool results when it follows repository guidance references. ``AmpAdapter`` preserves each file's URI, line count, and omitted byte count, but strips the file body before persisting the normalized ``ToolResult`` so transcripts and future compaction prompts do not balloon from provider-injected guidance payloads.
 
 The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib-only — it ships in the source tree but runs as a detached child of the Amp CLI, so it must not import any Atelier modules (the CLI's invocation env doesn't carry our virtualenv).
 

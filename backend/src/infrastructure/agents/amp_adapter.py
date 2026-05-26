@@ -788,17 +788,18 @@ def _convert(
                 # Use that as the canonical "thinking starts now" marker.
                 yield StatusChange(ts=now, status="thinking")
             elif isinstance(user_block, ToolResultContent):
+                raw_content = user_block.content
                 yield ToolResult(
                     ts=now,
                     tool_id=user_block.tool_use_id,
-                    content=user_block.content,
+                    content=_sanitize_tool_result_content(raw_content),
                     is_error=user_block.is_error,
                 )
                 # Structured handoff signal: the ``handoff`` tool's
                 # JSON result carries ``newThreadID`` directly. More
                 # reliable than the assistant-text regex fallback,
                 # which misses when the model paraphrases.
-                handoff_id = _detect_handoff_from_tool_result(user_block.content)
+                handoff_id = _detect_handoff_from_tool_result(raw_content)
                 if handoff_id is not None:
                     yield HandoffOffered(ts=now, new_thread_id=handoff_id)
         return
@@ -865,6 +866,47 @@ def _metrics_from_result(
         last_prompt_tokens=last_prompt_tokens,
         model=model,
     )
+
+
+def _sanitize_tool_result_content(content: str) -> str:
+    """Drop Amp guidance file bodies from persisted tool results.
+
+    Amp can attach ``discoveredGuidanceFiles`` to otherwise small tool
+    results. Those entries may include full source files referenced by
+    AGENTS.md; persisting them verbatim makes Atelier transcripts,
+    compaction prompts, and replay paths balloon invisibly. Keep metadata
+    and byte counts so the debug trail still explains what happened.
+    """
+    try:
+        payload = json.loads(content)
+    except (TypeError, ValueError):
+        return content
+    if not isinstance(payload, dict):
+        return content
+
+    guidance = payload.get("discoveredGuidanceFiles")
+    if not isinstance(guidance, list):
+        return content
+
+    changed = False
+    sanitized_guidance: list[object] = []
+    for entry in guidance:
+        if not isinstance(entry, dict):
+            sanitized_guidance.append(entry)
+            continue
+        sanitized = dict(entry)
+        file_content = sanitized.pop("content", None)
+        if isinstance(file_content, str):
+            sanitized["content_chars"] = len(file_content)
+            sanitized["content_omitted"] = True
+            changed = True
+        sanitized_guidance.append(sanitized)
+
+    if not changed:
+        return content
+    sanitized_payload = dict(payload)
+    sanitized_payload["discoveredGuidanceFiles"] = sanitized_guidance
+    return json.dumps(sanitized_payload, separators=(",", ":"))
 
 
 def _assistant_prompt_tokens(msg: StreamMessage) -> int | None:

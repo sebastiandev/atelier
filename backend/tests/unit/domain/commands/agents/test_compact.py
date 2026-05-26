@@ -77,7 +77,18 @@ class FakeShareProvisioner:
 
 class FakeSessionClient:
     def __init__(
-        self, *, summary: str | None = "provider generated summary"
+        self,
+        *,
+        summary: str | None = (
+            "## Goal\n"
+            "provider generated summary\n\n"
+            "## Decisions\n"
+            "Keep going.\n\n"
+            "## Key files\n"
+            "No key files.\n\n"
+            "## Blockers\n"
+            "No blockers."
+        ),
     ) -> None:
         self.summary = summary
         self.summary_prompt: str | None = None
@@ -285,6 +296,35 @@ async def test_compact_falls_back_when_provider_summary_fails(
 
 
 @pytest.mark.anyio
+async def test_compact_falls_back_when_provider_summary_is_unstructured(
+    tmp_path: Path,
+) -> None:
+    service, repo, files, _transcript = _workstore()
+    _seed_agent(service, repo, tmp_path)
+
+    await compact.execute(
+        service,
+        FakeSupervisor(),  # type: ignore[arg-type]
+        FakeWorktreeManager(tmp_path),  # type: ignore[arg-type]
+        FakeShareStore(),  # type: ignore[arg-type]
+        FakeShareProvisioner(),  # type: ignore[arg-type]
+        Settings(workspace_root=tmp_path),
+        lambda events, context: (
+            f"fallback summary for {context.work_name}: {events[-1]['text']}"
+        ),
+        FakeSessionClient(summary="I'm caught up; tell me what to do next."),  # type: ignore[arg-type]
+        compact.CompactAgentRequest(agent_slug="agt-1"),
+        clock=lambda: datetime(2026, 5, 26, 12, 0, 0, tzinfo=UTC),
+    )
+
+    summary = files.compaction_docs[
+        ("WRK-001", "agt-1", "20260526-120000.md")
+    ]
+    assert "fallback summary for Ship compaction: latest instruction" in summary
+    assert "I'm caught up" not in summary
+
+
+@pytest.mark.anyio
 async def test_compact_after_compaction_summarizes_previous_summary_plus_delta(
     tmp_path: Path,
 ) -> None:
@@ -338,6 +378,83 @@ async def test_compact_after_compaction_summarizes_previous_summary_plus_delta(
     assert "Important old decision." in session_client.summary_prompt
     assert "new post-compaction instruction" in session_client.summary_prompt
     assert "latest instruction" not in session_client.summary_prompt
+
+
+@pytest.mark.anyio
+async def test_compact_after_compaction_uses_summary_body_without_nested_context(
+    tmp_path: Path,
+) -> None:
+    service, repo, files, _transcript = _workstore()
+    _seed_agent(service, repo, tmp_path)
+    files.compaction_docs[
+        ("WRK-001", "agt-1", "20260526-100000.md")
+    ] = (
+        "# Compacted Context for Builder\n\n"
+        "Created: 2026-05-26T10:00:00+00:00\n\n"
+        "## Work Description\n"
+        "Do it\n\n"
+        "## Compacted Summary\n"
+        "# Handoff from Builder\n\n"
+        "## Goal\n"
+        "Keep building.\n\n"
+        "## Decisions\n"
+        "Previous compacted context:\n"
+        "# Compacted Context for Builder Created: old nested wrapper...\n\n"
+        "Latest user instructions to the source agent:\n"
+        "- Rename the Branch DTOs.\n\n"
+        "## Key files\n"
+        "- `src/app.py`\n\n"
+        "## Blockers\n"
+        "None.\n\n"
+        "## Repository State\n"
+        "Status: clean\n"
+    )
+    service.append_transcript_event_with_seq(
+        "WRK-001",
+        "agt-1",
+        {
+            "type": "context_compacted",
+            "ts": "2026-05-26T10:00:00+00:00",
+            "old_session_id": "older-session",
+            "new_session_id": "old-session",
+            "summary_path": (
+                "/stub/works/WRK-001/agents/agt-1/"
+                "compactions/20260526-100000.md"
+            ),
+            "reason": "manual",
+            "provider": "claude-code",
+        },
+    )
+    service.append_transcript_event_with_seq(
+        "WRK-001",
+        "agt-1",
+        {
+            "type": "user_input",
+            "ts": "2026-05-26T11:30:00+00:00",
+            "text": "continue after compact",
+        },
+    )
+    session_client = FakeSessionClient()
+
+    await compact.execute(
+        service,
+        FakeSupervisor(),  # type: ignore[arg-type]
+        FakeWorktreeManager(tmp_path),  # type: ignore[arg-type]
+        FakeShareStore(),  # type: ignore[arg-type]
+        FakeShareProvisioner(),  # type: ignore[arg-type]
+        Settings(workspace_root=tmp_path),
+        lambda _events, _context: "fallback summary",
+        session_client,  # type: ignore[arg-type]
+        compact.CompactAgentRequest(agent_slug="agt-1"),
+        clock=lambda: datetime(2026, 5, 26, 12, 0, 0, tzinfo=UTC),
+    )
+
+    assert session_client.summary_prompt is not None
+    assert "Keep building." in session_client.summary_prompt
+    assert "Rename the Branch DTOs." in session_client.summary_prompt
+    assert "Repository State" not in session_client.summary_prompt
+    assert "Created: 2026-05-26" not in session_client.summary_prompt
+    assert "old nested wrapper" not in session_client.summary_prompt
 
 
 @pytest.mark.anyio

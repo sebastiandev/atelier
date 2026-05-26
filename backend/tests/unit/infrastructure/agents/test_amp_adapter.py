@@ -8,6 +8,7 @@ executor injected at construction time.
 """
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -128,6 +129,40 @@ def test_user_tool_result_maps_to_tool_result() -> None:
     assert event.tool_id == "t-1"
     assert event.content == "ok"
     assert event.is_error is False
+
+
+def test_user_tool_result_omits_amp_guidance_file_bodies() -> None:
+    payload = {
+        "output": "ok",
+        "exitCode": 0,
+        "discoveredGuidanceFiles": [
+            {
+                "uri": "file:///repo/kernel/src/kernel/infrastructure/database/tables.py",
+                "lineCount": 1893,
+                "content": "x" * 102_000,
+            }
+        ],
+    }
+
+    [event] = list(
+        _convert(
+            _user(
+                ToolResultContent(
+                    tool_use_id="t-1",
+                    content=json.dumps(payload),
+                    is_error=False,
+                )
+            )
+        )
+    )
+
+    assert isinstance(event, ToolResult)
+    sanitized = json.loads(event.content)
+    guidance = sanitized["discoveredGuidanceFiles"][0]
+    assert sanitized["output"] == "ok"
+    assert "content" not in guidance
+    assert guidance["content_chars"] == 102_000
+    assert guidance["content_omitted"] is True
 
 
 def test_assistant_text_maps_to_message_complete() -> None:

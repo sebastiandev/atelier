@@ -161,6 +161,9 @@ def format_summary_prompt(
         transcript_lines.append(_event_to_line(ev))
     return (
         f"{header}"
+        "If a [previous_compaction_summary] entry is present, treat it as the "
+        "cumulative state before the latest compaction boundary. Merge it with "
+        "the later transcript events; do not quote or nest it verbatim.\n\n"
         f"Transcript ({len(events)} events, oldest first):\n\n"
         + "\n".join(transcript_lines)
     )

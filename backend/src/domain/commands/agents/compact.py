@@ -40,6 +40,13 @@ CompactionReason = Literal["manual", "forced_context_limit"]
 
 _log = logging.getLogger(__name__)
 
+_REQUIRED_PROVIDER_SUMMARY_SECTIONS = {
+    "## goal",
+    "## decisions",
+    "## key files",
+    "## blockers",
+}
+
 
 @dataclass(frozen=True)
 class CompactAgentRequest:
@@ -334,15 +341,28 @@ async def _summarize_with_provider(
             context=context,
             prompt=format_summary_prompt(events, summary_context),
         )
-        if summary.strip():
+        if _is_usable_provider_summary(summary):
             return summary
-        raise ValueError("provider summary was empty")
+        raise ValueError("provider summary was empty or missing required sections")
     except Exception as exc:
         _log.warning(
             "provider compaction summary failed; falling back to app summarizer: %r",
             exc,
         )
         return fallback(events, summary_context)
+
+
+def _is_usable_provider_summary(summary: str) -> bool:
+    cleaned = summary.strip()
+    if not cleaned:
+        return False
+
+    headings = {
+        line.strip().lower()
+        for line in cleaned.splitlines()
+        if line.strip().startswith("## ")
+    }
+    return _REQUIRED_PROVIDER_SUMMARY_SECTIONS.issubset(headings)
 
 
 def _summary_source_events(
@@ -397,7 +417,43 @@ def _read_previous_summary(
     )
     if summary is None:
         return None
-    return summary[1]
+    return _previous_summary_context(summary[1])
+
+
+def _previous_summary_context(summary_doc: str) -> str:
+    body = _extract_compacted_summary_body(summary_doc)
+    body = _remove_previous_compacted_context_block(body)
+    return body.strip()
+
+
+def _extract_compacted_summary_body(summary_doc: str) -> str:
+    marker = "\n## Compacted Summary\n"
+    start = summary_doc.find(marker)
+    if start < 0:
+        return summary_doc
+    body_start = start + len(marker)
+    end = summary_doc.find("\n## Repository State", body_start)
+    if end < 0:
+        return summary_doc[body_start:]
+    return summary_doc[body_start:end]
+
+
+def _remove_previous_compacted_context_block(summary_body: str) -> str:
+    lines = summary_body.splitlines()
+    cleaned: list[str] = []
+    skipping_previous_context = False
+
+    for line in lines:
+        if line.strip() == "Previous compacted context:":
+            skipping_previous_context = True
+            continue
+        if skipping_previous_context:
+            if not line.strip():
+                skipping_previous_context = False
+            continue
+        cleaned.append(line)
+
+    return "\n".join(cleaned)
 
 
 def _find_agent(workstore: WorkStore, work_slug: str, agent_slug: str) -> Agent:

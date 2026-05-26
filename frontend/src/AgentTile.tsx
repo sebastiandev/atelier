@@ -365,14 +365,13 @@ export function AgentTile({
     if (!lastMetrics || latestCompactionSeq <= lastMetrics.seq) return;
     setCompactedMetricsSeq((prev) => Math.max(prev ?? 0, lastMetrics.seq));
   }, [lastMetrics, latestCompactionSeq]);
+  const staleMetricsSeq = Math.max(latestCompactionSeq, compactedMetricsSeq ?? 0);
   const contextSnapshot = useMemo(
     () =>
-      lastMetrics &&
-      compactedMetricsSeq !== null &&
-      lastMetrics.seq <= compactedMetricsSeq
+      lastMetrics && lastMetrics.seq <= staleMetricsSeq
         ? null
         : contextSnapshotFor(lastMetrics, modelMeta),
-    [lastMetrics, modelMeta, compactedMetricsSeq],
+    [lastMetrics, modelMeta, staleMetricsSeq],
   );
   const compactionLevel = compactionLevelFor(contextSnapshot?.pct ?? null);
   const compactionSeverity = compactionSeverityFor(compactionLevel);
