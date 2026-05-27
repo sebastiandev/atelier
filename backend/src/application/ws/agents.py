@@ -78,7 +78,7 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if kick_task in done:
-                    await websocket.close(code=_CLOSE_SLOW_SUBSCRIBER)
+                    await _safe_close(websocket, code=_CLOSE_SLOW_SUBSCRIBER)
                     return
                 # Surface any task exception (other than disconnect/cancel).
                 for task in done:
@@ -91,7 +91,7 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
                     with suppress(asyncio.CancelledError, WebSocketDisconnect):
                         await task
     except connect.AgentNotFound:
-        await websocket.close(code=_CLOSE_AGENT_NOT_RUNNING)
+        await _safe_close(websocket, code=_CLOSE_AGENT_NOT_RUNNING)
     except WebSocketDisconnect:
         pass
 
@@ -133,7 +133,7 @@ async def _receive_inputs(
                 await websocket.send_json(
                     {"type": "client_error", "message": f"Add context failed: {exc}"}
                 )
-        except AgentTerminated as exc:
+        except AgentTerminated:
             # The pump exited (upstream rate limit, provider EOF,
             # subprocess crash). Tell the FE briefly, then close the
             # socket so its reconnect-with-backoff lands in resume
@@ -148,8 +148,20 @@ async def _receive_inputs(
                         ),
                     }
                 )
-            await websocket.close(code=_CLOSE_ADAPTER_TERMINATED)
+            await _safe_close(websocket, code=_CLOSE_ADAPTER_TERMINATED)
             return
+
+
+async def _safe_close(websocket: WebSocket, *, code: int) -> None:
+    """Close the socket if Starlette/Uvicorn has not already completed it.
+
+    Expected reconnect paths can race with the browser or proxy closing the
+    socket first. A second ASGI close raises ``RuntimeError``; suppress it so
+    benign reconnects do not produce scary backend tracebacks.
+    """
+
+    with suppress(RuntimeError, WebSocketDisconnect):
+        await websocket.close(code=code)
 
 
 def _parse_cursor(value: str | None) -> int:
