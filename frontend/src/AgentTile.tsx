@@ -389,6 +389,11 @@ export function AgentTile({
     }
   }, [compactionLevel]);
 
+  function openCompactionModal() {
+    setCompactionError(null);
+    setManualCompactionOpen(true);
+  }
+
   async function handleCompact() {
     setCompacting(true);
     setCompactionError(null);
@@ -853,7 +858,7 @@ export function AgentTile({
             activityPhase={composerActivity}
             context={contextSnapshot}
             compacting={compacting}
-            onCompact={() => void handleCompact()}
+            onCompact={openCompactionModal}
           />
         )}
         {pendingPermissions.length > 0 && (
