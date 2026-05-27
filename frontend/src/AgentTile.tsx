@@ -1460,6 +1460,9 @@ type TurnRollup = {
   lastPromptTokens: number;
   model: string | null;
   contextWindow: number;
+  gitBranch: string | null;
+  gitHead: string | null;
+  gitDetached: boolean;
 };
 
 type ContextSnapshot = {
@@ -1548,6 +1551,9 @@ function latestMetrics(events: AgentEvent[]): TurnRollup | null {
       lastPromptTokens: numberField(ev, "last_prompt_tokens"),
       model: typeof ev.model === "string" ? ev.model : null,
       contextWindow: numberField(ev, "context_window"),
+      gitBranch: typeof ev.git_branch === "string" ? ev.git_branch : null,
+      gitHead: typeof ev.git_head === "string" ? ev.git_head : null,
+      gitDetached: ev.git_detached === true,
     };
   }
   return null;
@@ -1634,6 +1640,39 @@ function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
+function shortSha(sha: string | null): string | null {
+  if (!sha) return null;
+  return sha.length > 8 ? sha.slice(0, 8) : sha;
+}
+
+function gitLabelFor(metrics: TurnRollup): string | null {
+  if (metrics.gitBranch) return metrics.gitBranch;
+  if (metrics.gitDetached) return "DETACHED HEAD";
+  return null;
+}
+
+function BranchMetricIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="3" cy="2.5" r="1" />
+      <circle cx="3" cy="9.5" r="1" />
+      <circle cx="9" cy="6" r="1" />
+      <path d="M3 3.5v5" />
+      <path d="M3 6h2a3 3 0 0 0 3-3" />
+    </svg>
+  );
+}
+
 function TurnMetricsBar({
   metrics,
   session,
@@ -1697,6 +1736,8 @@ function TurnMetricsBar({
   const contextWindow = context?.contextWindow ?? null;
   const ctxPct = context?.pct ?? null;
   const sessionCost = computeSessionCost(session, meta);
+  const gitLabel = gitLabelFor(metrics);
+  const gitHead = shortSha(metrics.gitHead);
   const tooltipLines = [
     `Duration: ${formatDuration(metrics.durationMs)}`,
     `Input: ${metrics.inputTokens.toLocaleString()}`,
@@ -1704,6 +1745,11 @@ function TurnMetricsBar({
     `Cache read: ${metrics.cacheReadTokens.toLocaleString()}`,
     `Cache write: ${metrics.cacheCreationTokens.toLocaleString()}`,
   ];
+  if (gitLabel !== null) {
+    tooltipLines.unshift(
+      `Git: ${gitLabel}${gitHead !== null ? ` @ ${gitHead}` : ""}`,
+    );
+  }
   if (promptTokens !== null && ctxPct !== null && contextWindow !== null) {
     tooltipLines.push(
       `Context: ${promptTokens.toLocaleString()} / ${contextWindow.toLocaleString()} (${ctxPct.toFixed(1)}%)`,
@@ -1723,6 +1769,15 @@ function TurnMetricsBar({
   }
   return (
     <div className="turn-metrics" title={tooltipLines.join("\n")}>
+      {gitLabel !== null && (
+        <>
+          <span className="turn-metrics-item turn-metrics-git">
+            <BranchMetricIcon />
+            <span className="turn-metrics-git-label">{gitLabel}</span>
+          </span>
+          <span className="turn-metrics-sep">·</span>
+        </>
+      )}
       <span className="turn-metrics-item">{formatDuration(metrics.durationMs)}</span>
       <span className="turn-metrics-sep">·</span>
       <span className="turn-metrics-item">↓ {formatTokens(totalTokens)} tokens</span>

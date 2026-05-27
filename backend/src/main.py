@@ -166,7 +166,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # the canonical dir under the workspace.
                     if share.real_path is not None:
                         roots.append(share.real_path)
-                    else:
+                    elif share.slug is not None:
                         roots.append(paths.project_share_dir(project_slug, share.slug))
             return roots
 
@@ -185,6 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             transcript_log,
             workstore.set_agent_session_id,
             record_artifact=_track_artifact,
+            describe_worktree_state=worktree_manager.describe_state,
         )
         for work in workstore.list_works():
             if work.slug is None:

@@ -2233,6 +2233,25 @@ h5.md-h {
 .turn-metrics-sep {
   color: var(--fg-4);
 }
+.turn-metrics-git {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 1 auto;
+  max-width: clamp(18ch, 40vw, 56ch);
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+.turn-metrics-git svg {
+  flex: 0 0 auto;
+  color: var(--fg-3);
+}
+.turn-metrics-git-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .turn-metrics-ctx {
   transition: color 200ms ease, font-weight 200ms ease;
 }

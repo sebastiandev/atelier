@@ -93,6 +93,7 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from src.domain.agents import (
@@ -102,12 +103,15 @@ from src.domain.agents import (
     ArtifactMarker,
     PermissionDecisionValue,
     SessionEstablished,
+    TurnMetrics,
 )
 from src.domain.models import Artifact
 from src.domain.workstore.ports import TranscriptLog
+from src.domain.worktrees import WorktreeState
 
 SetSessionIdFn = Callable[[str, str], None]
 RecordArtifactFn = Callable[[str, str, dict[str, Any]], Artifact]
+DescribeWorktreeStateFn = Callable[[Path], WorktreeState]
 
 _log = logging.getLogger(__name__)
 
@@ -187,6 +191,7 @@ class AgentSupervisorService:
         transcript_log: TranscriptLog,
         set_session_id: SetSessionIdFn = lambda _slug, _sid: None,
         record_artifact: RecordArtifactFn | None = None,
+        describe_worktree_state: DescribeWorktreeStateFn | None = None,
     ) -> None:
         self._transcript_log = transcript_log
         # Called when an adapter emits SessionEstablished — the supervisor
@@ -200,6 +205,7 @@ class AgentSupervisorService:
         # an Artifact row. Tests that don't care about artifact recording
         # leave it unset.
         self._record_artifact = record_artifact
+        self._describe_worktree_state = describe_worktree_state
         self._states: dict[str, _AgentState] = {}
         self._registry_lock = asyncio.Lock()
 
@@ -457,6 +463,7 @@ class AgentSupervisorService:
                     await asyncio.to_thread(
                         self._set_session_id, state.agent_slug, event.session_id
                     )
+                event = await self._event_with_worktree_state(state, event)
                 # Marker hits disk via _publish FIRST so a downstream
                 # validation failure still leaves a durable record of
                 # what the agent emitted.
@@ -626,6 +633,33 @@ class AgentSupervisorService:
             },
         )
 
+    async def _event_with_worktree_state(
+        self, state: _AgentState, event: AgentEvent
+    ) -> AgentEvent:
+        if not isinstance(event, TurnMetrics):
+            return event
+        if self._describe_worktree_state is None:
+            return event
+        try:
+            worktree = await asyncio.to_thread(
+                self._describe_worktree_state, state.context.workdir
+            )
+        except Exception:
+            _log.exception(
+                "failed to describe worktree state for agent=%s workdir=%s",
+                state.agent_slug,
+                state.context.workdir,
+            )
+            return event
+        if not worktree.is_git_repo or worktree.error is not None:
+            return event
+        return dataclasses.replace(
+            event,
+            git_branch=worktree.branch,
+            git_head=worktree.head,
+            git_detached=worktree.branch is None and worktree.head is not None,
+        )
+
     def _require_state(self, agent_slug: str) -> _AgentState:
         state = self._states.get(agent_slug)
         if state is None:
@@ -637,8 +671,10 @@ def _event_to_dict(event: AgentEvent) -> dict[str, Any]:
     """Flatten a frozen variant into a JSON-friendly dict, ts as ISO-8601."""
     d = dataclasses.asdict(event)
     d["ts"] = event.ts.isoformat()
-    if d.get("type") == "turn_metrics" and d.get("context_window") is None:
-        d.pop("context_window", None)
+    if d.get("type") == "turn_metrics":
+        for key in ("context_window", "git_branch", "git_head", "git_detached"):
+            if d.get(key) is None:
+                d.pop(key, None)
     return d
 
 

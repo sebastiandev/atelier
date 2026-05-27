@@ -240,6 +240,9 @@ class TurnMetrics:
     last_prompt_tokens: int = 0
     model: str | None = None
     context_window: int | None = None
+    git_branch: str | None = None
+    git_head: str | None = None
+    git_detached: bool | None = None
 
 
 AgentEvent = (

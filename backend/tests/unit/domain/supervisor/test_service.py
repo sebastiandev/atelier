@@ -21,6 +21,7 @@ from src.domain.agents import (
     MessageDelta,
     SessionEstablished,
     StatusChange,
+    TurnMetrics,
 )
 from src.domain.models import Artifact, PrArtifact
 from src.domain.supervisor import (
@@ -28,6 +29,7 @@ from src.domain.supervisor import (
     AgentSupervisorService,
     AgentTerminated,
 )
+from src.domain.worktrees import WorktreeState
 from src.infrastructure.agents import StubAgentAdapter
 from tests.unit.domain.workstore._stubs import StubTranscriptLog
 
@@ -198,6 +200,46 @@ def test_log_receives_every_event() -> None:
     log = _run(run())
     seqs = [e["seq"] for e in log.events[("WRK-001", "agt-1")]]
     assert seqs == [1, 2, 3, 4, 5]
+
+
+def test_turn_metrics_are_enriched_with_worktree_branch() -> None:
+    async def run() -> tuple[dict[str, Any], list[Path]]:
+        log = StubTranscriptLog()
+        calls: list[Path] = []
+
+        def describe(workdir: Path) -> WorktreeState:
+            calls.append(workdir)
+            return WorktreeState(
+                workdir=workdir,
+                is_git_repo=True,
+                branch="feature/metrics",
+                head="abcdef1234567890",
+            )
+
+        supervisor = AgentSupervisorService(
+            log, describe_worktree_state=describe
+        )
+        adapter = StubAgentAdapter(
+            [
+                TurnMetrics(
+                    ts=UTC_NOW,
+                    duration_ms=123,
+                    input_tokens=10,
+                    output_tokens=5,
+                )
+            ]
+        )
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.shutdown()
+        return log.events[("WRK-001", "agt-1")][0], calls
+
+    event, calls = _run(run())
+    assert calls == [Path("/tmp/agent")]
+    assert event["type"] == "turn_metrics"
+    assert event["git_branch"] == "feature/metrics"
+    assert event["git_head"] == "abcdef1234567890"
+    assert event["git_detached"] is False
 
 
 # ---------------------------------------------------------------------------
