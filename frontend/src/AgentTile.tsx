@@ -2,6 +2,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -377,38 +378,52 @@ export function AgentTile({
   const compactionLevel = compactionLevelFor(contextSnapshot?.pct ?? null);
   const compactionBlocked = compactionLevel === "blocked";
   const [compacting, setCompacting] = useState(false);
-  const [manualCompactionOpen, setManualCompactionOpen] = useState(false);
-  const [compactionError, setCompactionError] = useState<string | null>(null);
-  const shouldOpenCompactionModal =
-    contextSnapshot !== null &&
-    (manualCompactionOpen || compactionBlocked);
+  const [compactionDialog, setCompactionDialog] =
+    useState<CompactionDialogState | null>(null);
+  const shouldOpenCompactionModal = compactionDialog !== null;
 
   useEffect(() => {
-    if (compactionLevel === "none" || compactionLevel === "notice") {
-      setCompactionError(null);
+    if (!compactionBlocked || contextSnapshot === null || compactionDialog) {
+      return;
     }
-  }, [compactionLevel]);
+    setCompactionDialog(createCompactionDialog(contextSnapshot, compactionLevel));
+  }, [compactionBlocked, compactionDialog, compactionLevel, contextSnapshot]);
+
+  useEffect(() => {
+    if (compactionDialog?.phase !== "success") return;
+    const handle = window.setTimeout(() => setCompactionDialog(null), 800);
+    return () => window.clearTimeout(handle);
+  }, [compactionDialog?.phase]);
 
   function openCompactionModal() {
-    setCompactionError(null);
-    setManualCompactionOpen(true);
+    if (contextSnapshot === null) return;
+    setCompactionDialog(createCompactionDialog(contextSnapshot, compactionLevel));
   }
 
   async function handleCompact() {
+    if (compactionDialog === null) return;
+    const currentDialog = compactionDialog;
     setCompacting(true);
-    setCompactionError(null);
+    setCompactionDialog({ ...currentDialog, phase: "compacting", error: null });
     try {
       await compactAgent(
         agentSlug,
-        compactionBlocked ? "forced_context_limit" : "manual",
+        currentDialog.level === "blocked" ? "forced_context_limit" : "manual",
       );
       setCompactedMetricsSeq((prev) =>
         lastMetrics ? Math.max(prev ?? 0, lastMetrics.seq) : prev,
       );
-      setManualCompactionOpen(false);
+      setCompactionDialog({
+        ...currentDialog,
+        phase: "success",
+        error: null,
+      });
     } catch (err) {
-      setCompactionError(err instanceof Error ? err.message : String(err));
-      setManualCompactionOpen(true);
+      setCompactionDialog({
+        ...currentDialog,
+        phase: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setCompacting(false);
     }
@@ -513,7 +528,7 @@ export function AgentTile({
     const text = draft.trim();
     if (!text) return;
     if (compactionBlocked) {
-      setManualCompactionOpen(true);
+      openCompactionModal();
       return;
     }
     sendInput(text, submittableContexts);
@@ -991,16 +1006,16 @@ export function AgentTile({
           </div>
         </form>
       </div>
-      {shouldOpenCompactionModal && contextSnapshot && (
+      {compactionDialog && (
         <CompactionModal
-          context={contextSnapshot}
-          level={compactionLevel}
-          compacting={compacting}
-          error={compactionError}
+          dialog={compactionDialog}
           canHandoff={Boolean(onHandoff)}
           onCompact={() => void handleCompact()}
           onClose={
-            compactionBlocked ? undefined : () => setManualCompactionOpen(false)
+            compactionDialog.level === "blocked" ||
+            compactionDialog.phase === "compacting"
+              ? undefined
+              : () => setCompactionDialog(null)
           }
           onHandoff={onHandoff}
         />
@@ -1477,6 +1492,14 @@ type ContextSnapshot = {
 };
 
 type CompactionLevel = "none" | "notice" | "recommended" | "urgent" | "blocked";
+type CompactionDialogPhase = "confirm" | "compacting" | "success" | "error";
+type CompactionDialogState = {
+  context: ContextSnapshot;
+  level: CompactionLevel;
+  tone: ContextTone;
+  phase: CompactionDialogPhase;
+  error: string | null;
+};
 
 /**
  * Best-effort label for what the agent is doing *right now*, derived
@@ -1831,6 +1854,19 @@ function contextToneFor(pct: number | null): ContextTone {
   if (pct >= COMPACTION_URGENT_PCT) return "crit";
   if (pct >= COMPACTION_RECOMMENDED_PCT) return "warn";
   return "ok";
+}
+
+function createCompactionDialog(
+  context: ContextSnapshot,
+  level: CompactionLevel,
+): CompactionDialogState {
+  return {
+    context,
+    level,
+    tone: contextToneFor(context.pct),
+    phase: "confirm",
+    error: null,
+  };
 }
 
 function clampPct(pct: number): number {
@@ -2723,108 +2759,164 @@ function inferLanguage(path: string): string {
 }
 
 function CompactionModal({
-  context,
-  level,
-  compacting,
-  error,
+  dialog,
   canHandoff,
   onCompact,
   onClose,
   onHandoff,
 }: {
-  context: ContextSnapshot;
-  level: CompactionLevel;
-  compacting: boolean;
-  error: string | null;
+  dialog: CompactionDialogState;
   canHandoff: boolean;
   onCompact: () => void;
   onClose?: () => void;
   onHandoff?: () => void;
 }) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  const { context, error, level, phase, tone } = dialog;
   const blocked = level === "blocked";
-  const urgent = level === "urgent" || blocked;
-  const title = blocked
-    ? "Context limit reached"
-    : urgent
-      ? "Context is nearly full"
-      : "Compact this agent soon";
-  const body = blocked
-    ? "This agent needs a compacted session before it can receive another message."
-    : urgent
-      ? "Compacting now will preserve the working state before the next turn risks hitting the model limit."
-      : "The transcript is large enough that the next few turns may become brittle or expensive.";
+  const canCancel = Boolean(onClose) && phase !== "compacting";
+  const title =
+    phase === "compacting"
+      ? "Compacting agent..."
+      : phase === "success"
+        ? "Compacted"
+        : phase === "error"
+          ? "Couldn't compact"
+          : "Compact context";
+  const body =
+    phase === "compacting"
+      ? "Summarising older turns. This usually takes a few seconds."
+      : phase === "success"
+        ? "New session started from summary. The next turn will report updated context."
+        : phase === "error"
+          ? "The summary call failed. Try again or send a shorter next message."
+          : "The agent will summarise older turns and reset its working memory. The conversation continues from where you are.";
+  const primaryLabel = phase === "error" ? "Try again" : "Compact now";
+  const readout = `ctx ${context.pct.toFixed(0)}% · ${formatTokens(
+    context.promptTokens,
+  )} tokens`;
+
+  useEffect(() => {
+    if (phase === "confirm" || phase === "error") {
+      primaryRef.current?.focus();
+    }
+  }, [phase]);
+
+  function handleLayerMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
+    if (e.target === e.currentTarget && canCancel) {
+      onClose?.();
+    }
+  }
+
+  function handleKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Escape" && canCancel) {
+      e.preventDefault();
+      onClose?.();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const buttons = Array.from(
+      cardRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ??
+        [],
+    );
+    if (buttons.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = buttons[0];
+    const last = buttons[buttons.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
     <div
       className="compaction-modal-layer"
       role="presentation"
-      data-level={level}
+      data-tone={tone}
+      data-phase={phase}
+      onMouseDown={handleLayerMouseDown}
     >
       <div
+        ref={cardRef}
         className="compaction-modal"
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        onKeyDown={handleKeyDown}
       >
         <div className="compaction-modal-hd">
-          <CompactionIcon />
-          <div>
-            <h3>{title}</h3>
-            <p>{body}</p>
+          <h3>{title}</h3>
+          <p>{body}</p>
+        </div>
+        <div className="compaction-modal-facts">
+          <div className="compaction-modal-fact">
+            <span className="compaction-modal-dot is-good" aria-hidden />
+            <span>Keeps recent turns, decisions, and pinned files</span>
+          </div>
+          <div className="compaction-modal-fact">
+            <span className="compaction-modal-dot is-good" aria-hidden />
+            <span>Drops verbose tool output and exploration</span>
+          </div>
+          <div className="compaction-modal-fact">
+            <span className="compaction-modal-dot" aria-hidden />
+            <span>Takes about 3-5 seconds; previous session is preserved</span>
           </div>
         </div>
-        <div className="compaction-modal-meter" aria-hidden>
-          <span style={{ width: `${Math.min(context.pct, 100)}%` }} />
+        <div className="compaction-modal-progress">
+          <div className="compaction-modal-meter" aria-hidden>
+            <span style={{ width: `${phase === "success" ? 100 : clampPct(context.pct)}%` }} />
+          </div>
+          <span className="compaction-modal-readout mono">{readout}</span>
         </div>
-        <div className="compaction-modal-stats">
-          <span>{context.pct.toFixed(0)}% used</span>
-          <span className="mono">
-            {formatTokens(context.promptTokens)} /{" "}
-            {formatTokens(context.contextWindow)}
-          </span>
-        </div>
-        {error && <div className="compaction-modal-error">{error}</div>}
-        <div className="compaction-modal-actions">
-          {blocked && canHandoff && (
-            <button type="button" className="btn sm" onClick={onHandoff}>
-              Handoff
-            </button>
-          )}
-          {onClose && (
-            <button
-              type="button"
-              className="btn sm ghost"
-              onClick={onClose}
-              disabled={compacting}
-            >
-              Close
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn sm primary"
-            onClick={onCompact}
-            disabled={compacting}
-          >
-            {compacting ? "Compacting…" : "Compact now"}
-          </button>
-        </div>
+        {phase === "error" && error && (
+          <div className="compaction-modal-error">{error}</div>
+        )}
+        {phase !== "success" && (
+          <div className="compaction-modal-actions">
+            {blocked && canHandoff && phase !== "compacting" && (
+              <button
+                type="button"
+                className="compaction-modal-secondary"
+                onClick={onHandoff}
+              >
+                Handoff
+              </button>
+            )}
+            {canCancel && (
+              <button
+                type="button"
+                className="compaction-modal-secondary"
+                onClick={onClose}
+              >
+                Cancel
+              </button>
+            )}
+            {phase === "compacting" ? (
+              <span className="compaction-modal-spinner" aria-live="polite">
+                Compacting...
+              </span>
+            ) : (
+              <button
+                ref={primaryRef}
+                type="button"
+                className="compaction-modal-primary"
+                onClick={onCompact}
+              >
+                {primaryLabel}
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </div>
-  );
-}
-
-function CompactionIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden>
-      <path
-        d="M4 3h8M4 13h8M6 6h4M6 10h4M3 4.5L6 8l-3 3.5M13 4.5L10 8l3 3.5"
-        stroke="currentColor"
-        strokeWidth="1.3"
-        fill="none"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }
 
