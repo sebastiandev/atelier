@@ -44,10 +44,13 @@ from src.domain.agents import (
 )
 from src.infrastructure.agents.codex_adapter import (
     CodexAdapter,
+    _app_server_approval_result,
+    _app_server_thread_params,
     _CodexTokenSnapshotTail,
     _command_execution_args,
     _convert,
     _file_change_canonical,
+    _normalize_app_server_notification,
     _normalize_sdk_event,
     _per_call_prompt_tokens,
     _thread_options_from_kwargs,
@@ -774,6 +777,73 @@ def test_thread_options_forward_additional_directories_to_sdk_alias() -> None:
         }
     )
     assert options["additionalDirectories"] == ["/tmp/shared"]
+
+
+def test_app_server_thread_params_forward_writable_roots_to_config() -> None:
+    params = _app_server_thread_params(
+        model="gpt-5.5",
+        cwd="/tmp/worktree",
+        sandbox="workspace-write",
+        approval_mode="on-request",
+        base_instructions="system",
+        mcp_servers=None,
+        config_overrides={"model_reasoning_effort": "medium"},
+        additional_directories=["/tmp/shared"],
+    )
+
+    assert params["approvalPolicy"] == "on-request"
+    assert params["approvalsReviewer"] == "user"
+    assert params["baseInstructions"] == "system"
+    assert params["config"]["model_reasoning_effort"] == "medium"
+    assert params["config"]["sandbox_workspace_write"] == {
+        "writable_roots": ["/tmp/shared"],
+        "network_access": False,
+    }
+
+
+def test_app_server_notifications_normalize_to_existing_codex_shape() -> None:
+    notification = _normalize_app_server_notification(
+        {
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "item": {
+                    "type": "commandExecution",
+                    "id": "cmd-1",
+                    "command": "dt pytest",
+                    "aggregatedOutput": "ok",
+                    "exitCode": 0,
+                },
+            },
+        }
+    )
+
+    assert notification is not None
+    assert notification.type == "item/completed"
+    assert notification.params["item"]["itemType"] == "commandExecution"
+    assert notification.params["item"]["output"] == "ok"
+    assert notification.params["item"]["exit_code"] == 0
+
+
+def test_app_server_approval_result_maps_domain_decisions() -> None:
+    assert _app_server_approval_result(
+        "item/commandExecution/requestApproval", {}, "allow"
+    ) == {"decision": "accept"}
+    assert _app_server_approval_result(
+        "item/commandExecution/requestApproval", {}, "allow_always"
+    ) == {"decision": "acceptForSession"}
+    assert _app_server_approval_result(
+        "item/commandExecution/requestApproval", {}, "deny"
+    ) == {"decision": "decline"}
+    assert _app_server_approval_result(
+        "item/permissions/requestApproval",
+        {"permissions": {"network": {"enabled": True}}},
+        "allow_always",
+    ) == {
+        "permissions": {"network": {"enabled": True}},
+        "scope": "session",
+    }
 
 
 def test_resume_calls_thread_resume_with_session_id() -> None:

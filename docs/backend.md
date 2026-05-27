@@ -67,7 +67,7 @@ Each has a `Literal` `type` discriminator; the frontend pattern-matches on it.
 
 ## AgentSupervisorService
 
-`domain/supervisor/service.py`. The supervisor is the traffic cop sitting between the browser, the agent SDK, and the on-disk transcript. There is **one `asyncio.Task` per running agent** ("the agent task"), pumping that agent's adapter event stream. The supervisor is single-subscriber: at most one WS connection per agent; a second `subscribe()` replaces the slot.
+`domain/supervisor/service.py`. The supervisor is the traffic cop sitting between the browser, the agent SDK, and the on-disk transcript. There is **one `asyncio.Task` per running agent** ("the agent task"), pumping that agent's adapter event stream. The supervisor is single-subscriber: at most one WS connection per agent; a second `subscribe()` replaces the slot and kicks the older subscription so stale sockets reconnect instead of accepting input without receiving live events.
 
 ### The big picture
 
@@ -279,22 +279,22 @@ We use ``delegate`` to gate Bash specifically. The other tools (Read/Edit/Write/
 
 The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib-only — it ships in the source tree but runs as a detached child of the Amp CLI, so it must not import any Atelier modules (the CLI's invocation env doesn't carry our virtualenv).
 
-### Tool permissions for Codex: SDK approval-policy limits
+### Tool permissions for Codex: app-server approval callbacks
 
-Codex has a native approval-policy concept, but the current ``openai-codex-sdk`` 0.1.x path Atelier uses does not expose those approval callbacks to the backend. Atelier forwards ``approvalPolicy``/``--ask-for-approval`` and lets Codex's runtime decide when to ask; unlike Claude's ``can_use_tool`` and Amp's Bash bridge, those prompts are not surfaced as Atelier ``PermissionRequest`` UI today.
+Codex has a native approval-policy concept. Atelier runs live Codex agents through ``codex app-server --listen stdio://`` so Codex's JSON-RPC approval requests flow back into the same ``PermissionRequest`` UI Claude and Amp use. ``_CodexAppServerClient`` handles ``item/commandExecution/requestApproval``, ``item/fileChange/requestApproval``, and ``item/permissions/requestApproval``, maps them to domain-level tool names/input, waits for ``resolve_permission``, then replies to Codex with ``accept`` / ``acceptForSession`` / ``decline``-style decisions.
 
-``CodexAdapter._handle_approval_request(request)`` remains as a compatibility seam for tests and a future SDK that exposes callbacks: it canonicalises the tool name + input, publishes a ``PermissionRequest``, waits for ``resolve_permission``, and maps Atelier's decision to Codex's ``accept``/``decline``. The production ``_CodexSdkClient.on_approval_request`` is currently a no-op.
+``CodexAdapter._handle_approval_request(request)`` is still the provider-neutral callback seam: it canonicalises the tool name + input, publishes a ``PermissionRequest``, waits for ``resolve_permission``, and returns Atelier's ``allow`` / ``allow_always`` / ``deny`` decision. The app-server client maps those domain decisions to Codex JSON-RPC responses. The legacy ``_CodexSdkClient`` remains for compatibility with tests/older SDK experiments, but its ``exec --experimental-json`` transport cannot surface approvals.
 
 Two layers sit on top of Codex execution:
 
-- **``CodexSandbox``** — OS-level filesystem gating (``read-only`` / ``workspace-write`` (default) / ``danger-full-access``). Forwarded as ``sandboxMode`` to ``ThreadOptions`` and ``--sandbox`` on detach-to-CLI; Codex enforces it before approval policy can help.
-- **``CodexApprovalMode``** — Codex's own ask policy. ``on-request`` is the default, ``never`` auto-runs everything, and ``untrusted`` asks Codex to prompt on every tool. With SDK 0.1.x, these prompts do not round-trip through Atelier's WS permission frame.
+- **``CodexSandbox``** — OS-level filesystem gating (``read-only`` / ``workspace-write`` (default) / ``danger-full-access``). Forwarded as ``sandbox`` to app-server and ``--sandbox`` on detach-to-CLI; Codex enforces it before approval policy can help.
+- **``CodexApprovalMode``** — Codex's own ask policy. ``on-request`` is the default, ``never`` auto-runs everything, and ``untrusted`` asks Codex to prompt on every non-trusted tool. In live Atelier sessions, those prompts now round-trip through the WS permission frame.
 
-Atelier's worktree (``~/Atelier/works/<slug>/worktrees/<agent>/``) is the primary writable root for ``workspace-write``. Project shared folders are symlinks whose resolved targets live outside that worktree, so start/resume/detach collect mounted share targets into ``CommonAgentConfig.writable_roots`` and forward them as Codex ``additionalDirectories`` / CLI ``--add-dir`` values. Git worktrees also keep mutable branch/index metadata in the source repo's shared ``.git`` directory; ``WorktreeManager.sandbox_writable_roots(workdir)`` adds that git common dir when it lives outside the worktree so Codex agents can run normal branch commands such as ``git switch -c``. These narrow additions keep shared-folder writes and git branch creation working without switching the whole agent to ``danger-full-access``.
+Atelier's worktree (``~/Atelier/works/<slug>/worktrees/<agent>/``) is the primary writable root for ``workspace-write``. Project shared folders are symlinks whose resolved targets live outside that worktree, so start/resume/detach collect mounted share targets into ``CommonAgentConfig.writable_roots`` and forward them as Codex app-server ``sandbox_workspace_write.writable_roots`` / CLI ``--add-dir`` values. Git worktrees also keep mutable branch/index metadata in the source repo's shared ``.git`` directory; ``WorktreeManager.sandbox_writable_roots(workdir)`` adds that git common dir when it lives outside the worktree so Codex agents can run normal branch commands such as ``git switch -c``. These narrow additions keep shared-folder writes and git branch creation working without switching the whole agent to ``danger-full-access``.
 
-### SDK seam
+### Codex runtime seam
 
-Production wires the real ``openai-codex-sdk`` via a lazy ``_default_client_factory`` that only imports the SDK at first call (so the adapter module stays loadable on machines where the SDK isn't installed; the missing dep only fails the agent actually creating a Codex session). Tests inject a fake factory matching the local ``CodexClient`` / ``CodexThread`` / ``CodexTurnHandle`` Protocols — see ``tests/unit/infrastructure/agents/test_codex_adapter.py`` for the fixture set. Same shape as Amp's ``executor`` DI seam.
+Production wires ``_CodexAppServerClient`` via ``_default_client_factory``. Tests inject a fake factory matching the local ``CodexClient`` / ``CodexThread`` / ``CodexTurnHandle`` Protocols — see ``tests/unit/infrastructure/agents/test_codex_adapter.py`` for the fixture set. Same shape as Amp's ``executor`` DI seam.
 
 ### Slow-subscriber drop
 

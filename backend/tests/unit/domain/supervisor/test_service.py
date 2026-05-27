@@ -347,9 +347,9 @@ def test_resolve_permission_to_unknown_agent_is_noop() -> None:
 def test_resubscribe_replaces_previous_subscriber() -> None:
     """Atelier is single-user single-browser: at most one subscriber per
     agent. A second subscribe (reconnect race) replaces the slot; the
-    previous queue stops receiving events."""
+    previous queue stops receiving events and gets kicked closed."""
 
-    async def run() -> tuple[bool, str]:
+    async def run() -> tuple[bool, bool, str]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter([], keep_alive=True)
         await _start(supervisor,
@@ -358,17 +358,21 @@ def test_resubscribe_replaces_previous_subscriber() -> None:
 
         async with supervisor.subscribe("agt-1") as sub1:
             async with supervisor.subscribe("agt-1") as sub2:
-                # The slot now points at sub2; sub1 is abandoned.
+                # The slot now points at sub2; sub1 is kicked so a
+                # stale-but-open websocket can't keep sending input while
+                # no longer receiving live events.
                 await supervisor.send_input("agt-1", "after replace")
                 ev = await sub2.queue.get()
                 # sub1 was not put into.
                 q1_empty = sub1.queue.empty()
+                sub1_kicked = sub1.kicked.is_set()
 
         await supervisor.shutdown()
-        return q1_empty, ev["text"]
+        return q1_empty, sub1_kicked, ev["text"]
 
-    q1_empty, text = _run(run())
+    q1_empty, sub1_kicked, text = _run(run())
     assert q1_empty is True
+    assert sub1_kicked is True
     assert text == "after replace"
 
 

@@ -1,10 +1,10 @@
-"""OpenAI Codex SDK adapter.
+"""OpenAI Codex adapter.
 
-Wraps ``openai-codex-sdk`` so the supervisor can drive a Codex session
-through the project's ``AgentAdapter`` Protocol. Mirrors the structure of
-the Claude and Amp adapters — pump-pattern queues, in-process artifact
-MCP wiring (subprocess form, same as Amp), shared AgentEvent mapping —
-adapted to Codex's JSON-RPC notification shapes.
+Wraps the Codex runtime so the supervisor can drive a Codex session
+through the project's ``AgentAdapter`` Protocol. Mirrors the structure
+of the Claude and Amp adapters — pump-pattern queues, shared AgentEvent
+mapping, and domain-level permission callbacks — adapted to Codex's
+JSON-RPC notification shapes.
 
 Lifecycle:
   start()       — open AsyncCodex client, call ``thread_start`` (or
@@ -13,9 +13,10 @@ Lifecycle:
                   ``turn_start``.
   events()      — async generator: drain ``_outgoing`` (fed by a side
                   pump task that forwards Codex notifications into the
-                  queue). The current openai-codex-sdk path does not
-                  expose approval callbacks to Atelier; approval policy
-                  is forwarded to Codex itself.
+                  queue). Production uses Codex app-server so approval
+                  requests round-trip through Atelier's PermissionRequest
+                  UI; the legacy Python SDK wrapper remains as a fallback
+                  seam for tests/older runtimes.
   send_input(t) — enqueue user text; pump consumes and forwards
   resolve_permission(rid, decision) — answers an open approval request
                   when tests/future SDKs provide a callback
@@ -24,12 +25,13 @@ Lifecycle:
   close()       — exit the SDK context (closes the Codex subprocess);
                   idempotent.
 
-SDK seam: production wires the real ``openai-codex-sdk`` via a thin
-``_default_client_factory`` that lazy-imports the SDK at first call.
-Tests inject a fake factory that yields scripted notifications matching
-the local Protocols (``CodexClient`` / ``CodexThread`` / ``CodexTurnHandle``
-/ ``Notification`` defined below). Keeps the module importable even when
-the SDK isn't installed — symmetric with Amp's ``executor`` DI.
+Runtime seam: production talks to ``codex app-server`` through a small
+JSON-RPC client. Tests inject a fake factory that yields scripted
+notifications matching the local Protocols (``CodexClient`` /
+``CodexThread`` / ``CodexTurnHandle`` / ``Notification`` defined below).
+The older ``openai-codex-sdk`` exec wrapper is kept as a compatibility
+client because it shares the same Protocol, but it cannot surface
+approvals to Atelier.
 
 Auth: the Codex SDK reads ``OPENAI_API_KEY`` from ``os.environ`` directly.
 The lifespan forwards an optional ``Settings.openai_api_key`` into the
@@ -43,6 +45,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shlex
 import sys
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable
@@ -174,9 +178,8 @@ class CodexClient(Protocol):
     ) -> None:
         """Register an async approval callback when an SDK exposes one.
 
-        ``openai-codex-sdk`` 0.1.x does not currently expose this in
-        production; the fake test client uses the seam and future SDKs may
-        wire it for real.
+        App-server production and fake tests use this seam. The legacy SDK
+        wrapper no-ops it because ``exec --experimental-json`` is one-way.
         """
 
 
@@ -193,6 +196,15 @@ class ApprovalRequest(Protocol):
     # The adapter canonicalises before emitting the PermissionRequest.
     tool_name: str
     tool_input: dict[str, Any]
+
+
+@dataclass
+class _AppServerApprovalRequest:
+    request_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    method: str
+    params: dict[str, Any]
 
 
 ClientFactory = Callable[[], CodexClient]
@@ -600,6 +612,321 @@ class _SdkNotification:
     params: dict[str, Any]
 
 
+class _CodexAppServerClient:
+    """Codex app-server JSON-RPC client implementing ``CodexClient``.
+
+    The Python SDK's ``exec --experimental-json`` transport is one-way:
+    it streams events, but approval requests stay inside Codex. The app-
+    server protocol is bidirectional JSON-RPC over stdio, so command,
+    file-change, and permission approvals can use Atelier's existing
+    ``PermissionRequest`` callback path.
+    """
+
+    def __init__(
+        self,
+        *,
+        executable_path: str = "codex",
+        env: dict[str, str] | None = None,
+    ) -> None:
+        self._executable_path = executable_path
+        self._env = env
+        self._proc: asyncio.subprocess.Process | None = None
+        self._reader_task: asyncio.Task[None] | None = None
+        self._next_id = 1
+        self._pending: dict[int | str, asyncio.Future[dict[str, Any]]] = {}
+        self._thread_queues: dict[str, asyncio.Queue[_SdkNotification | object]] = {}
+        self._approval_callback: Callable[[ApprovalRequest], Any] | None = None
+        self._server_request_tasks: set[asyncio.Task[None]] = set()
+        self._closed = False
+
+    async def __aenter__(self) -> _CodexAppServerClient:
+        env = os.environ.copy()
+        if self._env is not None:
+            env.update(self._env)
+        self._proc = await asyncio.create_subprocess_exec(
+            self._executable_path,
+            "app-server",
+            "--listen",
+            "stdio://",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        self._reader_task = asyncio.create_task(
+            self._read_loop(), name="codex-app-server-read-loop"
+        )
+        await self._request(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "atelier",
+                    "title": "Atelier",
+                    "version": "0",
+                },
+                "capabilities": {"experimentalApi": True},
+            },
+        )
+        await self._send({"method": "initialized"})
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        self._closed = True
+        for queue in self._thread_queues.values():
+            await queue.put(_SHUTDOWN)
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._reader_task
+        for task in list(self._server_request_tasks):
+            task.cancel()
+        if self._server_request_tasks:
+            await asyncio.gather(
+                *self._server_request_tasks, return_exceptions=True
+            )
+        proc = self._proc
+        if proc is not None and proc.returncode is None:
+            proc.terminate()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+        self._proc = None
+
+    async def thread_start(
+        self,
+        *,
+        model: str,
+        cwd: str,
+        sandbox: str,
+        approval_mode: str,
+        base_instructions: str | None = None,
+        mcp_servers: dict[str, Any] | None = None,
+        config_overrides: dict[str, Any] | None = None,
+        additional_directories: list[str] | None = None,
+    ) -> CodexThread:
+        result = await self._request(
+            "thread/start",
+            _app_server_thread_params(
+                model=model,
+                cwd=cwd,
+                sandbox=sandbox,
+                approval_mode=approval_mode,
+                base_instructions=base_instructions,
+                mcp_servers=mcp_servers,
+                config_overrides=config_overrides,
+                additional_directories=additional_directories,
+            ),
+        )
+        thread_id = _thread_id_from_app_server_result(result)
+        return _CodexAppServerThread(self, thread_id)
+
+    async def thread_resume(
+        self,
+        thread_id: str,
+        *,
+        model: str,
+        cwd: str,
+        sandbox: str,
+        approval_mode: str,
+        base_instructions: str | None = None,
+        mcp_servers: dict[str, Any] | None = None,
+        config_overrides: dict[str, Any] | None = None,
+        additional_directories: list[str] | None = None,
+    ) -> CodexThread:
+        params = _app_server_thread_params(
+            model=model,
+            cwd=cwd,
+            sandbox=sandbox,
+            approval_mode=approval_mode,
+            base_instructions=base_instructions,
+            mcp_servers=mcp_servers,
+            config_overrides=config_overrides,
+            additional_directories=additional_directories,
+        )
+        params["threadId"] = thread_id
+        result = await self._request("thread/resume", params)
+        return _CodexAppServerThread(
+            self, _thread_id_from_app_server_result(result) or thread_id
+        )
+
+    def on_approval_request(self, callback: Callable[[ApprovalRequest], Any]) -> None:
+        self._approval_callback = callback
+
+    async def _turn_start(
+        self, thread_id: str, user_message: str
+    ) -> _CodexAppServerTurnHandle:
+        result = await self._request(
+            "turn/start",
+            {
+                "threadId": thread_id,
+                "input": [{"type": "text", "text": user_message}],
+            },
+        )
+        turn = result.get("turn") if isinstance(result, dict) else None
+        turn_id = turn.get("id") if isinstance(turn, dict) else ""
+        queue = self._queue_for_thread(thread_id)
+        return _CodexAppServerTurnHandle(self, thread_id, str(turn_id or ""), queue)
+
+    async def _interrupt_turn(self, thread_id: str, turn_id: str) -> None:
+        if not turn_id:
+            return
+        await self._request(
+            "turn/interrupt",
+            {"threadId": thread_id, "turnId": turn_id},
+        )
+
+    def _queue_for_thread(self, thread_id: str) -> asyncio.Queue[_SdkNotification | object]:
+        queue = self._thread_queues.get(thread_id)
+        if queue is None:
+            queue = asyncio.Queue()
+            self._thread_queues[thread_id] = queue
+        return queue
+
+    async def _request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        req_id = self._next_id
+        self._next_id += 1
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending[req_id] = fut
+        await self._send({"id": req_id, "method": method, "params": params})
+        return await fut
+
+    async def _send(self, message: dict[str, Any]) -> None:
+        proc = self._proc
+        if proc is None or proc.stdin is None:
+            raise RuntimeError("Codex app-server is not running")
+        wire = dict(message)
+        wire.setdefault("jsonrpc", "2.0")
+        proc.stdin.write((json.dumps(wire) + "\n").encode("utf-8"))
+        await proc.stdin.drain()
+
+    async def _read_loop(self) -> None:
+        assert self._proc is not None
+        assert self._proc.stdout is not None
+        try:
+            while not self._closed:
+                raw = await self._proc.stdout.readline()
+                if not raw:
+                    break
+                try:
+                    message = json.loads(raw)
+                except ValueError:
+                    continue
+                await self._handle_message(message)
+        finally:
+            stderr = b""
+            if self._proc is not None and self._proc.stderr is not None:
+                with suppress(Exception):
+                    stderr = await self._proc.stderr.read()
+            err_text = stderr.decode("utf-8", errors="replace").strip()
+            for fut in self._pending.values():
+                if not fut.done():
+                    detail = f": {err_text}" if err_text else ""
+                    fut.set_exception(RuntimeError(f"Codex app-server exited{detail}"))
+
+    async def _handle_message(self, message: dict[str, Any]) -> None:
+        msg_id = message.get("id")
+        method = message.get("method")
+        if isinstance(msg_id, int | str) and method:
+            task = asyncio.create_task(self._handle_server_request(message))
+            self._server_request_tasks.add(task)
+            task.add_done_callback(self._server_request_tasks.discard)
+            return
+        if isinstance(msg_id, int | str):
+            fut = self._pending.pop(msg_id, None)
+            if fut is None or fut.done():
+                return
+            if "error" in message:
+                fut.set_exception(RuntimeError(json.dumps(message["error"])))
+            else:
+                result = message.get("result")
+                fut.set_result(result if isinstance(result, dict) else {})
+            return
+        if isinstance(method, str):
+            notification = _normalize_app_server_notification(message)
+            if notification is not None:
+                await self._dispatch_notification(notification)
+
+    async def _handle_server_request(self, message: dict[str, Any]) -> None:
+        msg_id = message.get("id")
+        method = str(message.get("method") or "")
+        params = message.get("params")
+        if not isinstance(msg_id, int | str) or not isinstance(params, dict):
+            return
+        callback = self._approval_callback
+        if callback is None:
+            await self._send({"id": msg_id, "result": _app_server_denial(method)})
+            return
+        request = _approval_request_from_app_server(method, params)
+        if request is None:
+            await self._send({"id": msg_id, "result": {}})
+            return
+        try:
+            decision = await callback(request)
+        except Exception:
+            _log.exception("Codex approval callback failed")
+            decision = "deny"
+        await self._send(
+            {
+                "id": msg_id,
+                "result": _app_server_approval_result(method, params, str(decision)),
+            }
+        )
+
+    async def _dispatch_notification(self, notification: _SdkNotification) -> None:
+        thread_id = _thread_id_from_app_server_params(notification.params)
+        if thread_id:
+            await self._queue_for_thread(thread_id).put(notification)
+            return
+        for queue in self._thread_queues.values():
+            await queue.put(notification)
+
+
+class _CodexAppServerThread:
+    def __init__(self, client: _CodexAppServerClient, thread_id: str) -> None:
+        self._client = client
+        self._id = thread_id
+
+    @property
+    def id(self) -> str:
+        return self._id
+
+    async def turn_start(self, user_message: str) -> _CodexAppServerTurnHandle:
+        return await self._client._turn_start(self._id, user_message)
+
+
+class _CodexAppServerTurnHandle:
+    def __init__(
+        self,
+        client: _CodexAppServerClient,
+        thread_id: str,
+        turn_id: str,
+        queue: asyncio.Queue[_SdkNotification | object],
+    ) -> None:
+        self._client = client
+        self._thread_id = thread_id
+        self._turn_id = turn_id
+        self._queue = queue
+
+    async def stream(self) -> AsyncIterator[_SdkNotification]:
+        while True:
+            item = await self._queue.get()
+            if item is _SHUTDOWN:
+                return
+            assert isinstance(item, _SdkNotification)
+            turn_id = _turn_id_from_app_server_params(item.params)
+            if turn_id and self._turn_id and turn_id != self._turn_id:
+                continue
+            yield item
+            if item.type == "turn/completed":
+                return
+
+    async def interrupt(self) -> None:
+        await self._client._interrupt_turn(self._thread_id, self._turn_id)
+
+
 class _CodexTokenSnapshotTail:
     """Incrementally read Codex's session JSONL for token_count frames.
 
@@ -717,8 +1044,8 @@ class _CodexSdkClient:
         )
 
     def on_approval_request(self, callback: Callable[[ApprovalRequest], Any]) -> None:
-        # openai-codex-sdk 0.1.x routes approvals through the Codex CLI
-        # approval policy; it does not expose an approval callback.
+        # The legacy Python SDK's exec transport is one-way; production
+        # uses _CodexAppServerClient for bidirectional approvals.
         _ = callback
 
 
@@ -837,6 +1164,246 @@ def _normalize_sdk_item(item: Any) -> dict[str, Any]:
     elif item_type == "mcp_tool_call":
         data["itemType"] = "mcpToolCall"
     return data
+
+
+def _app_server_thread_params(
+    *,
+    model: str,
+    cwd: str,
+    sandbox: str,
+    approval_mode: str,
+    base_instructions: str | None,
+    mcp_servers: dict[str, Any] | None,
+    config_overrides: dict[str, Any] | None,
+    additional_directories: list[str] | None,
+) -> dict[str, Any]:
+    config: dict[str, Any] = dict(config_overrides or {})
+    if additional_directories:
+        config["sandbox_workspace_write"] = {
+            "writable_roots": additional_directories,
+            "network_access": False,
+        }
+    if mcp_servers:
+        # The app-server reads MCP servers from the same config shape the
+        # CLI uses. Older Codex builds may ignore this; that is no worse
+        # than the legacy SDK path, which could not register MCP servers.
+        config["mcp_servers"] = mcp_servers
+    params: dict[str, Any] = {
+        "model": model,
+        "cwd": cwd,
+        "sandbox": sandbox,
+        "approvalPolicy": approval_mode,
+        "approvalsReviewer": "user",
+        "baseInstructions": base_instructions,
+    }
+    if config:
+        params["config"] = config
+    return {k: v for k, v in params.items() if v is not None}
+
+
+def _thread_id_from_app_server_result(result: dict[str, Any]) -> str:
+    thread = result.get("thread")
+    if isinstance(thread, dict):
+        thread_id = thread.get("id") or thread.get("sessionId")
+        if isinstance(thread_id, str):
+            return thread_id
+    return ""
+
+
+def _normalize_app_server_notification(
+    message: dict[str, Any]
+) -> _SdkNotification | None:
+    method = str(message.get("method") or "")
+    params = message.get("params")
+    if not isinstance(params, dict):
+        params = {}
+    if method in {
+        "thread/started",
+        "turn/started",
+        "item/agentMessage/delta",
+        "item/reasoning/summaryTextDelta",
+    }:
+        return _SdkNotification(method, dict(params))
+    if method in {"item/started", "item/completed"}:
+        normalized = dict(params)
+        item = normalized.get("item")
+        if isinstance(item, dict):
+            normalized["item"] = _normalize_app_server_item(item)
+        return _SdkNotification(method, normalized)
+    if method == "turn/completed":
+        normalized = dict(params)
+        turn = normalized.get("turn")
+        if isinstance(turn, dict):
+            status = turn.get("status")
+            normalized["status"] = status if isinstance(status, str) else "completed"
+            error = turn.get("error")
+            if isinstance(error, dict):
+                normalized["error"] = error.get("message") or json.dumps(error)
+            normalized["duration_ms"] = turn.get("durationMs") or 0
+        return _SdkNotification(method, normalized)
+    if method == "thread/tokenUsage/updated":
+        usage = params.get("tokenUsage")
+        if isinstance(usage, dict):
+            last = usage.get("last")
+            if isinstance(last, dict):
+                return _SdkNotification(
+                    "token_count",
+                    {
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": last.get("inputTokens", 0),
+                                "cached_input_tokens": last.get(
+                                    "cachedInputTokens", 0
+                                ),
+                                "output_tokens": last.get("outputTokens", 0),
+                            },
+                            "model_context_window": usage.get(
+                                "modelContextWindow"
+                            ),
+                        }
+                    },
+                )
+    return None
+
+
+def _normalize_app_server_item(item: dict[str, Any]) -> dict[str, Any]:
+    data = dict(item)
+    item_type = data.get("type")
+    if isinstance(item_type, str):
+        data["itemType"] = item_type
+    if item_type == "commandExecution":
+        if "aggregatedOutput" in data:
+            data["output"] = data.get("aggregatedOutput") or ""
+        if "exitCode" in data:
+            data["exit_code"] = data.get("exitCode")
+    elif item_type == "fileChange":
+        changes = data.get("changes")
+        if isinstance(changes, list) and changes:
+            first = changes[0]
+            if isinstance(first, dict):
+                data.setdefault("path", first.get("path"))
+                data.setdefault("result", first.get("kind"))
+    elif item_type == "reasoning":
+        summary = data.get("summary")
+        if isinstance(summary, list):
+            data["summary"] = "\n".join(str(part) for part in summary)
+    return data
+
+
+def _thread_id_from_app_server_params(params: dict[str, Any]) -> str | None:
+    thread_id = params.get("threadId")
+    if isinstance(thread_id, str) and thread_id:
+        return thread_id
+    thread = params.get("thread")
+    if isinstance(thread, dict):
+        thread_id = thread.get("id") or thread.get("sessionId")
+        if isinstance(thread_id, str) and thread_id:
+            return thread_id
+    return None
+
+
+def _turn_id_from_app_server_params(params: dict[str, Any]) -> str | None:
+    turn_id = params.get("turnId")
+    if isinstance(turn_id, str) and turn_id:
+        return turn_id
+    turn = params.get("turn")
+    if isinstance(turn, dict):
+        turn_id = turn.get("id")
+        if isinstance(turn_id, str) and turn_id:
+            return turn_id
+    return None
+
+
+def _approval_request_from_app_server(
+    method: str, params: dict[str, Any]
+) -> _AppServerApprovalRequest | None:
+    request_id = _app_server_request_id(method, params)
+    if method in {
+        "item/commandExecution/requestApproval",
+        "execCommandApproval",
+    }:
+        command = params.get("command")
+        tool_input: dict[str, Any] = {}
+        if isinstance(command, list):
+            tool_input["command"] = shlex.join(str(part) for part in command)
+        elif isinstance(command, str):
+            tool_input["command"] = command
+        if isinstance(params.get("cwd"), str):
+            tool_input["cwd"] = params["cwd"]
+        if isinstance(params.get("reason"), str):
+            tool_input["reason"] = params["reason"]
+        return _AppServerApprovalRequest(
+            request_id=request_id,
+            tool_name="Bash",
+            tool_input=tool_input,
+            method=method,
+            params=params,
+        )
+    if method in {"item/fileChange/requestApproval", "applyPatchApproval"}:
+        tool_input = {k: v for k, v in params.items() if k not in {"threadId", "turnId"}}
+        return _AppServerApprovalRequest(
+            request_id=request_id,
+            tool_name="FileChange",
+            tool_input=tool_input,
+            method=method,
+            params=params,
+        )
+    if method == "item/permissions/requestApproval":
+        return _AppServerApprovalRequest(
+            request_id=request_id,
+            tool_name="Permission",
+            tool_input=dict(params),
+            method=method,
+            params=params,
+        )
+    return None
+
+
+def _app_server_request_id(method: str, params: dict[str, Any]) -> str:
+    for key in ("approvalId", "itemId", "callId"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return f"{method}:{value}"
+    return f"{method}:{uuid.uuid4().hex}"
+
+
+def _app_server_approval_result(
+    method: str, params: dict[str, Any], decision: str
+) -> dict[str, Any]:
+    if method in {
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+    }:
+        if decision == "allow_always":
+            return {"decision": "acceptForSession"}
+        if decision == "allow":
+            return {"decision": "accept"}
+        return {"decision": "decline"}
+    if method == "execCommandApproval":
+        if decision == "allow_always":
+            return {"decision": "approved_for_session"}
+        if decision == "allow":
+            return {"decision": "approved"}
+        return {"decision": "denied"}
+    if method == "applyPatchApproval":
+        if decision == "allow_always":
+            return {"decision": "approved_for_session"}
+        if decision == "allow":
+            return {"decision": "approved"}
+        return {"decision": "denied"}
+    if method == "item/permissions/requestApproval":
+        if decision in {"allow", "allow_always"}:
+            granted = params.get("permissions")
+            return {
+                "permissions": granted if isinstance(granted, dict) else {},
+                "scope": "session" if decision == "allow_always" else "turn",
+            }
+        return {"permissions": {}, "scope": "turn"}
+    return {}
+
+
+def _app_server_denial(method: str) -> dict[str, Any]:
+    return _app_server_approval_result(method, {}, "deny")
 
 
 def _model_dump(value: Any) -> dict[str, Any]:
@@ -1299,32 +1866,19 @@ def _coerce_str(value: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Production client factory — lazy SDK import
+# Production client factory
 # ---------------------------------------------------------------------------
 
 
 def _default_client_factory() -> CodexClient:
-    """Lazy-import the Codex SDK and return a fresh client adapter.
+    """Return a fresh Codex app-server client.
 
-    Import happens at call time (not module load) so the adapter module
-    stays importable even when ``openai-codex-sdk`` isn't installed —
-    the missing dependency only fails the agent actually creating a
-    Codex session, not the whole backend. Mirrors the way Claude /
-    Amp resolve their SDKs at runtime.
+    The app-server protocol is the only local Codex transport that exposes
+    approval requests as bidirectional JSON-RPC. ``openai-codex-sdk``
+    remains installed for type/CLI compatibility, but its exec transport
+    cannot round-trip approvals into Atelier.
     """
-    try:
-        from src.infrastructure.agents import _codex_sdk_patch
-
-        _codex_sdk_patch.install()
-        from openai_codex_sdk import Codex
-    except ImportError as exc:  # pragma: no cover - exercised on machines without the SDK
-        raise RuntimeError(
-            "openai-codex-sdk is not installed. Run "
-            "``uv add openai-codex-sdk`` (or pip install) in the backend "
-            "to enable Codex agents."
-        ) from exc
-    client: CodexClient = _CodexSdkClient(Codex())
-    return client
+    return _CodexAppServerClient()
 
 
 # ---------------------------------------------------------------------------

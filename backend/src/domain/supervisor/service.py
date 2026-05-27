@@ -72,8 +72,8 @@ Per running agent there are three concurrent things going on:
     └─────────────────────────────────────────────────────────────────┘
     ┌─ WS subscriber (zero or one) ───────────────────────────────────┐
     │   the WS handler registers a queue via subscribe(); a second    │
-    │   subscribe (e.g., reconnect race) replaces the slot. publish   │
-    │   puts events into the current queue if one is registered.      │
+    │   subscribe (e.g., reconnect race) replaces the slot and kicks  │
+    │   the stale socket. publish puts events into the current queue. │
     └─────────────────────────────────────────────────────────────────┘
     ┌─ User input ────────────────────────────────────────────────────┐
     │   send_input() writes user_input transcript line + forwards     │
@@ -176,8 +176,8 @@ class _AgentState:
     publish_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
     # Atelier is single-user single-browser: at most one WS subscriber per
     # agent. A second subscribe (e.g., reconnect-before-cleanup) replaces
-    # the slot; the previous subscription is silently abandoned because
-    # its WS is presumed dead.
+    # the slot and kicks the previous subscription so a stale-but-open WS
+    # cannot keep sending input while no longer receiving live events.
     subscriber: AgentSubscription | None = None
 
 
@@ -364,11 +364,10 @@ class AgentSupervisorService:
         and the slot is cleared. Callers must monitor ``kicked`` alongside
         ``stream()`` and close the upstream connection if it fires.
 
-        A second subscribe to the same agent replaces the slot; the
-        previous subscription is abandoned (its WS is presumed dead).
-        Cleanup only clears the slot if it still points at our
-        subscription, so a stale ``finally`` can't disturb a fresh
-        subscriber.
+        A second subscribe to the same agent replaces the slot and kicks
+        the previous subscription. Cleanup only clears the slot if it
+        still points at our subscription, so a stale ``finally`` can't
+        disturb a fresh subscriber.
         """
         state = self._require_state(agent_slug)
         subscription = AgentSubscription(
@@ -377,6 +376,9 @@ class AgentSupervisorService:
         )
         async with state.publish_lock:
             from_seq = state.seq
+            previous = state.subscriber
+            if previous is not None:
+                previous.kicked.set()
             state.subscriber = subscription
         # Disk read is sync + slow; do it outside the publish lock so it
         # doesn't block other publishes. Filter to (cursor, from_seq] —
