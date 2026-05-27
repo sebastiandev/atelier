@@ -217,10 +217,12 @@ def _notice_summary_event(
         complete_messages.append(event.text)
     elif isinstance(event, MessageDelta):
         delta_parts.append(event.text)
-    elif isinstance(event, ToolCall) and not error_seen.done():
-        error_seen.set_result(
-            RuntimeError(f"summary-only session attempted tool: {event.name}")
-        )
+    elif isinstance(event, ToolCall):
+        # Summary-only configs reject all provider tools. Some providers
+        # still surface the attempted call before continuing from the
+        # rejection; do not abort early or we force the weaker fallback
+        # summarizer even when the model can still produce the summary.
+        return
     elif isinstance(event, Error) and not error_seen.done():
         error_seen.set_result(RuntimeError(event.message))
     elif isinstance(event, StatusChange) and event.status == "idle":

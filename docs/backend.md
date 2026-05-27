@@ -181,6 +181,8 @@ Provider-specific CLI behavior is kept in provider modules, mirroring the adapte
 
 Provider mechanics stay behind `infrastructure/agents/compaction_sessions.py`, which uses the normal `AgentAdapter` factory for Claude, Amp, and Codex. The command does not mutate provider-owned history in place; Atelier's append-only transcript remains canonical, and `parent_session_id` captures the previous provider session when `set_agent_session_id` swaps to the new one.
 
+Summary-only provider runs reject all tools. If a provider still emits an attempted `ToolCall` before recovering from the rejection, the private collector ignores that attempted call and keeps waiting for assistant text; only provider `Error` events, timeout, or empty/unstructured summaries fall back to the app summarizer.
+
 ### How the SDK adapters fit in
 
 Each adapter implements the `AgentAdapter` Protocol from `domain/agents/ports.py`:
