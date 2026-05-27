@@ -450,11 +450,17 @@ class AmpAdapter:
                 ):
                     await self._outgoing.put(ev)
                 if isinstance(msg, ResultMessage | ErrorResultMessage):
-                    # Anthropic-mode happy path: ``_convert`` already
+                    # Anthropic-mode result path: ``_convert`` already
                     # emitted real TurnMetrics + idle. Drop accumulator
                     # state so a stale synth close can't pile on.
                     last_prompt_tokens = 0
                     turn.reset()
+                    if isinstance(msg, ErrorResultMessage):
+                        # Amp error results often leave the stream-json
+                        # input handler unusable. End this adapter so the
+                        # supervisor evicts it and the reconnect path
+                        # rebuilds a fresh process before the next send.
+                        break
         except Exception as e:
             await self._outgoing.put(Error(ts=datetime.now(UTC), message=str(e)))
             await self._outgoing.put(

@@ -446,6 +446,41 @@ def test_full_lifecycle_translates_scripted_session() -> None:
     assert events[4].status == "idle"
 
 
+def test_error_result_terminates_adapter_stream() -> None:
+    """Amp can report a terminal stream failure as an ErrorResultMessage.
+
+    Treating that as a normal idle turn leaves the same CLI process
+    registered, and the next send can hit a closed stream-json-input
+    transport. The adapter must end so the supervisor evicts it and the
+    reconnect path can build a fresh process.
+    """
+
+    scripted: list[StreamMessage] = [
+        _system(),
+        _result_err("stream ended without producing a Message with role=assistant"),
+        _assistant(TextContent(text="should not be observed")),
+    ]
+    adapter = AmpAdapter(_config(), executor=_make_fake_executor(scripted))
+
+    async def session() -> list[AgentEvent]:
+        await adapter.start(_start_context())
+        events = [ev async for ev in adapter.events()]
+        await adapter.close()
+        return events
+
+    events = asyncio.run(session())
+    assert [type(e) for e in events] == [
+        SessionEstablished,
+        Error,
+        TurnMetrics,
+        StatusChange,
+    ]
+    assert isinstance(events[1], Error)
+    assert "role=assistant" in events[1].message
+    assert isinstance(events[-1], StatusChange)
+    assert events[-1].status == "idle"
+
+
 def test_close_is_idempotent() -> None:
     adapter = AmpAdapter(_config(), executor=_make_fake_executor([]))
 

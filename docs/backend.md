@@ -198,6 +198,8 @@ Each adapter implements the `AgentAdapter` Protocol from `domain/agents/ports.py
 
 Adapters whose SDK doesn't expose a feature no-op the corresponding method (Amp's `stop_turn`, `resolve_permission`; the stub's everything-but-events). The supervisor calls them uniformly so its own code doesn't branch on provider.
 
+Amp `ErrorResultMessage` is treated as terminal for the adapter pump. The adapter still emits the provider `Error`, final `TurnMetrics`, and idle status, then ends `events()` so the supervisor evicts the registered process and kicks the websocket into the normal reconnect/resume path. This avoids accepting the next user input into an Amp CLI whose stream-json-input handler has already closed.
+
 ### Tool permissions: the `can_use_tool` callback flow
 
 The Claude adapter is the interesting case. The Claude SDK takes a `can_use_tool: async (tool_name, tool_input, ctx) → PermissionResult` option; for every tool the model wants to use that isn't in `allowed_tools` (Atelier's default: `["Read", "Grep", "Glob"]`), the SDK awaits the callback before invoking the tool. The callback's return value (`Allow` / `Deny`) is what the SDK acts on.
