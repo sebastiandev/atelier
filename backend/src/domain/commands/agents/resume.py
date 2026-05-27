@@ -167,12 +167,15 @@ async def execute(
     except RuntimeError:
         # A concurrent caller registered first (StrictMode double-mount,
         # rapid clicks, two tabs). Drop our adapter copy to avoid leaking
-        # an SDK process and verify the registration actually exists; if
-        # it doesn't, the failure was something other than the race.
+        # an SDK process, then advance the winner's seq from disk. This
+        # losing resume attempt may have appended CLI catch-up markers
+        # before it hit the registration race; without the refresh, the
+        # next supervisor-published input can reuse an already-written seq.
         with suppress(Exception):
             await adapter.close()
         if not supervisor.is_registered(req.agent_slug):
             raise
+        await supervisor.refresh_seq_from_disk(req.agent_slug)
 
     return agent
 
