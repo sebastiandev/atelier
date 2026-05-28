@@ -2307,6 +2307,10 @@ h5.md-h {
   padding: 22px 24px;
 }
 .compaction-modal-hd {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
   margin: 0 0 1rem;
 }
 .compaction-modal-hd h3 {
@@ -2327,6 +2331,22 @@ h5.md-h {
   color: var(--fg-3);
   font-size: 13.5px;
   line-height: 1.45;
+}
+.compaction-modal-close {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.compaction-modal-close:hover {
+  background: var(--bg-3);
+  color: var(--fg);
 }
 .compaction-modal-facts {
   display: grid;

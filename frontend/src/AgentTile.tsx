@@ -221,6 +221,7 @@ export function AgentTile({
   }, [agentName, editingName]);
 
   function startRename() {
+    if (guardBlockedCompaction()) return;
     if (!onRename) return;
     setDraftName(agentName ?? "");
     setRenameError(null);
@@ -233,6 +234,7 @@ export function AgentTile({
   }
 
   async function commitRename() {
+    if (guardBlockedCompaction()) return;
     if (!onRename) {
       cancelRename();
       return;
@@ -377,17 +379,38 @@ export function AgentTile({
   );
   const compactionLevel = compactionLevelFor(contextSnapshot?.pct ?? null);
   const compactionBlocked = compactionLevel === "blocked";
+  const [compactionModalDismissed, setCompactionModalDismissed] = useState(false);
   const [compacting, setCompacting] = useState(false);
   const [compactionDialog, setCompactionDialog] =
     useState<CompactionDialogState | null>(null);
   const shouldOpenCompactionModal = compactionDialog !== null;
+  const compactionActivationKeys = new Set(["Enter", " "]);
 
   useEffect(() => {
-    if (!compactionBlocked || contextSnapshot === null || compactionDialog) {
+    if (!compactionBlocked) {
+      setCompactionModalDismissed(false);
+      setCompactionDialog((current) =>
+        current?.level === "blocked" && current.phase !== "compacting"
+          ? null
+          : current,
+      );
+      return;
+    }
+    if (
+      contextSnapshot === null ||
+      compactionDialog ||
+      compactionModalDismissed
+    ) {
       return;
     }
     setCompactionDialog(createCompactionDialog(contextSnapshot, compactionLevel));
-  }, [compactionBlocked, compactionDialog, compactionLevel, contextSnapshot]);
+  }, [
+    compactionBlocked,
+    compactionDialog,
+    compactionLevel,
+    contextSnapshot,
+    compactionModalDismissed,
+  ]);
 
   useEffect(() => {
     if (compactionDialog?.phase !== "success") return;
@@ -397,7 +420,36 @@ export function AgentTile({
 
   function openCompactionModal() {
     if (contextSnapshot === null) return;
+    setCompactionModalDismissed(false);
     setCompactionDialog(createCompactionDialog(contextSnapshot, compactionLevel));
+  }
+
+  function closeCompactionModal() {
+    if (compactionDialog?.level === "blocked") {
+      setCompactionModalDismissed(true);
+    }
+    setCompactionDialog(null);
+  }
+
+  function guardBlockedCompaction(): boolean {
+    if (!compactionBlocked) return false;
+    openCompactionModal();
+    return true;
+  }
+
+  function guardBlockedCompactionEvent(e: {
+    preventDefault: () => void;
+    stopPropagation: () => void;
+  }): boolean {
+    if (!guardBlockedCompaction()) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    return true;
+  }
+
+  function guardBlockedCompactionKey(e: ReactKeyboardEvent<HTMLElement>): boolean {
+    if (!compactionActivationKeys.has(e.key)) return false;
+    return guardBlockedCompactionEvent(e);
   }
 
   async function handleCompact() {
@@ -442,6 +494,7 @@ export function AgentTile({
   } | null>(null);
 
   function handleLoadOlder() {
+    if (guardBlockedCompaction()) return;
     const el = transcriptRef.current;
     if (el) {
       pendingScrollRestoreRef.current = {
@@ -525,12 +578,9 @@ export function AgentTile({
   );
 
   function submit() {
+    if (guardBlockedCompaction()) return;
     const text = draft.trim();
     if (!text) return;
-    if (compactionBlocked) {
-      openCompactionModal();
-      return;
-    }
     sendInput(text, submittableContexts);
     setDraft("");
     setPendingContexts([]);
@@ -539,20 +589,24 @@ export function AgentTile({
   }
 
   function addSimpleContext(type: SimpleContextType) {
+    if (guardBlockedCompaction()) return;
     setPendingContexts((prev) => [...prev, { type, value: "", conn_id: null }]);
     setPickerOpen(false);
   }
 
   function addConnectionContext(type: ConnectionType) {
+    if (guardBlockedCompaction()) return;
     setPendingContexts((prev) => [...prev, { type, value: "", conn_id: null }]);
     setPickerOpen(false);
   }
 
   function patchPendingContext(index: number, next: ContextEntry) {
+    if (guardBlockedCompaction()) return;
     setPendingContexts((prev) => prev.map((c, i) => (i === index ? next : c)));
   }
 
   function removePendingContext(index: number) {
+    if (guardBlockedCompaction()) return;
     setPendingContexts((prev) => prev.filter((_, i) => i !== index));
   }
 
@@ -569,6 +623,11 @@ export function AgentTile({
   }
 
   function handleKeyDown(e: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (compactionBlocked) {
+      e.preventDefault();
+      openCompactionModal();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       submit();
@@ -600,11 +659,17 @@ export function AgentTile({
     if (!maximized) return;
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      if (e.shiftKey || e.metaKey || e.ctrlKey) setMaximized(false);
+      if (!(e.shiftKey || e.metaKey || e.ctrlKey)) return;
+      if (compactionBlocked) {
+        e.preventDefault();
+        openCompactionModal();
+        return;
+      }
+      setMaximized(false);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [maximized]);
+  }, [compactionBlocked, maximized]);
 
   const dotStatus = thinkingSinceSeq !== null ? "thinking" : agentStatus;
   // "Active right now" — driven off the last event's nature, not the
@@ -627,7 +692,7 @@ export function AgentTile({
   // no-ops. Disable the composer for every non-connected state so the
   // user never thinks a click landed.
   const composerDisabled = status !== "connected";
-  const sendDisabled = composerDisabled || compacting || compactionBlocked;
+  const sendDisabled = composerDisabled || compacting;
   const tileClass = `agent-tile mode-${mode}` + (maximized ? " maximized" : "");
   const title = agentName || agentSlug;
   const composerPlaceholder =
@@ -681,6 +746,7 @@ export function AgentTile({
               onDoubleClick={
                 onRename
                   ? (e) => {
+                      if (guardBlockedCompactionEvent(e)) return;
                       e.stopPropagation();
                       startRename();
                     }
@@ -713,10 +779,14 @@ export function AgentTile({
               type="button"
               className="folder-pill mono"
               aria-label={`Reveal worktree — ${worktreePath}`}
-              onClick={onRevealWorktree}
+              onClick={(e) => {
+                if (guardBlockedCompactionEvent(e)) return;
+                onRevealWorktree?.();
+              }}
               onContextMenu={
                 onRevealAtelierDir
                   ? (e) => {
+                      if (guardBlockedCompactionEvent(e)) return;
                       e.preventDefault();
                       e.stopPropagation();
                       setFolderMenu({ x: e.clientX, y: e.clientY });
@@ -742,7 +812,8 @@ export function AgentTile({
               <button
                 type="button"
                 className="menu-item"
-                onClick={() => {
+                onClick={(e) => {
+                  if (guardBlockedCompactionEvent(e)) return;
                   setFolderMenu(null);
                   onRevealWorktree?.();
                 }}
@@ -752,7 +823,8 @@ export function AgentTile({
               <button
                 type="button"
                 className="menu-item"
-                onClick={() => {
+                onClick={(e) => {
+                  if (guardBlockedCompactionEvent(e)) return;
                   setFolderMenu(null);
                   onRevealAtelierDir?.();
                 }}
@@ -775,7 +847,10 @@ export function AgentTile({
               type="button"
               className="tile-ctl"
               aria-label="Open worktree in editor"
-              onClick={onOpenInIde}
+              onClick={(e) => {
+                if (guardBlockedCompactionEvent(e)) return;
+                onOpenInIde();
+              }}
               {...hintHandlers("Open in editor")}
             >
               <OpenIdeIcon />
@@ -786,7 +861,10 @@ export function AgentTile({
               type="button"
               className="tile-ctl"
               aria-label="Open worktree in console"
-              onClick={onOpenInConsole}
+              onClick={(e) => {
+                if (guardBlockedCompactionEvent(e)) return;
+                onOpenInConsole();
+              }}
               {...hintHandlers("Open in console")}
             >
               <OpenConsoleIcon />
@@ -797,7 +875,10 @@ export function AgentTile({
               type="button"
               className="tile-ctl"
               aria-label="Handoff to agent"
-              onClick={onHandoff}
+              onClick={(e) => {
+                if (guardBlockedCompactionEvent(e)) return;
+                onHandoff();
+              }}
               {...hintHandlers("Handoff to agent")}
             >
               <HandoffIcon />
@@ -807,7 +888,10 @@ export function AgentTile({
             type="button"
             className="tile-ctl"
             aria-label={maximized ? "Restore" : "Maximize"}
-            onClick={() => setMaximized((m) => !m)}
+            onClick={(e) => {
+              if (guardBlockedCompactionEvent(e)) return;
+              setMaximized((m) => !m);
+            }}
             {...hintHandlers(maximized ? "Restore" : "Maximize")}
           >
             {maximized ? <RestoreIcon /> : <MaxIcon />}
@@ -817,7 +901,10 @@ export function AgentTile({
               type="button"
               className="tile-ctl"
               aria-label="Detach to terminal"
-              onClick={onDetach}
+              onClick={(e) => {
+                if (guardBlockedCompactionEvent(e)) return;
+                onDetach();
+              }}
               {...hintHandlers("Detach to CLI")}
             >
               <DetachIcon />
@@ -827,7 +914,10 @@ export function AgentTile({
             type="button"
             className="tile-ctl"
             aria-label={onClose ? "Close" : "Close unavailable"}
-            onClick={onClose}
+            onClick={(e) => {
+              if (guardBlockedCompactionEvent(e)) return;
+              onClose?.();
+            }}
             disabled={!onClose}
             {...hintHandlers(
               onClose ? "Close · pins to sidebar" : "Close unavailable",
@@ -844,6 +934,12 @@ export function AgentTile({
           (shouldOpenCompactionModal ? " is-compaction-blurred" : "")
         }
         aria-hidden={shouldOpenCompactionModal}
+        onClickCapture={(e) => {
+          if (compactionBlocked) guardBlockedCompactionEvent(e);
+        }}
+        onKeyDownCapture={(e) => {
+          if (compactionBlocked) guardBlockedCompactionKey(e);
+        }}
       >
         {isStopped && (
           <div className="tile-banner">
@@ -882,7 +978,10 @@ export function AgentTile({
               <PermissionPrompt
                 key={p.request_id}
                 prompt={p}
-                onDecide={sendPermission}
+                onDecide={(requestId, decision) => {
+                  if (guardBlockedCompaction()) return;
+                  sendPermission(requestId, decision);
+                }}
               />
             ))}
           </div>
@@ -893,6 +992,7 @@ export function AgentTile({
             switching={handoffSwitching}
             error={handoffError}
             onSwitch={async () => {
+              if (guardBlockedCompaction()) return;
               setHandoffError(null);
               setHandoffSwitching(true);
               try {
@@ -950,11 +1050,24 @@ export function AgentTile({
           <textarea
             ref={textareaRef}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              if (compactionBlocked) {
+                openCompactionModal();
+                return;
+              }
+              setDraft(e.target.value);
+            }}
+            onClick={(e) => {
+              if (compactionBlocked) guardBlockedCompactionEvent(e);
+            }}
+            onFocus={() => {
+              if (compactionBlocked) openCompactionModal();
+            }}
             onKeyDown={handleKeyDown}
             placeholder={composerPlaceholder}
             rows={1}
             disabled={composerDisabled}
+            readOnly={compactionBlocked}
             autoFocus={mode === "page"}
           />
           <div className="composer-actions">
@@ -962,7 +1075,10 @@ export function AgentTile({
               <button
                 type="button"
                 className="composer-tool"
-                onClick={() => setPickerOpen((o) => !o)}
+                onClick={(e) => {
+                  if (guardBlockedCompactionEvent(e)) return;
+                  setPickerOpen((o) => !o);
+                }}
                 title="Attach context to your next message — appended to context.md when you Send"
                 aria-expanded={pickerOpen}
               >
@@ -999,7 +1115,7 @@ export function AgentTile({
             <button
               type="submit"
               className="composer-send"
-              disabled={sendDisabled || !draft.trim()}
+              disabled={sendDisabled || (!compactionBlocked && !draft.trim())}
             >
               Send
             </button>
@@ -1012,10 +1128,9 @@ export function AgentTile({
           canHandoff={Boolean(onHandoff)}
           onCompact={() => void handleCompact()}
           onClose={
-            compactionDialog.level === "blocked" ||
             compactionDialog.phase === "compacting"
               ? undefined
-              : () => setCompactionDialog(null)
+              : closeCompactionModal
           }
           onHandoff={onHandoff}
         />
@@ -2853,8 +2968,20 @@ function CompactionModal({
         onKeyDown={handleKeyDown}
       >
         <div className="compaction-modal-hd">
-          <h3>{title}</h3>
-          <p>{body}</p>
+          <div>
+            <h3>{title}</h3>
+            <p>{body}</p>
+          </div>
+          {canCancel && (
+            <button
+              type="button"
+              className="compaction-modal-close"
+              aria-label="Close compaction dialog"
+              onClick={onClose}
+            >
+              <CloseIcon />
+            </button>
+          )}
         </div>
         <div className="compaction-modal-facts">
           <div className="compaction-modal-fact">
@@ -2888,15 +3015,6 @@ function CompactionModal({
                 onClick={onHandoff}
               >
                 Handoff
-              </button>
-            )}
-            {canCancel && (
-              <button
-                type="button"
-                className="compaction-modal-secondary"
-                onClick={onClose}
-              >
-                Cancel
               </button>
             )}
             {phase === "compacting" ? (
