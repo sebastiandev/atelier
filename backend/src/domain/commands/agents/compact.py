@@ -40,14 +40,6 @@ CompactionReason = Literal["manual", "forced_context_limit"]
 
 _log = logging.getLogger(__name__)
 
-_REQUIRED_PROVIDER_SUMMARY_SECTIONS = {
-    "## goal",
-    "## decisions",
-    "## key files",
-    "## blockers",
-}
-
-
 @dataclass(frozen=True)
 class CompactAgentRequest:
     agent_slug: str
@@ -350,28 +342,15 @@ async def _summarize_with_provider(
             context=context,
             prompt=format_summary_prompt(events, summary_context),
         )
-        if _is_usable_provider_summary(summary):
+        if summary.strip():
             return summary
-        raise ValueError("provider summary was empty or missing required sections")
+        raise ValueError("provider summary was empty")
     except Exception as exc:
         _log.warning(
             "provider compaction summary failed; falling back to app summarizer: %r",
             exc,
         )
         return fallback(events, summary_context)
-
-
-def _is_usable_provider_summary(summary: str) -> bool:
-    cleaned = summary.strip()
-    if not cleaned:
-        return False
-
-    headings = {
-        line.strip().lower()
-        for line in cleaned.splitlines()
-        if line.strip().startswith("## ")
-    }
-    return _REQUIRED_PROVIDER_SUMMARY_SECTIONS.issubset(headings)
 
 
 def _summary_source_events(

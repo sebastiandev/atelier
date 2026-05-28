@@ -298,7 +298,7 @@ async def test_compact_falls_back_when_provider_summary_fails(
 
 
 @pytest.mark.anyio
-async def test_compact_falls_back_when_provider_summary_is_unstructured(
+async def test_compact_preserves_unstructured_provider_summary(
     tmp_path: Path,
 ) -> None:
     service, repo, files, _transcript = _workstore()
@@ -322,8 +322,36 @@ async def test_compact_falls_back_when_provider_summary_is_unstructured(
     summary = files.compaction_docs[
         ("WRK-001", "agt-1", "20260526-120000.md")
     ]
+    assert "I'm caught up; tell me what to do next." in summary
+    assert "fallback summary for Ship compaction: latest instruction" not in summary
+
+
+@pytest.mark.anyio
+async def test_compact_falls_back_when_provider_summary_is_empty(
+    tmp_path: Path,
+) -> None:
+    service, repo, files, _transcript = _workstore()
+    _seed_agent(service, repo, tmp_path)
+
+    await compact.execute(
+        service,
+        FakeSupervisor(),  # type: ignore[arg-type]
+        FakeWorktreeManager(tmp_path),  # type: ignore[arg-type]
+        FakeShareStore(),  # type: ignore[arg-type]
+        FakeShareProvisioner(),  # type: ignore[arg-type]
+        Settings(workspace_root=tmp_path),
+        lambda events, context: (
+            f"fallback summary for {context.work_name}: {events[-1]['text']}"
+        ),
+        FakeSessionClient(summary="   \n"),  # type: ignore[arg-type]
+        compact.CompactAgentRequest(agent_slug="agt-1"),
+        clock=lambda: datetime(2026, 5, 26, 12, 0, 0, tzinfo=UTC),
+    )
+
+    summary = files.compaction_docs[
+        ("WRK-001", "agt-1", "20260526-120000.md")
+    ]
     assert "fallback summary for Ship compaction: latest instruction" in summary
-    assert "I'm caught up" not in summary
 
 
 @pytest.mark.anyio
