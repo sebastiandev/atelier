@@ -49,6 +49,7 @@ def test_claude_describe_lists_models_and_options() -> None:
     desc = ClaudeSpec().describe()
     assert desc.name == "claude-code"
     assert desc.primary_field.label == "Model"
+    assert ClaudeModel.OPUS_4_8.value in desc.primary_field.values
     assert ClaudeModel.OPUS_4_7.value in desc.primary_field.values
     assert "thinking_effort" in desc.options
     assert "permission_mode" in desc.options
@@ -58,16 +59,22 @@ def test_claude_describe_lists_models_and_options() -> None:
 def test_claude_describe_includes_model_meta() -> None:
     desc = ClaudeSpec().describe()
     assert set(desc.model_meta.keys()) == {m.value for m in ClaudeModel}
+    opus_48 = desc.model_meta[ClaudeModel.OPUS_4_8.value]
+    assert opus_48.context_window == 1_000_000
+    assert opus_48.input_per_mtok == 5.0
+    assert opus_48.output_per_mtok == 25.0
+    assert opus_48.cache_read_per_mtok == 0.50
+    assert opus_48.cache_write_per_mtok == 6.25
     opus = desc.model_meta[ClaudeModel.OPUS_4_7.value]
-    assert opus.context_window == 200_000
-    assert opus.input_per_mtok == 15.0
-    assert opus.output_per_mtok == 75.0
-    assert opus.cache_read_per_mtok == 1.50
-    assert opus.cache_write_per_mtok == 18.75
+    assert opus.context_window == 1_000_000
+    assert opus.input_per_mtok == 5.0
+    assert opus.output_per_mtok == 25.0
+    assert opus.cache_read_per_mtok == 0.50
+    assert opus.cache_write_per_mtok == 6.25
     opus_1m = desc.model_meta[ClaudeModel.OPUS_4_7_1M.value]
     assert opus_1m.context_window == 1_000_000
-    assert opus_1m.input_per_mtok == 15.0
-    assert opus_1m.output_per_mtok == 75.0
+    assert opus_1m.input_per_mtok == 5.0
+    assert opus_1m.output_per_mtok == 25.0
     sonnet = desc.model_meta[ClaudeModel.SONNET_4_6.value]
     assert sonnet.input_per_mtok == 3.0
     assert sonnet.output_per_mtok == 15.0
@@ -76,10 +83,10 @@ def test_claude_describe_includes_model_meta() -> None:
     assert haiku.output_per_mtok == 5.0
 
 
-def test_claude_describe_defaults_to_opus_1m() -> None:
+def test_claude_describe_defaults_to_latest_opus() -> None:
     desc = ClaudeSpec().describe()
-    assert desc.primary_field.default == ClaudeModel.OPUS_4_7_1M.value
-    assert ClaudeModel.OPUS_4_7_1M.value in desc.primary_field.values
+    assert desc.primary_field.default == ClaudeModel.OPUS_4_8.value
+    assert ClaudeModel.OPUS_4_8.value in desc.primary_field.values
 
 
 def test_claude_build_accepts_1m_opus() -> None:

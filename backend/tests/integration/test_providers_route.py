@@ -45,23 +45,27 @@ def test_claude_descriptor_exposes_model_meta(app_client: TestClient) -> None:
     claude = next(p for p in response.json() if p["name"] == "claude-code")
     meta = claude["model_meta"]
     assert set(meta.keys()) == {
+        "claude-opus-4-8",
         "claude-opus-4-7[1m]",
         "claude-opus-4-7",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
     }
+    assert claude["primary_field"]["default"] == "claude-opus-4-8"
+    opus_48 = meta["claude-opus-4-8"]
+    assert opus_48["context_window"] == 1_000_000
+    assert opus_48["input_per_mtok"] == 5.0
+    assert opus_48["output_per_mtok"] == 25.0
     opus = meta["claude-opus-4-7"]
-    assert opus["context_window"] == 200_000
-    assert opus["input_per_mtok"] == 15.0
-    assert opus["output_per_mtok"] == 75.0
-    assert opus["cache_read_per_mtok"] == 1.5
-    assert opus["cache_write_per_mtok"] == 18.75
+    assert opus["context_window"] == 1_000_000
+    assert opus["input_per_mtok"] == 5.0
+    assert opus["output_per_mtok"] == 25.0
+    assert opus["cache_read_per_mtok"] == 0.5
+    assert opus["cache_write_per_mtok"] == 6.25
     opus_1m = meta["claude-opus-4-7[1m]"]
     assert opus_1m["context_window"] == 1_000_000
-    # 1M variant uses the same flat per-token rates today; the surcharge
-    # above 200k input tokens isn't modeled. See `_CLAUDE_MODEL_META`.
-    assert opus_1m["input_per_mtok"] == 15.0
-    assert opus_1m["output_per_mtok"] == 75.0
+    assert opus_1m["input_per_mtok"] == 5.0
+    assert opus_1m["output_per_mtok"] == 25.0
 
 
 def test_amp_descriptor_exposes_per_mode_context_window(app_client: TestClient) -> None:

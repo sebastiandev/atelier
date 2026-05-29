@@ -20,6 +20,7 @@ labels it appropriately for the UI.
 """
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, ClassVar, Protocol
 
 from src.domain.agents.configs import (
@@ -123,7 +124,7 @@ class Spec(Protocol):
     ) -> AgentConfig: ...
 
 
-def _enum_values(enum_cls: type) -> list[str]:
+def _enum_values(enum_cls: type[Enum]) -> list[str]:
     return [member.value for member in enum_cls]
 
 
@@ -140,24 +141,26 @@ _CLAUDE_MODEL_META: dict[str, ModelMeta] = {
     # ~1.25x input, cache read ~0.10x input - encoded explicitly here
     # so the FE doesn't have to derive it.
     #
-    # The ``[1m]`` Opus variant uses the same per-token rates as the
-    # 200k tier; Anthropic's actual pricing carries a surcharge above
-    # 200k input tokens which a flat ``ModelMeta`` can't represent. The
-    # cost rollup will under-count for very long prompts on the 1M tier
-    # — acceptable for the at-a-glance indicator we surface.
+    ClaudeModel.OPUS_4_8.value: ModelMeta(
+        context_window=1_000_000,
+        input_per_mtok=5.0,
+        output_per_mtok=25.0,
+        cache_read_per_mtok=0.50,
+        cache_write_per_mtok=6.25,
+    ),
     ClaudeModel.OPUS_4_7_1M.value: ModelMeta(
         context_window=1_000_000,
-        input_per_mtok=15.0,
-        output_per_mtok=75.0,
-        cache_read_per_mtok=1.50,
-        cache_write_per_mtok=18.75,
+        input_per_mtok=5.0,
+        output_per_mtok=25.0,
+        cache_read_per_mtok=0.50,
+        cache_write_per_mtok=6.25,
     ),
     ClaudeModel.OPUS_4_7.value: ModelMeta(
-        context_window=200_000,
-        input_per_mtok=15.0,
-        output_per_mtok=75.0,
-        cache_read_per_mtok=1.50,
-        cache_write_per_mtok=18.75,
+        context_window=1_000_000,
+        input_per_mtok=5.0,
+        output_per_mtok=25.0,
+        cache_read_per_mtok=0.50,
+        cache_write_per_mtok=6.25,
     ),
     ClaudeModel.SONNET_4_6.value: ModelMeta(
         context_window=200_000,
@@ -222,7 +225,7 @@ class ClaudeSpec:
             primary_field=EnumOption(
                 label="Model",
                 values=_enum_values(ClaudeModel),
-                default=ClaudeModel.OPUS_4_7_1M.value,
+                default=ClaudeModel.OPUS_4_8.value,
             ),
             options={
                 "thinking_effort": EnumOption(

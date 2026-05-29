@@ -30,13 +30,12 @@ class ClaudeModel(str, Enum):
     versioned snapshots like ``claude-haiku-4-5-20251001`` if you need
     to pin a specific date).
 
-    The ``[1m]`` suffix is the Claude Code CLI's opt-in for the 1M
-    extended-context tier — it is a separate model id from the SDK's
-    perspective, with its own context window (1M vs 200k) and (above
-    200k input) a pricing surcharge that the flat ``ModelMeta`` doesn't
-    fully model.
+    The ``[1m]`` suffix is the Claude Code CLI's historical opt-in for
+    the 1M extended-context tier. Opus 4.8 supports 1M by default on the
+    first-party Claude API, so it uses the plain model id here.
     """
 
+    OPUS_4_8 = "claude-opus-4-8"
     OPUS_4_7_1M = "claude-opus-4-7[1m]"
     OPUS_4_7 = "claude-opus-4-7"
     SONNET_4_6 = "claude-sonnet-4-6"

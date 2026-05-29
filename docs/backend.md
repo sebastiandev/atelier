@@ -31,7 +31,7 @@ Three roles, one unifying registry:
 1. **Config** (`domain/agents/configs.py`) — typed runtime instance. `CommonAgentConfig` carries the cross-provider bits (workdir, system_prompt). Each provider gets a frozen dataclass that wraps `common: CommonAgentConfig` and adds its own knobs (`ClaudeAgentConfig` has `model: ClaudeModel`, `thinking_effort: ClaudeEffort`, ...). Composition over inheritance — frozen dataclasses + ABC + defaults play badly together.
 
 2. **Spec** (`domain/agents/specs.py`) — descriptor + builder. `Spec.describe()` returns a `ProviderDescriptor` that the new-agent dialog renders into form fields. `Spec.build(common, model, options)` validates the wire-format dict into a typed `AgentConfig`. Same Spec instance powers `GET /api/providers` and `POST /api/works/<slug>/agents`, so descriptor and validator can't drift. The `SPECS` registry maps `provider name → Spec`.
-   Codex's descriptor also publishes `model_meta` so agent tiles can estimate session cost from OpenAI's published per-model pricing; context windows are only populated where the Codex-side limit is documented, because API windows and Codex windows do not always match.
+   Claude and Codex descriptors also publish `model_meta` so agent tiles can estimate session cost and context usage from public per-model metadata. Context windows are only populated where the provider-side limit is documented, because API windows and CLI/runtime windows do not always match.
 
 3. **Adapter** (`infrastructure/agents/`) — implements `AgentAdapter` Protocol from `domain/agents/ports.py`. Selected via singledispatch on the AgentConfig type:
 

@@ -2022,7 +2022,7 @@ function shortProvider(provider: string): string {
 }
 
 function shortModel(model: string): string {
-  // Claude model ids are prefixed (claude-opus-4-7, claude-sonnet-4-6);
+  // Claude model ids are prefixed (claude-opus-4-8, claude-sonnet-4-6);
   // strip the redundant prefix for display since the provider pill
   // sits next to it. Amp modes (smart/rush/deep/large) display as-is.
   return model.startsWith("claude-") ? model.slice("claude-".length) : model;
