@@ -5,8 +5,13 @@ Code CLI + ANTHROPIC_API_KEY). These tests exercise ``_convert`` against
 synthetic SDK message objects to lock in the Claude → AgentEvent mapping.
 """
 
+import asyncio
+from pathlib import Path
+
 from claude_agent_sdk import (
     AssistantMessage,
+    PermissionResultAllow,
+    PermissionResultDeny,
     ResultMessage,
     TextBlock,
     ThinkingBlock,
@@ -16,8 +21,13 @@ from claude_agent_sdk import (
 
 from src.domain.agents import (
     ArtifactMarker,
+    ClaudeAgentConfig,
+    ClaudeModel,
+    CommonAgentConfig,
     Error,
     MessageComplete,
+    PermissionDecision,
+    PermissionRequest,
     StatusChange,
     ThinkingComplete,
     ToolCall,
@@ -25,6 +35,7 @@ from src.domain.agents import (
     TurnMetrics,
 )
 from src.infrastructure.agents.claude_code_adapter import (
+    ClaudeCodeAdapter,
     _assistant_prompt_tokens,
     _convert,
 )
@@ -64,10 +75,66 @@ def _result(*, is_error: bool = False, errors: list[str] | None = None) -> Resul
     )
 
 
+def _config() -> ClaudeAgentConfig:
+    return ClaudeAgentConfig(
+        common=CommonAgentConfig(
+            workdir=Path("/tmp/atelier-claude-test"),
+            system_prompt="test",
+        ),
+        model=ClaudeModel.SONNET_4_6,
+    )
+
+
 def test_text_block_maps_to_message_complete() -> None:
     [event] = list(_convert(_assistant(TextBlock(text="hello"))))
     assert isinstance(event, MessageComplete)
     assert event.text == "hello"
+
+
+def test_resolve_permission_emits_exactly_one_decision() -> None:
+    """Happy path: user click resolves the SDK callback and emits one
+    transcript-pairing PermissionDecision."""
+
+    async def session() -> tuple[PermissionRequest, PermissionDecision, object]:
+        adapter = ClaudeCodeAdapter(_config())
+        task = asyncio.create_task(
+            adapter._can_use_tool("Bash", {"command": "ls"}, object())
+        )
+        request = await adapter._outgoing.get()
+        assert isinstance(request, PermissionRequest)
+        await adapter.resolve_permission(request.request_id, "allow")
+        result = await task
+        decision = await adapter._outgoing.get()
+        assert isinstance(decision, PermissionDecision)
+        return request, decision, result
+
+    request, decision, result = asyncio.run(session())
+    assert decision.request_id == request.request_id
+    assert decision.decision == "allow"
+    assert isinstance(result, PermissionResultAllow)
+
+
+def test_close_with_pending_permission_emits_synthetic_deny() -> None:
+    """Orphan prevention: close must pair every PermissionRequest with a
+    synthetic deny so reconnect does not rebuild a stuck prompt."""
+
+    async def session() -> tuple[PermissionRequest, PermissionDecision, object]:
+        adapter = ClaudeCodeAdapter(_config())
+        task = asyncio.create_task(
+            adapter._can_use_tool("Bash", {"command": "rm x"}, object())
+        )
+        request = await adapter._outgoing.get()
+        assert isinstance(request, PermissionRequest)
+        await adapter.close()
+        result = await task
+        decision = await adapter._outgoing.get()
+        assert isinstance(decision, PermissionDecision)
+        return request, decision, result
+
+    request, decision, result = asyncio.run(session())
+    assert decision.request_id == request.request_id
+    assert decision.decision == "deny"
+    assert isinstance(result, PermissionResultDeny)
 
 
 def test_thinking_block_maps_to_thinking_complete() -> None:

@@ -8,6 +8,104 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+EDITOR_OPTIONS = [
+    {
+        "value": "vscode",
+        "label": "VS Code",
+        "command": "code .",
+        "url_template": "vscode://file{path_uri}",
+    },
+    {
+        "value": "cursor",
+        "label": "Cursor",
+        "command": "cursor .",
+        "url_template": "cursor://file{path_uri}",
+    },
+    {
+        "value": "zed",
+        "label": "Zed",
+        "command": "zed .",
+        "url_template": "zed://file{path_segments}",
+    },
+    {
+        "value": "pycharm",
+        "label": "PyCharm",
+        "command": "charm .",
+        "url_template": "pycharm://open?file={path_param}",
+    },
+    {
+        "value": "idea",
+        "label": "IntelliJ IDEA",
+        "command": "idea .",
+        "url_template": "idea://open?file={path_param}",
+    },
+    {
+        "value": "webstorm",
+        "label": "WebStorm",
+        "command": "wstorm .",
+        "url_template": "webstorm://open?file={path_param}",
+    },
+    {
+        "value": "vim",
+        "label": "Vim (MacVim)",
+        "command": "mvim .",
+        "url_template": "mvim://open?url={file_uri}",
+    },
+]
+
+TERMINAL_OPTIONS = [
+    {
+        "value": "system",
+        "label": "System default",
+        "command": "open -a Terminal",
+        "url_template": None,
+    },
+    {
+        "value": "iterm2",
+        "label": "iTerm2 (macOS)",
+        "command": "open -a iTerm",
+        "url_template": None,
+    },
+    {
+        "value": "terminator",
+        "label": "Terminator (Linux)",
+        "command": "terminator",
+        "url_template": None,
+    },
+    {
+        "value": "gnome-terminal",
+        "label": "GNOME Terminal",
+        "command": "gnome-terminal",
+        "url_template": None,
+    },
+    {
+        "value": "konsole",
+        "label": "Konsole (KDE)",
+        "command": "konsole",
+        "url_template": None,
+    },
+    {
+        "value": "tmux",
+        "label": "tmux",
+        "command": "tmux new",
+        "url_template": None,
+    },
+]
+
+
+def expected_settings(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "editor": "vscode",
+        "terminal": "system",
+        "layout": "tiles",
+        "accent_hue": 278,
+        "theme": "ansi",
+        "editor_options": EDITOR_OPTIONS,
+        "terminal_options": TERMINAL_OPTIONS,
+    }
+    body.update(overrides)
+    return body
+
 
 def test_get_settings_returns_defaults_on_fresh_install(
     app_client: TestClient,
@@ -18,13 +116,7 @@ def test_get_settings_returns_defaults_on_fresh_install(
     response = app_client.get("/api/settings")
     assert response.status_code == 200
     body = response.json()
-    assert body == {
-        "editor": "vscode",
-        "terminal": "system",
-        "layout": "tiles",
-        "accent_hue": 278,
-        "theme": "ansi",
-    }
+    assert body == expected_settings()
 
 
 def test_put_settings_round_trips(app_client: TestClient) -> None:
@@ -39,13 +131,13 @@ def test_put_settings_round_trips(app_client: TestClient) -> None:
         },
     )
     assert response.status_code == 200
-    assert response.json() == {
-        "editor": "cursor",
-        "terminal": "iterm2",
-        "layout": "columns",
-        "accent_hue": 120,
-        "theme": "light",
-    }
+    assert response.json() == expected_settings(
+        editor="cursor",
+        terminal="iterm2",
+        layout="columns",
+        accent_hue=120,
+        theme="light",
+    )
     # Subsequent GET reflects the PUT.
     assert app_client.get("/api/settings").json() == response.json()
 
@@ -65,10 +157,10 @@ def test_put_settings_merges_partial(app_client: TestClient) -> None:
     )
     response = app_client.put("/api/settings", json={"terminal": "system"})
     assert response.status_code == 200
-    assert response.json() == {
-        "editor": "vim",
-        "terminal": "system",
-        "layout": "columns",
-        "accent_hue": 90,
-        "theme": "dark",
-    }
+    assert response.json() == expected_settings(
+        editor="vim",
+        terminal="system",
+        layout="columns",
+        accent_hue=90,
+        theme="dark",
+    )

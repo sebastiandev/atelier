@@ -43,6 +43,7 @@ from src.domain.agents import (
     TurnMetrics,
 )
 from src.infrastructure.agents.codex_adapter import (
+    _APP_SERVER_STDIO_LIMIT_BYTES,
     CodexAdapter,
     _app_server_approval_result,
     _app_server_thread_params,
@@ -1349,6 +1350,13 @@ def test_app_server_interrupt_synthesizes_terminal_turn() -> None:
     assert event.type == "turn/completed"
     assert event.params["status"] == "interrupted"
     assert event.params["turnId"] == "turn-1"
+
+
+def test_app_server_stdio_limit_handles_large_resume_payloads() -> None:
+    """thread/resume responses include historical turns and can exceed
+    asyncio's default 64 KiB readline limit for long Codex sessions."""
+
+    assert _APP_SERVER_STDIO_LIMIT_BYTES >= 1024 * 1024
 
 
 def test_stop_turn_before_first_turn_is_a_noop() -> None:

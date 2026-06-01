@@ -4,8 +4,9 @@ Singleton resource — one row per Atelier install, no slug. The FE
 Settings page reads on boot and writes through on every field change.
 
 Read: GET returns the stored row with defaults filled in for fields the
-user hasn't picked yet, so the FE always renders a fully populated form
-without having to know the defaults itself.
+user hasn't picked yet, plus backend-owned descriptors for the selectable
+tool options. The FE renders those descriptors instead of carrying its
+own option catalog.
 
 Write: PUT merges. Fields omitted from the body (or set to ``null``)
 are left untouched; the FE sends only the field that changed. This
@@ -34,12 +35,78 @@ DEFAULTS: dict[str, object] = {
 }
 
 
+class ToolOptionRead(BaseModel):
+    value: str
+    label: str
+    command: str
+    url_template: str | None = None
+
+
+EDITOR_OPTIONS: tuple[ToolOptionRead, ...] = (
+    ToolOptionRead(
+        value="vscode",
+        label="VS Code",
+        command="code .",
+        url_template="vscode://file{path_uri}",
+    ),
+    ToolOptionRead(
+        value="cursor",
+        label="Cursor",
+        command="cursor .",
+        url_template="cursor://file{path_uri}",
+    ),
+    ToolOptionRead(
+        value="zed",
+        label="Zed",
+        command="zed .",
+        url_template="zed://file{path_segments}",
+    ),
+    ToolOptionRead(
+        value="pycharm",
+        label="PyCharm",
+        command="charm .",
+        url_template="pycharm://open?file={path_param}",
+    ),
+    ToolOptionRead(
+        value="idea",
+        label="IntelliJ IDEA",
+        command="idea .",
+        url_template="idea://open?file={path_param}",
+    ),
+    ToolOptionRead(
+        value="webstorm",
+        label="WebStorm",
+        command="wstorm .",
+        url_template="webstorm://open?file={path_param}",
+    ),
+    ToolOptionRead(
+        value="vim",
+        label="Vim (MacVim)",
+        command="mvim .",
+        url_template="mvim://open?url={file_uri}",
+    ),
+)
+
+TERMINAL_OPTIONS: tuple[ToolOptionRead, ...] = (
+    ToolOptionRead(value="system", label="System default", command="open -a Terminal"),
+    ToolOptionRead(value="iterm2", label="iTerm2 (macOS)", command="open -a iTerm"),
+    ToolOptionRead(value="terminator", label="Terminator (Linux)", command="terminator"),
+    ToolOptionRead(
+        value="gnome-terminal", label="GNOME Terminal", command="gnome-terminal"
+    ),
+    ToolOptionRead(value="konsole", label="Konsole (KDE)", command="konsole"),
+    ToolOptionRead(value="tmux", label="tmux", command="tmux new"),
+)
+
+
 class UserSettingsRead(BaseModel):
     editor: str
     terminal: str
     layout: str
     accent_hue: int
     theme: str
+    editor_options: list[ToolOptionRead]
+    terminal_options: list[ToolOptionRead]
 
 
 class UserSettingsWrite(BaseModel):
@@ -89,4 +156,6 @@ def _to_read(settings: UserSettings) -> UserSettingsRead:
         if settings.accent_hue is not None
         else int(DEFAULTS["accent_hue"]),  # type: ignore[arg-type]
         theme=settings.theme or str(DEFAULTS["theme"]),
+        editor_options=list(EDITOR_OPTIONS),
+        terminal_options=list(TERMINAL_OPTIONS),
     )

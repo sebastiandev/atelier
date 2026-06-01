@@ -65,6 +65,19 @@ The frontend's topbar `UpdateChip` polls this every 10 minutes; the chip is hidd
 
 ---
 
+## `GET /api/settings` / `PUT /api/settings`
+
+```
+Browser ──► Router (settings.py)
+                │
+                ├─► UserSettingsRepository.get() / put()
+                └─► returns persisted scalars + tool descriptors
+```
+
+`editor`, `terminal`, `layout`, `accent_hue`, and `theme` are persisted in the singleton DB row. `editor_options` and `terminal_options` are backend-owned descriptors (`value`, `label`, `command`, optional `url_template`) returned with every read/write response so the Settings UI renders selectable tools from the backend rather than from a local catalog. The descriptor fields are additive; older frontends ignore them.
+
+---
+
 ## `GET /api/providers`
 
 ```
@@ -277,8 +290,10 @@ Router ──► supervisor.start_agent(work, agent_slug, adapter, context, firs
                 │
                 ├─► seq = transcript_log.last_seq(...)        ← seed for monotonic resumes
                 ├─► register _AgentState in self._states
-                ├─► await adapter.start(context)              ← Claude: connect SDK
+                ├─► await adapter.start(context)              ← eager start only
+                │                                                 Claude: connect SDK
                 │                                                 Amp: open Unix permission socket
+                │                                                 Codex: open app-server state
                 ├─► if first_message is not None:
                 │       supervisor.send_input(slug, first_message)  ← lands as user_input seq=1
                 └─► task = asyncio.create_task(self._run_agent(state))
@@ -345,10 +360,10 @@ Browser ─── connect ?cursor=N ───► Router
                                        │       └─► rebuilds adapter via SPECS[provider].build(...)
                                        │       └─► returns ResumeAgentPlan(agent, adapter, context.session_id)
                                        │
-                                       ├─► supervisor.start_agent(work, slug, adapter, context)
-                                       │       (no first_message — the SDK session retains the original turn)
-                                       │       └─► Claude adapter passes session_id as `resume`
-                                       │           Amp adapter passes session_id as `continue_thread`
+                                       ├─► supervisor.register_agent(..., lazy=True)
+                                       │       (view-only: no adapter.start, no provider pump)
+                                       │       └─► first input starts the adapter with session_id
+                                       │           and then creates the pump
                                        │
                                        └─► (continues as Case A: subscribe → replay → live)
 ```

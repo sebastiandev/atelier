@@ -89,6 +89,8 @@ from src.settings import Settings
 _log = logging.getLogger(__name__)
 
 _SHUTDOWN = object()  # sentinel pushed onto the queue by close()
+_APP_SERVER_REQUEST_TIMEOUT_SECONDS = 60.0
+_APP_SERVER_STDIO_LIMIT_BYTES = 16 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -652,22 +654,27 @@ class _CodexAppServerClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            limit=_APP_SERVER_STDIO_LIMIT_BYTES,
         )
         self._reader_task = asyncio.create_task(
             self._read_loop(), name="codex-app-server-read-loop"
         )
-        await self._request(
-            "initialize",
-            {
-                "clientInfo": {
-                    "name": "atelier",
-                    "title": "Atelier",
-                    "version": "0",
+        try:
+            await self._request(
+                "initialize",
+                {
+                    "clientInfo": {
+                        "name": "atelier",
+                        "title": "Atelier",
+                        "version": "0",
+                    },
+                    "capabilities": {"experimentalApi": True},
                 },
-                "capabilities": {"experimentalApi": True},
-            },
-        )
-        await self._send({"method": "initialized"})
+            )
+            await self._send({"method": "initialized"})
+        except Exception:
+            await self.__aexit__(None, None, None)
+            raise
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
@@ -790,8 +797,22 @@ class _CodexAppServerClient:
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending[req_id] = fut
-        await self._send({"id": req_id, "method": method, "params": params})
-        return await fut
+        try:
+            await self._send({"id": req_id, "method": method, "params": params})
+            return await asyncio.wait_for(
+                fut, timeout=_APP_SERVER_REQUEST_TIMEOUT_SECONDS
+            )
+        except TimeoutError as exc:
+            self._pending.pop(req_id, None)
+            if not fut.done():
+                fut.cancel()
+            raise RuntimeError(
+                f"Codex app-server request {method!r} timed out after "
+                f"{_APP_SERVER_REQUEST_TIMEOUT_SECONDS:g}s"
+            ) from exc
+        except Exception:
+            self._pending.pop(req_id, None)
+            raise
 
     async def _send(self, message: dict[str, Any]) -> None:
         proc = self._proc
@@ -819,7 +840,9 @@ class _CodexAppServerClient:
             stderr = b""
             if self._proc is not None and self._proc.stderr is not None:
                 with suppress(Exception):
-                    stderr = await self._proc.stderr.read()
+                    stderr = await asyncio.wait_for(
+                        self._proc.stderr.read(), timeout=0.2
+                    )
             err_text = stderr.decode("utf-8", errors="replace").strip()
             for fut in self._pending.values():
                 if not fut.done():

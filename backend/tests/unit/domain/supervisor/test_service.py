@@ -13,6 +13,7 @@ from typing import Any, TypeVar
 
 import pytest
 
+import src.domain.supervisor.service as supervisor_module
 from src.domain.agents import (
     AgentEvent,
     AgentStartContext,
@@ -588,6 +589,126 @@ def test_register_evicts_state_when_adapter_start_raises() -> None:
     assert closed is True
 
 
+def test_send_input_starts_lazy_adapter_before_lazy_pump() -> None:
+    """Lazy registration is view-only. The first input owns provider
+    startup and must not start ``_run_agent`` until ``adapter.start()``
+    has completed."""
+
+    class _SlowStartAdapter:
+        def __init__(self) -> None:
+            self.start_entered = asyncio.Event()
+            self.release_start = asyncio.Event()
+            self.start_calls = 0
+            self.events_called = False
+            self.received_inputs: list[str] = []
+            self.closed = False
+
+        async def start(self, context: AgentStartContext) -> None:
+            self.start_calls += 1
+            self.start_entered.set()
+            await self.release_start.wait()
+
+        async def send_input(self, text: str) -> None:
+            self.received_inputs.append(text)
+
+        async def events(self):  # type: ignore[no-untyped-def]
+            self.events_called = True
+            while True:
+                await asyncio.sleep(3600)
+                yield  # pragma: no cover
+
+        async def stop_turn(self) -> None: ...
+
+        async def resolve_permission(self, request_id: str, decision: str) -> None: ...
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def run() -> tuple[bool, bool, list[str], bool, int]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = _SlowStartAdapter()
+        await supervisor.register_agent(
+            "WRK-001", "agt-1", adapter, _start_context(), lazy=True
+        )
+        start_deferred = not adapter.start_entered.is_set()
+
+        send_task = asyncio.create_task(supervisor.send_input("agt-1", "wake up"))
+        second_send_task = asyncio.create_task(
+            supervisor.send_input("agt-1", "second")
+        )
+        await adapter.start_entered.wait()
+        await asyncio.sleep(0.01)
+        send_waiting = not send_task.done() and not second_send_task.done()
+        events_before_start_finished = adapter.events_called
+
+        adapter.release_start.set()
+        await send_task
+        await second_send_task
+        inputs = list(adapter.received_inputs)
+        events_after_ready = adapter.events_called
+        await supervisor.shutdown()
+        return (
+            start_deferred and send_waiting,
+            events_before_start_finished,
+            inputs,
+            events_after_ready,
+            adapter.start_calls,
+        )
+
+    waiting, called_before, inputs, called_after, start_calls = _run(run())
+    assert waiting is True
+    assert called_before is False
+    assert sorted(inputs) == ["second", "wake up"]
+    assert called_after is True
+    assert start_calls == 1
+
+
+def test_lazy_start_failure_persists_user_input_and_error() -> None:
+    """The transcript is the source of truth. Even if lazy provider
+    startup fails, the user's submitted message must survive refresh."""
+
+    class _StartFailingAdapter:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def start(self, context: AgentStartContext) -> None:
+            raise RuntimeError("codex app-server did not answer")
+
+        async def send_input(self, text: str) -> None: ...
+
+        async def events(self):  # type: ignore[no-untyped-def]
+            if False:
+                yield  # pragma: no cover
+
+        async def stop_turn(self) -> None: ...
+
+        async def resolve_permission(self, request_id: str, decision: str) -> None: ...
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def run() -> tuple[list[dict[str, Any]], bool, bool]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log)
+        adapter = _StartFailingAdapter()
+        await supervisor.register_agent(
+            "WRK-001", "agt-1", adapter, _start_context(), lazy=True
+        )
+
+        with pytest.raises(AgentTerminated):
+            await supervisor.send_input("agt-1", "do the thing")
+
+        events = list(log.events[("WRK-001", "agt-1")])
+        return events, "agt-1" in supervisor._states, adapter.closed
+
+    events, still_registered, closed = _run(run())
+    assert [e["type"] for e in events] == ["user_input", "error"]
+    assert events[0]["text"] == "do the thing"
+    assert "codex app-server did not answer" in events[1]["message"]
+    assert still_registered is False
+    assert closed is True
+
+
 def test_shutdown_closes_all_adapters() -> None:
     async def run() -> tuple[bool, bool]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
@@ -767,6 +888,49 @@ def test_pump_crash_evicts_state_after_publishing_error() -> None:
     assert still_registered is False
 
 
+def test_adapter_close_timeout_does_not_block_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider cleanup is an orchestration concern: a wedged adapter
+    close must not pin shutdown / detach / reconnect cleanup forever."""
+
+    class _HangingCloseAdapter:
+        def __init__(self) -> None:
+            self.close_entered = False
+
+        async def start(self, context: AgentStartContext) -> None: ...
+
+        async def send_input(self, text: str) -> None: ...
+
+        async def stop_turn(self) -> None: ...
+
+        async def resolve_permission(self, request_id: str, decision: str) -> None: ...
+
+        async def events(self):  # type: ignore[no-untyped-def]
+            if False:
+                yield  # pragma: no cover
+
+        async def close(self) -> None:
+            self.close_entered = True
+            await asyncio.Event().wait()
+
+    async def run() -> tuple[bool, bool]:
+        monkeypatch.setattr(
+            supervisor_module, "ADAPTER_CLOSE_TIMEOUT_SECONDS", 0.01
+        )
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = _HangingCloseAdapter()
+        await supervisor.register_agent(
+            "WRK-001", "agt-1", adapter, _start_context(), lazy=True
+        )
+        await supervisor.shutdown()
+        return adapter.close_entered, "agt-1" in supervisor._states
+
+    close_entered, still_registered = _run(run())
+    assert close_entered is True
+    assert still_registered is False
+
+
 def test_pump_end_kicks_active_subscription() -> None:
     """When eviction fires while a WS subscription is open, the
     subscription's ``kicked`` event must be set so the WS handler
@@ -918,21 +1082,21 @@ def test_kicked_subscriber_does_not_block_further_publishing() -> None:
 
 
 def test_lazy_register_does_not_start_pump_until_send_input() -> None:
-    """``register_agent(..., lazy=True)`` registers state and runs the
-    cheap ``adapter.start`` setup, but doesn't iterate ``adapter.events``.
-    The first ``send_input`` creates the pump task. This is the seam the
-    re-attach (resume) path uses to avoid burning a fork on providers
-    that fork-on-resume."""
+    """``register_agent(..., lazy=True)`` registers replayable state
+    without starting provider setup or iterating ``adapter.events``.
+    The first ``send_input`` starts the adapter and creates the pump.
+    This is the seam the re-attach path uses to avoid burning provider
+    work on view-only reconnect."""
 
-    async def run() -> tuple[bool, list[dict[str, Any]], list[str]]:
+    async def run() -> tuple[bool, bool, list[dict[str, Any]], list[str]]:
         log = StubTranscriptLog()
         supervisor = AgentSupervisorService(log)
         adapter = StubAgentAdapter(_scripted())
         await supervisor.register_agent(
             "WRK-001", "agt-1", adapter, _start_context(), lazy=True
         )
-        # Adapter.start ran (cheap setup), but no events task exists.
         state = supervisor._states["agt-1"]
+        start_deferred = adapter.start_context is None
         no_task_yet = state.task is None
 
         async with supervisor.subscribe("agt-1") as sub:
@@ -942,9 +1106,10 @@ def test_lazy_register_does_not_start_pump_until_send_input() -> None:
             events = [await queue.get() for _ in range(6)]
 
         await supervisor.shutdown()
-        return no_task_yet, events, adapter.received_inputs
+        return start_deferred, no_task_yet, events, adapter.received_inputs
 
-    no_task_yet, events, inputs = _run(run())
+    start_deferred, no_task_yet, events, inputs = _run(run())
+    assert start_deferred is True
     assert no_task_yet is True
     assert events[0]["type"] == "user_input"
     assert events[0]["text"] == "wake up"
@@ -1056,17 +1221,21 @@ def test_artifact_marker_without_recorder_is_passthrough() -> None:
     assert [e["type"] for e in events] == ["artifact_marker"]
 
 
-def test_lazy_register_calls_adapter_start_with_context() -> None:
-    """The ``adapter.start`` step still runs at register time even in
-    lazy mode — it's the cheap setup (Amp's permission socket, Claude's
-    SDK connect) that needs to be live before the first send_input."""
+def test_lazy_register_defers_adapter_start_until_send_input() -> None:
+    """View-only lazy reattach must not start provider transport. The
+    first send_input starts the adapter with the original context."""
 
-    async def run() -> AgentStartContext | None:
+    async def run() -> tuple[AgentStartContext | None, AgentStartContext | None]:
         supervisor = AgentSupervisorService(StubTranscriptLog())
         adapter = StubAgentAdapter([], keep_alive=True)
         ctx = _start_context()
         await supervisor.register_agent("WRK-001", "agt-1", adapter, ctx, lazy=True)
+        before_input = adapter.start_context
+        await supervisor.send_input("agt-1", "wake up")
+        after_input = adapter.start_context
         await supervisor.shutdown()
-        return adapter.start_context
+        return before_input, after_input
 
-    assert _run(run()) is not None
+    before, after = _run(run())
+    assert before is None
+    assert after is not None

@@ -98,7 +98,7 @@ The mode is a structural switch, not a theming switch. Splitting into two compon
 
 - **Left** cell: persona pip + status dot + h2 title. h2 truncates with `text-overflow: ellipsis` so long names don't push the meta off-center.
 - **Center** cell: `agent-slug` (mono) + `provider-pill` (`amp · rush`) + `conn-status` (`CONNECTED`) + a `folder-pill mono` showing `shortenPath(worktreePath)`. Left-click reveals the worktree in Finder; **right-click opens a small context menu** (`.folder-pill-menu`, anchored at cursor coords) with two options: *Open worktree* and *Open Atelier folder* (the per-agent dir under `~/Atelier/works/<work>/agents/<agent>/` — transcript, agent.json, contexts/). Backend dispatch via `POST /api/agents/{slug}/reveal?kind=worktree|atelier`. Center stays horizontally centered regardless of how wide the title or controls clusters get; the 1fr columns absorb the slack equally.
-- **Right** cell: `tile-controls` wrapper with **open-in-IDE / handoff / maximize / detach / close** buttons. Buttons are 26×26 with 13×13 SVG glyphs; controlled by `.tile-controls .tile-ctl` so the meta/folder pill in the center stays at default sizing. The open-in-IDE button uses the `vscode://file/<path>` URL scheme (handled by VSCode and Cursor) — browsers route unknown protocols to the OS handler without navigating, so the page stays.
+- **Right** cell: `tile-controls` wrapper with **open-in-IDE / handoff / maximize / detach / close** buttons. Buttons are 26×26 with 13×13 SVG glyphs; controlled by `.tile-controls .tile-ctl` so the meta/folder pill in the center stays at default sizing. The open-in-IDE button uses the selected editor descriptor from `GET /api/settings` (`url_template` plus path tokens such as `{path_uri}` / `{path_param}`) — browsers route unknown protocols to the OS handler without navigating, so the page stays.
 
 The standalone worktree-icon button (formerly between conn-status and tile-controls) was removed — the folder pill is itself the reveal affordance. `shortenPath` is exported from `WorkView.tsx` for reuse.
 
@@ -229,9 +229,8 @@ Component-local `useState` + the WS hook is the default. Cross-component, fronte
 
 Current stores:
 
-- `theme.ts` — `{ theme: "dark" | "light" | "ansi" }`, persisted under `atelier:theme` (v2). `App.tsx` mirrors it onto `<html data-theme=...>`. `toggleTheme` cycles light → dark → ansi → light; `ansi` is the default for fresh users.
+- `settings.ts` — `{ theme, editor, terminal, accentHue, editorOptions, terminalOptions }`, hydrated from backend `GET /api/settings` and written through with `PUT /api/settings`. The backend owns the selectable editor/console descriptors (`label`, `command`, `url_template`); the FE only renders them and interpolates path tokens for editor URL handlers. Legacy `atelier:tweaks` / `atelier:theme` localStorage blobs are migrated into the backend once on boot.
 - `closed.ts` — `{ byWork: Record<workSlug, agentSlug[]> }`, persisted under `atelier:closed`. `WorkView` filters closed agents out of the canvas; clicking a closed rail entry restores the tile (which reopens its WS and resumes the provider session). Replaces the prior "minimized" model — there is no "delete".
-- `tweaks.ts` — `{ accentHue: number; layout: "tiles" | "columns" | "windows"; panelOpen: bool }`, persisted under `atelier:tweaks` (panelOpen is excluded). Drives the floating `TweaksPanel`; `App.tsx` mirrors `accentHue` onto `--accent-h` on `<html>` so the rest of the accent ramp (`oklch()`-derived) follows. The "windows" layout falls back to "tiles" until STORY-024 wires the freeform drag.
 
 When adding a new store: keep it narrow (one concern per file), put presentation-only state here (per CLAUDE.md → "UI state is frontend-local"), and don't reach into it from outside React-tree code unless you have a reason — `useStore.getState()` is a synchronous read, fine inside a `useEffect`.
 

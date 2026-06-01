@@ -529,9 +529,9 @@ export function revealAgent(
  * terminal — same pattern as ``revealAgent`` but launches a console
  * instead of the file browser.
  *
- * ``kind`` selects a specific terminal app on the backend (``system``,
- * ``iterm2``, ``terminator``, ``gnome-terminal``, ``konsole``,
- * ``tmux``); unknown values fall back to ``system`` server-side.
+ * ``kind`` selects one of the backend-described terminal options from
+ * ``GET /api/settings``; unknown values fall back to ``system``
+ * server-side.
  */
 export function openAgentInConsole(
   agentSlug: string,
@@ -873,6 +873,15 @@ export type UserSettingsRead = {
   layout: string;
   accent_hue: number;
   theme: string;
+  editor_options?: SettingsToolOption[];
+  terminal_options?: SettingsToolOption[];
+};
+
+export type SettingsToolOption = {
+  value: string;
+  label: string;
+  command: string;
+  url_template?: string | null;
 };
 
 export type UserSettingsWrite = Partial<{

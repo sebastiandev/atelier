@@ -11,9 +11,9 @@ class UserSettings:
 
     Every field is optional on read so the repository can return a fresh
     row with defaults applied by the caller. The values themselves are
-    opaque strings/ints — validation is at the route boundary, not here,
-    since the legal vocabulary is owned by the FE's union types
-    (``EditorChoice`` / ``TerminalChoice`` / ``Theme`` / ``CanvasLayout``).
+    opaque strings/ints — the route layer owns defaults and selectable
+    tool descriptors, while this row only stores the user's selected
+    values.
     """
 
     editor: str | None = None

@@ -96,8 +96,8 @@ type AgentTileProps = {
    *  also copy it from there. When omitted, the folder button is
    *  hidden. */
   onRevealWorktree?: () => void;
-  /** Open the agent's worktree in an editor (VSCode/Cursor) so the
-   *  user can review diffs without leaving their normal IDE flow.
+  /** Open the agent's worktree in the configured editor so the user
+   *  can review diffs without leaving their normal IDE flow.
    *  When omitted, the IDE button is hidden. */
   onOpenInIde?: () => void;
   /** Called with the agent's new name after a successful PATCH. Parent

@@ -5,10 +5,7 @@ import { BrandMark } from "./BrandMark";
 import { Connections } from "./Connections";
 import { CheckIcon, SlidersIcon } from "./Icons";
 import {
-  EDITOR_OPTS,
-  TERMINAL_OPTS,
-  type EditorChoice,
-  type TerminalChoice,
+  type ToolOption,
   type Theme,
   useSettingsStore,
 } from "./state/settings";
@@ -128,20 +125,22 @@ function SettingsCard({
 function SettingsTools() {
   const editor = useSettingsStore((s) => s.editor);
   const terminal = useSettingsStore((s) => s.terminal);
+  const editorOptions = useSettingsStore((s) => s.editorOptions);
+  const terminalOptions = useSettingsStore((s) => s.terminalOptions);
   const setEditor = useSettingsStore((s) => s.setEditor);
   const setTerminal = useSettingsStore((s) => s.setTerminal);
   return (
     <>
       <SettingsSectionHd
         title="Default tools"
-        sub="Apps that fire when you click an agent's open-in-editor / open-in-terminal button. Per-browser preference, no backend round-trip."
+        sub="Apps that fire when you click an agent's open-in-editor / open-in-terminal button. Options come from the backend settings descriptor."
       />
       <SettingsCard
         label="EDITOR"
         hint="Opens when an agent tile's “Open in editor” fires."
       >
         <div className="tool-grid">
-          {EDITOR_OPTS.map((opt) => (
+          {editorOptions.map((opt) => (
             <ToolCardEditor
               key={opt.value}
               opt={opt}
@@ -156,7 +155,7 @@ function SettingsTools() {
         hint="The terminal used by “Open in terminal” + detach actions."
       >
         <div className="tool-grid">
-          {TERMINAL_OPTS.map((opt) => (
+          {terminalOptions.map((opt) => (
             <ToolCardTerminal
               key={opt.value}
               opt={opt}
@@ -170,20 +169,12 @@ function SettingsTools() {
   );
 }
 
-const EDITOR_CMD: Record<EditorChoice, string> = {
-  vscode: "code .",
-  cursor: "cursor .",
-  pycharm: "charm .",
-  idea: "idea .",
-  webstorm: "wstorm .",
-  vim: "mvim .",
-};
 function ToolCardEditor({
   opt,
   active,
   onPick,
 }: {
-  opt: { value: EditorChoice; label: string };
+  opt: ToolOption;
   active: boolean;
   onPick: () => void;
 }) {
@@ -195,26 +186,18 @@ function ToolCardEditor({
     >
       <div className="tool-card-hd">
         <span className="tool-name">{opt.label}</span>
-        <span className="tool-cmd">${EDITOR_CMD[opt.value]}</span>
+        <span className="tool-cmd">${opt.command}</span>
       </div>
     </button>
   );
 }
 
-const TERMINAL_CMD: Record<TerminalChoice, string> = {
-  system: "open -a Terminal",
-  iterm2: "open -a iTerm",
-  terminator: "terminator",
-  "gnome-terminal": "gnome-terminal",
-  konsole: "konsole",
-  tmux: "tmux new",
-};
 function ToolCardTerminal({
   opt,
   active,
   onPick,
 }: {
-  opt: { value: TerminalChoice; label: string };
+  opt: ToolOption;
   active: boolean;
   onPick: () => void;
 }) {
@@ -226,7 +209,7 @@ function ToolCardTerminal({
     >
       <div className="tool-card-hd">
         <span className="tool-name">{opt.label}</span>
-        <span className="tool-cmd">${TERMINAL_CMD[opt.value]}</span>
+        <span className="tool-cmd">${opt.command}</span>
       </div>
     </button>
   );

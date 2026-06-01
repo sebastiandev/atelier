@@ -123,6 +123,12 @@ _log = logging.getLogger(__name__)
 # reconnect with ?cursor=N and resume.
 SUBSCRIBER_QUEUE_MAX = 256
 
+# Cleanup must not let one wedged provider transport pin the supervisor.
+# Individual adapters can still do more specific teardown, but the
+# orchestration-level guarantee belongs here because every provider goes
+# through these cleanup paths.
+ADAPTER_CLOSE_TIMEOUT_SECONDS = 5.0
+
 
 class AgentTerminated(RuntimeError):
     """Raised by ``send_input`` when the agent's event pump has ended
@@ -175,6 +181,9 @@ class _AgentState:
     # doesn't fork a new provider session unless the user actually types.
     context: AgentStartContext
     started: bool = False
+    ready: asyncio.Event = dataclasses.field(default_factory=asyncio.Event)
+    start_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+    start_error: BaseException | None = None
     seq: int = 0
     task: asyncio.Task[None] | None = None
     publish_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
@@ -225,15 +234,14 @@ class AgentSupervisorService:
              monotonically — restarting at 0 would let new events collide
              with on-disk history. ``last_seq`` is a tail-read; cheap.
           2. Insert the agent into the registry (under ``_registry_lock``).
-          3. Call ``adapter.start(context)`` — cheap per-adapter setup
-             (Amp's permission socket, Claude's SDK connect).
-          4. If ``lazy`` is False (default): create the events-pump task
+          3. If ``lazy`` is False (default): call ``adapter.start(context)``
+             for per-adapter setup, then create the events-pump task
              that iterates ``adapter.events()`` and ferries each frame
-             through ``_publish``. If True: skip — ``send_input`` creates
-             the pump on first call. Lazy is for re-attach (``resume``)
-             on providers that fork-on-resume (Amp's
-             ``--execute --stream-json``); a view-only re-attach should
-             not burn a fork.
+             through ``_publish``.
+          4. If ``lazy`` is True: skip provider startup entirely. Lazy is
+             for re-attach (``resume``); a view-only re-attach should not
+             burn a fork or open Codex app-server. ``send_input`` starts
+             the adapter and pump on first real input.
 
         Raises ``RuntimeError`` if the agent is already registered. The
         caller (``connect`` / ``start`` / ``resume``) handles the race —
@@ -253,39 +261,46 @@ class AgentSupervisorService:
                 seq=seed_seq,
             )
             self._states[agent_slug] = state
-        # If ``adapter.start`` raises, evict the half-registered state
-        # before propagating: otherwise the slot stays occupied with a
-        # dead adapter, subsequent ``connect``s see ``is_registered ==
-        # True`` and skip resume entirely, and the agent looks "stuck
-        # thinking" on the FE forever. The cleanup path also closes the
-        # adapter so any partial setup (Amp's permission socket, tempdir,
-        # bridge wrapper) doesn't leak.
+        # If registration-time setup raises, evict the half-registered
+        # state before propagating: otherwise the slot stays occupied
+        # with a dead adapter, subsequent ``connect``s see
+        # ``is_registered == True`` and skip resume entirely, and the
+        # agent looks "stuck thinking" on the FE forever. The cleanup
+        # path also closes the adapter so any partial setup (Amp's
+        # permission socket, tempdir, bridge wrapper) doesn't leak.
         try:
-            await adapter.start(context)
-        except BaseException:
+            if lazy:
+                # Lazy re-attach should be view-only: do not start the
+                # provider transport just to replay disk. The first user
+                # input starts the adapter and pump under ``start_lock``.
+                await self._clear_stale_permission_requests(state)
+            else:
+                await self._start_adapter(state)
+                # Stale permission cleanup: a permission_request whose decision
+                # never landed (backend crashed mid-prompt, adapter died on
+                # resume, tile closed while waiting) becomes a zombie prompt
+                # the FE re-derives from the transcript on every reload — and
+                # the user's "Allow" click can't reach any live future because
+                # the original adapter is gone. Publish a synthetic ``deny``
+                # for every orphan so the prompt clears and the agent can
+                # accept new input. Runs BEFORE the pump task so stale
+                # decisions land first in seq order.
+                await self._clear_stale_permission_requests(state)
+                state.task = asyncio.create_task(
+                    self._run_agent(state), name=f"agent-{agent_slug}"
+                )
+            state.ready.set()
+        except Exception as exc:
+            state.start_error = exc
+            state.ready.set()
             async with self._registry_lock:
                 self._states.pop(agent_slug, None)
-            with suppress(Exception):
-                await adapter.close()
+            await self._close_adapter(adapter, agent_slug=agent_slug)
             raise
-        state.started = True
-        # Stale permission cleanup: a permission_request whose decision
-        # never landed (backend crashed mid-prompt, adapter died on
-        # resume, tile closed while waiting) becomes a zombie prompt
-        # the FE re-derives from the transcript on every reload — and
-        # the user's "Allow" click can't reach any live future because
-        # the original adapter is gone. Publish a synthetic ``deny``
-        # for every orphan so the prompt clears and the agent can
-        # accept new input. Runs BEFORE the pump task so stale
-        # decisions land first in seq order.
-        await self._clear_stale_permission_requests(state)
-        if not lazy:
-            state.task = asyncio.create_task(
-                self._run_agent(state), name=f"agent-{agent_slug}"
-            )
 
     async def send_input(self, agent_slug: str, text: str) -> None:
         state = self._require_state(agent_slug)
+        await self._await_ready(state)
         if state.task is not None and state.task.done():
             # The pump has terminated (subprocess died, upstream 429,
             # provider stream EOF) and the eviction-after-pump-end task
@@ -297,13 +312,6 @@ class AgentSupervisorService:
             raise AgentTerminated(
                 f"agent {agent_slug} pump ended; reconnect to rebuild"
             )
-        if state.task is None:
-            # Lazy spawn: register_agent deferred the pump (re-attach
-            # path). Start it now, before publishing user_input, so the
-            # events task is alive to consume what the adapter forwards.
-            state.task = asyncio.create_task(
-                self._run_agent(state), name=f"agent-{state.agent_slug}"
-            )
         await self._publish(
             state,
             {
@@ -312,7 +320,35 @@ class AgentSupervisorService:
                 "text": text,
             },
         )
-        await state.adapter.send_input(text)
+        try:
+            if not state.started:
+                await self._start_lazy_adapter(state)
+            if state.task is None:
+                # Defensive fallback for older states: lazy startup
+                # should create the pump, but never forward input into
+                # an adapter without a consumer draining events.
+                state.task = asyncio.create_task(
+                    self._run_agent(state), name=f"agent-{state.agent_slug}"
+                )
+            await state.adapter.send_input(text)
+        except Exception as exc:
+            root = (
+                exc.__cause__
+                if isinstance(exc, AgentTerminated) and exc.__cause__ is not None
+                else exc
+            )
+            await self._publish(
+                state,
+                {
+                    "type": "error",
+                    "ts": datetime.now(UTC).isoformat(),
+                    "message": f"failed to deliver user input: {root!r}",
+                },
+            )
+            await self._evict_failed_start(state)
+            raise AgentTerminated(
+                f"agent {agent_slug} failed to accept input; reconnect to rebuild"
+            ) from root
 
     async def resolve_permission(
         self, agent_slug: str, request_id: str, decision: PermissionDecisionValue
@@ -337,6 +373,9 @@ class AgentSupervisorService:
                 agent_slug, request_id,
             )
             return
+        await self._await_ready(state)
+        if not state.started:
+            return
         await state.adapter.resolve_permission(request_id, decision)
 
     async def stop_turn(self, agent_slug: str) -> None:
@@ -345,6 +384,9 @@ class AgentSupervisorService:
         # interrupt mid-turn (Amp today) no-op the second step; the
         # transcript line still lands so the user sees they pressed stop.
         state = self._require_state(agent_slug)
+        await self._await_ready(state)
+        if not state.started:
+            return
         await self._publish(
             state,
             {"type": "user_stop", "ts": datetime.now(UTC).isoformat()},
@@ -376,6 +418,7 @@ class AgentSupervisorService:
         disturb a fresh subscriber.
         """
         state = self._require_state(agent_slug)
+        await self._await_ready(state)
         subscription = AgentSubscription(
             queue=asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_MAX),
             kicked=asyncio.Event(),
@@ -421,7 +464,7 @@ class AgentSupervisorService:
             state.task.cancel()
             with suppress(asyncio.CancelledError):
                 await state.task
-        await state.adapter.close()
+        await self._close_adapter(state.adapter, agent_slug=agent_slug)
 
     async def shutdown(self) -> None:
         async with self._registry_lock:
@@ -440,7 +483,12 @@ class AgentSupervisorService:
     def is_lazy_registered(self, agent_slug: str) -> bool:
         """True when the agent is registered but its provider pump is idle."""
         state = self._states.get(agent_slug)
-        return state is not None and state.task is None
+        return (
+            state is not None
+            and state.ready.is_set()
+            and state.start_error is None
+            and state.task is None
+        )
 
     async def refresh_seq_from_disk(self, agent_slug: str) -> None:
         """Advance a lazy state's replay high-water mark after external
@@ -448,6 +496,7 @@ class AgentSupervisorService:
         state = self._states.get(agent_slug)
         if state is None:
             return
+        await self._await_ready(state)
         last_seq = await asyncio.to_thread(
             self._transcript_log.last_seq, state.work_slug, agent_slug
         )
@@ -455,6 +504,62 @@ class AgentSupervisorService:
             state.seq = max(state.seq, last_seq)
 
     # -- internals --
+
+    async def _await_ready(self, state: _AgentState) -> None:
+        """Wait until registration has finished its setup.
+
+        ``register_agent`` inserts state early so concurrent resume
+        attempts see the slot and lose the race cleanly. Consumers still
+        wait for this gate before acting on state; lazy inputs then use
+        ``start_lock`` before touching provider transport.
+        """
+        await state.ready.wait()
+        if state.start_error is not None:
+            raise AgentTerminated(
+                f"agent {state.agent_slug} failed to start; reconnect to rebuild"
+            ) from state.start_error
+
+    async def _start_adapter(self, state: _AgentState) -> None:
+        if state.started:
+            return
+        await state.adapter.start(state.context)
+        state.started = True
+
+    async def _start_lazy_adapter(self, state: _AgentState) -> None:
+        """Start a lazy adapter on first real input.
+
+        View-only reattach leaves provider transports dormant. The first
+        input owns startup, and concurrent inputs serialize here so only
+        one task can call ``adapter.start`` / create the pump.
+        """
+        async with state.start_lock:
+            if state.start_error is not None:
+                raise AgentTerminated(
+                    f"agent {state.agent_slug} failed to start; reconnect to rebuild"
+                ) from state.start_error
+            if state.started:
+                return
+            try:
+                await self._start_adapter(state)
+            except Exception as exc:
+                state.start_error = exc
+                raise AgentTerminated(
+                    f"agent {state.agent_slug} failed to start; reconnect to rebuild"
+                ) from exc
+            if state.task is None:
+                state.task = asyncio.create_task(
+                    self._run_agent(state),
+                    name=f"agent-{state.agent_slug}",
+                )
+
+    async def _evict_failed_start(self, state: _AgentState) -> None:
+        async with self._registry_lock:
+            current = self._states.get(state.agent_slug)
+            if current is state:
+                del self._states[state.agent_slug]
+        if state.subscriber is not None:
+            state.subscriber.kicked.set()
+        await self._close_adapter(state.adapter, agent_slug=state.agent_slug)
 
     async def _run_agent(self, state: _AgentState) -> None:
         try:
@@ -508,8 +613,23 @@ class AgentSupervisorService:
         sub = state.subscriber
         if sub is not None:
             sub.kicked.set()
-        with suppress(Exception):
-            await state.adapter.close()
+        await self._close_adapter(state.adapter, agent_slug=state.agent_slug)
+
+    async def _close_adapter(
+        self, adapter: AgentAdapter, *, agent_slug: str
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                adapter.close(), timeout=ADAPTER_CLOSE_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            _log.warning(
+                "timed out closing adapter for agent=%s after %.1fs",
+                agent_slug,
+                ADAPTER_CLOSE_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            _log.exception("adapter close failed for agent=%s", agent_slug)
 
     async def _clear_stale_permission_requests(
         self, state: _AgentState

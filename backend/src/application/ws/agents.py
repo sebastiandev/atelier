@@ -83,12 +83,17 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
                 # Surface any task exception (other than disconnect/cancel).
                 for task in done:
                     exc = task.exception()
-                    if exc is not None and not isinstance(exc, WebSocketDisconnect):
-                        raise exc
+                    if exc is None or isinstance(exc, WebSocketDisconnect):
+                        continue
+                    if _is_send_after_close(exc):
+                        return
+                    raise exc
             finally:
                 for task in (send_task, recv_task, kick_task):
                     task.cancel()
-                    with suppress(asyncio.CancelledError, WebSocketDisconnect):
+                    with suppress(
+                        asyncio.CancelledError, WebSocketDisconnect, RuntimeError
+                    ):
                         await task
     except connect.AgentNotFound:
         await _safe_close(websocket, code=_CLOSE_AGENT_NOT_RUNNING)
@@ -99,6 +104,13 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
 async def _drain(sub: AgentSubscription, websocket: WebSocket) -> None:
     async for event in sub.stream():
         await websocket.send_json(event)
+
+
+def _is_send_after_close(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, RuntimeError)
+        and 'Cannot call "send" once a close message has been sent.' in str(exc)
+    )
 
 
 async def _receive_inputs(

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { getSettings, putSettings } from "../api";
+import { getSettings, putSettings, type SettingsToolOption } from "../api";
 
 /**
  * User settings — the canonical store for everything the Settings page
@@ -22,21 +22,11 @@ import { getSettings, putSettings } from "../api";
  * tweaks panel is for live colour iteration and shouldn't survive a
  * reload.
  */
-export type EditorChoice =
-  | "vscode"
-  | "cursor"
-  | "pycharm"
-  | "idea"
-  | "webstorm"
-  | "vim";
+export type EditorChoice = string;
 
-export type TerminalChoice =
-  | "system"
-  | "iterm2"
-  | "terminator"
-  | "gnome-terminal"
-  | "konsole"
-  | "tmux";
+export type TerminalChoice = string;
+
+export type ToolOption = SettingsToolOption;
 
 export type Theme = "dark" | "light" | "ansi";
 
@@ -60,6 +50,8 @@ type SettingsState = {
   editor: EditorChoice;
   terminal: TerminalChoice;
   theme: Theme;
+  editorOptions: ToolOption[];
+  terminalOptions: ToolOption[];
   panelOpen: boolean;
   setAccentHue: (h: number) => void;
   setEditor: (e: EditorChoice) => void;
@@ -78,8 +70,68 @@ function nextTheme(current: Theme): Theme {
   return THEMES[(i + 1) % THEMES.length];
 }
 
+const FALLBACK_EDITOR_OPTIONS: ToolOption[] = [
+  {
+    value: "vscode",
+    label: "VS Code",
+    command: "code .",
+    url_template: "vscode://file{path_uri}",
+  },
+  {
+    value: "cursor",
+    label: "Cursor",
+    command: "cursor .",
+    url_template: "cursor://file{path_uri}",
+  },
+  {
+    value: "zed",
+    label: "Zed",
+    command: "zed .",
+    url_template: "zed://file{path_segments}",
+  },
+  {
+    value: "pycharm",
+    label: "PyCharm",
+    command: "charm .",
+    url_template: "pycharm://open?file={path_param}",
+  },
+  {
+    value: "idea",
+    label: "IntelliJ IDEA",
+    command: "idea .",
+    url_template: "idea://open?file={path_param}",
+  },
+  {
+    value: "webstorm",
+    label: "WebStorm",
+    command: "wstorm .",
+    url_template: "webstorm://open?file={path_param}",
+  },
+  {
+    value: "vim",
+    label: "Vim (MacVim)",
+    command: "mvim .",
+    url_template: "mvim://open?url={file_uri}",
+  },
+];
+
+const FALLBACK_TERMINAL_OPTIONS: ToolOption[] = [
+  { value: "system", label: "System default", command: "open -a Terminal" },
+  { value: "iterm2", label: "iTerm2 (macOS)", command: "open -a iTerm" },
+  { value: "terminator", label: "Terminator (Linux)", command: "terminator" },
+  {
+    value: "gnome-terminal",
+    label: "GNOME Terminal",
+    command: "gnome-terminal",
+  },
+  { value: "konsole", label: "Konsole (KDE)", command: "konsole" },
+  { value: "tmux", label: "tmux", command: "tmux new" },
+];
+
 export const useSettingsStore = create<SettingsState>()((set, get) => ({
   ...SETTINGS_DEFAULTS,
+  editorOptions: FALLBACK_EDITOR_OPTIONS,
+  terminalOptions: FALLBACK_TERMINAL_OPTIONS,
   panelOpen: false,
   setAccentHue: (accentHue) => {
     set({ accentHue });
@@ -115,50 +167,33 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   closePanel: () => set({ panelOpen: false }),
 }));
 
-export const EDITOR_OPTS: { value: EditorChoice; label: string }[] = [
-  { value: "vscode", label: "VS Code" },
-  { value: "cursor", label: "Cursor" },
-  { value: "pycharm", label: "PyCharm" },
-  { value: "idea", label: "IntelliJ IDEA" },
-  { value: "webstorm", label: "WebStorm" },
-  { value: "vim", label: "Vim (MacVim)" },
-];
-
-export const TERMINAL_OPTS: { value: TerminalChoice; label: string }[] = [
-  { value: "system", label: "System default" },
-  { value: "iterm2", label: "iTerm2 (macOS)" },
-  { value: "terminator", label: "Terminator (Linux)" },
-  { value: "gnome-terminal", label: "GNOME Terminal" },
-  { value: "konsole", label: "Konsole (KDE)" },
-  { value: "tmux", label: "tmux" },
-];
-
 /**
- * Build the OS-handler URL for the chosen editor. JetBrains IDEs use
- * `<ide>://open?file=<encoded path>` (registered by JetBrains Toolbox);
- * VSCode + Cursor use `vscode://file<path>` (Cursor also responds to
- * the vscode:// scheme, but its native `cursor://` is preferred when
- * the user explicitly picks Cursor).
- *
- * "Vim" maps to MacVim's `mvim://open?url=file://<path>` scheme — the
- * de-facto browser-launchable handler for Vim on macOS.
+ * Build the OS-handler URL for the chosen editor from the backend-owned
+ * descriptor. The frontend only knows how to interpolate path tokens.
  */
 export function editorUrl(editor: EditorChoice, path: string): string {
-  switch (editor) {
-    case "cursor":
-      return `cursor://file${path}`;
-    case "pycharm":
-      return `pycharm://open?file=${encodeURIComponent(path)}`;
-    case "idea":
-      return `idea://open?file=${encodeURIComponent(path)}`;
-    case "webstorm":
-      return `webstorm://open?file=${encodeURIComponent(path)}`;
-    case "vim":
-      return `mvim://open?url=file://${encodeURI(path)}`;
-    case "vscode":
-    default:
-      return `vscode://file${path}`;
-  }
+  const option =
+    useSettingsStore.getState().editorOptions.find((opt) => opt.value === editor) ??
+    FALLBACK_EDITOR_OPTIONS.find((opt) => opt.value === editor) ??
+    FALLBACK_EDITOR_OPTIONS[0];
+  return renderUrlTemplate(option.url_template, path);
+}
+
+function encodeFilePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+function renderUrlTemplate(
+  template: string | null | undefined,
+  path: string,
+): string {
+  const fileUri = `file://${encodeURI(path)}`;
+  return (template || "vscode://file{path_uri}")
+    .replaceAll("{path}", path)
+    .replaceAll("{path_uri}", encodeURI(path))
+    .replaceAll("{path_param}", encodeURIComponent(path))
+    .replaceAll("{path_segments}", encodeFilePath(path))
+    .replaceAll("{file_uri}", fileUri);
 }
 
 const LEGACY_TWEAKS_KEY = "atelier:tweaks";
@@ -244,6 +279,8 @@ export async function hydrateSettings(): Promise<void> {
       editor: remote.editor as EditorChoice,
       terminal: remote.terminal as TerminalChoice,
       theme: remote.theme as Theme,
+      editorOptions: remote.editor_options ?? FALLBACK_EDITOR_OPTIONS,
+      terminalOptions: remote.terminal_options ?? FALLBACK_TERMINAL_OPTIONS,
     });
   } catch {
     // Backend unreachable on boot — keep defaults and let the next

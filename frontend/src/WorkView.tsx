@@ -815,7 +815,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                       }}
                       onHandoff={() => setHandoffSource(a)}
                       onOpenInIde={() => {
-                        // The configured editor (Tweaks panel) maps to
+                        // The configured editor (Settings) maps to
                         // its OS-registered URL scheme. Browsers route
                         // unknown protocols to the OS handler without
                         // navigating, so the page stays put.

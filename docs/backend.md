@@ -111,8 +111,10 @@ The ORDER is the load-bearing invariant: **no event reaches a subscriber before 
 
 1. **Seed `seq`.** Tail-read `transcript.ndjson` via `transcript_log.last_seq` and seed `state.seq` from it, so a resume continues monotonically rather than colliding with existing history.
 2. **Register state.** Under `_registry_lock`, build the `_AgentState` and put it in `_states[agent_slug]`. Concurrent registration of the same slug raises `RuntimeError`; the loser drops its adapter copy.
-3. **`await adapter.start(context)`** — cheap per-adapter setup: Amp stands up the permission Unix socket; Claude connects its SDK control channel. The CLI subprocess is NOT spawned here.
-4. **Spawn the events-pump task** — `asyncio.create_task(self._run_agent(state))`. Iterating `adapter.events()` is what actually fires the underlying CLI. **Skipped when `lazy=True`** — the first `send_input` creates the task instead.
+3. **For eager starts, `await adapter.start(context)`** — per-adapter setup: Amp stands up the permission Unix socket; Claude connects its SDK control channel; Codex starts app-server state. The CLI/model turn is NOT spawned here.
+4. **For eager starts, spawn the events-pump task** — `asyncio.create_task(self._run_agent(state))`. Iterating `adapter.events()` is what actually fires the underlying turn loop. **Skipped when `lazy=True`** — the first `send_input` starts the adapter and creates the task instead.
+
+State is deliberately inserted before eager `adapter.start` finishes so StrictMode/two-tab/concurrent resume races converge on one registered adapter. The state carries a readiness gate: `subscribe`, `send_input`, `stop_turn`, `resolve_permission`, and lazy catch-up wait for registration-time setup to complete. Lazy reattach is view-only: it publishes stale permission denials and replays disk without touching provider transport. The first lazy `send_input` starts the adapter under a per-agent lock, then creates `_run_agent`, so no path can call `events()` while `start()` is still in flight.
 
 `_run_agent` is the consumer side: `async for event in adapter.events()`. For `SessionEstablished` events it calls `_set_session_id` (the WorkStore hook) so the SDK's session/thread ID gets persisted to SQL — the canonical resume handle. For `TurnMetrics`, it adds the current worktree branch/head from the injected worktree-state reader before publishing, so each completed live turn carries the git prompt label without provider-specific adapter code. This supervisor hot path intentionally does not rewrite `agent.json`; command-driven session replacement flows opt into that filesystem mirror when they need user-visible lineage. Every event gets `_publish`-ed.
 
@@ -129,14 +131,14 @@ There is **one inward path** from the WS endpoint into domain logic:
 
 #### Re-attach (resume) and lazy spawn
 
-When `connect` finds the supervisor has no live state — backend restart, agent closed-to-rail, or `status=DETACHED` — it calls `resume.execute`. Resume runs `register_agent(..., lazy=True)`: the events pump is **not** started. The user sees the existing transcript via the replay window. Only when they type does `send_input` create the pump task and the SDK process spawn. This is the fix for Amp's fork-on-resume bug — a view-only re-attach no longer burns a fork.
+When `connect` finds the supervisor has no live state — backend restart, agent closed-to-rail, or `status=DETACHED` — it calls `resume.execute`. Resume runs `register_agent(..., lazy=True)`: the adapter and events pump are **not** started. The user sees the existing transcript via the replay window. Only when they type does `send_input` start the adapter, create the pump task, and spawn provider work. This is the fix for fork-on-resume and slow app-server reconnect bugs — a view-only re-attach no longer burns provider work.
 
 If the agent is already lazy-registered, `connect` still runs a lightweight CLI catch-up before subscribing. This covers a user reopening Atelier once, continuing to type in the external CLI, then reopening again: new CLI transcript entries are appended to NDJSON and the supervisor's replay high-water mark is advanced before the WS replay window is computed.
 
 ### Lifecycle: stopping a turn / closing an agent
 
 - **`stop_turn(agent_slug)`** writes a `user_stop` transcript line (so the user's intent is durable even if the SDK call fails), then `await state.adapter.stop_turn()`. Claude calls `interrupt()` over the SDK control protocol; Codex app-server sends `turn/interrupt` and then synthesizes an interrupted terminal turn if the server does not emit one, so queued follow-up prompts are not stranded behind the old turn; Amp no-ops today (its CLI exposes no per-turn cancel).
-- **`stop_agent(agent_slug)`** pops the state from the registry, kicks any active subscriber so the browser reconnects/replays from disk, cancels the agent task, awaits it (suppressing `CancelledError`), and calls `adapter.close()`. Idempotent on the slug.
+- **`stop_agent(agent_slug)`** pops the state from the registry, kicks any active subscriber so the browser reconnects/replays from disk, cancels the agent task, awaits it (suppressing `CancelledError`), and closes the adapter through the supervisor's bounded close helper (`ADAPTER_CLOSE_TIMEOUT_SECONDS`). Idempotent on the slug.
 - **`shutdown()`** stops every running agent — called from the FastAPI lifespan teardown.
 
 ### Resume after a backend restart
@@ -194,7 +196,7 @@ Each adapter implements the `AgentAdapter` Protocol from `domain/agents/ports.py
 | `send_input(text)` | by `send_input` (also called by `start.execute` to inject a synthesised first message) | Pushes a turn into the adapter's input channel. |
 | `stop_turn()` | by `stop_turn` | Cancel the in-flight turn without tearing down the session. |
 | `resolve_permission(rid, decision)` | by `resolve_permission` | Answer a `PermissionRequest` the adapter previously emitted. |
-| `close()` | by `stop_agent` / `shutdown` | Disconnect from the SDK. Idempotent. |
+| `close()` | by `stop_agent` / `shutdown` | Disconnect from the SDK. Idempotent; the supervisor bounds the await so a wedged provider transport cannot pin cleanup. |
 
 Adapters whose SDK doesn't expose a feature no-op the corresponding method (Amp's `stop_turn`, `resolve_permission`; the stub's everything-but-events). The supervisor calls them uniformly so its own code doesn't branch on provider.
 
