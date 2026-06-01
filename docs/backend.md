@@ -135,7 +135,7 @@ If the agent is already lazy-registered, `connect` still runs a lightweight CLI 
 
 ### Lifecycle: stopping a turn / closing an agent
 
-- **`stop_turn(agent_slug)`** writes a `user_stop` transcript line (so the user's intent is durable even if the SDK call fails), then `await state.adapter.stop_turn()`. Claude calls `interrupt()` over the SDK control protocol; Amp no-ops today (its CLI exposes no per-turn cancel).
+- **`stop_turn(agent_slug)`** writes a `user_stop` transcript line (so the user's intent is durable even if the SDK call fails), then `await state.adapter.stop_turn()`. Claude calls `interrupt()` over the SDK control protocol; Codex app-server sends `turn/interrupt` and then synthesizes an interrupted terminal turn if the server does not emit one, so queued follow-up prompts are not stranded behind the old turn; Amp no-ops today (its CLI exposes no per-turn cancel).
 - **`stop_agent(agent_slug)`** pops the state from the registry, kicks any active subscriber so the browser reconnects/replays from disk, cancels the agent task, awaits it (suppressing `CancelledError`), and calls `adapter.close()`. Idempotent on the slug.
 - **`shutdown()`** stops every running agent — called from the FastAPI lifespan teardown.
 
@@ -288,6 +288,8 @@ The bridge itself (``infrastructure/agents/amp_permission_bridge.py``) is stdlib
 Codex has a native approval-policy concept. Atelier runs live Codex agents through ``codex app-server --listen stdio://`` so Codex's JSON-RPC approval requests flow back into the same ``PermissionRequest`` UI Claude and Amp use. ``_CodexAppServerClient`` handles ``item/commandExecution/requestApproval``, ``item/fileChange/requestApproval``, and ``item/permissions/requestApproval``, maps them to domain-level tool names/input, waits for ``resolve_permission``, then replies to Codex with ``accept`` / ``acceptForSession`` / ``decline``-style decisions.
 
 ``CodexAdapter._handle_approval_request(request)`` is still the provider-neutral callback seam: it canonicalises the tool name + input, publishes a ``PermissionRequest``, waits for ``resolve_permission``, and returns Atelier's ``allow`` / ``allow_always`` / ``deny`` decision. The app-server client maps those domain decisions to Codex JSON-RPC responses. The legacy ``_CodexSdkClient`` remains for compatibility with tests/older SDK experiments, but its ``exec --experimental-json`` transport cannot surface approvals.
+
+Codex app-server interrupts are also normalized at the adapter boundary. If ``turn/interrupt`` returns but the app-server does not send a terminal ``turn/completed`` notification (observed when stopping a long-running shell command), ``_CodexAppServerTurnHandle`` injects an interrupted terminal notification for the current turn. That lets the normal conversion path publish idle/metrics and lets the input pump consume the next queued user prompt without requiring a browser refresh.
 
 Two layers sit on top of Codex execution:
 

@@ -46,6 +46,7 @@ from src.infrastructure.agents.codex_adapter import (
     CodexAdapter,
     _app_server_approval_result,
     _app_server_thread_params,
+    _CodexAppServerTurnHandle,
     _CodexTokenSnapshotTail,
     _command_execution_args,
     _convert,
@@ -1312,6 +1313,42 @@ def test_stop_turn_interrupts_in_flight_turn() -> None:
 
     interrupted = asyncio.run(session())
     assert interrupted is True
+
+
+def test_app_server_interrupt_synthesizes_terminal_turn() -> None:
+    """The Codex app-server may acknowledge interrupt without sending a
+    terminal turn/completed notification. The handle must still unblock
+    the adapter pump so queued follow-up inputs are processed."""
+
+    class FakeAppServerClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def _interrupt_turn(self, thread_id: str, turn_id: str) -> None:
+            self.calls.append((thread_id, turn_id))
+
+    client = FakeAppServerClient()
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    handle = _CodexAppServerTurnHandle(  # type: ignore[arg-type]
+        client, "thread-1", "turn-1", queue
+    )
+
+    async def session() -> Any:
+        async def read_one() -> Any:
+            async for event in handle.stream():
+                return event
+            raise AssertionError("stream ended without a terminal event")
+
+        stream_task = asyncio.create_task(read_one())
+        await asyncio.sleep(0)
+        await handle.interrupt()
+        return await asyncio.wait_for(stream_task, timeout=1.0)
+
+    event = asyncio.run(session())
+    assert client.calls == [("thread-1", "turn-1")]
+    assert event.type == "turn/completed"
+    assert event.params["status"] == "interrupted"
+    assert event.params["turnId"] == "turn-1"
 
 
 def test_stop_turn_before_first_turn_is_a_noop() -> None:

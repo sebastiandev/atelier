@@ -924,7 +924,28 @@ class _CodexAppServerTurnHandle:
                 return
 
     async def interrupt(self) -> None:
-        await self._client._interrupt_turn(self._thread_id, self._turn_id)
+        try:
+            await self._client._interrupt_turn(self._thread_id, self._turn_id)
+        finally:
+            # The app-server interrupt request can complete before the
+            # event stream receives a terminal turn/completed frame,
+            # especially while a shell command is being torn down. Without
+            # a terminal event this turn's stream stays parked forever and
+            # later user inputs sit in the adapter queue until a full
+            # reconnect. Emit the same terminal shape the server normally
+            # sends so the pump returns to the next prompt.
+            if self._turn_id:
+                await self._queue.put(
+                    _SdkNotification(
+                        "turn/completed",
+                        {
+                            "threadId": self._thread_id,
+                            "turnId": self._turn_id,
+                            "status": "interrupted",
+                            "duration_ms": 0,
+                        },
+                    )
+                )
 
 
 class _CodexTokenSnapshotTail:
