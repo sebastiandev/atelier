@@ -1294,6 +1294,12 @@ export type RenderUnit =
       newSessionId: string;
       summaryPath: string;
     }
+  | {
+      kind: "provider_compaction";
+      key: number;
+      provider: string;
+      reason: string;
+    }
   | { kind: "permission_resolved"; key: number; decision: PermissionDecision; tool_name: string };
 
 export function groupEvents(events: AgentEvent[]): RenderUnit[] {
@@ -1518,6 +1524,13 @@ function renderUnitFor(ev: AgentEvent): RenderUnit | null {
         oldSessionId: stringField(ev, "old_session_id"),
         newSessionId: stringField(ev, "new_session_id"),
         summaryPath: stringField(ev, "summary_path"),
+      };
+    case "provider_context_compacted":
+      return {
+        kind: "provider_compaction",
+        key: ev.seq,
+        provider: stringField(ev, "provider") || "provider",
+        reason: stringField(ev, "reason") || "auto",
       };
     case "compaction_failed":
       return {
@@ -2168,6 +2181,8 @@ function Unit({
           compactionSummaryLoader={compactionSummaryLoader}
         />
       );
+    case "provider_compaction":
+      return <ProviderCompactionBoundary unit={unit} />;
     case "permission_resolved":
       return (
         <div className="msg msg-permission" data-decision={unit.decision}>
@@ -2179,6 +2194,25 @@ function Unit({
         </div>
       );
   }
+}
+
+function ProviderCompactionBoundary({
+  unit,
+}: {
+  unit: Extract<RenderUnit, { kind: "provider_compaction" }>;
+}) {
+  const providerLabel = unit.provider === "codex" ? "Codex" : unit.provider;
+  return (
+    <div className="msg msg-compaction is-provider">
+      <div className="msg-compaction-title">
+        {providerLabel} compacted context automatically
+      </div>
+      <div className="msg-compaction-body">
+        The provider reduced the active prompt context. The local transcript is unchanged.
+      </div>
+      <div className="msg-compaction-meta">{unit.reason}</div>
+    </div>
+  );
 }
 
 function CompactionBoundary({

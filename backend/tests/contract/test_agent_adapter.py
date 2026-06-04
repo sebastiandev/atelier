@@ -3,7 +3,7 @@
 A single parametrised module that runs against any `AgentAdapter`
 implementation and asserts the invariants the supervisor depends on:
 
-  - Every yielded event is one of the seven `AgentEvent` variants.
+  - Every yielded event is one of the `AgentEvent` variants.
   - Event timestamps are non-decreasing.
   - `close()` is idempotent.
   - `send_input` is accepted (does not raise) before, between, or after

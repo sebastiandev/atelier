@@ -58,7 +58,7 @@ Three roles, one unifying registry:
 
 ## AgentEvent union
 
-Frozen variants in `domain/agents/events.py`: `MessageDelta`, `MessageComplete`, `ThinkingDelta`, `ThinkingComplete`, `ToolCall`, `ToolResult`, `StatusChange`, `ArtifactMarker`, `Error`, `TurnMetrics`, `SessionEstablished`, plus `UserInput` (originating from the WS input channel, not the adapter).
+Frozen variants in `domain/agents/events.py`: `MessageDelta`, `MessageComplete`, `ThinkingDelta`, `ThinkingComplete`, `ToolCall`, `ToolResult`, `StatusChange`, `ArtifactMarker`, `Error`, `TurnMetrics`, `SessionEstablished`, `ProviderContextCompacted`, plus `UserInput` (originating from the WS input channel, not the adapter).
 
 Each has a `Literal` `type` discriminator; the frontend pattern-matches on it.
 
@@ -68,7 +68,7 @@ Each has a `Literal` `type` discriminator; the frontend pattern-matches on it.
 
 `TurnMetrics` carries two flavours of token counts, and they aren't interchangeable. `input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens` are **cumulative** across every model sub-call in a turn — a turn that fires 20 tool-uses makes 20 API calls and the SDK's `ResultMessage` aggregates them. Summed across turns these equal what Anthropic billed, so they drive **session cost**.
 
-`last_prompt_tokens` is named misleadingly: it's the prompt size of the *last* sub-call, but because each sub-call's prompt replays the entire conversation history (system + every prior user/assistant/tool-use/tool-result + this turn's new user msg + any in-turn tool round-trips), that value equals the **total context currently in the model's window** — the running total, growing monotonically across turns. This is the "should I /clear?" number, used for the **ctx %** badge. Don't sum it across sub-calls or across turns; it's a snapshot. If a provider reports an effective runtime `context_window` on the turn, the FE uses it over static `model_meta` because CLIs can reserve part of the API window. The supervisor also enriches live `turn_metrics` with optional `git_branch` / `git_head` / `git_detached` by calling the domain `WorktreeManager.describe_state(workdir)` port; adapters stay provider-focused and do not shell out to git. See `domain/agents/events.py:TurnMetrics` for the full docstring; the FE picks it up in `frontend/src/AgentTile.tsx` (`latestMetrics` → `TurnMetricsBar`).
+`last_prompt_tokens` is named misleadingly: it's the prompt size of the *last* sub-call, but because each sub-call's prompt replays the entire conversation history (system + every prior user/assistant/tool-use/tool-result + this turn's new user msg + any in-turn tool round-trips), that value equals the **total context currently in the model's window** for that call. This is the "should I /clear?" number, used for the **ctx %** badge. Don't sum it across sub-calls or across turns; it's a snapshot. Most providers grow this value steadily during a session, but Codex app-server can compact provider-owned prompt context automatically; when that happens the Codex adapter emits `provider_context_compacted` and the next snapshot may drop sharply while the local Atelier transcript remains unchanged. If a provider reports an effective runtime `context_window` on the turn, the FE uses it over static `model_meta` because CLIs can reserve part of the API window. The supervisor also enriches live `turn_metrics` with optional `git_branch` / `git_head` / `git_detached` by calling the domain `WorktreeManager.describe_state(workdir)` port; adapters stay provider-focused and do not shell out to git. See `domain/agents/events.py:TurnMetrics` for the full docstring; the FE picks it up in `frontend/src/AgentTile.tsx` (`latestMetrics` → `TurnMetricsBar`).
 
 ### Canonical tool shape
 
@@ -303,6 +303,8 @@ Codex has a native approval-policy concept. Atelier runs live Codex agents throu
 ``CodexAdapter._handle_approval_request(request)`` is still the provider-neutral callback seam: it canonicalises the tool name + input, publishes a ``PermissionRequest``, waits for ``resolve_permission``, and returns Atelier's ``allow`` / ``allow_always`` / ``deny`` decision. The app-server client maps those domain decisions to Codex JSON-RPC responses. The legacy ``_CodexSdkClient`` remains for compatibility with tests/older SDK experiments, but its ``exec --experimental-json`` transport cannot surface approvals.
 
 Codex app-server interrupts are also normalized at the adapter boundary. If ``turn/interrupt`` returns but the app-server does not send a terminal ``turn/completed`` notification (observed when stopping a long-running shell command), ``_CodexAppServerTurnHandle`` injects an interrupted terminal notification for the current turn. That lets the normal conversion path publish idle/metrics and lets the input pump consume the next queued user prompt without requiring a browser refresh.
+
+Codex app-server can also compact its own prompt context automatically. Atelier maps the app-server ``thread/compacted`` notification and ``contextCompaction`` item into ``ProviderContextCompacted`` (``provider_context_compacted`` on the wire). This is informational only: it has no Atelier summary file, does not replace ``agents.session_id``, and exists so the UI can explain a sudden context-usage drop.
 
 Two layers sit on top of Codex execution:
 

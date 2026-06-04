@@ -1614,6 +1614,12 @@ type ChatRuntimeItem =
       oldSessionId: string;
       newSessionId: string;
     }
+  | {
+      kind: "provider_compaction";
+      key: number;
+      provider: string;
+      reason: string;
+    }
   | { kind: "error"; key: number; message: string };
 
 function chatItemsFromEvents(events: AgentEvent[]): ChatRuntimeItem[] {
@@ -1687,6 +1693,14 @@ function chatItemsFromEvents(events: AgentEvent[]): ChatRuntimeItem[] {
         summaryPath: stringField(ev, "summary_path"),
         oldSessionId: stringField(ev, "old_session_id"),
         newSessionId: stringField(ev, "new_session_id"),
+      });
+    } else if (ev.type === "provider_context_compacted") {
+      pendingAssistant = null;
+      out.push({
+        kind: "provider_compaction",
+        key: seq,
+        provider: stringField(ev, "provider") || "provider",
+        reason: stringField(ev, "reason") || "auto",
       });
     } else if (ev.type === "compaction_failed") {
       pendingAssistant = null;

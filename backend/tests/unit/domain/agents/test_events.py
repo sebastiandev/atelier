@@ -10,6 +10,7 @@ from src.domain.agents import (
     Error,
     MessageComplete,
     MessageDelta,
+    ProviderContextCompacted,
     StatusChange,
     ToolCall,
     ToolResult,
@@ -67,6 +68,13 @@ def test_error_event() -> None:
     event = Error(ts=UTC_NOW, message="boom")
     assert event.type == "error"
     assert event.message == "boom"
+
+
+def test_provider_context_compacted_event() -> None:
+    event = ProviderContextCompacted(ts=UTC_NOW, provider="codex")
+    assert event.type == "provider_context_compacted"
+    assert event.provider == "codex"
+    assert event.reason == "auto"
 
 
 def test_events_are_frozen() -> None:

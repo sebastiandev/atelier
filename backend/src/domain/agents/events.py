@@ -158,6 +158,22 @@ class HandoffOffered:
     new_thread_id: str
 
 
+@dataclass(frozen=True, kw_only=True)
+class ProviderContextCompacted:
+    """Provider runtime compacted its own prompt context automatically.
+
+    This is distinct from Atelier's explicit ``context_compacted`` transcript
+    marker, which is written by the manual compact command and points at an
+    Atelier-owned summary file. Provider-side auto compaction has no local
+    summary artifact and may not replace the persisted provider session id.
+    """
+
+    type: Literal["provider_context_compacted"] = "provider_context_compacted"
+    ts: datetime
+    provider: str
+    reason: str = "auto"
+
+
 PermissionDecisionValue = Literal["allow", "allow_always", "deny"]
 
 
@@ -215,8 +231,10 @@ class TurnMetrics:
       every prior user/assistant/tool-use/tool-result + this turn's new
       user message + any in-turn tool round-trips). So this value IS the
       running total of context currently occupying the model's window
-      — the "should I /clear?" number, growing monotonically across
-      turns. Consumers use it for **context %** display.
+      for that call — the "should I /clear?" number. Consumers use it
+      for **context %** display. Some providers can compact their own
+      prompt context automatically, so this snapshot can drop without
+      an Atelier manual compaction event.
 
       Why not sum ``input + cache_read + cache_creation``? Each sub-call
       replays the full history (read from cache), so summing across N
@@ -257,6 +275,7 @@ AgentEvent = (
     | Error
     | SessionEstablished
     | HandoffOffered
+    | ProviderContextCompacted
     | PermissionRequest
     | PermissionDecision
     | TurnMetrics
@@ -273,6 +292,7 @@ __all__ = [
     "PermissionDecision",
     "PermissionDecisionValue",
     "PermissionRequest",
+    "ProviderContextCompacted",
     "SessionEstablished",
     "StatusChange",
     "ThinkingComplete",

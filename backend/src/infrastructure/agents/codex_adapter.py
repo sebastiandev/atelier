@@ -69,6 +69,7 @@ from src.domain.agents import (
     PermissionDecision,
     PermissionDecisionValue,
     PermissionRequest,
+    ProviderContextCompacted,
     SessionEstablished,
     StatusChange,
     ThinkingComplete,
@@ -1182,6 +1183,8 @@ def _normalize_sdk_event(event: Any) -> _SdkNotification:
         payload = data.get("payload")
         if isinstance(payload, dict) and payload.get("type") == "token_count":
             return _SdkNotification("token_count", payload)
+        if isinstance(payload, dict) and payload.get("type") == "context_compacted":
+            return _SdkNotification("context_compacted", payload)
         return _SdkNotification("event_msg", data)
     return _SdkNotification(event_type.replace(".", "/"), _model_dump(event))
 
@@ -1268,6 +1271,8 @@ def _normalize_app_server_notification(
         "item/reasoning/summaryTextDelta",
     }:
         return _SdkNotification(method, dict(params))
+    if method == "thread/compacted":
+        return _SdkNotification("context_compacted", dict(params))
     if method in {"item/started", "item/completed"}:
         normalized = dict(params)
         item = normalized.get("item")
@@ -1582,6 +1587,9 @@ def _convert(
         if item_type == "mcpToolCall":
             yield from _emit_mcp_tool_result(item, now)
             return
+        if item_type in {"contextCompaction", "context_compaction"}:
+            yield ProviderContextCompacted(ts=now, provider="codex")
+            return
         return
 
     # Turn lifecycle ----------------------------------------------------------
@@ -1606,6 +1614,9 @@ def _convert(
             context_window,
         )
         yield StatusChange(ts=now, status="idle")
+        return
+    if t == "context_compacted":
+        yield ProviderContextCompacted(ts=now, provider="codex")
         return
 
     # Anything else (handshake / heartbeats / unknown future types) is

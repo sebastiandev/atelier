@@ -34,6 +34,7 @@ from src.domain.agents import (
     MessageDelta,
     PermissionDecision,
     PermissionRequest,
+    ProviderContextCompacted,
     SessionEstablished,
     StatusChange,
     ThinkingComplete,
@@ -610,6 +611,31 @@ def test_unknown_notification_type_is_dropped() -> None:
     assert list(_convert(FakeNotification("session/heartbeat", {}))) == []
 
 
+def test_provider_context_compacted_notification_maps_to_event() -> None:
+    events = list(_convert(FakeNotification("context_compacted", {})))
+
+    assert len(events) == 1
+    event = events[0]
+    assert isinstance(event, ProviderContextCompacted)
+    assert event.provider == "codex"
+    assert event.reason == "auto"
+
+
+def test_context_compaction_item_maps_to_provider_event() -> None:
+    for item_type in ("contextCompaction", "context_compaction"):
+        events = list(
+            _convert(
+                FakeNotification(
+                    "item/completed",
+                    {"item": {"itemType": item_type, "id": "compact-1"}},
+                )
+            )
+        )
+
+        assert len(events) == 1
+        assert isinstance(events[0], ProviderContextCompacted)
+
+
 def test_normalize_sdk_event_keeps_codex_token_count_payload() -> None:
     @dataclass
     class FakeSdkEvent:
@@ -631,6 +657,19 @@ def test_normalize_sdk_event_keeps_codex_token_count_payload() -> None:
 
     assert notification.type == "token_count"
     assert notification.params["info"]["model_context_window"] == 258_400
+
+
+def test_normalize_sdk_event_keeps_codex_context_compacted_payload() -> None:
+    @dataclass
+    class FakeSdkEvent:
+        type: str
+        payload: dict[str, Any]
+
+    event = FakeSdkEvent("event_msg", {"type": "context_compacted"})
+
+    notification = _normalize_sdk_event(event)
+
+    assert notification.type == "context_compacted"
 
 
 def test_per_call_prompt_tokens_pulls_from_agent_message_completion() -> None:
@@ -826,6 +865,19 @@ def test_app_server_notifications_normalize_to_existing_codex_shape() -> None:
     assert notification.params["item"]["itemType"] == "commandExecution"
     assert notification.params["item"]["output"] == "ok"
     assert notification.params["item"]["exit_code"] == 0
+
+
+def test_app_server_thread_compacted_normalizes_to_provider_context_event() -> None:
+    notification = _normalize_app_server_notification(
+        {
+            "method": "thread/compacted",
+            "params": {"threadId": "thread-1", "turnId": "turn-1"},
+        }
+    )
+
+    assert notification is not None
+    assert notification.type == "context_compacted"
+    assert notification.params["threadId"] == "thread-1"
 
 
 def test_app_server_approval_result_maps_domain_decisions() -> None:
