@@ -584,6 +584,18 @@ export function ChatTile({
   const tileClass =
     "agent-tile chat-tile mode-tile" + (maximized ? " maximized" : "");
 
+  useEffect(() => {
+    if (!maximized) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (!(e.shiftKey || e.metaKey || e.ctrlKey)) return;
+      e.preventDefault();
+      setMaximized(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [maximized]);
+
   return (
     <div className={tileClass} data-chat="true">
       <header

@@ -6226,6 +6226,7 @@ h5.md-h {
 }
 .shell-v3.wide-left { grid-template-columns: 460px 1fr; }
 .shell-v3.narrow-left { grid-template-columns: 280px 1fr; }
+.shell-v3.home-v3 { grid-template-columns: 500px 1fr; }
 
 .shell-left {
   display: flex;
