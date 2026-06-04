@@ -15,6 +15,7 @@ import { DragHandleContext } from "./dragHandleContext";
  * the tile content (children) is unaware that any reordering is going on.
  */
 export function SortableCanvasCell({
+  itemId,
   agentSlug,
   persona,
   focused,
@@ -22,8 +23,9 @@ export function SortableCanvasCell({
   registerRef,
   children,
 }: {
-  agentSlug: string;
-  persona: string;
+  itemId?: string;
+  agentSlug?: string;
+  persona?: string;
   focused: boolean;
   onFocus: () => void;
   /** WorkView keeps a slug→element map for scroll-into-view after creating
@@ -31,6 +33,10 @@ export function SortableCanvasCell({
   registerRef: (el: HTMLDivElement | null) => void;
   children: ReactNode;
 }) {
+  const id = itemId ?? agentSlug;
+  if (!id) {
+    throw new Error("SortableCanvasCell requires itemId");
+  }
   const {
     attributes,
     listeners,
@@ -38,7 +44,7 @@ export function SortableCanvasCell({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: agentSlug });
+  } = useSortable({ id });
 
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),

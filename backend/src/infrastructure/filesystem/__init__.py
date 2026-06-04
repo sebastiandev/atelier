@@ -11,6 +11,8 @@ from src.infrastructure.filesystem.atomic import (
     atomic_write_json,
     atomic_write_text,
 )
+from src.infrastructure.filesystem.chat_files import FsChatFiles
+from src.infrastructure.filesystem.chat_transcript_log import FsChatTranscriptLog
 from src.infrastructure.filesystem.ndjson import append_event, read_from_cursor
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.project_files import FsProjectFiles
@@ -18,6 +20,8 @@ from src.infrastructure.filesystem.transcript_log import FsTranscriptLog
 from src.infrastructure.filesystem.workspace_files import FsWorkspaceFiles
 
 __all__ = [
+    "FsChatFiles",
+    "FsChatTranscriptLog",
     "FsProjectFiles",
     "FsTranscriptLog",
     "FsWorkspaceFiles",

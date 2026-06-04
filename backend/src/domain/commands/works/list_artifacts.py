@@ -33,6 +33,7 @@ from src.domain.agents.doc_state import (
     git_state,
 )
 from src.domain.artifacts import (
+    ArtifactType,
     DocArtifact,
     DocStatus,
     JiraArtifact,
@@ -62,7 +63,7 @@ class ArtifactView:
     """
 
     slug: str
-    type: str
+    type: ArtifactType
     title: str
     status: str
     created_at: datetime

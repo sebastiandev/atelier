@@ -21,6 +21,9 @@ from src.application.http.schemas import (
     NewHandoffRequest,
     NewWorkRequest,
     PatchWorkRequest,
+    WorkChatContextDocResponse,
+    WorkChatContextFolderSummary,
+    WorkChatRef,
     WorkDetail,
     WorkSummary,
 )
@@ -29,7 +32,6 @@ from src.domain.agents.handoffs import (
     Summarizer,
     build_handoff,
 )
-from src.domain.sharedfolders.ports import SharedFolderStore
 from src.domain.commands.projects import get as projects_get
 from src.domain.commands.works import (
     complete,
@@ -44,10 +46,13 @@ from src.domain.commands.works import (
 from src.domain.commands.works.list_artifacts import ArtifactView
 from src.domain.models import Context, Handoff, Work
 from src.domain.projectstore.ports import ProjectStore
+from src.domain.sharedfolders.ports import SharedFolderStore
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.dtos import (
+    CreateWorkChatContextFolder,
     CreateWorkRequest,
     UpdateWorkRequest,
+    WorkChatProvenance,
     WorkRecord,
 )
 from src.domain.workstore.ports import TranscriptLog, WorkStore
@@ -159,12 +164,13 @@ def list_work_artifacts_endpoint(
         return candidate if candidate.exists() else None
 
     def _resolve_share_roots(project_slug: str) -> list[Path]:
-        return [
-            share.real_path
-            if share.real_path is not None
-            else paths.project_share_dir(project_slug, share.slug)
-            for share in sharestore.list_for_project(project_slug)
-        ]
+        roots: list[Path] = []
+        for share in sharestore.list_for_project(project_slug):
+            if share.real_path is not None:
+                roots.append(share.real_path)
+            elif share.slug is not None:
+                roots.append(paths.project_share_dir(project_slug, share.slug))
+        return roots
 
     try:
         views = list_artifacts.execute(
@@ -331,6 +337,31 @@ def reveal_work_endpoint(
         ) from exc
 
 
+@router.get(
+    "/works/{work_slug}/chat-contexts/{folder_name}/{filename}",
+    response_model=WorkChatContextDocResponse,
+)
+def get_work_chat_context_doc_endpoint(
+    work_slug: str,
+    folder_name: str,
+    filename: str,
+    workstore: WorkStoreDep,
+) -> WorkChatContextDocResponse:
+    try:
+        result = workstore.read_work_chat_context_doc(
+            work_slug, folder_name, filename
+        )
+    except ValueError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    if result is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"context doc not found: {work_slug}/{folder_name}/{filename}",
+        )
+    path, content = result
+    return WorkChatContextDocResponse(path=path, content=content)
+
+
 # ---------------------------------------------------------------------------
 # Translators between pydantic schemas and domain DTOs/entities
 # ---------------------------------------------------------------------------
@@ -342,6 +373,25 @@ def _to_create_request(payload: NewWorkRequest) -> CreateWorkRequest:
         description=payload.description,
         contexts=[_to_domain_context(c) for c in payload.contexts],
         project_slug=payload.project_slug,
+        from_chat=(
+            WorkChatProvenance(
+                chat_slug=payload.from_chat.slug,
+                chat_title=payload.from_chat.title,
+            )
+            if payload.from_chat is not None
+            else None
+        ),
+        chat_context_folders=[
+            CreateWorkChatContextFolder(
+                name=f.name,
+                mount_path=f.mount_path,
+                chat_slug=f.chat_slug,
+                chat_title=f.chat_title,
+                context_markdown=f.context_markdown,
+                context_filename=f.context_filename,
+            )
+            for f in payload.chat_context_folders
+        ],
     )
 
 
@@ -383,6 +433,11 @@ def _to_summary(
         project_slug=work.project_slug,
         agent_count=(counts or {}).get("agents", 0),
         artifact_count=(counts or {}).get("artifacts", 0),
+        from_chat=(
+            WorkChatRef(slug=work.from_chat_slug, title=work.from_chat_title or work.from_chat_slug)
+            if work.from_chat_slug is not None
+            else None
+        ),
     )
 
 
@@ -391,6 +446,17 @@ def _to_detail(record: WorkRecord, paths: WorkspacePaths) -> WorkDetail:
     return WorkDetail(
         **summary.model_dump(),
         contexts=[_to_schema_context(c) for c in record.contexts],
+        chat_context_folders=[
+            WorkChatContextFolderSummary(
+                name=f.name,
+                mount_path=f.mount_path,
+                chat_slug=f.chat_slug,
+                chat_title=f.chat_title,
+                context_filename=f.context_filename,
+                absolute_path=str(f.absolute_path) if f.absolute_path else "",
+            )
+            for f in record.chat_context_folders
+        ],
     )
 
 

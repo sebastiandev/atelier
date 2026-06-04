@@ -39,6 +39,7 @@ import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { useDragHandle } from "./dragHandleContext";
 import { MarkdownText } from "./MarkdownText";
+import { shortenPath } from "./pathFormat";
 import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
@@ -48,7 +49,6 @@ import {
   type PermissionDecision,
   useAgentStream,
 } from "./useAgentStream";
-import { shortenPath } from "./WorkView";
 
 const COMPOSER_MAX_HEIGHT = 200;
 const COMPACTION_NOTICE_PCT = 70;
@@ -1268,7 +1268,7 @@ type TodoItem = {
 
 type ToolResultPayload = { content: string; isError: boolean };
 
-type RenderUnit =
+export type RenderUnit =
   | { kind: "assistant"; key: number; text: string; complete: boolean }
   | { kind: "thinking"; key: number; text: string; complete: boolean }
   | { kind: "user"; key: number; text: string }
@@ -1296,7 +1296,7 @@ type RenderUnit =
     }
   | { kind: "permission_resolved"; key: number; decision: PermissionDecision; tool_name: string };
 
-function groupEvents(events: AgentEvent[]): RenderUnit[] {
+export function groupEvents(events: AgentEvent[]): RenderUnit[] {
   const out: RenderUnit[] = [];
   let pendingAssistant:
     | { kind: "assistant"; key: number; text: string; complete: boolean }
@@ -1535,7 +1535,7 @@ function stringField(ev: AgentEvent, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function isAgentActive(events: AgentEvent[]): boolean {
+export function isAgentActive(events: AgentEvent[]): boolean {
   // True iff the agent appears to be doing work *right now*. Reads off
   // the last event's nature, not the cumulative ``agentStatus``, so it
   // recovers gracefully when an adapter forgets to emit the trailing
@@ -1579,7 +1579,7 @@ function latestStatus(events: AgentEvent[]): string {
   return "idle";
 }
 
-type TurnRollup = {
+export type TurnRollup = {
   seq: number;
   durationMs: number;
   inputTokens: number;
@@ -1600,7 +1600,7 @@ type TurnRollup = {
   gitDetached: boolean;
 };
 
-type ContextSnapshot = {
+export type ContextSnapshot = {
   pct: number;
   promptTokens: number;
   contextWindow: number;
@@ -1631,7 +1631,7 @@ type CompactionDialogState = {
  * "Recently" means within the last 5 events; rapid tool/thinking
  * interleaving inside a turn shouldn't strand us on a stale label.
  */
-function deriveActivityPhase(
+export function deriveActivityPhase(
   events: AgentEvent[], isActive: boolean,
 ): string | null {
   if (!isActive) return null;
@@ -1680,7 +1680,7 @@ function deriveActivityPhase(
   return "working…";
 }
 
-function latestMetrics(events: AgentEvent[]): TurnRollup | null {
+export function latestMetrics(events: AgentEvent[]): TurnRollup | null {
   for (let i = events.length - 1; i >= 0; i--) {
     const ev = events[i];
     if (ev.type !== "turn_metrics") continue;
@@ -1702,21 +1702,21 @@ function latestMetrics(events: AgentEvent[]): TurnRollup | null {
   return null;
 }
 
-function latestEventSeq(events: AgentEvent[], type: string): number {
+export function latestEventSeq(events: AgentEvent[], type: string): number {
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].type === type) return events[i].seq;
   }
   return 0;
 }
 
-type SessionTotals = {
+export type SessionTotals = {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
 };
 
-function sessionMetrics(events: AgentEvent[]): SessionTotals {
+export function sessionMetrics(events: AgentEvent[]): SessionTotals {
   const totals: SessionTotals = {
     inputTokens: 0,
     outputTokens: 0,
@@ -1738,7 +1738,7 @@ function numberField(ev: AgentEvent, key: string): number {
   return typeof value === "number" ? value : 0;
 }
 
-function contextSnapshotFor(
+export function contextSnapshotFor(
   metrics: TurnRollup | null,
   meta: ModelMeta | null,
 ): ContextSnapshot | null {
@@ -1816,7 +1816,7 @@ function BranchMetricIcon() {
   );
 }
 
-function TurnMetricsBar({
+export function TurnMetricsBar({
   metrics,
   session,
   meta,
@@ -1824,6 +1824,7 @@ function TurnMetricsBar({
   context,
   compacting,
   onCompact,
+  compactTitle = "Compact this agent's context",
 }: {
   metrics: TurnRollup | null;
   session: SessionTotals;
@@ -1832,6 +1833,7 @@ function TurnMetricsBar({
   context: ContextSnapshot | null;
   compacting: boolean;
   onCompact?: () => void;
+  compactTitle?: string;
 }) {
   const activityNode = (
     <span
@@ -1952,7 +1954,7 @@ function TurnMetricsBar({
           className="turn-metrics-compact"
           data-tone={ctxTone}
           onClick={onCompact}
-          title="Compact this agent's context"
+          title={compactTitle}
         >
           Compact
         </button>
@@ -2039,19 +2041,31 @@ function lastUnitText(units: RenderUnit[]): string {
 // Renderers
 // ---------------------------------------------------------------------------
 
-function TranscriptUnits({
+type CompactionSummaryLoader = (
+  resourceSlug: string,
+  filename: string,
+) => Promise<{ content: string }>;
+
+export function TranscriptUnits({
   units,
   agentSlug,
+  compactionSummaryLoader = getAgentCompactionSummary,
 }: {
   units: RenderUnit[];
   agentSlug: string;
+  compactionSummaryLoader?: CompactionSummaryLoader;
 }) {
   const compactionIndex = findLastUnitIndex(units, (unit) => unit.kind === "compaction");
   if (compactionIndex <= 0) {
     return (
       <>
         {units.map((unit) => (
-          <Unit key={unit.key} unit={unit} agentSlug={agentSlug} />
+          <Unit
+            key={unit.key}
+            unit={unit}
+            agentSlug={agentSlug}
+            compactionSummaryLoader={compactionSummaryLoader}
+          />
         ))}
       </>
     );
@@ -2070,19 +2084,41 @@ function TranscriptUnits({
         </summary>
         <div className="transcript-previous-session-body">
           {previousUnits.map((unit) => (
-            <Unit key={unit.key} unit={unit} agentSlug={agentSlug} />
+            <Unit
+              key={unit.key}
+              unit={unit}
+              agentSlug={agentSlug}
+              compactionSummaryLoader={compactionSummaryLoader}
+            />
           ))}
         </div>
       </details>
-      <Unit unit={boundary} agentSlug={agentSlug} />
+      <Unit
+        unit={boundary}
+        agentSlug={agentSlug}
+        compactionSummaryLoader={compactionSummaryLoader}
+      />
       {newUnits.map((unit) => (
-        <Unit key={unit.key} unit={unit} agentSlug={agentSlug} />
+        <Unit
+          key={unit.key}
+          unit={unit}
+          agentSlug={agentSlug}
+          compactionSummaryLoader={compactionSummaryLoader}
+        />
       ))}
     </>
   );
 }
 
-function Unit({ unit, agentSlug }: { unit: RenderUnit; agentSlug: string }) {
+function Unit({
+  unit,
+  agentSlug,
+  compactionSummaryLoader,
+}: {
+  unit: RenderUnit;
+  agentSlug: string;
+  compactionSummaryLoader: CompactionSummaryLoader;
+}) {
   switch (unit.kind) {
     case "assistant":
       return (
@@ -2125,7 +2161,13 @@ function Unit({ unit, agentSlug }: { unit: RenderUnit; agentSlug: string }) {
     case "error":
       return <div className="msg msg-error">{unit.message}</div>;
     case "compaction":
-      return <CompactionBoundary unit={unit} agentSlug={agentSlug} />;
+      return (
+        <CompactionBoundary
+          unit={unit}
+          agentSlug={agentSlug}
+          compactionSummaryLoader={compactionSummaryLoader}
+        />
+      );
     case "permission_resolved":
       return (
         <div className="msg msg-permission" data-decision={unit.decision}>
@@ -2142,9 +2184,11 @@ function Unit({ unit, agentSlug }: { unit: RenderUnit; agentSlug: string }) {
 function CompactionBoundary({
   unit,
   agentSlug,
+  compactionSummaryLoader,
 }: {
   unit: Extract<RenderUnit, { kind: "compaction" }>;
   agentSlug: string;
+  compactionSummaryLoader: CompactionSummaryLoader;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [summary, setSummary] = useState<string | null>(null);
@@ -2157,7 +2201,7 @@ function CompactionBoundary({
     let cancelled = false;
     setIsLoading(true);
     setError(null);
-    getAgentCompactionSummary(agentSlug, filename)
+    compactionSummaryLoader(agentSlug, filename)
       .then((result) => {
         if (!cancelled) setSummary(result.content);
       })
@@ -2172,7 +2216,7 @@ function CompactionBoundary({
     return () => {
       cancelled = true;
     };
-  }, [agentSlug, filename, isOpen, summary]);
+  }, [agentSlug, compactionSummaryLoader, filename, isOpen, summary]);
 
   return (
     <div className="msg msg-compaction">

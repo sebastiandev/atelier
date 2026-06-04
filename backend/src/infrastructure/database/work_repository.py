@@ -16,6 +16,7 @@ Slug formats follow the architecture convention:
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import cast
 
 from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -73,6 +74,8 @@ class SqlWorkRepository:
                 existing.status = work.status
                 existing.created_at = work.created_at
                 existing.project_slug = work.project_slug
+                existing.from_chat_slug = work.from_chat_slug
+                existing.from_chat_title = work.from_chat_title
         return work
 
     def delete_work(self, work_slug: str) -> None:
@@ -236,19 +239,21 @@ class SqlWorkRepository:
             ).scalar_one_or_none()
             if work_id is None:
                 return []
-            return list(
+            rows = list(
                 session.execute(
                     select(BaseArtifact)
                     .where(artifacts_table.c.work_id == work_id)
                     .order_by(artifacts_table.c.created_at.asc())
                 ).scalars()
             )
+            return cast(list[Artifact], rows)
 
     def get_artifact_by_slug(self, slug: str) -> Artifact | None:
         with self._txn() as session:
-            return session.execute(
+            artifact = session.execute(
                 select(BaseArtifact).where(artifacts_table.c.slug == slug)
             ).scalar_one_or_none()
+            return cast(Artifact | None, artifact)
 
     def list_non_terminal_pr_artifacts(self) -> list[tuple[str, PrArtifact]]:
         # Pair each PR with its parent work's slug in one query so the

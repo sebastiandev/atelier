@@ -51,6 +51,21 @@ with a hairline divider — `border-bottom: 1px solid var(--line)` plus
 and the content below. Without that, busy header rows visually float above
 their cards. See `.latest-hd` for the canonical pattern.
 
+## Chat surfaces
+
+Exploratory chat uses the design handoff's production variants only:
+section placement, spotlight launch, and summary promotion. There are no
+in-app mode pickers.
+
+- **Chat sections** use the existing section-header rhythm and `.v3-chat-row` rows: small chat bubble, title, grounding, age, and promoted-work pill when present. Home shows only unassigned chats, Project shows only project-level chats that are not in a work, and Work shows work-grounded/promoted chats. Project chat rows keep the associated work/project context directly under the chat title so wide rows do not push that association to the far right. Dense Work rail rows show the chat icon + title only, reserve left padding for the focused accent, and expose rename/delete through the same double-click/kebab pattern as agent rows.
+- **New chat** is a spotlight composer (`.chat-bar-scrim` / `.chat-bar`) instead of a full modal. It should feel quick: one large textarea, compact provider/model selects, grounding chip, and one primary Start action.
+- **Chat view** follows `shell-v3 narrow-left`: grounding and model in the rail, centered transcript in the main column. It consumes the runtime websocket stream and reuses the AgentTile transcript units and metrics bar so message, tool, compaction, and context-progress treatment stays consistent with agents.
+- **Work chat tiles** use the agent-tile frame but not agent persona colors. Anything with `data-chat="true"` sets `--p-color` / `--p-soft` from the fixed chat token family (`--chat-color`, `--chat-soft`, `--chat-line`). Chat tiles expose maximize, close, and start-agent-from-chat controls, but never IDE, console, reveal-worktree, detach, persona controls, or a duplicate header compact button. Work-grounded chat tiles do not repeat the current work as a grounding pill.
+- **Chat compaction** is fixed-accent, not persona/project colored. Compact actions are neutral local controls; `context_compacted` uses the shared AgentTile compaction boundary with a chat summary loader.
+- **Work hero actions** keep the Work action labeled but neutral (`Mark done` / `Reopen` via `.work-hero .pills .btn`) and make secondary chat/move actions icon-only 28px buttons (`.btn.icon.sm`) with tooltips. Keep the colored primary treatment for canvas-level creation actions such as `New agent`.
+- **Promotion** uses the summary modal shape (`.promote-summary-modal`) with the chat provenance card at the top. The modal is about confirming the work seed, not choosing promotion modes.
+- **Context docs** use a document viewer modal (`.context-doc-modal`) with the generated `context.md` rendered as simple headings, bullets, and paragraphs, plus a direct link back to the source chat.
+
 ## Card rhythm
 
 Workspace cards favor breathing room over density:

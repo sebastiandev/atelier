@@ -22,6 +22,34 @@ from src.domain.models import (
 
 
 @dataclass(frozen=True)
+class WorkChatProvenance:
+    chat_slug: str
+    chat_title: str
+
+
+@dataclass(frozen=True)
+class WorkChatContextFolder:
+    name: str
+    mount_path: str
+    chat_slug: str
+    chat_title: str
+    context_filename: str = "context.md"
+    # Populated on read after the filesystem adapter resolves the
+    # canonical work-scoped folder path.
+    absolute_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class CreateWorkChatContextFolder:
+    name: str
+    mount_path: str
+    chat_slug: str
+    chat_title: str
+    context_markdown: str
+    context_filename: str = "context.md"
+
+
+@dataclass(frozen=True)
 class CreateWorkRequest:
     name: str
     description: str
@@ -29,6 +57,10 @@ class CreateWorkRequest:
     # Optional grouping. ``None`` is "loose work" — first-class, not a
     # hidden bucket. Validated by the route layer (project must exist).
     project_slug: str | None = None
+    from_chat: WorkChatProvenance | None = None
+    chat_context_folders: list[CreateWorkChatContextFolder] = field(
+        default_factory=list
+    )
 
 
 @dataclass(frozen=True)
@@ -43,9 +75,19 @@ class UpdateWorkRequest:
 
 
 @dataclass(frozen=True)
+class EnsureWorkChatContextRequest:
+    work_slug: str
+    folder: CreateWorkChatContextFolder
+
+
+@dataclass(frozen=True)
 class WorkRecord:
     work: Work
     contexts: list[Context]
+    from_chat: WorkChatProvenance | None = None
+    chat_context_folders: list[WorkChatContextFolder] = field(
+        default_factory=list
+    )
 
 
 @dataclass(frozen=True)
@@ -89,9 +131,13 @@ class RecordHandoffRequest:
 
 __all__ = [
     "AddAgentRequest",
+    "CreateWorkChatContextFolder",
     "CreateWorkRequest",
+    "EnsureWorkChatContextRequest",
     "RecordArtifactRequest",
     "RecordHandoffRequest",
     "UpdateWorkRequest",
+    "WorkChatContextFolder",
+    "WorkChatProvenance",
     "WorkRecord",
 ]

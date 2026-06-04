@@ -7,8 +7,13 @@ file so reconcile can skip it without raising.
 
 import json
 import shutil
+from pathlib import Path
 from typing import Any
 
+from src.domain.workstore.dtos import (
+    CreateWorkChatContextFolder,
+    WorkChatContextFolder,
+)
 from src.infrastructure.filesystem.atomic import atomic_write_json, atomic_write_text
 from src.infrastructure.filesystem.paths import WorkspacePaths
 
@@ -37,6 +42,34 @@ class FsWorkspaceFiles:
 
     def write_brief(self, work_slug: str, content: str) -> None:
         atomic_write_text(self._paths.brief(work_slug), content)
+
+    def write_work_chat_context_file(
+        self, work_slug: str, folder: CreateWorkChatContextFolder
+    ) -> str:
+        _validate_filename(folder.name)
+        _validate_filename(folder.context_filename)
+        target = self._paths.work_chat_context_file(
+            work_slug, folder.name, folder.context_filename
+        )
+        atomic_write_text(target, folder.context_markdown)
+        return str(target)
+
+    def read_work_chat_context_file(
+        self, work_slug: str, folder_name: str, filename: str
+    ) -> tuple[str, str] | None:
+        _validate_filename(folder_name)
+        _validate_filename(filename)
+        target = self._paths.work_chat_context_file(work_slug, folder_name, filename)
+        try:
+            return str(target), target.read_text()
+        except FileNotFoundError:
+            return None
+
+    def work_chat_context_folder_path(
+        self, work_slug: str, folder: WorkChatContextFolder
+    ) -> Path:
+        _validate_filename(folder.name)
+        return self._paths.work_chat_context_dir(work_slug, folder.name)
 
     def write_agent_json(self, work_slug: str, agent_slug: str, data: dict[str, Any]) -> None:
         atomic_write_json(self._paths.agent_dir(work_slug, agent_slug) / "agent.json", data)

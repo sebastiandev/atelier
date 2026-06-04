@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 
 from sqlalchemy import Engine, select, text
+from sqlalchemy.engine import Connection
 
 from src.infrastructure.database.tables import (
     agents_table,
@@ -24,7 +25,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 12
+CURRENT_SCHEMA_VERSION = 15
 
 
 class SchemaMismatchError(RuntimeError):
@@ -184,6 +185,30 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
             # (per the established pattern — never call ``.create(conn)``
             # for tables that ``create_all`` already handles).
             existing = 12
+        if existing == 12:
+            # v12 → v13: introduce exploratory chats and optional Work
+            # provenance for works promoted from a chat. ``chats`` is a
+            # new table created by metadata.create_all above; existing
+            # ``works`` rows only need nullable additive columns.
+            conn.execute(text("ALTER TABLE works ADD COLUMN from_chat_slug TEXT"))
+            conn.execute(text("ALTER TABLE works ADD COLUMN from_chat_title TEXT"))
+            existing = 13
+        if existing == 13:
+            # v13 → v14: persist the provider session/thread id for
+            # runtime-backed exploratory chats. Nullable/additive so chats
+            # created before the websocket runtime continue to load as
+            # "no provider session yet".
+            if not _has_column(conn, "chats", "session_id"):
+                conn.execute(text("ALTER TABLE chats ADD COLUMN session_id TEXT"))
+            existing = 14
+        if existing == 14:
+            # v14 → v15: separate chat placement (Project/Work link) from
+            # the optional working folder used as the provider cwd.
+            if not _has_column(conn, "chats", "working_directory"):
+                conn.execute(
+                    text("ALTER TABLE chats ADD COLUMN working_directory TEXT")
+                )
+            existing = 15
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)
@@ -193,3 +218,8 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
             f"Database schema version {existing} differs from current "
             f"{CURRENT_SCHEMA_VERSION}; no forward migration registered."
         )
+
+
+def _has_column(conn: Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(text(f"PRAGMA table_info({table_name})")).mappings()
+    return any(row.get("name") == column_name for row in rows)

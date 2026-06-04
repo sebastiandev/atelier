@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 from src.domain.models import (
     AgentStatus,
     ArtifactType,
+    ChatGroundingKind,
+    ChatMessageRole,
     ContextType,
     Persona,
     Provider,
@@ -27,6 +29,29 @@ class ContextSchema(BaseModel):
     conn_id: str | None = None
 
 
+class WorkChatRef(BaseModel):
+    slug: str
+    title: str
+
+
+class NewWorkChatContextFolder(BaseModel):
+    name: str = Field(min_length=1)
+    mount_path: str = Field(min_length=1)
+    chat_slug: str = Field(min_length=1)
+    chat_title: str = Field(min_length=1)
+    context_markdown: str = Field(min_length=1)
+    context_filename: str = "context.md"
+
+
+class WorkChatContextFolderSummary(BaseModel):
+    name: str
+    mount_path: str
+    chat_slug: str
+    chat_title: str
+    context_filename: str
+    absolute_path: str
+
+
 class NewWorkRequest(BaseModel):
     name: str = Field(min_length=1)
     description: str
@@ -34,6 +59,10 @@ class NewWorkRequest(BaseModel):
     # Optional. Omit for "loose work". Validated as an existing project at
     # the route layer — the FK enforces it again at insert time.
     project_slug: str | None = None
+    from_chat: WorkChatRef | None = None
+    chat_context_folders: list[NewWorkChatContextFolder] = Field(
+        default_factory=list
+    )
 
 
 class PatchWorkRequest(BaseModel):
@@ -65,10 +94,14 @@ class WorkSummary(BaseModel):
     # both are still 0 anyway).
     agent_count: int = 0
     artifact_count: int = 0
+    from_chat: WorkChatRef | None = None
 
 
 class WorkDetail(WorkSummary):
     contexts: list[ContextSchema]
+    chat_context_folders: list[WorkChatContextFolderSummary] = Field(
+        default_factory=list
+    )
 
 
 class NewAgentRequest(BaseModel):
@@ -167,6 +200,12 @@ class CompactAgentRequest(BaseModel):
     reason: Literal["manual", "forced_context_limit"] = "manual"
 
 
+class CompactChatRequest(BaseModel):
+    """Body for POST /chats/{slug}/compact."""
+
+    reason: Literal["manual", "forced_context_limit"] = "manual"
+
+
 class CompactAgentResponse(BaseModel):
     agent_slug: str
     work_slug: str
@@ -181,6 +220,23 @@ class CompactAgentResponse(BaseModel):
 class AgentCompactionSummaryResponse(BaseModel):
     agent_slug: str
     work_slug: str
+    filename: str
+    summary_path: str
+    content: str
+
+
+class CompactChatResponse(BaseModel):
+    chat_slug: str
+    provider: Provider
+    old_session_id: str
+    new_session_id: str
+    summary_path: str
+    breadcrumb_written: bool
+    breadcrumb_error: str | None = None
+
+
+class ChatCompactionSummaryResponse(BaseModel):
+    chat_slug: str
     filename: str
     summary_path: str
     content: str
@@ -332,14 +388,83 @@ class HandoffSummary(BaseModel):
     target_dialog: Literal["new-agent"] | None = None
 
 
+# ---------------------------------------------------------------------------
+# Chats
+# ---------------------------------------------------------------------------
+
+
+class ChatGroundingSchema(BaseModel):
+    kind: ChatGroundingKind
+    ref: str = Field(min_length=1)
+
+
+class ChatMessageSchema(BaseModel):
+    role: ChatMessageRole
+    body: str
+    created_at: datetime
+
+
+class ChatSummary(BaseModel):
+    slug: str
+    title: str
+    provider: Provider
+    model: str
+    grounding: ChatGroundingSchema | None = None
+    working_directory: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    promoted_to_work_slug: str | None = None
+    message_count: int
+
+
+class ChatDetail(ChatSummary):
+    transcript: list[ChatMessageSchema]
+
+
+class NewChatRequest(BaseModel):
+    provider: Provider
+    model: str = Field(min_length=1)
+    first_message: str = Field(min_length=1)
+    title: str | None = None
+    grounding: ChatGroundingSchema | None = None
+    working_directory: str | None = None
+
+
+class PatchChatRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1)
+
+
+class SendChatMessageRequest(BaseModel):
+    body: str = Field(min_length=1)
+
+
+class PromoteChatRequest(BaseModel):
+    name: str = Field(min_length=1)
+    description: str
+    project_slug: str | None = None
+
+
+class WorkChatContextDocResponse(BaseModel):
+    path: str
+    content: str
+
+
 __all__ = [
     "AgentSummary",
     "ArtifactSummary",
+    "ChatCompactionSummaryResponse",
+    "ChatDetail",
+    "ChatGroundingSchema",
+    "ChatMessageSchema",
+    "ChatSummary",
+    "CompactChatRequest",
+    "CompactChatResponse",
     "ConnectionRead",
     "ContextSchema",
     "DetachResponse",
     "HandoffSummary",
     "NewAgentRequest",
+    "NewChatRequest",
     "NewConnectionRequest",
     "NewHandoffRequest",
     "NewProjectRequest",
@@ -350,8 +475,13 @@ __all__ = [
     "PatchWorkRequest",
     "ProjectDetail",
     "ProjectSummary",
+    "PromoteChatRequest",
+    "SendChatMessageRequest",
     "SwitchThreadRequest",
     "VerifyResponse",
+    "WorkChatContextDocResponse",
+    "WorkChatContextFolderSummary",
+    "WorkChatRef",
     "WorkDetail",
     "WorkSummary",
 ]

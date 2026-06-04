@@ -9,6 +9,7 @@ stubs additionally let tests pre-seed state.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 from src.domain.models import Agent, Artifact, Handoff, Work
@@ -181,6 +182,7 @@ class StubFiles:
         self.compaction_docs: dict[tuple[str, str, str], str] = {}
         self.context_files: dict[tuple[str, str, str], str] = {}
         self.context_indexes: dict[tuple[str, str], str] = {}
+        self.work_chat_contexts: dict[tuple[str, str, str], str] = {}
 
     def ensure_work_dir(self, work_slug: str) -> None:
         self.work_dirs.add(work_slug)
@@ -204,6 +206,29 @@ class StubFiles:
 
     def write_brief(self, work_slug: str, content: str) -> None:
         self.briefs[work_slug] = content
+
+    def write_work_chat_context_file(self, work_slug: str, folder: Any) -> str:
+        self.work_chat_contexts[(work_slug, folder.name, folder.context_filename)] = (
+            folder.context_markdown
+        )
+        return (
+            f"/stub/works/{work_slug}/chat-contexts/"
+            f"{folder.name}/{folder.context_filename}"
+        )
+
+    def read_work_chat_context_file(
+        self, work_slug: str, folder_name: str, filename: str
+    ) -> tuple[str, str] | None:
+        content = self.work_chat_contexts.get((work_slug, folder_name, filename))
+        if content is None:
+            return None
+        return (
+            f"/stub/works/{work_slug}/chat-contexts/{folder_name}/{filename}",
+            content,
+        )
+
+    def work_chat_context_folder_path(self, work_slug: str, folder: Any) -> Path:
+        return Path(f"/stub/works/{work_slug}/chat-contexts/{folder.name}")
 
     def write_agent_json(self, work_slug: str, agent_slug: str, data: dict[str, Any]) -> None:
         self.agent_jsons[(work_slug, agent_slug)] = data

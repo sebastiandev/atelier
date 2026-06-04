@@ -147,3 +147,101 @@ export function CheckIcon({ size = 12, ...rest }: IconProps) {
     </svg>
   );
 }
+
+export function ChatIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M3.5 4.5A2.5 2.5 0 0 1 6 2h4a2.5 2.5 0 0 1 2.5 2.5v3A2.5 2.5 0 0 1 10 10H7l-3 2.5V10A2.5 2.5 0 0 1 1.5 7.5v-3" />
+    </svg>
+  );
+}
+
+export function MoveIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M2.5 8h7" />
+      <path d="M7 5.5 9.5 8 7 10.5" />
+      <path d="M10.5 3.5h2.5v9h-2.5" />
+    </svg>
+  );
+}
+
+export function SparkIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M8 1.8l1.2 3 3 1.2-3 1.2L8 10.2 6.8 7.2l-3-1.2 3-1.2L8 1.8zM12.5 10.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6.6-1.4zM3.2 11.2l.4 1 .9.4-.9.4-.4 1-.4-1-.9-.4.9-.4.4-1z" />
+    </svg>
+  );
+}
+
+export function SendIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M2 8l11-5-3 11-2-4-4 3 3-4-5-1z" />
+    </svg>
+  );
+}
+
+export function DocIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M4 2.5h5l3 3v8H4z" />
+      <path d="M9 2.5v3h3M6 8h6M6 10.5h6" />
+    </svg>
+  );
+}

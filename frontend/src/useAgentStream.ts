@@ -58,7 +58,13 @@ function delayForAttempt(attempt: number): number {
  * the cursor across mounts because we don't persist the events either:
  * starting non-zero on a fresh mount would yield an empty tile.
  */
-export function useAgentStream(agentSlug: string) {
+export type StreamResource = "agents" | "chats";
+
+export function useAgentStream(
+  agentSlug: string,
+  options: { resource?: StreamResource } = {},
+) {
+  const resource = options.resource ?? "agents";
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const wsRef = useRef<WebSocket | null>(null);
@@ -113,7 +119,7 @@ export function useAgentStream(agentSlug: string) {
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       const url =
         `${proto}//${window.location.host}` +
-        `/api/agents/${agentSlug}/stream` +
+        `/api/${resource}/${agentSlug}/stream` +
         `?cursor=${lastSeqRef.current}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
@@ -164,7 +170,7 @@ export function useAgentStream(agentSlug: string) {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [agentSlug]);
+  }, [agentSlug, resource]);
 
   function sendInput(text: string, contexts?: ContextEntry[]) {
     const ws = wsRef.current;

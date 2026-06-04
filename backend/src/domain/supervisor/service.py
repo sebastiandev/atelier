@@ -298,7 +298,9 @@ class AgentSupervisorService:
             await self._close_adapter(adapter, agent_slug=agent_slug)
             raise
 
-    async def send_input(self, agent_slug: str, text: str) -> None:
+    async def send_input(
+        self, agent_slug: str, text: str, *, record_user_input: bool = True
+    ) -> None:
         state = self._require_state(agent_slug)
         await self._await_ready(state)
         if state.task is not None and state.task.done():
@@ -312,14 +314,15 @@ class AgentSupervisorService:
             raise AgentTerminated(
                 f"agent {agent_slug} pump ended; reconnect to rebuild"
             )
-        await self._publish(
-            state,
-            {
-                "type": "user_input",
-                "ts": datetime.now(UTC).isoformat(),
-                "text": text,
-            },
-        )
+        if record_user_input:
+            await self._publish(
+                state,
+                {
+                    "type": "user_input",
+                    "ts": datetime.now(UTC).isoformat(),
+                    "text": text,
+                },
+            )
         try:
             if not state.started:
                 await self._start_lazy_adapter(state)

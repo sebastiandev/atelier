@@ -17,6 +17,7 @@ from src.domain.artifacts.models import (
 )
 from src.domain.models import (
     Agent,
+    Chat,
     Connection,
     Handoff,
     Project,
@@ -26,6 +27,7 @@ from src.domain.models import (
 from src.infrastructure.database.tables import (
     agents_table,
     artifacts_table,
+    chats_table,
     connections_table,
     handoffs_table,
     projects_table,
@@ -51,6 +53,7 @@ def configure_mappings() -> None:
 
     mapper_registry.map_imperatively(Project, projects_table)
     mapper_registry.map_imperatively(Work, works_table)
+    mapper_registry.map_imperatively(Chat, chats_table)
     mapper_registry.map_imperatively(Agent, agents_table)
     # Artifact: single-table inheritance on the existing ``artifacts``
     # table. The ``type`` column is the polymorphic discriminator;

@@ -16,16 +16,20 @@ types.
 """
 
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, Protocol
 
 from src.domain.artifacts.models import PrArtifact
 from src.domain.models import Agent, AgentStatus, Artifact, Context, Handoff, Work
 from src.domain.workstore.dtos import (
     AddAgentRequest,
+    CreateWorkChatContextFolder,
     CreateWorkRequest,
+    EnsureWorkChatContextRequest,
     RecordArtifactRequest,
     RecordHandoffRequest,
     UpdateWorkRequest,
+    WorkChatContextFolder,
     WorkRecord,
 )
 
@@ -49,6 +53,18 @@ class WorkStore(Protocol):
         ...
 
     def update_work(self, req: UpdateWorkRequest) -> WorkRecord: ...
+
+    def ensure_work_chat_context(
+        self, req: EnsureWorkChatContextRequest
+    ) -> WorkRecord:
+        """Ensure a work has one chat context folder for ``req.folder.chat_slug``.
+
+        Existing installs may already have the folder from chat promotion.
+        In that case callers receive the current WorkRecord and no duplicate
+        folder is added. If the metadata exists but the file is missing, the
+        provided markdown is written into the existing folder.
+        """
+        ...
 
     def move_work_to_project(
         self, work_slug: str, project_slug: str | None
@@ -114,6 +130,10 @@ class WorkStore(Protocol):
 
     def read_agent_compaction_doc(
         self, work_slug: str, agent_slug: str, filename: str
+    ) -> tuple[str, str] | None: ...
+
+    def read_work_chat_context_doc(
+        self, work_slug: str, folder_name: str, filename: str = "context.md"
     ) -> tuple[str, str] | None: ...
 
     def set_agent_session_id(
@@ -270,6 +290,17 @@ class WorkspaceFiles(Protocol):
     def read_work_json(self, work_slug: str) -> dict[str, Any] | None: ...
 
     def write_brief(self, work_slug: str, content: str) -> None: ...
+    def write_work_chat_context_file(
+        self,
+        work_slug: str,
+        folder: CreateWorkChatContextFolder,
+    ) -> str: ...
+    def read_work_chat_context_file(
+        self, work_slug: str, folder_name: str, filename: str
+    ) -> tuple[str, str] | None: ...
+    def work_chat_context_folder_path(
+        self, work_slug: str, folder: WorkChatContextFolder
+    ) -> Path: ...
 
     def write_agent_json(self, work_slug: str, agent_slug: str, data: dict[str, Any]) -> None: ...
     def read_agent_json(self, work_slug: str, agent_slug: str) -> dict[str, Any] | None: ...

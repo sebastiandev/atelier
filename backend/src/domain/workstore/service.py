@@ -25,15 +25,20 @@ from src.domain.artifacts.models import PrArtifact
 from src.domain.models import Agent, AgentStatus, Context, Handoff, Work
 from src.domain.workstore._serde import (
     deserialize_contexts,
+    deserialize_work_record,
     serialize_agent,
     serialize_work_record,
 )
 from src.domain.workstore.dtos import (
     AddAgentRequest,
+    CreateWorkChatContextFolder,
     CreateWorkRequest,
+    EnsureWorkChatContextRequest,
     RecordArtifactRequest,
     RecordHandoffRequest,
     UpdateWorkRequest,
+    WorkChatContextFolder,
+    WorkChatProvenance,
     WorkRecord,
 )
 from src.domain.workstore.ports import TranscriptLog, WorkRepository, WorkspaceFiles
@@ -43,6 +48,31 @@ Clock = Callable[[], datetime]
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _clean_identity(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _artifact_identity(artifact: Artifact) -> tuple[str, str | None]:
+    if artifact.type in ("pr", "jira"):
+        return (artifact.type, _clean_identity(getattr(artifact, "url", None)))
+    return (artifact.type, _clean_identity(getattr(artifact, "doc_path", None)))
+
+
+def _dedupe_artifacts(artifacts: list[Artifact]) -> list[Artifact]:
+    seen: set[tuple[str, str | None]] = set()
+    out: list[Artifact] = []
+    for artifact in artifacts:
+        key = _artifact_identity(artifact)
+        if key[1] is None or key in seen:
+            continue
+        seen.add(key)
+        out.append(artifact)
+    return out
 
 
 class WorkStoreService:
@@ -69,13 +99,43 @@ class WorkStoreService:
                 status="active",
                 created_at=self._clock(),
                 project_slug=req.project_slug,
+                from_chat_slug=req.from_chat.chat_slug if req.from_chat else None,
+                from_chat_title=req.from_chat.chat_title if req.from_chat else None,
             )
             work = self._repo.add_work(work)
             slug = _require_slug(work)
+            chat_context_folders = [
+                WorkChatContextFolder(
+                    name=f.name,
+                    mount_path=f.mount_path,
+                    chat_slug=f.chat_slug,
+                    chat_title=f.chat_title,
+                    context_filename=f.context_filename,
+                )
+                for f in req.chat_context_folders
+            ]
             self._files.ensure_work_dir(slug)
-            self._files.write_work_json(slug, serialize_work_record(work, list(req.contexts)))
+            self._files.write_work_json(
+                slug,
+                serialize_work_record(
+                    work,
+                    list(req.contexts),
+                    req.from_chat,
+                    chat_context_folders,
+                ),
+            )
             self._files.write_brief(slug, req.description)
-        return WorkRecord(work=work, contexts=list(req.contexts))
+            for folder in req.chat_context_folders:
+                self._files.write_work_chat_context_file(slug, folder)
+            hydrated = self._hydrate_chat_context_folders(
+                slug, chat_context_folders
+            )
+        return WorkRecord(
+            work=work,
+            contexts=list(req.contexts),
+            from_chat=req.from_chat,
+            chat_context_folders=hydrated,
+        )
 
     def get_work(self, work_slug: str) -> WorkRecord | None:
         with self._lock:
@@ -83,8 +143,21 @@ class WorkStoreService:
             if work is None or work.status == "deleted":
                 return None
             data = self._files.read_work_json(work_slug)
-            contexts = deserialize_contexts(data) if data is not None else []
-        return WorkRecord(work=work, contexts=contexts)
+            if data is not None:
+                _fs_work, contexts, from_chat, folders = deserialize_work_record(
+                    data
+                )
+            else:
+                contexts = []
+                from_chat = _from_chat_from_work(work)
+                folders = []
+            folders = self._hydrate_chat_context_folders(work_slug, folders)
+        return WorkRecord(
+            work=work,
+            contexts=contexts,
+            from_chat=from_chat,
+            chat_context_folders=folders,
+        )
 
     def list_works(self) -> list[Work]:
         with self._lock:
@@ -98,7 +171,14 @@ class WorkStoreService:
         with self._lock:
             existing = self._require_work(req.work_slug)
             data = self._files.read_work_json(req.work_slug)
-            existing_contexts = deserialize_contexts(data) if data is not None else []
+            if data is not None:
+                _fs_work, existing_contexts, from_chat, folders = (
+                    deserialize_work_record(data)
+                )
+            else:
+                existing_contexts = []
+                from_chat = _from_chat_from_work(existing)
+                folders = []
 
             if req.name is not None:
                 existing.name = req.name
@@ -110,11 +190,83 @@ class WorkStoreService:
 
             self._repo.upsert_work(existing)
             self._files.write_work_json(
-                req.work_slug, serialize_work_record(existing, new_contexts)
+                req.work_slug,
+                serialize_work_record(existing, new_contexts, from_chat, folders),
             )
             if req.description is not None:
                 self._files.write_brief(req.work_slug, req.description)
-        return WorkRecord(work=existing, contexts=new_contexts)
+            folders = self._hydrate_chat_context_folders(req.work_slug, folders)
+        return WorkRecord(
+            work=existing,
+            contexts=new_contexts,
+            from_chat=from_chat,
+            chat_context_folders=folders,
+        )
+
+    def ensure_work_chat_context(
+        self, req: EnsureWorkChatContextRequest
+    ) -> WorkRecord:
+        with self._lock:
+            existing = self._require_work(req.work_slug)
+            data = self._files.read_work_json(req.work_slug)
+            if data is not None:
+                _fs_work, contexts, from_chat, folders = deserialize_work_record(
+                    data
+                )
+            else:
+                contexts = []
+                from_chat = _from_chat_from_work(existing)
+                folders = []
+
+            folder = req.folder
+            existing_folder = next(
+                (f for f in folders if f.chat_slug == folder.chat_slug),
+                None,
+            )
+            if existing_folder is not None:
+                if (
+                    self._files.read_work_chat_context_file(
+                        req.work_slug,
+                        existing_folder.name,
+                        existing_folder.context_filename,
+                    )
+                    is None
+                ):
+                    self._files.write_work_chat_context_file(
+                        req.work_slug,
+                        CreateWorkChatContextFolder(
+                            name=existing_folder.name,
+                            mount_path=existing_folder.mount_path,
+                            chat_slug=existing_folder.chat_slug,
+                            chat_title=existing_folder.chat_title,
+                            context_markdown=folder.context_markdown,
+                            context_filename=existing_folder.context_filename,
+                        ),
+                    )
+            else:
+                folders = [
+                    *folders,
+                    WorkChatContextFolder(
+                        name=folder.name,
+                        mount_path=folder.mount_path,
+                        chat_slug=folder.chat_slug,
+                        chat_title=folder.chat_title,
+                        context_filename=folder.context_filename,
+                    ),
+                ]
+                self._files.write_work_json(
+                    req.work_slug,
+                    serialize_work_record(existing, contexts, from_chat, folders),
+                )
+                self._files.write_work_chat_context_file(req.work_slug, folder)
+
+            hydrated = self._hydrate_chat_context_folders(req.work_slug, folders)
+        return WorkRecord(
+            work=existing,
+            contexts=contexts,
+            from_chat=from_chat,
+            chat_context_folders=hydrated,
+        )
 
     def move_work_to_project(
         self, work_slug: str, project_slug: str | None
@@ -122,24 +274,48 @@ class WorkStoreService:
         with self._lock:
             existing = self._require_work(work_slug)
             data = self._files.read_work_json(work_slug)
-            contexts = deserialize_contexts(data) if data is not None else []
+            if data is not None:
+                _fs_work, contexts, from_chat, folders = deserialize_work_record(
+                    data
+                )
+            else:
+                contexts = []
+                from_chat = _from_chat_from_work(existing)
+                folders = []
 
             existing.project_slug = project_slug
             self._repo.upsert_work(existing)
             # Re-write work.json so reconcile sees the new project on startup.
             self._files.write_work_json(
-                work_slug, serialize_work_record(existing, contexts)
+                work_slug,
+                serialize_work_record(existing, contexts, from_chat, folders),
             )
-        return WorkRecord(work=existing, contexts=contexts)
+            folders = self._hydrate_chat_context_folders(work_slug, folders)
+        return WorkRecord(
+            work=existing,
+            contexts=contexts,
+            from_chat=from_chat,
+            chat_context_folders=folders,
+        )
 
     def soft_delete_work(self, work_slug: str) -> None:
         with self._lock:
             existing = self._require_work(work_slug)
             data = self._files.read_work_json(work_slug)
-            contexts = deserialize_contexts(data) if data is not None else []
+            if data is not None:
+                _fs_work, contexts, from_chat, folders = deserialize_work_record(
+                    data
+                )
+            else:
+                contexts = []
+                from_chat = _from_chat_from_work(existing)
+                folders = []
             existing.status = "deleted"
             self._repo.upsert_work(existing)
-            self._files.write_work_json(work_slug, serialize_work_record(existing, contexts))
+            self._files.write_work_json(
+                work_slug,
+                serialize_work_record(existing, contexts, from_chat, folders),
+            )
 
     def delete_agent(self, agent_slug: str) -> None:
         with self._lock:
@@ -297,6 +473,16 @@ class WorkStoreService:
                 work_slug, agent_slug, filename
             )
 
+    def read_work_chat_context_doc(
+        self, work_slug: str, folder_name: str, filename: str = "context.md"
+    ) -> tuple[str, str] | None:
+        with self._lock:
+            if self._repo.get_work_by_slug(work_slug) is None:
+                raise ValueError(f"work not found: {work_slug}")
+            return self._files.read_work_chat_context_file(
+                work_slug, folder_name, filename
+            )
+
     def set_agent_session_id(
         self, agent_slug: str, session_id: str, *, mirror_agent_json: bool = False
     ) -> None:
@@ -408,6 +594,9 @@ class WorkStoreService:
                 if agent is None:
                     raise ValueError(f"agent not found: {req.agent_slug}")
                 agent_id = agent.id
+            existing = self._find_existing_artifact(req)
+            if existing is not None:
+                return existing
             artifact = make_artifact(
                 type=req.type,
                 work_id=_require_id(parent),
@@ -421,10 +610,36 @@ class WorkStoreService:
             )
             return self._repo.add_artifact(artifact)
 
+    def _find_existing_artifact(
+        self, req: RecordArtifactRequest
+    ) -> Artifact | None:
+        """Return the existing row for the same work-scoped artifact identity.
+
+        Agents can legitimately emit the same artifact marker twice: once via
+        the MCP tool call and again via the fallback text marker, or after a
+        retry/reconnect. The left rail is row-backed, so artifact recording is
+        idempotent by the stable per-type identity instead of creating a new
+        row for every marker.
+        """
+        for artifact in self._repo.list_artifacts_for_work(req.work_slug):
+            if artifact.type != req.type:
+                continue
+            if req.type in ("pr", "jira"):
+                if _clean_identity(getattr(artifact, "url", None)) == _clean_identity(
+                    req.url
+                ):
+                    return artifact
+            elif req.type == "doc":
+                if _clean_identity(
+                    getattr(artifact, "doc_path", None)
+                ) == _clean_identity(req.doc_path):
+                    return artifact
+        return None
+
     def list_artifacts_for_work(self, work_slug: str) -> list[Artifact]:
         with self._lock:
             self._require_work(work_slug)
-            return self._repo.list_artifacts_for_work(work_slug)
+            return _dedupe_artifacts(self._repo.list_artifacts_for_work(work_slug))
 
     def get_artifact_by_slug(self, slug: str) -> Artifact | None:
         return self._repo.get_artifact_by_slug(slug)
@@ -477,11 +692,37 @@ class WorkStoreService:
             self._require_work(work_slug)
             return self._repo.list_handoffs_for_work(work_slug)
 
+    def _hydrate_chat_context_folders(
+        self, work_slug: str, folders: list[WorkChatContextFolder]
+    ) -> list[WorkChatContextFolder]:
+        return [
+            WorkChatContextFolder(
+                name=f.name,
+                mount_path=f.mount_path,
+                chat_slug=f.chat_slug,
+                chat_title=f.chat_title,
+                context_filename=f.context_filename,
+                absolute_path=self._files.work_chat_context_folder_path(
+                    work_slug, f
+                ),
+            )
+            for f in folders
+        ]
+
     def _require_work(self, work_slug: str) -> Work:
         work = self._repo.get_work_by_slug(work_slug)
         if work is None or work.status == "deleted":
             raise ValueError(f"work not found: {work_slug}")
         return work
+
+
+def _from_chat_from_work(work: Work) -> WorkChatProvenance | None:
+    if not work.from_chat_slug:
+        return None
+    return WorkChatProvenance(
+        chat_slug=work.from_chat_slug,
+        chat_title=work.from_chat_title or work.from_chat_slug,
+    )
 
 
 def _require_slug(entity: Work | Agent) -> str:

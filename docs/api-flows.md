@@ -92,6 +92,125 @@ Same `Spec` instances back the create-agent validator (`spec.build`) so the desc
 
 ---
 
+## `GET /api/chats`
+
+```
+Browser ──► Router (chats.py)
+                │
+                ├─► ChatStore.list_chats()
+                │       └─► SQL index + ~/Atelier/chats/<CHT>/transcript.ndjson
+                └─► optional project_slug/work_slug filter
+                        └─► scope by Project/Work link/provenance
+                returns list[ChatSummary]
+```
+
+Unscoped listing powers Home and only returns chats not assigned to a project or work (`grounding` unset/folder and not promoted). Project scope returns chats linked at that project level (`grounding.kind == "project"`) that have not been promoted into a work. Work scope returns chats linked to the work plus chats promoted into that work. `working_directory` is independent and does not affect list scope.
+
+---
+
+## `PATCH /api/chats/{slug}` / `DELETE /api/chats/{slug}`
+
+```
+Browser ──► Router (chats.py)
+                │
+                ├─► PATCH title
+                │       └─► commands.chats.rename.execute(...)
+                │               └─► ChatStore.rename_chat()
+                │                       ├─► SQL chats.title / updated_at
+                │                       └─► ~/Atelier/chats/<CHT>/chat.json
+                │
+                └─► DELETE
+                        └─► commands.chats.delete.execute(...)
+                                ├─► chat_supervisor.stop_agent(CHT)
+                                └─► ChatStore.delete_chat()
+                                        ├─► remove ~/Atelier/chats/<CHT>/
+                                        └─► delete SQL row
+```
+
+Rename is metadata-only and leaves provider sessions untouched. Delete is
+irreversible and stops any live chat runtime before removing transcript files.
+
+---
+
+## `POST /api/chats` / `POST /api/chats/{slug}/messages`
+
+```
+Browser ──► Router (chats.py)
+                │
+                ├─► ChatStore.create_chat(req)
+                │       ├─► repo.add_chat(chat)       ← assigns CHT-NNN
+                │       ├─► files.write_chat_json(...)
+                │       └─► files.append_transcript_event(first user message)
+                └─► returns ChatDetail
+```
+
+Create-chat records only the modal's first user message plus optional Project/Work link (`grounding`) and optional provider cwd (`working_directory`). The provider turn starts when the chat websocket opens and `chats/connect.py` claims that first prompt (see [WS `/api/chats/{slug}/stream`](#ws-apichatsslugstream)). `POST /api/chats/{slug}/messages` remains as a compatibility append route for older clients; the current frontend sends follow-up turns over the websocket.
+
+---
+
+## WS `/api/chats/{slug}/stream`
+
+```
+Browser ──► WS Router (application/ws/chats.py)
+                │
+                └─► chats/connect.execute(...)
+                        │
+                        ├─► ChatStore.get_chat(slug)          ← 4404 if missing
+                        ├─► if not registered:
+                        │       ├─► resolve cwd from working_directory/link defaults
+                        │       ├─► SPECS[provider].build(...)
+                        │       ├─► build_adapter(config)
+                        │       └─► chat_supervisor.register_agent(..., lazy=True)
+                        ├─► ChatStore.claim_initial_prompt()
+                        │       └─► append chat_initial_prompt_delivered marker
+                        ├─► chat_supervisor.send_input(first, record_user_input=False)
+                        └─► async with chat_supervisor.subscribe(slug, cursor)
+                                ├─► replay legacy rows as AgentEvent-shaped frames
+                                └─► live provider events
+```
+
+Inbound frames mirror the agent stream for the chat-safe subset: `input` writes a `user_input` line and forwards to the adapter, `stop` writes `user_stop` and calls `adapter.stop_turn()`, and `permission` resolves any pending provider permission. Context attachment frames are rejected with a `client_error` frame because chats do not own agent context folders. The separate `chat_supervisor` writes to `~/Atelier/chats/<CHT>/transcript.ndjson` through `FsChatTranscriptLog` and persists provider session ids to `chats.session_id`. If `working_directory` is set it is used as cwd/writable root; otherwise Work/Project links use their Atelier metadata folders, while legacy folder-grounded chats use that folder as cwd.
+
+---
+
+## `POST /api/chats/{slug}/promote`
+
+```
+Browser ──► Router (chats.py)
+                │
+                ├─► ChatStore.get_chat(slug)                 ← 404/409 guards
+                ├─► build context.md from confirmed brief + transcript metadata
+                ├─► WorkStore.create_work(from_chat, chat_context_folders)
+                │       ├─► repo.add_work(work)
+                │       ├─► files.write_work_json(... from_chat ...)
+                │       ├─► files.write_brief(...)
+                │       └─► files.write_work_chat_context_file(...)
+                └─► ChatStore.mark_promoted(chat, work_slug)
+                returns WorkDetail
+```
+
+The full transcript stays at `chat://CHT-NNN` / `~/Atelier/chats/<CHT>/transcript.ndjson`; the promoted Work receives only the summary/action context file under `~/Atelier/works/<WRK>/chat-contexts/<folder>/context.md`.
+
+---
+
+## `POST /api/works/{work}/chats/{chat}/context`
+
+```
+Browser ──► Router (chats.py)
+                │
+                ├─► ChatStore.get_chat(chat)                 ← 404 guard
+                ├─► WorkStore.get_work(work)                 ← 404 guard
+                ├─► build context.md from chat summary + transcript metadata
+                └─► WorkStore.ensure_work_chat_context(...)
+                        ├─► reuse existing chat_context_folders entry
+                        └─► otherwise append metadata + write context.md
+                returns WorkChatContextFolderSummary
+```
+
+Used by WorkView's chat tile "start agent from chat" path. The returned `absolute_path/context_filename` is passed into `NewAgentDialog` as a normal `file` context, so agent creation reuses the existing context renderer and first-message pointer.
+
+---
+
 ## `GET /api/works`
 
 ```
@@ -281,7 +400,9 @@ commands.start.execute(workstore, worktree_manager, settings, req)
    │       └─► branch_name="x"   → `git worktree add -b x` with self-heal-on-collision
    │       └─► non-git folder    → returns folder unchanged
    │   (or WorktreeManager.ensure_forked(...) when fork_from_agent is set — always detached)
-   ├─► render_system_prompt(..., is_detached_worktree=worktree_manager.is_detached(workdir))
+   ├─► mount project shared folders and work chat-context folders into workdir
+   │       └─► mounted roots flow into provider writable_roots / Codex --add-dir
+   ├─► render_system_prompt(..., shares=mounted folders, is_detached_worktree=...)
    ├─► build_adapter(config, settings)                 ← singledispatch: Claude / Amp / Codex / Stub
    └─► returns StartAgentPlan(agent, adapter, context, first_message?)
                                      │
@@ -445,6 +566,39 @@ The HTTP handler is thin: all workflow decisions live in the domain command, and
 ## `GET /api/agents/{slug}/compactions/{filename}`
 
 The browser calls this from the `context_compacted` transcript boundary when the user opens **View summary**. The route delegates to `commands.read_compaction_summary.execute(...)`, which resolves the agent's work, reads only `agents/<slug>/compactions/<filename>` through `WorkStore`, and returns `{agent_slug, work_slug, filename, summary_path, content}`. The filename is path-segment scoped; callers do not send the absolute `summary_path` back as input.
+
+---
+
+## `POST /api/chats/{slug}/compact`
+
+```
+Browser ──► Router (chats.py) ──► commands.chats.compact.execute(...)
+                                      │
+                                      ├─► ChatStore.get_chat(slug)                 ← 404
+                                      ├─► reject missing session / mid-turn        ← 409
+                                      ├─► build chat provider config from working directory/link
+                                      ├─► await chat_supervisor.stop_agent(slug)
+                                      ├─► summarize transcript
+                                      ├─► ChatStore.write_chat_compaction_doc(...)
+                                      ├─► CompactionSessionClient.start_fresh_session(...)
+                                      ├─► CompactionSessionClient.write_breadcrumb(old_sid)
+                                      ├─► ChatStore.set_chat_session_id(new_sid)
+                                      ├─► append context_compacted transcript event
+                                      └─► stop chat_supervisor again for reconnect races
+                                 Router formats CompactChatResponse
+```
+
+Chat compaction keeps the `CHT-NNN` identity, Project/Work link, and working
+folder. It only replaces the underlying provider session and writes additive
+metadata under `chats/<slug>/compactions/`.
+
+## `GET /api/chats/{slug}/compactions/{filename}`
+
+The chat renderer calls this from a `context_compacted` boundary when the user
+opens **Show summary**. The route reads only
+`chats/<slug>/compactions/<filename>` through `ChatStore` and returns
+`{chat_slug, filename, summary_path, content}`. As with agent compactions, the
+caller sends only the scoped filename, never an absolute path.
 
 ---
 

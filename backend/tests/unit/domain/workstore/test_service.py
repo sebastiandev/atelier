@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from src.domain.artifacts import make_artifact
 from src.domain.models import Context
 from src.domain.workstore import (
     AddAgentRequest,
@@ -371,6 +372,102 @@ def test_record_artifact_with_agent_links_both_ids() -> None:
     assert artifact.agent_id == 1
     assert artifact.url == "https://github.com/owner/repo/pull/1"
     assert "art-1" in repo.artifacts
+
+
+def test_record_artifact_returns_existing_pr_for_same_work_and_url() -> None:
+    service, repo, _, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(
+        _agent_request(name="Dev", persona="developer", role="dev", model="x")
+    )
+    req = RecordArtifactRequest(
+        work_slug="WRK-001",
+        agent_slug="agt-1",
+        type="pr",
+        title="Fix bug",
+        status="open",
+        url="https://github.com/owner/repo/pull/1",
+    )
+
+    first = service.record_artifact(req)
+    second = service.record_artifact(
+        RecordArtifactRequest(
+            work_slug="WRK-001",
+            agent_slug="agt-1",
+            type="pr",
+            title="Fix bug again",
+            status="draft",
+            url=" https://github.com/owner/repo/pull/1 ",
+        )
+    )
+
+    assert second is first
+    assert len(repo.artifacts) == 1
+
+
+def test_record_artifact_returns_existing_doc_for_same_work_and_path() -> None:
+    service, repo, _, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(
+        _agent_request(name="Dev", persona="developer", role="dev", model="x")
+    )
+    req = RecordArtifactRequest(
+        work_slug="WRK-001",
+        agent_slug="agt-1",
+        type="doc",
+        title="Plan",
+        status="draft",
+        doc_path="/tmp/plan.md",
+    )
+
+    first = service.record_artifact(req)
+    second = service.record_artifact(
+        RecordArtifactRequest(
+            work_slug="WRK-001",
+            agent_slug="agt-1",
+            type="doc",
+            title="Plan again",
+            status="pending",
+            doc_path=" /tmp/plan.md ",
+        )
+    )
+
+    assert second is first
+    assert len(repo.artifacts) == 1
+
+
+def test_list_artifacts_for_work_hides_legacy_duplicate_rows() -> None:
+    service, repo, _, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(
+        _agent_request(name="Dev", persona="developer", role="dev", model="x")
+    )
+    first = service.record_artifact(
+        RecordArtifactRequest(
+            work_slug="WRK-001",
+            agent_slug="agt-1",
+            type="pr",
+            title="Fix bug",
+            status="open",
+            url="https://github.com/owner/repo/pull/1",
+        )
+    )
+    repo.add_artifact(
+        make_artifact(
+            type="pr",
+            work_id=1,
+            agent_id=1,
+            title="Fix bug duplicate",
+            status="open",
+            created_at=FIXED_NOW,
+            url="https://github.com/owner/repo/pull/1",
+        )
+    )
+
+    artifacts = service.list_artifacts_for_work("WRK-001")
+
+    assert artifacts == [first]
+    assert len(repo.artifacts) == 2
 
 
 def test_record_artifact_without_agent_has_null_agent_id() -> None:

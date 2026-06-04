@@ -44,7 +44,9 @@ def reconcile(repo: WorkRepository, files: WorkspaceFiles) -> ReconcileReport:
             report.skipped_unreadable.append(f"work:{fs_slug}")
             continue
         try:
-            fs_work, _ = deserialize_work_record(data)
+            fs_work, _contexts, _from_chat, _folders = deserialize_work_record(
+                data
+            )
         except (KeyError, ValueError, TypeError):
             report.skipped_unreadable.append(f"work:{fs_slug}")
             continue

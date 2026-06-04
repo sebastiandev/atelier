@@ -18,6 +18,21 @@ export type WorkSummary = {
   // works that have no children yet).
   agent_count: number;
   artifact_count: number;
+  from_chat: WorkChatRef | null;
+};
+
+export type WorkChatRef = {
+  slug: string;
+  title: string;
+};
+
+export type WorkChatContextFolder = {
+  name: string;
+  mount_path: string;
+  chat_slug: string;
+  chat_title: string;
+  context_filename: string;
+  absolute_path: string;
 };
 
 export type ContextEntry = {
@@ -28,6 +43,7 @@ export type ContextEntry = {
 
 export type WorkDetail = WorkSummary & {
   contexts: ContextEntry[];
+  chat_context_folders: WorkChatContextFolder[];
 };
 
 export type CreateWorkPayload = {
@@ -36,6 +52,17 @@ export type CreateWorkPayload = {
   contexts?: ContextEntry[];
   // Omit (or pass null) to create loose work.
   project_slug?: string | null;
+  from_chat?: WorkChatRef | null;
+  chat_context_folders?: CreateWorkChatContextFolder[];
+};
+
+export type CreateWorkChatContextFolder = {
+  name: string;
+  mount_path: string;
+  chat_slug: string;
+  chat_title: string;
+  context_markdown: string;
+  context_filename?: string;
 };
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -80,8 +107,150 @@ export function createWork(payload: CreateWorkPayload): Promise<WorkDetail> {
   return fetch("/api/works", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, contexts: payload.contexts ?? [] }),
+    body: JSON.stringify({
+      ...payload,
+      contexts: payload.contexts ?? [],
+      chat_context_folders: payload.chat_context_folders ?? [],
+    }),
   }).then((r) => jsonOrThrow<WorkDetail>(r));
+}
+
+export function patchWork(
+  slug: string,
+  payload: Partial<Pick<WorkDetail, "name" | "description" | "status" | "contexts">>,
+): Promise<WorkDetail> {
+  return fetch(`/api/works/${slug}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<WorkDetail>(r));
+}
+
+// ─── Chats ────────────────────────────────────────────────────────────────
+
+export type ChatGrounding =
+  | { kind: "project"; ref: string }
+  | { kind: "work"; ref: string }
+  | { kind: "folder"; ref: string };
+
+export type ChatMessage = {
+  role: "user" | "assistant";
+  body: string;
+  created_at: string;
+};
+
+export type ChatSummary = {
+  slug: string;
+  title: string;
+  provider: string;
+  model: string;
+  grounding: ChatGrounding | null;
+  working_directory: string | null;
+  created_at: string;
+  updated_at: string;
+  promoted_to_work_slug: string | null;
+  message_count: number;
+};
+
+export type ChatDetail = ChatSummary & {
+  transcript: ChatMessage[];
+};
+
+export type CreateChatPayload = {
+  provider: string;
+  model: string;
+  first_message: string;
+  title?: string | null;
+  grounding?: ChatGrounding | null;
+  working_directory?: string | null;
+};
+
+export function listChats(scope?: {
+  project_slug?: string;
+  work_slug?: string;
+}): Promise<ChatSummary[]> {
+  const params = new URLSearchParams();
+  if (scope?.project_slug) params.set("project_slug", scope.project_slug);
+  if (scope?.work_slug) params.set("work_slug", scope.work_slug);
+  const qs = params.toString();
+  return fetch(`/api/chats${qs ? `?${qs}` : ""}`).then((r) =>
+    jsonOrThrow<ChatSummary[]>(r),
+  );
+}
+
+export function createChat(payload: CreateChatPayload): Promise<ChatDetail> {
+  return fetch("/api/chats", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<ChatDetail>(r));
+}
+
+export function getChat(slug: string): Promise<ChatDetail> {
+  return fetch(`/api/chats/${slug}`).then((r) => jsonOrThrow<ChatDetail>(r));
+}
+
+export function patchChat(
+  slug: string,
+  patch: { title?: string },
+): Promise<ChatDetail> {
+  return fetch(`/api/chats/${slug}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  }).then((r) => jsonOrThrow<ChatDetail>(r));
+}
+
+export async function deleteChat(slug: string): Promise<void> {
+  const r = await fetch(`/api/chats/${slug}`, { method: "DELETE" });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`Delete failed (${r.status}): ${detail}`);
+  }
+}
+
+export function sendChatMessage(slug: string, body: string): Promise<ChatDetail> {
+  return fetch(`/api/chats/${slug}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  }).then((r) => jsonOrThrow<ChatDetail>(r));
+}
+
+export function promoteChat(
+  slug: string,
+  payload: { name: string; description: string; project_slug?: string | null },
+): Promise<WorkDetail> {
+  return fetch(`/api/chats/${slug}/promote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<WorkDetail>(r));
+}
+
+export type WorkChatContextDoc = {
+  path: string;
+  content: string;
+};
+
+export function getWorkChatContextDoc(
+  workSlug: string,
+  folderName: string,
+  filename: string,
+): Promise<WorkChatContextDoc> {
+  return fetch(
+    `/api/works/${workSlug}/chat-contexts/${encodeURIComponent(folderName)}/${encodeURIComponent(filename)}`,
+  ).then((r) => jsonOrThrow<WorkChatContextDoc>(r));
+}
+
+export function ensureWorkChatContext(
+  workSlug: string,
+  chatSlug: string,
+): Promise<WorkChatContextFolder> {
+  return fetch(
+    `/api/works/${workSlug}/chats/${encodeURIComponent(chatSlug)}/context`,
+    { method: "POST" },
+  ).then((r) => jsonOrThrow<WorkChatContextFolder>(r));
 }
 
 /**
@@ -472,6 +641,23 @@ export type AgentCompactionSummary = {
   content: string;
 };
 
+export type CompactChatResponse = {
+  chat_slug: string;
+  provider: string;
+  old_session_id: string;
+  new_session_id: string;
+  summary_path: string;
+  breadcrumb_written: boolean;
+  breadcrumb_error: string | null;
+};
+
+export type ChatCompactionSummary = {
+  chat_slug: string;
+  filename: string;
+  summary_path: string;
+  content: string;
+};
+
 /**
  * Summarize the current provider session, persist the compaction document,
  * write transcript markers, and re-register the agent against the new
@@ -495,6 +681,26 @@ export function getAgentCompactionSummary(
   return fetch(
     `/api/agents/${agentSlug}/compactions/${encodeURIComponent(filename)}`,
   ).then((r) => jsonOrThrow<AgentCompactionSummary>(r));
+}
+
+export function compactChat(
+  chatSlug: string,
+  reason: CompactAgentReason = "manual",
+): Promise<CompactChatResponse> {
+  return fetch(`/api/chats/${chatSlug}/compact`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  }).then((r) => jsonOrThrow<CompactChatResponse>(r));
+}
+
+export function getChatCompactionSummary(
+  chatSlug: string,
+  filename: string,
+): Promise<ChatCompactionSummary> {
+  return fetch(
+    `/api/chats/${chatSlug}/compactions/${encodeURIComponent(filename)}`,
+  ).then((r) => jsonOrThrow<ChatCompactionSummary>(r));
 }
 
 /**

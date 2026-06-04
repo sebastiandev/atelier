@@ -193,8 +193,8 @@ def _render_shares_block(shares: Sequence[ShareSummary]) -> str:
     quiet for projects that don't use them."""
     if not shares:
         return ""
-    lines = ["Shared folders (persistent across agents in this project,"]
-    lines.append("edited concurrently — last writer wins):")
+    lines = ["Shared folders (persistent across agents in this work,"]
+    lines.append("and sometimes inherited from its project — last writer wins):")
     for share in shares:
         lines.append(f'  - "{share.name}" at ./{share.mount_path}/')
     lines.append(

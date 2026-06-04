@@ -16,6 +16,10 @@ import { AgentTile } from "./AgentTile";
 import {
   type AgentSummary,
   type ArtifactSummary,
+  type ChatGrounding,
+  type ChatDetail,
+  type ChatSummary,
+  type ContextEntry,
   type CreateAgentPayload,
   type HandoffSummary,
   type ProjectSummary,
@@ -25,8 +29,10 @@ import {
   PERSONA_GLYPH,
   createAgent,
   detachAgent,
+  ensureWorkChatContext,
   getProject,
   getWork,
+  listChats,
   listAgents,
   listArtifacts,
   refreshPrStatuses,
@@ -34,18 +40,30 @@ import {
   listProjects,
   listWorks,
   openAgentInConsole,
+  patchWork,
   patchAgent,
   revealAgent,
   revealArtifact,
   revealWork,
 } from "./api";
 import { BrandMark } from "./BrandMark";
+import {
+  ChatComposer,
+  DeleteChatDialog,
+  ChatRow,
+  ChatTile,
+  ContextDocModal,
+  chatSummaryFromDetail,
+} from "./Chat";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { HandoffDialog } from "./HandoffDialog";
 import {
+  ChatIcon,
   CheckIcon,
+  DocIcon,
   FolderIcon,
+  MoveIcon,
   SearchIcon,
   SlidersIcon,
 } from "./Icons";
@@ -77,18 +95,22 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const [shares, setShares] = useState<SharedFolderSummary[]>([]);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
+  const [openChatSlugs, setOpenChatSlugs] = useState<string[]>([]);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
-  // When the new-agent dialog is opened from the handoff flow, we
-  // pre-fill it with the source agent's slug + folder + the freshly
-  // generated handoff doc as initial goal. Null in the regular flow.
+  // When the new-agent dialog is opened from the handoff/chat flow, we
+  // pre-fill it with either the source agent handoff doc or chat context
+  // file. Null in the regular flow.
   const [agentDialogPrefill, setAgentDialogPrefill] = useState<{
-    forkFromAgent: { slug: string; name: string; folder: string };
-    initialGoal: string;
+    forkFromAgent?: { slug: string; name: string; folder: string };
+    initialGoal?: string;
+    initialContexts?: ContextEntry[];
   } | null>(null);
   const [handoffSource, setHandoffSource] = useState<AgentSummary | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AgentSummary | null>(null);
+  const [deleteChatTarget, setDeleteChatTarget] = useState<ChatSummary | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   // Projects list for the move picker — fetched lazily when the dialog
@@ -100,6 +122,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [chatComposerGrounding, setChatComposerGrounding] =
+    useState<ChatGrounding | null | undefined>(undefined);
+  const [contextDocFolder, setContextDocFolder] = useState<string | null>(null);
   const artifactsRevision = useArtifactsRefresh((s) =>
     selectWorkRevision(s, workSlug),
   );
@@ -108,6 +133,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   // copied to clipboard" fallback. One slot is plenty: detaches happen
   // one at a time and overlapping toasts would just compete for room.
   const [toast, setToast] = useState<string | null>(null);
+  const [canvasOrderOverride, setCanvasOrderOverride] = useState<string[]>([]);
   const tileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const closedSlugs = useClosedStore((s) => s.byWork[workSlug] ?? NO_CLOSED);
   const closeAgent = useClosedStore((s) => s.close);
@@ -215,8 +241,23 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     setSearchOpen(true);
   }
 
+  function openChatComposer() {
+    if (allProjects === null) {
+      listProjects()
+        .then(setAllProjects)
+        .catch(() => setAllProjects([]));
+    }
+    if (allWorks === null) {
+      listWorks()
+        .then(setAllWorks)
+        .catch(() => setAllWorks([]));
+    }
+    setChatComposerGrounding({ kind: "work", ref: workSlug });
+  }
+
   // Shortcuts:
   //   N       → new agent
+  //   Shift+C → new chat (grounded to this work)
   //   Shift+W → switch to a sibling work (palette)
   //   Shift+P → switch project (palette)
   // Suppressed while any modal is open, when a chord modifier is held,
@@ -232,6 +273,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         deleteTarget !== null ||
         projectSwitcherOpen ||
         workSwitcherOpen ||
+        chatComposerGrounding !== undefined ||
+        contextDocFolder !== null ||
         searchOpen
       )
         return;
@@ -252,6 +295,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       } else if (!e.shiftKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
         setAgentDialogOpen(true);
+      } else if (e.shiftKey && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        openChatComposer();
       }
     }
     window.addEventListener("keydown", onKey);
@@ -264,6 +310,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     deleteTarget,
     projectSwitcherOpen,
     workSwitcherOpen,
+    chatComposerGrounding,
+    contextDocFolder,
     searchOpen,
     allProjects,
     allWorks,
@@ -315,12 +363,19 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getWork(workSlug), listAgents(workSlug)])
-      .then(([w, a]) => {
+    Promise.all([getWork(workSlug), listAgents(workSlug), listChats({ work_slug: workSlug })])
+      .then(([w, a, c]) => {
         if (cancelled) return;
         setWork(w);
         setAgents(a);
-        if (a.length > 0) setFocusedSlug(a[0].slug);
+        setChats(c);
+        const initialChatSlug = new URLSearchParams(window.location.search).get("chat");
+        if (initialChatSlug && c.some((chat) => chat.slug === initialChatSlug)) {
+          focusChat(initialChatSlug);
+          window.history.replaceState(null, "", `/works/${workSlug}`);
+        } else if (a.length > 0) {
+          setFocusedSlug(a[0].slug);
+        }
         // Fetch the project lazily so the breadcrumb can render its name
         // and tint without a second mount cycle. Failure is silent — the
         // crumb just falls back to the slug.
@@ -368,6 +423,61 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       const el = tileRefs.current.get(slug);
       if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  }
+
+  function focusChat(slug: string) {
+    setOpenChatSlugs((prev) => (prev.includes(slug) ? prev : [...prev, slug]));
+    setCanvasOrderOverride((prev) => (prev.includes(slug) ? prev : [...prev, slug]));
+    setFocusedSlug(slug);
+    requestAnimationFrame(() => {
+      const el = tileRefs.current.get(slug);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  function closeChat(slug: string) {
+    setOpenChatSlugs((prev) => prev.filter((s) => s !== slug));
+    setCanvasOrderOverride((prev) => prev.filter((s) => s !== slug));
+    if (focusedSlug === slug) setFocusedSlug(null);
+  }
+
+  function patchChatSummary(chat: ChatSummary) {
+    setChats((curr) => curr.map((c) => (c.slug === chat.slug ? chat : c)));
+  }
+
+  function removeChatEverywhere(slug: string) {
+    setChats((curr) => curr.filter((c) => c.slug !== slug));
+    setOpenChatSlugs((prev) => prev.filter((s) => s !== slug));
+    setCanvasOrderOverride((prev) => prev.filter((s) => s !== slug));
+    tileRefs.current.delete(slug);
+    if (focusedSlug === slug) setFocusedSlug(null);
+  }
+
+  async function handleStartAgentFromChat(chat: ChatDetail) {
+    const currentWork = work;
+    if (!currentWork) return;
+    let folder =
+      currentWork.chat_context_folders.find((f) => f.chat_slug === chat.slug) ??
+      null;
+    if (folder === null) {
+      folder = await ensureWorkChatContext(currentWork.slug, chat.slug);
+      setWork((curr) => {
+        if (!curr) return curr;
+        const without = curr.chat_context_folders.filter(
+          (f) => f.chat_slug !== folder!.chat_slug,
+        );
+        return { ...curr, chat_context_folders: [...without, folder!] };
+      });
+    }
+    if (!folder.absolute_path) {
+      throw new Error(`chat context path missing for ${chat.slug}`);
+    }
+    const filePath = `${folder.absolute_path}/${folder.context_filename}`;
+    setAgentDialogPrefill({
+      initialGoal: `Use the attached ${chat.slug} context file as the starting point.`,
+      initialContexts: [{ type: "file", value: filePath, conn_id: null }],
+    });
+    setAgentDialogOpen(true);
   }
 
   async function handleCreateAgent(payload: CreateAgentPayload) {
@@ -444,28 +554,45 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const canvasAgents = orderedAgents.filter(
     (a) => !closedSlugs.includes(a.slug),
   );
+  const canvasAgentMap = new Map(canvasAgents.map((a) => [a.slug, a]));
+  const chatSummaryMap = new Map(chats.map((c) => [c.slug, c]));
+  const chatSlugs = new Set(chats.map((c) => c.slug));
+  const canvasChatSlugs = openChatSlugs.filter((slug) => chatSlugs.has(slug));
+  const canvasBaseOrder = [...canvasAgents.map((a) => a.slug), ...canvasChatSlugs];
+  const canvasTileIds = resolveCanvasOrder(canvasOrderOverride, canvasBaseOrder);
+  const canvasTileCount = canvasTileIds.length;
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    // canvasAgents is what the user sees; closed agents stay in their
-    // override slot but aren't on the canvas. Persist the FULL ordered
-    // set (canvas + closed) so re-opening a closed tile restores its
-    // prior slot rather than dumping it at the end.
-    const fullOrder = orderedAgents.map((a) => a.slug);
-    const fromIdx = fullOrder.indexOf(active.id as string);
-    const toIdx = fullOrder.indexOf(over.id as string);
+    const fromIdx = canvasTileIds.indexOf(active.id as string);
+    const toIdx = canvasTileIds.indexOf(over.id as string);
     if (fromIdx === -1 || toIdx === -1) return;
-    const next = [...fullOrder];
+    const next = [...canvasTileIds];
     const [moved] = next.splice(fromIdx, 1);
     next.splice(toIdx, 0, moved);
-    useAgentOrderStore.getState().setOrder(workSlug, next);
+    setCanvasOrderOverride(next);
+
+    const visibleAgentOrder = next.filter((slug) => canvasAgentMap.has(slug));
+    const visibleAgentSet = new Set(visibleAgentOrder);
+    const closedAgentOrder = orderedAgents
+      .map((a) => a.slug)
+      .filter((slug) => !visibleAgentSet.has(slug));
+    useAgentOrderStore
+      .getState()
+      .setOrder(workSlug, [...visibleAgentOrder, ...closedAgentOrder]);
+    setOpenChatSlugs((prev) => {
+      const openSet = new Set(prev);
+      const orderedOpen = next.filter((slug) => openSet.has(slug));
+      const orderedSet = new Set(orderedOpen);
+      return [...orderedOpen, ...prev.filter((slug) => !orderedSet.has(slug))];
+    });
   }
   const cols =
-    canvasAgents.length <= 1
+    canvasTileCount <= 1
       ? 1
-      : canvasAgents.length === 2
+      : canvasTileCount === 2
         ? 2
-        : canvasAgents.length <= 4
+        : canvasTileCount <= 4
           ? 2
           : 3;
 
@@ -477,6 +604,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         ["--proj-soft" as string]: `oklch(0.62 0.16 ${projectHue} / 0.10)`,
       }
     : undefined;
+
+  const chatContextFolders = work.chat_context_folders ?? [];
+  const sharedFolderCount = chatContextFolders.length + shares.length;
+  const selectedContextFolder =
+    chatContextFolders.find((f) => f.name === contextDocFolder) ?? null;
 
   return (
     <div className="shell-v3 narrow-left work-v3" style={projectStyleVars}>
@@ -580,13 +712,34 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                 <CheckIcon size={11} /> Mark done
               </button>
             ) : (
-              <span className="chip chip-completed" title="This work is completed">
-                completed
-              </span>
+              <button
+                className="btn"
+                onClick={() => {
+                  patchWork(work.slug, { status: "active" })
+                    .then(setWork)
+                    .catch((err) =>
+                      setError(err instanceof Error ? err.message : String(err)),
+                    );
+                }}
+                title="Reopen this completed work"
+              >
+                Reopen
+              </button>
             )}
             {work.status === "active" && (
               <button
-                className="btn"
+                className="btn icon sm"
+                onClick={openChatComposer}
+                title="Discuss this work in a grounded chat"
+                aria-label="Discuss this work in a grounded chat"
+                data-tip="Chat"
+              >
+                <ChatIcon size={12} />
+              </button>
+            )}
+            {work.status === "active" && (
+              <button
+                className="btn icon sm"
                 onClick={() => {
                   if (allProjects === null) {
                     listProjects()
@@ -596,8 +749,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   setMoveOpen(true);
                 }}
                 title="Move this work to a different project"
+                aria-label="Move this work to a different project"
+                data-tip="Move"
               >
-                Move…
+                <MoveIcon size={12} />
               </button>
             )}
           </div>
@@ -606,6 +761,52 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         <div className="v3-rule flush" />
 
         <div className="scrolly">
+          {sharedFolderCount > 0 && (
+            <>
+              <div className="v3-shd">
+                <span>
+                  Shared folders{" "}
+                  <span className="num" style={{ marginLeft: 8 }}>
+                    {sharedFolderCount}
+                  </span>
+                </span>
+                {project && work.project_slug && (
+                  <span className="right">
+                    <a href={`/projects/${work.project_slug}`}>manage ↗</a>
+                  </span>
+                )}
+              </div>
+              {chatContextFolders.map((folder) => (
+                <button
+                  key={folder.name}
+                  className="v3-agent-row folder-chat"
+                  onClick={() => setContextDocFolder(folder.name)}
+                  title="View context.md"
+                >
+                  <span className="pip"><FolderIcon size={12} /></span>
+                  <span className="meta">
+                    <span className="name mono">{folder.name}</span>
+                    <span className="role">context.md · from {folder.chat_slug}</span>
+                  </span>
+                  <span className="status"><DocIcon size={11} /></span>
+                </button>
+              ))}
+              {shares.map((s) => (
+                <V3RailShareRow
+                  key={s.slug}
+                  share={s}
+                  onCopy={(path) => {
+                    void navigator.clipboard
+                      ?.writeText(path)
+                      .then(() => showToast(`Copied ${path}`))
+                      .catch(() => showToast(`Path: ${path}`));
+                  }}
+                />
+              ))}
+            </>
+          )}
+
+          {sharedFolderCount > 0 && <div style={{ height: 14 }} />}
           <div className="v3-shd">
             <span>
               Active agents{" "}
@@ -638,35 +839,34 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             />
           ))}
 
-          {work.project_slug && (
+          {(chats.length > 0 || work.status === "active") && (
             <>
               <div style={{ height: 14 }} />
               <div className="v3-shd">
                 <span>
-                  Shared folders{" "}
-                  <span className="num" style={{ marginLeft: 8 }}>
-                    {shares.length}
-                  </span>
+                  Chats <span className="num" style={{ marginLeft: 8 }}>{chats.length}</span>
                 </span>
-                {project && (
+                {work.status === "active" && (
                   <span className="right">
-                    <a href={`/projects/${work.project_slug}`}>manage ↗</a>
+                    <button onClick={openChatComposer}>
+                      + new <span className="kbd" style={{ marginLeft: 4 }}>⇧C</span>
+                    </button>
                   </span>
                 )}
               </div>
-              {shares.length === 0 && (
-                <div className="v3-empty">none in this project.</div>
-              )}
-              {shares.map((s) => (
-                <V3RailShareRow
-                  key={s.slug}
-                  share={s}
-                  onCopy={(path) => {
-                    void navigator.clipboard
-                      ?.writeText(path)
-                      .then(() => showToast(`Copied ${path}`))
-                      .catch(() => showToast(`Path: ${path}`));
-                  }}
+              {chats.length === 0 && <div className="v3-empty">no chats grounded here yet.</div>}
+              {chats.map((c) => (
+                <ChatRow
+                  key={c.slug}
+                  chat={c}
+                  projects={allProjects ?? (project ? [project] : [])}
+                  works={allWorks ?? [work]}
+                  dense
+                  focused={focusedSlug === c.slug}
+                  hideGrounding
+                  onOpen={() => focusChat(c.slug)}
+                  onRenamed={patchChatSummary}
+                  onDelete={setDeleteChatTarget}
                 />
               ))}
             </>
@@ -721,7 +921,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             <span className="t">{work.name}</span>
             <span className="d">
               {canvasAgents.length} agent
-              {canvasAgents.length === 1 ? "" : "s"} on canvas
+              {canvasAgents.length === 1 ? "" : "s"}
+              {canvasChatSlugs.length > 0
+                ? ` + ${canvasChatSlugs.length} chat${
+                    canvasChatSlugs.length === 1 ? "" : "s"
+                  }`
+                : ""}{" "}
+              on canvas
             </span>
           </div>
           <div className="spacer" />
@@ -769,119 +975,130 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
           <DndContext sensors={dragSensors} onDragEnd={handleDragEnd}>
             <div className="work-right-canvas tiles" data-cols={cols}>
-              {agents.length === 0 && (
+              {canvasTileCount === 0 && agents.length === 0 && (
                 <div className="canvas-empty">
-                  <div className="em-title">No agents on the canvas</div>
-                  <div className="em-sub">Launch one with the “+ New agent” button above.</div>
+                  <div className="em-title">No tiles on the canvas</div>
+                  <div className="em-sub">Launch an agent or open a chat from the rail.</div>
                 </div>
               )}
-              {agents.length > 0 && canvasAgents.length === 0 && (
+              {agents.length > 0 && canvasAgents.length === 0 && canvasChatSlugs.length === 0 && (
                 <div className="canvas-empty">
                   <div className="em-title">All agents closed</div>
                   <div className="em-sub">Click any rail entry to reopen.</div>
                 </div>
               )}
               <SortableContext
-                items={canvasAgents.map((a) => a.slug)}
+                items={canvasTileIds}
                 strategy={rectSortingStrategy}
               >
-                {canvasAgents.map((a) => (
-                  <SortableCanvasCell
-                    key={a.slug}
-                    agentSlug={a.slug}
-                    persona={a.persona}
-                    focused={focusedSlug === a.slug}
-                    onFocus={() => setFocusedSlug(a.slug)}
-                    registerRef={(el) => {
-                      if (el) tileRefs.current.set(a.slug, el);
-                      else tileRefs.current.delete(a.slug);
-                    }}
-                  >
-                    <AgentTile
-                      agentSlug={a.slug}
-                      workSlug={workSlug}
-                      mode="tile"
-                      persona={a.persona}
-                      agentName={a.name}
-                      provider={a.provider}
-                      model={a.model}
-                      worktreePath={a.worktree_path}
-                      onClose={() => {
-                        closeAgent(workSlug, a.slug);
-                        if (focusedSlug === a.slug) setFocusedSlug(null);
+                {canvasTileIds.map((slug) => {
+                  const agent = canvasAgentMap.get(slug);
+                  if (agent) {
+                    const a = agent;
+                    return (
+                      <SortableCanvasCell
+                        key={a.slug}
+                        itemId={a.slug}
+                        persona={a.persona}
+                        focused={focusedSlug === a.slug}
+                        onFocus={() => setFocusedSlug(a.slug)}
+                        registerRef={(el) => {
+                          if (el) tileRefs.current.set(a.slug, el);
+                          else tileRefs.current.delete(a.slug);
+                        }}
+                      >
+                        <AgentTile
+                          agentSlug={a.slug}
+                          workSlug={workSlug}
+                          mode="tile"
+                          persona={a.persona}
+                          agentName={a.name}
+                          provider={a.provider}
+                          model={a.model}
+                          worktreePath={a.worktree_path}
+                          onClose={() => {
+                            closeAgent(workSlug, a.slug);
+                            if (focusedSlug === a.slug) setFocusedSlug(null);
+                          }}
+                          onDetach={() => {
+                            void handleDetach(a.slug);
+                          }}
+                          onHandoff={() => setHandoffSource(a)}
+                          onOpenInIde={() => {
+                            window.location.href = editorUrl(editor, a.worktree_path);
+                          }}
+                          onOpenInConsole={() => {
+                            openAgentInConsole(a.slug, terminal)
+                              .then(() => {
+                                showToast(
+                                  `Opened in ${terminal === "system" ? "your terminal" : terminal}`,
+                                );
+                              })
+                              .catch(async (err) => {
+                                const copied = await navigator.clipboard
+                                  ?.writeText(a.worktree_path)
+                                  .then(() => true)
+                                  .catch(() => false);
+                                const message =
+                                  err instanceof Error ? err.message : String(err);
+                                showToast(
+                                  copied
+                                    ? `Couldn't open terminal — path copied to clipboard. (${message})`
+                                    : `Couldn't open terminal: ${message}`,
+                                );
+                              });
+                          }}
+                          onRevealWorktree={() => {
+                            revealAgent(a.slug).catch(() => {
+                              navigator.clipboard
+                                ?.writeText(a.worktree_path)
+                                .catch(() => {});
+                            });
+                          }}
+                          onRevealAtelierDir={() => {
+                            revealAgent(a.slug, "atelier").catch((err) => {
+                              showToast(
+                                `Couldn't open Atelier folder: ${
+                                  err instanceof Error ? err.message : String(err)
+                                }`,
+                              );
+                            });
+                          }}
+                          onRename={(name) =>
+                            setAgents((curr) =>
+                              curr.map((x) =>
+                                x.slug === a.slug ? { ...x, name } : x,
+                              ),
+                            )
+                          }
+                        />
+                      </SortableCanvasCell>
+                    );
+                  }
+                  const chatSummary = chatSummaryMap.get(slug);
+                  return (
+                    <SortableCanvasCell
+                      key={slug}
+                      itemId={slug}
+                      focused={focusedSlug === slug}
+                      onFocus={() => setFocusedSlug(slug)}
+                      registerRef={(el) => {
+                        if (el) tileRefs.current.set(slug, el);
+                        else tileRefs.current.delete(slug);
                       }}
-                      onDetach={() => {
-                        void handleDetach(a.slug);
-                      }}
-                      onHandoff={() => setHandoffSource(a)}
-                      onOpenInIde={() => {
-                        // The configured editor (Settings) maps to
-                        // its OS-registered URL scheme. Browsers route
-                        // unknown protocols to the OS handler without
-                        // navigating, so the page stays put.
-                        window.location.href = editorUrl(editor, a.worktree_path);
-                      }}
-                      onOpenInConsole={() => {
-                        // Backend shells out to the platform terminal.
-                        // Surface the actual outcome — earlier the
-                        // failure path was silent (just copied the
-                        // path to clipboard), so a misconfigured
-                        // terminal preference looked like "the button
-                        // does nothing".
-                        openAgentInConsole(a.slug, terminal)
-                          .then(() => {
-                            showToast(
-                              `Opened in ${terminal === "system" ? "your terminal" : terminal}`,
-                            );
-                          })
-                          .catch(async (err) => {
-                            const copied = await navigator.clipboard
-                              ?.writeText(a.worktree_path)
-                              .then(() => true)
-                              .catch(() => false);
-                            const message =
-                              err instanceof Error ? err.message : String(err);
-                            showToast(
-                              copied
-                                ? `Couldn't open terminal — path copied to clipboard. (${message})`
-                                : `Couldn't open terminal: ${message}`,
-                            );
-                          });
-                      }}
-                      onRevealWorktree={() => {
-                        // Best-effort reveal — same fallback shape as the
-                        // work-level pill: copy the path on backend
-                        // failure so the user can paste it into a terminal.
-                        revealAgent(a.slug).catch(() => {
-                          navigator.clipboard
-                            ?.writeText(a.worktree_path)
-                            .catch(() => {});
-                        });
-                      }}
-                      onRevealAtelierDir={() => {
-                        // No clipboard fallback here — the user can't
-                        // easily reconstruct the Atelier-side path
-                        // (deterministic but not visible in the UI), and
-                        // the failure mode (no file browser to spawn) is
-                        // rare on desktop. Surface as a toast instead.
-                        revealAgent(a.slug, "atelier").catch((err) => {
-                          showToast(
-                            `Couldn't open Atelier folder: ${
-                              err instanceof Error ? err.message : String(err)
-                            }`,
-                          );
-                        });
-                      }}
-                      onRename={(name) =>
-                        setAgents((curr) =>
-                          curr.map((x) =>
-                            x.slug === a.slug ? { ...x, name } : x,
-                          ),
-                        )
-                      }
-                    />
-                  </SortableCanvasCell>
-                ))}
+                    >
+                      <ChatTile
+                        chatSlug={slug}
+                        chatSummary={chatSummary}
+                        projects={allProjects ?? (project ? [project] : [])}
+                        works={allWorks ?? [work]}
+                        onClose={() => closeChat(slug)}
+                        onStartAgent={(chat) => handleStartAgentFromChat(chat)}
+                        onUpdated={patchChatSummary}
+                      />
+                    </SortableCanvasCell>
+                  );
+                })}
               </SortableContext>
             </div>
           </DndContext>
@@ -899,6 +1116,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           }}
           forkFromAgent={agentDialogPrefill?.forkFromAgent}
           initialGoal={agentDialogPrefill?.initialGoal}
+          initialContexts={agentDialogPrefill?.initialContexts}
         />
       )}
       {deleteTarget && (
@@ -923,6 +1141,17 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             // header). Errors here are silent — the optimistic strip
             // already gave the user the right local picture.
             void refreshAgents().catch(() => {});
+          }}
+        />
+      )}
+      {deleteChatTarget && (
+        <DeleteChatDialog
+          chat={deleteChatTarget}
+          onClose={() => setDeleteChatTarget(null)}
+          onDeleted={() => {
+            const slug = deleteChatTarget.slug;
+            removeChatEverywhere(slug);
+            setDeleteChatTarget(null);
           }}
         />
       )}
@@ -984,6 +1213,30 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             work.project_slug ? { slug: work.project_slug } : "all"
           }
           onClose={() => setSearchOpen(false)}
+        />
+      )}
+      {chatComposerGrounding !== undefined && (
+        <ChatComposer
+          projects={allProjects ?? (project ? [project] : [])}
+          works={allWorks ?? [work]}
+          presetGrounding={chatComposerGrounding}
+          hideGrounding
+          onClose={() => setChatComposerGrounding(undefined)}
+          onStarted={(chat) => {
+            setChats((current) => [
+              chatSummaryFromDetail(chat),
+              ...current.filter((c) => c.slug !== chat.slug),
+            ]);
+            setChatComposerGrounding(undefined);
+            focusChat(chat.slug);
+          }}
+        />
+      )}
+      {selectedContextFolder && (
+        <ContextDocModal
+          workSlug={work.slug}
+          folder={selectedContextFolder}
+          onClose={() => setContextDocFolder(null)}
         />
       )}
     </div>
@@ -1199,6 +1452,14 @@ function V3RailAgentRow({
   );
 }
 
+function resolveCanvasOrder(override: string[], current: string[]): string[] {
+  if (override.length === 0) return current;
+  const currentSet = new Set(current);
+  const valid = override.filter((slug) => currentSet.has(slug));
+  const validSet = new Set(valid);
+  return [...valid, ...current.filter((slug) => !validSet.has(slug))];
+}
+
 function V3RailShareRow({
   share,
   onCopy,
@@ -1284,18 +1545,4 @@ function formatAge(iso: string): string {
   if (w < 5) return `${w}w ago`;
   const mo = Math.floor(d / 30);
   return `${mo}mo ago`;
-}
-
-export function shortenPath(p: string): string {
-  if (!p) return "";
-  // Substitute ``$HOME/...`` → ``~/...`` for display when we can detect
-  // home from the path. Backend sends absolute paths; FE has no env var
-  // access, so we just probe the common ``/Users/{user}`` and
-  // ``/home/{user}`` prefixes plus check whether ``Atelier`` is the
-  // user's home — covers macOS + Linux, the platforms we ship today.
-  const homeMatch = p.match(/^(\/Users\/[^/]+|\/home\/[^/]+)\/(.*)$/);
-  const display = homeMatch ? `~/${homeMatch[2]}` : p;
-  const parts = display.split("/");
-  if (parts.length <= 3) return display;
-  return [parts[0], "…", ...parts.slice(-2)].join("/");
 }

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from src.application.http.routes import (
     agents,
     artifacts,
+    chats,
     connections,
     fs,
     git,
@@ -23,7 +24,9 @@ from src.application.http.routes import (
     settings as settings_route,
 )
 from src.application.ws import agents as ws_agents
+from src.application.ws import chats as ws_chats
 from src.domain.agents import record_artifact
+from src.domain.chatstore import ChatStoreService
 from src.domain.connections import ConnectionStoreService
 from src.domain.models import Artifact
 from src.domain.projectstore import ProjectStoreService
@@ -37,6 +40,7 @@ from src.infrastructure.agents.compaction_sessions import (
 from src.infrastructure.artifacts.pr_status_poller import PrStatusPoller
 from src.infrastructure.connections import KeyringSecretStore, fetch_context, verify
 from src.infrastructure.database import (
+    SqlChatRepository,
     SqlProjectRepository,
     SqlWorkRepository,
     configure_mappings,
@@ -50,6 +54,8 @@ from src.infrastructure.database.user_settings_repository import (
     SqlUserSettingsRepository,
 )
 from src.infrastructure.filesystem import (
+    FsChatFiles,
+    FsChatTranscriptLog,
     FsProjectFiles,
     FsTranscriptLog,
     FsWorkspaceFiles,
@@ -101,6 +107,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         projectstore = ProjectStoreService(project_repo, project_files)
 
         reconcile(repo, files)
+
+        chat_repo = SqlChatRepository(session_factory)
+        chat_files = FsChatFiles(paths)
+        chatstore = ChatStoreService(chat_repo, chat_files)
+        chat_transcript_log = FsChatTranscriptLog(chat_files, chatstore.touch_chat)
 
         connection_repo = SqlConnectionRepository(session_factory)
         connection_store = ConnectionStoreService(
@@ -187,6 +198,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             record_artifact=_track_artifact,
             describe_worktree_state=worktree_manager.describe_state,
         )
+        chat_supervisor = AgentSupervisorService(
+            chat_transcript_log,
+            chatstore.set_chat_session_id,
+        )
         for work in workstore.list_works():
             if work.slug is None:
                 continue
@@ -198,7 +213,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.session_factory = session_factory
         app.state.workstore = workstore
         app.state.projectstore = projectstore
+        app.state.chatstore = chatstore
         app.state.supervisor = supervisor
+        app.state.chat_supervisor = chat_supervisor
         app.state.connection_store = connection_store
         app.state.user_settings_repo = user_settings_repo
         app.state.worktree_manager = worktree_manager
@@ -240,6 +257,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             await update_check_poller.stop()
             await pr_status_poller.stop()
+            await chat_supervisor.shutdown()
             await supervisor.shutdown()
             engine.dispose()
 
@@ -247,6 +265,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(works.router, prefix="/api")
+    app.include_router(chats.router, prefix="/api")
     app.include_router(agents.router, prefix="/api")
     app.include_router(providers.router, prefix="/api")
     app.include_router(connections.router, prefix="/api")
@@ -257,6 +276,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(update_status.router, prefix="/api")
     app.include_router(settings_route.router, prefix="/api")
     app.include_router(ws_agents.router, prefix="/api")
+    app.include_router(ws_chats.router, prefix="/api")
     return app
 
 

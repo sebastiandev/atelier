@@ -23,6 +23,7 @@ Steps:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -236,6 +237,14 @@ async def execute(
             work_slug=req.work_slug,
             agent_slug=agent.slug,
         )
+        mounted_chat_contexts = _mount_work_chat_contexts(
+            workdir=workdir,
+            folders=record.chat_context_folders,
+        )
+        mounted_shares = _merge_mounted_shares(
+            mounted_chat_contexts,
+            mounted_shares,
+        )
 
         common = CommonAgentConfig(
             workdir=workdir,
@@ -356,6 +365,69 @@ def _agent_writable_roots(
                 *worktree_manager.sandbox_writable_roots(workdir),
             )
         )
+    )
+
+
+def _mount_work_chat_contexts(
+    *,
+    workdir: Path,
+    folders: Sequence[object],
+) -> MountedProjectShares:
+    summaries: list[ShareSummary] = []
+    writable_roots: list[Path] = []
+    for folder in folders:
+        name = getattr(folder, "name", None)
+        mount_path = getattr(folder, "mount_path", None)
+        target = getattr(folder, "absolute_path", None)
+        if not isinstance(name, str) or not isinstance(mount_path, str):
+            continue
+        if not isinstance(target, Path):
+            continue
+        link_path = workdir / mount_path
+        try:
+            link_path.parent.mkdir(parents=True, exist_ok=True)
+            if link_path.is_symlink():
+                if link_path.resolve(strict=False) == target.resolve(strict=False):
+                    pass
+                else:
+                    link_path.unlink()
+                    link_path.symlink_to(target, target_is_directory=True)
+            elif link_path.exists():
+                _log.warning(
+                    "chat context %s not mounted at %s: path already exists",
+                    name,
+                    link_path,
+                )
+                continue
+            else:
+                link_path.symlink_to(target, target_is_directory=True)
+        except OSError as exc:
+            _log.warning(
+                "chat context %s not mounted at %s: %s",
+                name,
+                link_path,
+                exc,
+            )
+            continue
+        summaries.append(ShareSummary(name=name, mount_path=mount_path))
+        writable_roots.append(target.resolve(strict=False))
+    return MountedProjectShares(
+        summaries=tuple(summaries),
+        writable_roots=tuple(dict.fromkeys(writable_roots)),
+    )
+
+
+def _merge_mounted_shares(
+    *groups: MountedProjectShares,
+) -> MountedProjectShares:
+    summaries: list[ShareSummary] = []
+    writable_roots: list[Path] = []
+    for group in groups:
+        summaries.extend(group.summaries)
+        writable_roots.extend(group.writable_roots)
+    return MountedProjectShares(
+        summaries=tuple(summaries),
+        writable_roots=tuple(dict.fromkeys(writable_roots)),
     )
 
 

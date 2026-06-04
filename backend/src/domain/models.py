@@ -33,6 +33,8 @@ Persona = Literal["architect", "developer", "product", "ux", "writer", "custom"]
 Provider = Literal["claude-code", "amp", "codex"]
 ConnectionType = Literal["sentry", "honeycomb", "jira"]
 HandoffTargetDialog = Literal["new-agent"]
+ChatGroundingKind = Literal["project", "work", "folder"]
+ChatMessageRole = Literal["user", "assistant"]
 # ``ArtifactType`` was defined here; after the per-type-status split it
 # lives next to the typed Artifact subclasses. Re-exported below.
 
@@ -100,6 +102,11 @@ class Work:
     status: WorkStatus
     created_at: datetime
     project_slug: str | None = None
+    # Optional provenance when a Work was promoted from an exploratory
+    # chat. Nullable/additive so legacy rows and work.json files load as
+    # ordinary work.
+    from_chat_slug: str | None = None
+    from_chat_title: str | None = None
 
 
 @dataclass(kw_only=True)
@@ -111,9 +118,9 @@ class Project:
     use-time (read-through, not denormalized onto the Work). Works without
     a project ("loose work") remain first-class.
 
-    ``glyph`` is a 1–2-character monogram derived from ``name`` on create
+    ``glyph`` is a 1-2-character monogram derived from ``name`` on create
     by the FE; persisted so the user can override later.
-    ``color`` is an OKLCH hue 0–360, exposed to CSS as ``--proj-h``.
+    ``color`` is an OKLCH hue 0-360, exposed to CSS as ``--proj-h``.
     Default-connection fields hold connection slugs (e.g. ``"con-3"``);
     the FK is to ``connections.slug`` so deleting a connection sets the
     field to NULL rather than dangling.
@@ -128,6 +135,37 @@ class Project:
     pinned: bool = False
     default_jira_conn: str | None = None
     default_sentry_conn: str | None = None
+    created_at: datetime
+
+
+@dataclass(kw_only=True)
+class Chat:
+    """Lightweight exploratory conversation.
+
+    Chat is intentionally separate from Work: one immutable provider/model,
+    optional placement/working context, and a transcript stored under the
+    chat workspace directory. ``promoted_to_work_slug`` links forward once
+    the discussion seeds a tracked Work unit.
+    """
+
+    id: int | None = None
+    slug: str | None = None
+    title: str
+    provider: Provider
+    model: str
+    grounding_kind: ChatGroundingKind | None = None
+    grounding_ref: str | None = None
+    working_directory: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    session_id: str | None = None
+    promoted_to_work_slug: str | None = None
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    role: ChatMessageRole
+    body: str
     created_at: datetime
 
 

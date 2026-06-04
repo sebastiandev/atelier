@@ -39,6 +39,22 @@ class WorkspacePaths:
     def works_dir(self) -> Path:
         return self.workspace_root / "works"
 
+    def chats_dir(self) -> Path:
+        return self.workspace_root / "chats"
+
+    def chat_dir(self, chat_slug: str) -> Path:
+        _validate_slug(chat_slug)
+        return self.chats_dir() / chat_slug
+
+    def chat_json(self, chat_slug: str) -> Path:
+        return self.chat_dir(chat_slug) / "chat.json"
+
+    def chat_transcript(self, chat_slug: str) -> Path:
+        return self.chat_dir(chat_slug) / "transcript.ndjson"
+
+    def chat_compactions_dir(self, chat_slug: str) -> Path:
+        return self.chat_dir(chat_slug) / "compactions"
+
     def work_dir(self, work_slug: str) -> Path:
         _validate_slug(work_slug)
         return self.works_dir() / work_slug
@@ -70,6 +86,15 @@ class WorkspacePaths:
 
     def brief(self, work_slug: str) -> Path:
         return self.work_dir(work_slug) / "brief.md"
+
+    def work_chat_context_dir(self, work_slug: str, folder_name: str) -> Path:
+        _validate_slug(folder_name)
+        return self.work_dir(work_slug) / "chat-contexts" / folder_name
+
+    def work_chat_context_file(
+        self, work_slug: str, folder_name: str, filename: str
+    ) -> Path:
+        return self.work_chat_context_dir(work_slug, folder_name) / filename
 
     def agent_dir(self, work_slug: str, agent_slug: str) -> Path:
         _validate_slug(agent_slug)

@@ -13,6 +13,7 @@ frontend/src/
 ├── Home.tsx             # /
 ├── WorkView.tsx         # /works/<slug>
 ├── ProjectScreen.tsx    # /projects/<slug>
+├── Chat.tsx             # /chats/<slug> + spotlight composer + context doc modal
 ├── AgentView.tsx        # /agents/<slug> — wraps AgentTile in page mode
 ├── Connections.tsx      # /connections — CRUD UI for ConnectionStore
 ├── AgentTile.tsx        # the unit; "page" or "tile" mode
@@ -38,11 +39,19 @@ State: Zustand for frontend-local presentation concerns (see [State](#state)).
 
 Hand-rolled in `App.tsx`. Path prefix → component. We don't ship a router because:
 
-- Four route patterns total (`/agents/<slug>`, `/works/<slug>`, `/projects/<slug>`, `/connections`) plus the home.
+- Five route patterns total (`/agents/<slug>`, `/works/<slug>`, `/projects/<slug>`, `/chats/<slug>`, `/connections`) plus the home.
 - No nested routes, no parameterized search, no transitions.
 - Adding `react-router` would be more code than the router itself.
 
 If routing grows beyond ~5 patterns, swap it in.
+
+## Exploratory chats
+
+`Chat.tsx` owns the chat route and the reusable chat surfaces. Home, Project, and Work each render a Chats section and bind `C` to open the spotlight `ChatComposer`; Home starts unlinked, Project presets `grounding={kind:"project"}`, and Work presets `grounding={kind:"work"}`. `grounding` is the Project/Work link that decides where the chat appears; `working_directory` is the optional folder used as the provider cwd. Home exposes both controls, Work hides the link because the current Work is implicit, and Project only allows the current Project or one of its Works. Home only lists unassigned chats, Project only lists project-grounded chats that have not moved into a work, and Work lists work-grounded/promoted chats. After creation, project-grounded chats land on their Project list, while work-grounded chats navigate to `/works/<slug>?chat=<CHT>` and WorkView opens the chat tile in the canvas. Project chat rows use the subtitle grounding layout so the associated work/project label stays directly under the chat title on wide screens. The composer uses the existing provider descriptors from `GET /api/providers`, but the chosen provider/model stay immutable once the chat is created.
+
+`/chats/<slug>` uses the `shell-v3 narrow-left` two-column layout: left rail for grounding/model/provenance, right column for the transcript and composer. The page fetches REST metadata with `GET /api/chats/{slug}` but renders and sends turns through `useAgentStream(chatSlug, { resource: "chats" })`, which opens `WS /api/chats/{slug}/stream`. Promotion is the single summary modal path: the user confirms name, brief, and project, then `POST /api/chats/{slug}/promote` returns the new Work and the UI navigates there. WorkView renders promoted chat context folders before project shares; clicking one opens `ContextDocModal`, which reads `GET /api/works/{work}/chat-contexts/{folder}/{filename}` and links back to the source chat. The full chat rail also exposes a neutral **Compact context** action that calls `POST /api/chats/{slug}/compact`.
+
+Inside WorkView, the left rail orders Shared folders first, Active agents second, and Chats third. Chat rows are rail controls rather than navigation links: clicking a work chat opens a fixed-accent `ChatTile` in the same sortable canvas as agent tiles; closing the tile only removes it from the canvas, and the chat remains in the Chats rail. Chat rows can be renamed by double-clicking the title and deleted through the kebab menu, matching agent row affordances. Chat tiles use the chat websocket stream for transcript/input/stop/permission behavior and reuse `AgentTile` transcript units plus `TurnMetricsBar`, but intentionally omit IDE, console, reveal-worktree, detach, persona controls, duplicate header compaction, and current-work grounding metadata. Their context-bar compact action uses the same chat compact endpoint as the full chat page. Their start-agent action calls `POST /api/works/{work}/chats/{chat}/context`, then opens `NewAgentDialog` with the returned `context.md` as a normal `file` context.
 
 ## Projects
 
@@ -100,13 +109,19 @@ The mode is a structural switch, not a theming switch. Splitting into two compon
 - **Center** cell: `agent-slug` (mono) + `provider-pill` (`amp · rush`) + `conn-status` (`CONNECTED`) + a `folder-pill mono` showing `shortenPath(worktreePath)`. Left-click reveals the worktree in Finder; **right-click opens a small context menu** (`.folder-pill-menu`, anchored at cursor coords) with two options: *Open worktree* and *Open Atelier folder* (the per-agent dir under `~/Atelier/works/<work>/agents/<agent>/` — transcript, agent.json, contexts/). Backend dispatch via `POST /api/agents/{slug}/reveal?kind=worktree|atelier`. Center stays horizontally centered regardless of how wide the title or controls clusters get; the 1fr columns absorb the slack equally.
 - **Right** cell: `tile-controls` wrapper with **open-in-IDE / handoff / maximize / detach / close** buttons. Buttons are 26×26 with 13×13 SVG glyphs; controlled by `.tile-controls .tile-ctl` so the meta/folder pill in the center stays at default sizing. The open-in-IDE button uses the selected editor descriptor from `GET /api/settings` (`url_template` plus path tokens such as `{path_uri}` / `{path_param}`) — browsers route unknown protocols to the OS handler without navigating, so the page stays.
 
-The standalone worktree-icon button (formerly between conn-status and tile-controls) was removed — the folder pill is itself the reveal affordance. `shortenPath` is exported from `WorkView.tsx` for reuse.
+The standalone worktree-icon button (formerly between conn-status and tile-controls) was removed — the folder pill is itself the reveal affordance. Path display shortening lives in `pathFormat.ts` for reuse by AgentTile/Chat surfaces without importing WorkView.
 
 ### Context Compaction
 
 `AgentTile` derives context pressure from the latest `turn_metrics.last_prompt_tokens` snapshot plus the provider/model context window (`frontend/src/AgentTile.tsx`). The status row above the composer shows the current git branch or `DETACHED HEAD` first, then latency, token usage, `ctx N%`, and the activity label. The composer carries the visual state: a 2px top-edge context gauge fills to the current percentage, and a 2px bottom-edge persona rail sweeps while the agent is working. At 75% the row shows a warn-colored inline **Compact** button; at 86% the context label, gauge, button, and modal primary action switch to the critical tone. Clicking **Compact** opens a blurred, outcome-led confirmation modal that snapshots the current context/tone, stays open while the async compaction runs, then shows success or a retryable error. At 100% normal sends and tile actions are blocked: the modal opens automatically, can be dismissed so the user can inspect the last response, and reopens on the next attempted action; it can offer handoff when the parent supplied `onHandoff`.
 
 This is intentionally not styled like a tool permission prompt. Permission prompts stay inline above the composer and use tool/security language; compaction uses context/cost language and composer-edge rails because it changes the provider session behind the same agent. The frontend calls `POST /api/agents/{slug}/compact` through `api.compactAgent`; the supervisor kicks the active websocket on session replacement so `useAgentStream` reconnects and replays the `context_compacted` transcript marker. Reconnects are generation-guarded so stale sockets from the compaction race cannot replace the current live subscription. `AgentTile` renders that marker as a session boundary: the previous transcript units collapse into a disclosure, and **View summary** lazy-loads the saved compaction doc via `GET /api/agents/{slug}/compactions/{filename}`.
+
+Chats do not become agents and do not use the AgentTile context-pressure modal.
+`ChatView` and `ChatTile` reuse `TranscriptUnits` and `TurnMetricsBar`; when the
+websocket replays a `context_compacted` event, the shared boundary lazy-loads
+`GET /api/chats/{slug}/compactions/{filename}` through a chat-specific summary
+loader.
 
 ## View-toggle pattern
 
@@ -120,13 +135,13 @@ This is intentionally not styled like a tool permission prompt. Permission promp
 
 ## `useAgentStream`
 
-`useAgentStream(agentSlug)` is the single point of contact with the WS at `/api/agents/<slug>/stream`. It returns `{ events, status, sendInput }` and handles:
+`useAgentStream(slug, { resource })` is the single point of contact with supervisor-backed websocket streams. The default resource is `"agents"` (`/api/agents/<slug>/stream`); chat surfaces pass `{ resource: "chats" }` for `/api/chats/<slug>/stream`. It returns `{ events, status, sendInput, sendStop, sendPermission, pendingPermissions }` and handles:
 
 **Cursor-based resume.** Within a session, on WS close + reconnect it appends `?cursor=<lastSeq>` so the server replays only the window we missed before going live. The server's replay-then-live semantics guarantee no duplicates and no gaps (see `backend.md` → WS protocol). The cursor lives in a closure-scoped `lastSeqRef` and resets to `0` on every fresh mount — the transcript itself isn't persisted client-side, so seeding non-zero on mount would yield an empty tile (the bug that retired the old `atelier:cursors` localStorage key).
 
 **Exponential reconnect backoff.** Schedule: `1s → 2s → 4s → 8s → 16s → 30s` (cap). Resets on a successful `onopen`, so a single transient blip costs one 1s retry — only consecutive failures walk the ladder.
 
-**Terminal close on 4404.** When the backend closes with code 4404 the agent slug is unknown to the server and the hook sets `status: "stopped"` and exits the retry loop. With the supervisor's resume path (see `backend.md` → WS protocol), a backend restart no longer surfaces 4404 — the WS handler rebuilds the adapter with the persisted `session_id` so the conversation resumes mid-stream. 4404 in practice means the slug doesn't exist (e.g. stale localStorage in the closed-rail state).
+**Terminal close on 4404.** When the backend closes with code 4404 the slug is unknown to the server and the hook sets `status: "stopped"` and exits the retry loop. With the supervisor's resume path (see `backend.md` → WS protocol), a backend restart no longer surfaces 4404 — the WS handler rebuilds the adapter with the persisted `session_id` so the conversation resumes mid-stream. 4404 in practice means the slug doesn't exist (e.g. stale localStorage in the closed-rail state, or a deleted chat).
 
 **Close = pin to rail.** The X on `AgentTile` is "close" — `WorkView` records the slug in `useClosedStore` and unmounts the tile. The WS connection ends; the agent row + `transcript.ndjson` + provider session ID stay on the server. Clicking the rail entry restores the tile, which mounts a fresh `AgentTile`, which opens a new WS, which resumes the same provider session by ID. There is no "delete" — closing is fully reversible by design.
 

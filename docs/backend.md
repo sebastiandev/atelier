@@ -9,12 +9,13 @@ Python 3.11, `uv`-managed venv at `backend/.venv`, FastAPI on `127.0.0.1:8001`.
 ```
 backend/src/
 ├── application/        # FastAPI: routes, ws, lifespan
-│   ├── http/routes/    # works, agents, connections, providers, projects, health
+│   ├── http/routes/    # works, agents, chats, connections, providers, projects, health
 │   ├── http/schemas.py # Pydantic wire types
-│   └── ws/agents.py    # /api/agents/{slug}/stream
+│   └── ws/             # /api/agents/{slug}/stream, /api/chats/{slug}/stream
 ├── domain/             # framework-free
 │   ├── agents/         # configs, specs, ports, events, system_prompt
-│   ├── commands/       # works/, agents/, connections/, projects/ — execute() per use case
+│   ├── commands/       # works/, agents/, chats/, connections/, projects/ — execute() per use case
+│   ├── chatstore/      # ChatStore + chat transcript metadata
 │   ├── connections/    # ConnectionStore + service + ports
 │   ├── supervisor/     # AgentSupervisorService — async, single-subscriber
 │   ├── worktrees/      # WorktreeManager port
@@ -23,6 +24,14 @@ backend/src/
 │   └── models.py       # plain dataclasses
 └── infrastructure/     # SA mapping, filesystem, agent SDK adapters, git worktrees, keyring, HTTP verifier
 ```
+
+## Exploratory Chat Store
+
+Exploratory chats are a lightweight sibling to Work, not an agent type. `domain/chatstore/` composes a `ChatRepository` SQL index with `ChatFiles` under `~/Atelier/chats/<CHT-NNN>/` (`chat.json` plus `transcript.ndjson`). Schema v13 adds the `chats` table and nullable `works.from_chat_slug` / `works.from_chat_title`; schema v14 adds nullable `chats.session_id` for provider-backed stream resume; schema v15 adds nullable `chats.working_directory` so the Project/Work link can stay separate from the provider cwd. Existing rows read as unlinked, session-less, and default-working-folder. The wire and filesystem shapes are additive: `work.json` may include optional `from_chat` and `chat_context_folders`, `chat.json` may include optional `working_directory`, and readers default both when absent.
+
+Promotion runs through `application/http/routes/chats.py`: it summarizes the confirmed brief into a work-scoped `context.md`, creates the Work through `WorkStore`, marks `Chat.promoted_to_work_slug`, and stores the context folder under `~/Atelier/works/<WRK>/chat-contexts/<folder>/`. Work-grounded chat tiles can also call `POST /api/works/{work}/chats/{chat}/context`, which uses `WorkStore.ensure_work_chat_context` to reuse or append that same folder shape before seeding the New Agent dialog with the resulting file context. Agent start mounts those work-scoped chat context folders into the agent worktree alongside project shares and forwards their resolved roots through the normal writable-roots path; see `domain/commands/agents/start.py`.
+
+Runtime-backed chats use a separate `AgentSupervisorService` instance (`app.state.chat_supervisor`) with `FsChatTranscriptLog`, so `CHT-NNN` gets the same replay cursor, input/stop/permission frames, provider session persistence, and adapter event pump as agents without sharing agent worktrees, artifacts, or counts. `domain/commands/chats/connect.py` resolves the chat, builds the provider adapter from its immutable provider/model, registers lazily, claims the first persisted user prompt exactly once, and then yields the normal supervisor subscription. When `working_directory` is set it becomes the cwd/writable root; otherwise Work/Project links fall back to their Atelier metadata folders, and legacy folder-grounded chats are treated as working-folder chats. Legacy `role/body` transcript rows are translated into `user_input` / `message_complete` stream events on replay, and REST reads map new supervisor events back into `ChatMessage` for promotion/context generation. The old `POST /api/chats/{slug}/messages` append route remains for compatibility but the frontend uses `WS /api/chats/{slug}/stream` for turns. Chat compaction uses the same `CompactionSessionClient` provider-session port as agents, but stores summaries under `chats/<CHT>/compactions/` and only swaps `chats.session_id`; there is no worktree or parent agent lineage.
 
 ## Provider abstraction (Spec / Config / Adapter)
 
@@ -185,6 +194,8 @@ Provider mechanics stay behind `infrastructure/agents/compaction_sessions.py`, w
 
 Summary-only provider runs reject all tools. If a provider still emits an attempted `ToolCall` before recovering from the rejection, the private collector ignores that attempted call and keeps waiting for assistant text. Any non-empty provider summary is preserved as the seed summary; provider `Error` events, timeout, or empty summaries fall back to the app summarizer.
 
+`POST /api/chats/{slug}/compact` follows the same provider maintenance pattern for exploratory chats. The route delegates to `domain/commands/chats/compact.py`, which stops `chat_supervisor`, summarizes the chat transcript, writes `chats/<slug>/compactions/<timestamp>.md`, starts a fresh provider session, writes a best-effort breadcrumb into the old session, updates `chats.session_id`, and appends a `context_compacted` boundary. It stops the chat supervisor again before returning so any websocket reconnect that raced compaction is evicted and the next stream replays from the final boundary. `GET /api/chats/{slug}/compactions/{filename}` reads the saved summary through `ChatStore` by scoped filename.
+
 ### How the SDK adapters fit in
 
 Each adapter implements the `AgentAdapter` Protocol from `domain/agents/ports.py`:
@@ -334,6 +345,11 @@ Production wires ``_CodexAppServerClient`` via ``_default_client_factory``. Test
                     ├── text-1.md
                     ├── url-1.md
                     └── jira-ENG-3421.md
+└── chats/
+    └── <chat_slug>/
+        ├── chat.json
+        ├── transcript.ndjson
+        └── compactions/                  ← chat provider-session summaries
 ```
 
 **Filesystem is canonical.** SQLite is treated as a derived index. The `WorkStoreService` and `ProjectStoreService` each write DB first then FS within a service-level `threading.RLock`; a crash between the two leaves an orphan DB row, and startup `reconcile` (`domain/workstore/reconcile.py`, `domain/projectstore/reconcile.py`) repairs it: delete DB rows whose FS dir is gone; restore DB rows from `work.json` / `project.json` / `agent.json` if the FS has them but DB doesn't; FS wins on any field conflict.
@@ -442,6 +458,10 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 **Gitignored devtime artifacts get mirrored.** `git worktree add` only materialises tracked files, so a fresh worktree boots without `.venv` / `node_modules` and (load-bearing) without `.env*` files. `_symlink_devtime_artifacts` in `infrastructure/git/worktree_manager.py` symlinks two classes from the source repo into the worktree right after provisioning: **dirs** (`.venv` / `venv` / `node_modules`) and **files** (`.env`, `.env.local`, `.env.development[.local]`, `.env.production[.local]`). Top-level + one-level-deep scope, so monorepos with `backend/.env.local` + `frontend/.env.local` are covered. Symlinks (not copies) so source edits propagate live to every agent. Failures are logged and swallowed — a missing convenience symlink is a degradation, not a launch blocker. Without the env-file mirroring, pydantic raises on required fields at server start and Vite's compile-time `define` substitution silently bakes empty strings into the bundle.
 
 **Wired into the `agents/start` command** (`domain/commands/agents/start.py`). The route stays thin: parse the request, `await start.execute(...)`. The command validates the provider config first (via `Spec.build`) so a bad model can't allocate an agent row + worktree we'd have to roll back, then pre-fetches connection-backed contexts before any side effect, then `register_agent` (eager) and an optional first-message send. Domain errors: `WorkNotFound` → 404; `InvalidProviderConfig` / `AgentFolderMissing` / `ContextFetchError` → 422.
+
+## Artifact Recording
+
+Adapters emit `ArtifactMarker` events for `record_pr`, `record_jira`, and `record_doc` tool calls, plus a fallback scan for `{"atelier_artifact": ...}` text markers. The supervisor records those markers through `domain/agents/artifacts.py`, which validates the payload and calls `WorkStore.record_artifact`. Recording is idempotent by work-scoped artifact identity: PR/Jira artifacts use `url`; doc artifacts use resolved `doc_path`. `WorkStore.list_artifacts_for_work` applies the same de-dupe on read so legacy duplicate rows do not render twice in the left rail.
 
 ### Branch listing for the picker
 

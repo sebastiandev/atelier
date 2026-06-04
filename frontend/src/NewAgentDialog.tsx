@@ -45,6 +45,10 @@ type Props = {
    *  drop the freshly-generated handoff doc into the new agent's first
    *  context. The user can edit before submitting. */
   initialGoal?: string;
+  /** Context rows to pre-seed before the dialog opens. Used by chat
+   *  handoff so the chat summary/context.md enters the ordinary agent
+   *  context pipeline. */
+  initialContexts?: ContextEntry[];
 };
 
 const SIMPLE_TYPES: { id: SimpleContextType; label: string }[] = [
@@ -62,6 +66,7 @@ export function NewAgentDialog({
   onCreate,
   forkFromAgent,
   initialGoal,
+  initialContexts,
 }: Props) {
   const [providers, setProviders] = useState<ProviderDescriptor[] | null>(null);
   const [providersError, setProvidersError] = useState<string | null>(null);
@@ -106,7 +111,9 @@ export function NewAgentDialog({
   const [branchesLoading, setBranchesLoading] = useState(false);
 
   const [goal, setGoal] = useState(initialGoal ?? "");
-  const [contexts, setContexts] = useState<ContextEntry[]>([]);
+  const [contexts, setContexts] = useState<ContextEntry[]>(
+    () => initialContexts ?? [],
+  );
   const [connections, setConnections] = useState<Connection[]>([]);
   const { descriptors: connectionDescriptors } = useConnectionDescriptors();
   // Only types whose backend fetcher is wired show up as add-context

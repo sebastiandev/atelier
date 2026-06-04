@@ -162,6 +162,8 @@ works_table = Table(
         nullable=True,
         index=True,
     ),
+    Column("from_chat_slug", String, nullable=True, index=True),
+    Column("from_chat_title", String, nullable=True),
 )
 
 
@@ -173,7 +175,7 @@ projects_table = Table(
     Column("name", String, nullable=False),
     Column("description", String, nullable=False),
     Column("glyph", String, nullable=False),
-    # OKLCH hue 0–360. Stored as int; CSS exposes as --proj-h on cards/chips.
+    # OKLCH hue 0-360. Stored as int; CSS exposes as --proj-h on cards/chips.
     Column("color", Integer, nullable=False),
     Column("pinned", Boolean, nullable=False, default=False),
     # Default Jira/Sentry connections — referenced by slug so they survive
@@ -192,6 +194,32 @@ projects_table = Table(
         nullable=True,
     ),
     Column("created_at", UTCDateTime, nullable=False),
+)
+
+
+chats_table = Table(
+    "chats",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("slug", String, unique=True, nullable=False, index=True),
+    Column("title", String, nullable=False),
+    Column("provider", String, nullable=False),
+    Column("model", String, nullable=False),
+    Column("grounding_kind", String, nullable=True),
+    Column("grounding_ref", String, nullable=True),
+    Column("working_directory", String, nullable=True),
+    Column("created_at", UTCDateTime, nullable=False),
+    Column("updated_at", UTCDateTime, nullable=False),
+    # Provider session/thread ID once a chat stream has established one.
+    # Nullable for chats created before the runtime-backed stream existed.
+    Column("session_id", String, nullable=True),
+    Column(
+        "promoted_to_work_slug",
+        String,
+        ForeignKey("works.slug", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
 )
 
 

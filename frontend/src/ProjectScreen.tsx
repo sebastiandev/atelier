@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  type ChatGrounding,
+  type ChatSummary,
   type CreateWorkPayload,
   type ProjectDetail,
   type ProjectSummary,
@@ -8,13 +10,21 @@ import {
   type WorkSummary,
   createWork,
   getProject,
+  listChats,
   listProjectShares,
   listProjects,
   listWorks,
 } from "./api";
 import { BrandMark } from "./BrandMark";
+import {
+  ChatComposer,
+  ChatRow,
+  DeleteChatDialog,
+  chatSummaryFromDetail,
+} from "./Chat";
 import { EditProjectDialog } from "./EditProjectDialog";
 import {
+  ChatIcon,
   CheckIcon,
   FolderIcon,
   MoreIcon,
@@ -34,6 +44,8 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
   const [works, setWorks] = useState<WorkSummary[]>([]);
   const [allProjects, setAllProjects] = useState<ProjectSummary[]>([]);
   const [shares, setShares] = useState<SharedFolderSummary[]>([]);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [deleteChatTarget, setDeleteChatTarget] = useState<ChatSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("active");
   const [workDialogOpen, setWorkDialogOpen] = useState(false);
@@ -43,19 +55,23 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
   const [sharedFoldersOpen, setSharedFoldersOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [allWorks, setAllWorks] = useState<WorkSummary[]>([]);
+  const [chatComposerGrounding, setChatComposerGrounding] =
+    useState<ChatGrounding | null | undefined>(undefined);
 
   async function refresh() {
     try {
-      const [p, allWorks, projects, projectShares] = await Promise.all([
+      const [p, allWorks, projects, projectShares, projectChats] = await Promise.all([
         getProject(projectSlug),
         listWorks(),
         listProjects(),
         listProjectShares(projectSlug),
+        listChats({ project_slug: projectSlug }),
       ]);
       setProject(p);
       setWorks(allWorks.filter((w) => w.project_slug === projectSlug));
       setAllProjects(projects);
       setShares(projectShares);
+      setChats(projectChats);
       setAllWorks(allWorks);
       setError(null);
     } catch (err) {
@@ -69,11 +85,12 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
 
   // Shortcuts:
   //   N       → new work (in this project)
+  //   Shift+C → new chat (grounded to this project)
   //   Shift+W → switch to another work within this project
   //   Shift+P → switch project
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (workDialogOpen || editDialogOpen) return;
+      if (workDialogOpen || editDialogOpen || chatComposerGrounding !== undefined) return;
       if (projectSwitcherOpen || workSwitcherOpen) return;
       if (sharedFoldersOpen || searchOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -92,6 +109,9 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
       } else if (!e.shiftKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
         setWorkDialogOpen(true);
+      } else if (e.shiftKey && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        setChatComposerGrounding({ kind: "project", ref: projectSlug });
       }
     }
     window.addEventListener("keydown", onKey);
@@ -99,6 +119,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
   }, [
     workDialogOpen,
     editDialogOpen,
+    chatComposerGrounding,
     projectSwitcherOpen,
     workSwitcherOpen,
     sharedFoldersOpen,
@@ -329,6 +350,12 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           >
             + New work <span className="kbd" style={{ marginLeft: 8 }}>N</span>
           </button>
+          <button
+            className="btn"
+            onClick={() => setChatComposerGrounding({ kind: "project", ref: project.slug })}
+          >
+            <ChatIcon size={12} /> New chat <span className="kbd" style={{ marginLeft: 8 }}>⇧C</span>
+          </button>
           <button className="btn" onClick={() => setEditDialogOpen(true)}>
             Edit project
           </button>
@@ -383,6 +410,34 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           )}
           {filtered.map((w) => (
             <V3WorkRow key={w.slug} work={w} />
+          ))}
+          <div style={{ height: 28 }} />
+          <div className="v3-shd">
+            <span>
+              Chats <span className="num" style={{ marginLeft: 8 }}>{chats.length}</span>
+            </span>
+            <span className="right">
+              <button onClick={() => setChatComposerGrounding({ kind: "project", ref: project.slug })}>
+                + new <span className="kbd" style={{ marginLeft: 4 }}>⇧C</span>
+              </button>
+            </span>
+          </div>
+          <div className="v3-rule" />
+          {chats.length === 0 && <div className="v3-empty">no chats for this project yet.</div>}
+          {chats.map((c) => (
+            <ChatRow
+              key={c.slug}
+              chat={c}
+              projects={allProjects}
+              works={allWorks}
+              groundingPlacement="subtitle"
+              onRenamed={(updated) =>
+                setChats((curr) =>
+                  curr.map((x) => (x.slug === updated.slug ? updated : x)),
+                )
+              }
+              onDelete={setDeleteChatTarget}
+            />
           ))}
           <div style={{ height: 40 }} />
         </div>
@@ -443,6 +498,47 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           projects={allProjects}
           defaultScope={{ slug: project.slug }}
           onClose={() => setSearchOpen(false)}
+        />
+      )}
+      {chatComposerGrounding !== undefined && (
+        <ChatComposer
+          projects={allProjects}
+          works={allWorks}
+          linkProjects={[project]}
+          linkWorks={works}
+          allowNoLink={false}
+          presetGrounding={chatComposerGrounding}
+          onClose={() => setChatComposerGrounding(undefined)}
+          onStarted={(chat) => {
+            if (chat.grounding?.kind === "work") {
+              window.location.assign(`/works/${chat.grounding.ref}?chat=${chat.slug}`);
+              return;
+            }
+            if (chat.grounding?.kind === "project") {
+              if (chat.grounding.ref === project.slug) {
+                setChats((curr) => [
+                  chatSummaryFromDetail(chat),
+                  ...curr.filter((c) => c.slug !== chat.slug),
+                ]);
+                setChatComposerGrounding(undefined);
+              } else {
+                window.location.assign(`/projects/${chat.grounding.ref}`);
+              }
+              return;
+            }
+            window.location.assign(`/chats/${chat.slug}`);
+          }}
+        />
+      )}
+      {deleteChatTarget && (
+        <DeleteChatDialog
+          chat={deleteChatTarget}
+          onClose={() => setDeleteChatTarget(null)}
+          onDeleted={() => {
+            const slug = deleteChatTarget.slug;
+            setChats((curr) => curr.filter((c) => c.slug !== slug));
+            setDeleteChatTarget(null);
+          }}
         />
       )}
     </div>

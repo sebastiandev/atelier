@@ -1,14 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  type ChatGrounding,
+  type ChatSummary,
   type CreateWorkPayload,
   type ProjectSummary,
   type WorkSummary,
   createWork,
+  listChats,
   listProjects,
   listWorks,
 } from "./api";
-import { CheckIcon, ChevronRightIcon, PlugIcon, SearchIcon, SlidersIcon } from "./Icons";
+import { ChatComposer, ChatRow, DeleteChatDialog } from "./Chat";
+import {
+  ChatIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  FolderIcon,
+  PlugIcon,
+  SearchIcon,
+  SlidersIcon,
+} from "./Icons";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NewWorkDialog } from "./NewWorkDialog";
 import { SearchModal } from "./SearchModal";
@@ -24,6 +36,8 @@ type ProjectFilter = "all" | "loose" | { slug: string };
 export function Home() {
   const [works, setWorks] = useState<WorkSummary[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [chats, setChats] = useState<ChatSummary[]>([]);
+  const [deleteChatTarget, setDeleteChatTarget] = useState<ChatSummary | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<ProjectFilter>("all");
   const [workDialogOpen, setWorkDialogOpen] = useState(false);
@@ -31,12 +45,15 @@ export function Home() {
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [chatComposerGrounding, setChatComposerGrounding] =
+    useState<ChatGrounding | null | undefined>(undefined);
 
   async function refresh() {
     try {
-      const [w, p] = await Promise.all([listWorks(), listProjects()]);
+      const [w, p, c] = await Promise.all([listWorks(), listProjects(), listChats()]);
       setWorks(w);
       setProjects(p);
+      setChats(c);
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err));
@@ -50,13 +67,14 @@ export function Home() {
   // Global shortcuts:
   //   N       → new work
   //   P       → new project
+  //   C       → new chat
   //   Shift+W → switch work (palette over all works in the workspace)
   //   Shift+P → switch project (palette)
   // Ignored while modals/palettes are open or focus is in an editable
   // field, and skipped when a chord modifier is held (Cmd+W = close tab).
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (workDialogOpen || projectDialogOpen) return;
+      if (workDialogOpen || projectDialogOpen || chatComposerGrounding !== undefined) return;
       if (projectSwitcherOpen || workSwitcherOpen) return;
       if (searchOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -75,6 +93,9 @@ export function Home() {
       } else if (!e.shiftKey && (e.key === "n" || e.key === "N")) {
         e.preventDefault();
         setWorkDialogOpen(true);
+      } else if (!e.shiftKey && (e.key === "c" || e.key === "C")) {
+        e.preventDefault();
+        setChatComposerGrounding(null);
       } else if (!e.shiftKey && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
         setProjectDialogOpen(true);
@@ -85,6 +106,7 @@ export function Home() {
   }, [
     workDialogOpen,
     projectDialogOpen,
+    chatComposerGrounding,
     projectSwitcherOpen,
     workSwitcherOpen,
     searchOpen,
@@ -212,17 +234,27 @@ export function Home() {
               </span>
             </div>
             <div className="home-v3-actions">
-              <button className="btn primary" onClick={() => setWorkDialogOpen(true)}>
-                + New work <span className="kbd">N</span>
+              <button className="home-launch primary" onClick={() => setWorkDialogOpen(true)}>
+                <span className="launch-ico">+</span>
+                <span className="launch-label">New work</span>
+                <span className="kbd">N</span>
               </button>
-              <button className="btn" onClick={() => setProjectDialogOpen(true)}>
-                + New project <span className="kbd">P</span>
+              <button className="home-launch" onClick={() => setChatComposerGrounding(null)}>
+                <span className="launch-ico"><ChatIcon size={12} /></span>
+                <span className="launch-label">New chat</span>
+                <span className="kbd">C</span>
+              </button>
+              <button className="home-launch" onClick={() => setProjectDialogOpen(true)}>
+                <span className="launch-ico"><FolderIcon size={12} /></span>
+                <span className="launch-label">New project</span>
+                <span className="kbd">P</span>
               </button>
               <button
-                className="btn ghost"
+                className="home-launch ghost"
                 onClick={() => setSearchOpen(true)}
               >
-                <SearchIcon size={12} /> Search{" "}
+                <span className="launch-ico"><SearchIcon size={12} /></span>
+                <span className="launch-label">Search</span>
                 <span className="kbd">⇧F</span>
               </button>
             </div>
@@ -337,6 +369,43 @@ export function Home() {
             />
           ))}
 
+          <div style={{ height: 28 }} />
+          <V3SectionHd
+            title="Chats"
+            count={chats.length}
+            right={
+              <button onClick={() => setChatComposerGrounding(null)}>
+                + new <span className="kbd" style={{ marginLeft: 4 }}>C</span>
+              </button>
+            }
+          />
+          <div className="v3-rule" />
+          <button
+            className="v3-add-row chat"
+            onClick={() => setChatComposerGrounding(null)}
+          >
+            <span className="marker">+</span> new chat
+            <span style={{ color: "var(--fg-4)", marginLeft: 6 }}>
+              · think out loud, promote to work anytime
+            </span>
+            <span className="kbd">C</span>
+          </button>
+          {chats.length === 0 && <div className="v3-empty">no chats yet.</div>}
+          {chats.slice(0, 10).map((c) => (
+            <ChatRow
+              key={c.slug}
+              chat={c}
+              projects={projects}
+              works={works}
+              onRenamed={(updated) =>
+                setChats((curr) =>
+                  curr.map((x) => (x.slug === updated.slug ? updated : x)),
+                )
+              }
+              onDelete={setDeleteChatTarget}
+            />
+          ))}
+
           {/* Projects */}
           <div style={{ height: 28 }} />
           <V3SectionHd
@@ -441,6 +510,36 @@ export function Home() {
           works={works}
           projects={projects}
           onClose={() => setSearchOpen(false)}
+        />
+      )}
+      {chatComposerGrounding !== undefined && (
+        <ChatComposer
+          projects={projects}
+          works={works}
+          presetGrounding={chatComposerGrounding}
+          onClose={() => setChatComposerGrounding(undefined)}
+          onStarted={(chat) => {
+            if (chat.grounding?.kind === "work") {
+              window.location.assign(`/works/${chat.grounding.ref}?chat=${chat.slug}`);
+              return;
+            }
+            if (chat.grounding?.kind === "project") {
+              window.location.assign(`/projects/${chat.grounding.ref}`);
+              return;
+            }
+            window.location.assign(`/chats/${chat.slug}`);
+          }}
+        />
+      )}
+      {deleteChatTarget && (
+        <DeleteChatDialog
+          chat={deleteChatTarget}
+          onClose={() => setDeleteChatTarget(null)}
+          onDeleted={() => {
+            const slug = deleteChatTarget.slug;
+            setChats((curr) => curr.filter((c) => c.slug !== slug));
+            setDeleteChatTarget(null);
+          }}
         />
       )}
     </div>

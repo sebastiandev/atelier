@@ -61,6 +61,7 @@ Tip: start `./scripts/dev.sh` from your `~/.zshrc` / startup folder so the backe
 A quick tour of the surface area:
 
 - [One workspace, many agents](#one-workspace-many-agents) — Work units with live tiles
+- [Exploratory chats](#exploratory-chats) — think through ideas before committing to work
 - [Multi-provider](#multi-provider) — Claude and Amp side-by-side
 - [Detach to CLI](#detach-to-cli-come-back-seamlessly) — terminal handoff with full resume
 - [Hand off to a new agent](#hand-off-to-a-new-agent) — checkpoint doc + forked worktree
@@ -87,6 +88,18 @@ losing the conversation.
 <p align="center">
   <img src="docs/screenshots/agents.png" alt="Two agents (Architect and Developer) streaming in parallel inside a Work unit" width="1100">
 </p>
+
+### Exploratory chats
+
+Start a chat when you want to think out loud before creating a Work unit.
+Chats are useful for shaping a vague idea, asking a few research questions,
+or collecting enough context to decide what should happen next.
+
+A chat can stand on its own, or it can be linked to a Project or Work unit so
+it appears in the right place. You can also choose a working folder when the
+chat needs to look at local files. When the conversation turns into real work,
+Atelier can start a Work unit from the chat and carry over a concise summary,
+action items, and a link back to the full transcript.
 
 ### Multi-provider
 

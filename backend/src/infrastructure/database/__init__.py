@@ -19,11 +19,13 @@ from src.infrastructure.database.migrations import (
     SchemaMismatchError,
     initialize_database,
 )
+from src.infrastructure.database.chat_repository import SqlChatRepository
 from src.infrastructure.database.session import create_session_factory, session_scope
 from src.infrastructure.database.project_repository import SqlProjectRepository
 from src.infrastructure.database.tables import (
     agents_table,
     artifacts_table,
+    chats_table,
     connections_table,
     handoffs_table,
     metadata,
@@ -37,11 +39,13 @@ from src.infrastructure.database.work_repository import SqlWorkRepository
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "SchemaMismatchError",
+    "SqlChatRepository",
     "SqlProjectRepository",
     "SqlWorkRepository",
     "agents_table",
     "artifacts_table",
     "begin",
+    "chats_table",
     "configure_mappings",
     "connections_table",
     "create_database_engine",
