@@ -19,6 +19,7 @@
   <img src="docs/screenshots/home.png" alt="Atelier workspace — projects and latest work" width="1100">
 </p>
 
+
 ---
 
 ## Contents
@@ -91,6 +92,8 @@ losing the conversation.
 
 ### Exploratory chats
 
+<img width="2660" height="850" alt="image" src="https://github.com/user-attachments/assets/0db085b1-ce65-4112-860a-6ed77af8d181" />
+
 Start a chat when you want to think out loud before creating a Work unit.
 Chats are useful for shaping a vague idea, asking a few research questions,
 or collecting enough context to decide what should happen next.
@@ -100,6 +103,11 @@ it appears in the right place. You can also choose a working folder when the
 chat needs to look at local files. When the conversation turns into real work,
 Atelier can start a Work unit from the chat and carry over a concise summary,
 action items, and a link back to the full transcript.
+
+You can also start chats from a work unit. When you dont need worktree isolation
+but wan to ground the chat in a git repo, opening a chat is lighter. You can also
+spawn new agents from your chat, and they will appear in you canvas.
+
 
 ### Multi-provider
 
