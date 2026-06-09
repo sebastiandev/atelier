@@ -122,6 +122,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   const [workSwitcherOpen, setWorkSwitcherOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [artifactSearchOpen, setArtifactSearchOpen] = useState(false);
+  const [artifactSearchQuery, setArtifactSearchQuery] = useState("");
   const [chatComposerGrounding, setChatComposerGrounding] =
     useState<ChatGrounding | null | undefined>(undefined);
   const [contextDocFolder, setContextDocFolder] = useState<string | null>(null);
@@ -134,6 +136,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   // one at a time and overlapping toasts would just compete for room.
   const [toast, setToast] = useState<string | null>(null);
   const [canvasOrderOverride, setCanvasOrderOverride] = useState<string[]>([]);
+  const artifactSearchInputRef = useRef<HTMLInputElement>(null);
   const tileRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const closedSlugs = useClosedStore((s) => s.byWork[workSlug] ?? NO_CLOSED);
   const closeAgent = useClosedStore((s) => s.close);
@@ -207,6 +210,24 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       .map((slug) => slugToAgent.get(slug))
       .filter((a): a is AgentSummary => a !== undefined);
   }, [agents, agentOrderOverride]);
+
+  const artifactSearchActive = artifactSearchQuery.trim().length > 0;
+  const filteredArtifacts = useMemo(() => {
+    if (!artifactSearchActive) return artifacts;
+    return artifacts.filter((artifact) =>
+      artifactMatchesSearch(artifact, artifactSearchQuery),
+    );
+  }, [artifacts, artifactSearchActive, artifactSearchQuery]);
+
+  useEffect(() => {
+    if (!artifactSearchOpen) return;
+    requestAnimationFrame(() => artifactSearchInputRef.current?.focus());
+  }, [artifactSearchOpen]);
+
+  useEffect(() => {
+    setArtifactSearchOpen(false);
+    setArtifactSearchQuery("");
+  }, [workSlug]);
 
   // Open the project switcher and lazy-fetch the project list if we
   // don't have it yet. The switcher renders gracefully against an empty
@@ -760,9 +781,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
         <div className="v3-rule flush" />
 
-        <div className="scrolly">
+        <div
+          className={`scrolly work-rail-sections${
+            artifacts.length > 0 ? " has-artifacts" : ""
+          }`}
+        >
           {sharedFolderCount > 0 && (
-            <>
+            <section className="work-rail-section shared-folders-section">
               <div className="v3-shd">
                 <span>
                   Shared folders{" "}
@@ -776,72 +801,76 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   </span>
                 )}
               </div>
-              {chatContextFolders.map((folder) => (
-                <button
-                  key={folder.name}
-                  className="v3-agent-row folder-chat"
-                  onClick={() => setContextDocFolder(folder.name)}
-                  title="View context.md"
-                >
-                  <span className="pip"><FolderIcon size={12} /></span>
-                  <span className="meta">
-                    <span className="name mono">{folder.name}</span>
-                    <span className="role">context.md · from {folder.chat_slug}</span>
-                  </span>
-                  <span className="status"><DocIcon size={11} /></span>
+              <div className="work-rail-section-body themed-scrollbar">
+                {chatContextFolders.map((folder) => (
+                  <button
+                    key={folder.name}
+                    className="v3-agent-row folder-chat"
+                    onClick={() => setContextDocFolder(folder.name)}
+                    title="View context.md"
+                  >
+                    <span className="pip"><FolderIcon size={12} /></span>
+                    <span className="meta">
+                      <span className="name mono">{folder.name}</span>
+                      <span className="role">context.md · from {folder.chat_slug}</span>
+                    </span>
+                    <span className="status"><DocIcon size={11} /></span>
+                  </button>
+                ))}
+                {shares.map((s) => (
+                  <V3RailShareRow
+                    key={s.slug}
+                    share={s}
+                    onCopy={(path) => {
+                      void navigator.clipboard
+                        ?.writeText(path)
+                        .then(() => showToast(`Copied ${path}`))
+                        .catch(() => showToast(`Path: ${path}`));
+                    }}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section className="work-rail-section agents-section">
+            <div className="v3-shd">
+              <span>
+                Active agents{" "}
+                <span className="num" style={{ marginLeft: 8 }}>
+                  {orderedAgents.length}
+                </span>
+              </span>
+              <span className="right">
+                <button onClick={() => setAgentDialogOpen(true)}>
+                  + new <span className="kbd" style={{ marginLeft: 4 }}>N</span>
                 </button>
-              ))}
-              {shares.map((s) => (
-                <V3RailShareRow
-                  key={s.slug}
-                  share={s}
-                  onCopy={(path) => {
-                    void navigator.clipboard
-                      ?.writeText(path)
-                      .then(() => showToast(`Copied ${path}`))
-                      .catch(() => showToast(`Path: ${path}`));
-                  }}
+              </span>
+            </div>
+            <div className="work-rail-section-body themed-scrollbar">
+              {orderedAgents.length === 0 && (
+                <div className="v3-empty">no agents on the canvas.</div>
+              )}
+              {orderedAgents.map((a) => (
+                <V3RailAgentRow
+                  key={a.slug}
+                  agent={a}
+                  focused={focusedSlug === a.slug}
+                  closed={closedSlugs.includes(a.slug)}
+                  onFocus={() => focusAgent(a.slug)}
+                  onDelete={() => setDeleteTarget(a)}
+                  onRename={(name) =>
+                    setAgents((curr) =>
+                      curr.map((x) => (x.slug === a.slug ? { ...x, name } : x)),
+                    )
+                  }
                 />
               ))}
-            </>
-          )}
-
-          {sharedFolderCount > 0 && <div style={{ height: 14 }} />}
-          <div className="v3-shd">
-            <span>
-              Active agents{" "}
-              <span className="num" style={{ marginLeft: 8 }}>
-                {orderedAgents.length}
-              </span>
-            </span>
-            <span className="right">
-              <button onClick={() => setAgentDialogOpen(true)}>
-                + new <span className="kbd" style={{ marginLeft: 4 }}>N</span>
-              </button>
-            </span>
-          </div>
-          {orderedAgents.length === 0 && (
-            <div className="v3-empty">no agents on the canvas.</div>
-          )}
-          {orderedAgents.map((a) => (
-            <V3RailAgentRow
-              key={a.slug}
-              agent={a}
-              focused={focusedSlug === a.slug}
-              closed={closedSlugs.includes(a.slug)}
-              onFocus={() => focusAgent(a.slug)}
-              onDelete={() => setDeleteTarget(a)}
-              onRename={(name) =>
-                setAgents((curr) =>
-                  curr.map((x) => (x.slug === a.slug ? { ...x, name } : x)),
-                )
-              }
-            />
-          ))}
+            </div>
+          </section>
 
           {(chats.length > 0 || work.status === "active") && (
-            <>
-              <div style={{ height: 14 }} />
+            <section className="work-rail-section chats-section">
               <div className="v3-shd">
                 <span>
                   Chats <span className="num" style={{ marginLeft: 8 }}>{chats.length}</span>
@@ -854,41 +883,99 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   </span>
                 )}
               </div>
-              {chats.length === 0 && <div className="v3-empty">no chats grounded here yet.</div>}
-              {chats.map((c) => (
-                <ChatRow
-                  key={c.slug}
-                  chat={c}
-                  projects={allProjects ?? (project ? [project] : [])}
-                  works={allWorks ?? [work]}
-                  dense
-                  focused={focusedSlug === c.slug}
-                  hideGrounding
-                  onOpen={() => focusChat(c.slug)}
-                  onRenamed={patchChatSummary}
-                  onDelete={setDeleteChatTarget}
-                />
-              ))}
-            </>
+              <div className="work-rail-section-body themed-scrollbar">
+                {chats.length === 0 && <div className="v3-empty">no chats grounded here yet.</div>}
+                {chats.map((c) => (
+                  <ChatRow
+                    key={c.slug}
+                    chat={c}
+                    projects={allProjects ?? (project ? [project] : [])}
+                    works={allWorks ?? [work]}
+                    dense
+                    focused={focusedSlug === c.slug}
+                    hideGrounding
+                    onOpen={() => focusChat(c.slug)}
+                    onRenamed={patchChatSummary}
+                    onDelete={setDeleteChatTarget}
+                  />
+                ))}
+              </div>
+            </section>
           )}
 
           {artifacts.length > 0 && (
-            <>
-              <div style={{ height: 14 }} />
+            <section className="work-rail-section artifacts-section">
               <div className="v3-shd">
                 <span>
                   Artifacts{" "}
                   <span className="num" style={{ marginLeft: 8 }}>
-                    {artifacts.length}
+                    {artifactSearchActive
+                      ? `${filteredArtifacts.length}/${artifacts.length}`
+                      : artifacts.length}
                   </span>
                 </span>
+                <span className="right">
+                  <button
+                    type="button"
+                    className={`v3-shd-icon${artifactSearchOpen ? " active" : ""}`}
+                    onClick={() => {
+                      if (artifactSearchOpen) {
+                        setArtifactSearchOpen(false);
+                        setArtifactSearchQuery("");
+                      } else {
+                        setArtifactSearchOpen(true);
+                      }
+                    }}
+                    title={artifactSearchOpen ? "Close artifact search" : "Search artifacts"}
+                    aria-label={artifactSearchOpen ? "Close artifact search" : "Search artifacts"}
+                    aria-pressed={artifactSearchOpen}
+                  >
+                    <SearchIcon size={11} />
+                  </button>
+                </span>
               </div>
-              {artifacts.map((a) => (
-                <V3RailArtifactRow key={a.slug} artifact={a} />
-              ))}
-            </>
+              {artifactSearchOpen && (
+                <div className="rail-artifact-search">
+                  <SearchIcon size={11} />
+                  <input
+                    ref={artifactSearchInputRef}
+                    value={artifactSearchQuery}
+                    onChange={(e) => setArtifactSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Escape") return;
+                      e.preventDefault();
+                      if (artifactSearchQuery.trim()) {
+                        setArtifactSearchQuery("");
+                      } else {
+                        setArtifactSearchOpen(false);
+                      }
+                    }}
+                    placeholder="Filter artifacts"
+                    aria-label="Filter artifacts"
+                  />
+                  {artifactSearchQuery.trim() && (
+                    <button
+                      type="button"
+                      className="rail-artifact-search-clear"
+                      onClick={() => setArtifactSearchQuery("")}
+                      title="Clear artifact filter"
+                      aria-label="Clear artifact filter"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="work-rail-section-body themed-scrollbar">
+                {filteredArtifacts.length === 0 && (
+                  <div className="v3-empty">no matching artifacts.</div>
+                )}
+                {filteredArtifacts.map((a) => (
+                  <V3RailArtifactRow key={a.slug} artifact={a} />
+                ))}
+              </div>
+            </section>
           )}
-          <div style={{ height: 24 }} />
         </div>
 
         <div className="v3-footstrip">
@@ -1250,6 +1337,33 @@ const ARTIFACT_TYPE_LABEL: Record<ArtifactSummary["type"], string> = {
   jira: "JI",
   doc: "DC",
 };
+
+function normalizeArtifactSearch(value: string): string {
+  return value.toLocaleLowerCase().replace(/[_-]+/g, " ");
+}
+
+function artifactMatchesSearch(artifact: ArtifactSummary, query: string): boolean {
+  const terms = normalizeArtifactSearch(query)
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (terms.length === 0) return true;
+  const haystack = normalizeArtifactSearch(
+    [
+      artifact.title,
+      artifact.slug,
+      artifact.type,
+      ARTIFACT_TYPE_LABEL[artifact.type],
+      artifact.status,
+      artifact.agent_slug,
+      artifact.repo,
+      artifact.url,
+      artifact.doc_path,
+      artifact.location_kind,
+    ].join(" "),
+  );
+  return terms.every((term) => haystack.includes(term));
+}
 
 // Status values that resolve to a "good" (green) chip color. PR
 // terminal states get their own colors below — ``merged`` is purple
