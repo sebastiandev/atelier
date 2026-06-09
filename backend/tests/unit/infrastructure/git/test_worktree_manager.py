@@ -284,6 +284,26 @@ def test_ensure_default_is_detached_head(
     assert head.returncode != 0
 
 
+def test_ensure_uses_explicit_base_ref_instead_of_current_checkout(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    _git(repo, "branch", "master")
+    _git(repo, "switch", "-q", "-c", "feature")
+    (repo / "README.md").write_text("feature branch\n")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "feature")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo, base_ref="master")
+
+    assert (workdir / "README.md").read_text() == "hello\n"
+    head = subprocess.run(
+        ["git", "symbolic-ref", "-q", "HEAD"],
+        cwd=str(workdir),
+        capture_output=True,
+    )
+    assert head.returncode != 0
+
+
 def test_ensure_with_branch_name_creates_named_branch(
     manager: GitWorktreeManager, repo: Path
 ) -> None:

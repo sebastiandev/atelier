@@ -103,7 +103,7 @@ export function NewAgentDialog({
     () => forkFromAgent?.folder ?? folderCandidates[0] ?? "",
   );
   // Optional branch name for the agent's worktree. Blank = detached
-  // HEAD (default), and the agent is told via system prompt to
+  // HEAD from master (default), and the agent is told via system prompt to
   // ``git switch -c <name>`` before checking out elsewhere.
   const [branchName, setBranchName] = useState("");
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
@@ -402,7 +402,7 @@ export function NewAgentDialog({
                     <strong>Fresh worktree</strong>
                     <span className="hint">
                       {" "}
-                      · clean checkout of the source folder; loses{" "}
+                      · clean checkout from master; loses{" "}
                       {forkFromAgent.name}'s uncommitted work
                     </span>
                   </span>
@@ -488,7 +488,7 @@ export function NewAgentDialog({
                 )}
               </div>
               <span className="hint">
-                Blank = detached HEAD; agent names the branch later via{" "}
+                Blank = detached HEAD from master; agent names the branch later via{" "}
                 <code>git switch -c</code>.
               </span>
             </label>

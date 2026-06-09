@@ -58,6 +58,12 @@ _log = logging.getLogger(__name__)
 # at start time. Anything else is rendered inline by the renderer.
 _CONNECTION_BACKED_TYPES = frozenset({"jira", "sentry", "honeycomb"})
 
+# Fresh agents should start from the canonical integration branch, not
+# whatever branch the user's source checkout currently has selected.
+# Handoff/forked agents intentionally bypass this and inherit the source
+# agent's own worktree state via ``ensure_forked``.
+FRESH_AGENT_BASE_REF = "master"
+
 
 @dataclass(frozen=True)
 class StartAgentRequest:
@@ -223,6 +229,7 @@ async def execute(
                 work_slug=req.work_slug,
                 agent_slug=agent.slug,
                 source=req.folder,
+                base_ref=FRESH_AGENT_BASE_REF,
                 branch_name=req.branch_name,
             )
 

@@ -95,6 +95,51 @@ class _ExplodingWorktreeManager:
         pass
 
 
+class _RecordingWorktreeManager:
+    def __init__(self, workdir: Path) -> None:
+        self.workdir = workdir
+        self.ensure_calls: list[tuple[str, str, Path, str, str | None]] = []
+        self.fork_calls: list[tuple[str, str, str, Path]] = []
+        self.removed: list[tuple[str, str]] = []
+
+    def ensure(
+        self,
+        work_slug: str,
+        agent_slug: str,
+        source: Path,
+        base_ref: str = "HEAD",
+        branch_name: str | None = None,
+    ) -> Path:
+        self.ensure_calls.append((work_slug, agent_slug, source, base_ref, branch_name))
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        return self.workdir
+
+    def ensure_forked(
+        self,
+        work_slug: str,
+        new_agent_slug: str,
+        source_agent_slug: str,
+        source: Path,
+    ) -> Path:
+        self.fork_calls.append((work_slug, new_agent_slug, source_agent_slug, source))
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        return self.workdir
+
+    def is_detached(self, workdir: Path) -> bool:
+        return True
+
+    def sandbox_writable_roots(self, workdir: Path) -> tuple[Path, ...]:
+        return ()
+
+    def remove(self, work_slug: str, agent_slug: str) -> None:
+        self.removed.append((work_slug, agent_slug))
+
+    def sweep_orphans(
+        self, work_slug: str, live_agent_slugs: set[str]
+    ) -> None:  # pragma: no cover
+        pass
+
+
 class _StubConnectionStore:
     def fetch_context_body(self, context: Any) -> str:
         return ""
@@ -187,6 +232,95 @@ def test_start_rolls_back_agent_when_worktree_provisioning_fails(
     # Supervisor was never asked to register an agent that couldn't get
     # a workdir — keeps the supervisor's view of the world consistent.
     assert supervisor.registered == []
+
+
+def test_fresh_start_provisions_worktree_from_master(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workstore, _files, _repo = _make_workstore()
+    supervisor = _StubSupervisor()
+    workdir = tmp_path / "worktree"
+    worktrees = _RecordingWorktreeManager(workdir)
+    work_slug = _seed_work(workstore)
+    source = tmp_path / "source"
+    settings = Settings(workspace_root=tmp_path / "ws")
+    monkeypatch.setattr(start, "build_adapter", lambda _config, _settings: object())
+
+    req = start.StartAgentRequest(
+        work_slug=work_slug,
+        name="Dev",
+        persona="developer",
+        role="dev",
+        provider="amp",
+        model="rush",
+        folder=source,
+        options={},
+        contexts=(),
+    )
+
+    asyncio.run(
+        start.execute(
+            workstore,
+            supervisor,
+            worktrees,
+            _StubConnectionStore(),
+            _StubSharestore(),
+            _StubProvisioner(),
+            settings,
+            req,
+        )
+    )
+
+    assert worktrees.ensure_calls == [
+        (work_slug, "agt-1", source, start.FRESH_AGENT_BASE_REF, None)
+    ]
+    assert start.FRESH_AGENT_BASE_REF == "master"
+    assert worktrees.fork_calls == []
+    assert supervisor.registered == ["agt-1"]
+
+
+def test_handoff_start_forks_source_agent_state_instead_of_master(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workstore, _files, _repo = _make_workstore()
+    supervisor = _StubSupervisor()
+    workdir = tmp_path / "worktree"
+    worktrees = _RecordingWorktreeManager(workdir)
+    work_slug = _seed_work(workstore)
+    source = tmp_path / "source"
+    settings = Settings(workspace_root=tmp_path / "ws")
+    monkeypatch.setattr(start, "build_adapter", lambda _config, _settings: object())
+
+    req = start.StartAgentRequest(
+        work_slug=work_slug,
+        name="Dev",
+        persona="developer",
+        role="dev",
+        provider="amp",
+        model="rush",
+        folder=source,
+        options={},
+        contexts=(),
+        fork_from_agent="agt-source",
+        branch_name="ignored-on-fork",
+    )
+
+    asyncio.run(
+        start.execute(
+            workstore,
+            supervisor,
+            worktrees,
+            _StubConnectionStore(),
+            _StubSharestore(),
+            _StubProvisioner(),
+            settings,
+            req,
+        )
+    )
+
+    assert worktrees.ensure_calls == []
+    assert worktrees.fork_calls == [(work_slug, "agt-1", "agt-source", source)]
+    assert supervisor.registered == ["agt-1"]
 
 
 def test_mount_project_shares_returns_resolved_writable_roots(

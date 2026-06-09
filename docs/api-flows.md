@@ -395,11 +395,11 @@ commands.start.execute(workstore, worktree_manager, settings, req)
    │       └─► writes agents/<slug>/context/<files>.md
    │       └─► writes agents/<slug>/context.md  (index)
    │       returns abs_path | None
-   ├─► WorktreeManager.ensure(work, agent, source, branch_name=req.branch_name)
-   │       └─► branch_name=None  → `git worktree add --detach`  (default)
-   │       └─► branch_name="x"   → `git worktree add -b x` with self-heal-on-collision
+   ├─► WorktreeManager.ensure(work, agent, source, base_ref="master", branch_name=req.branch_name)
+   │       └─► branch_name=None  → `git worktree add --detach ... master`  (default)
+   │       └─► branch_name="x"   → `git worktree add -b x ... master` with self-heal-on-collision
    │       └─► non-git folder    → returns folder unchanged
-   │   (or WorktreeManager.ensure_forked(...) when fork_from_agent is set — always detached)
+   │   (or WorktreeManager.ensure_forked(...) when fork_from_agent is set — source agent HEAD + working state)
    ├─► mount project shared folders and work chat-context folders into workdir
    │       └─► mounted roots flow into provider writable_roots / Codex --add-dir
    ├─► render_system_prompt(..., shares=mounted folders, is_detached_worktree=...)
