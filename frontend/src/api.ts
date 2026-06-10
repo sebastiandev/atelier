@@ -420,6 +420,8 @@ export type ModelMeta = {
   output_per_mtok: number | null;
   cache_read_per_mtok: number | null;
   cache_write_per_mtok: number | null;
+  effort_values?: string[] | null;
+  effort_default?: string | null;
 };
 
 export type ProviderDescriptor = {

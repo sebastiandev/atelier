@@ -49,6 +49,7 @@ def test_claude_describe_lists_models_and_options() -> None:
     desc = ClaudeSpec().describe()
     assert desc.name == "claude-code"
     assert desc.primary_field.label == "Model"
+    assert ClaudeModel.FABLE_5.value in desc.primary_field.values
     assert ClaudeModel.OPUS_4_8.value in desc.primary_field.values
     assert ClaudeModel.OPUS_4_7.value in desc.primary_field.values
     assert "thinking_effort" in desc.options
@@ -59,6 +60,14 @@ def test_claude_describe_lists_models_and_options() -> None:
 def test_claude_describe_includes_model_meta() -> None:
     desc = ClaudeSpec().describe()
     assert set(desc.model_meta.keys()) == {m.value for m in ClaudeModel}
+    fable = desc.model_meta[ClaudeModel.FABLE_5.value]
+    assert fable.context_window == 1_000_000
+    assert fable.input_per_mtok == 15.0
+    assert fable.output_per_mtok == 75.0
+    assert fable.cache_read_per_mtok == 1.50
+    assert fable.cache_write_per_mtok == 18.75
+    assert fable.effort_values == ("low", "medium", "high", "xhigh", "max")
+    assert fable.effort_default == "xhigh"
     opus_48 = desc.model_meta[ClaudeModel.OPUS_4_8.value]
     assert opus_48.context_window == 1_000_000
     assert opus_48.input_per_mtok == 5.0
@@ -83,10 +92,10 @@ def test_claude_describe_includes_model_meta() -> None:
     assert haiku.output_per_mtok == 5.0
 
 
-def test_claude_describe_defaults_to_latest_opus() -> None:
+def test_claude_describe_defaults_to_latest_model() -> None:
     desc = ClaudeSpec().describe()
-    assert desc.primary_field.default == ClaudeModel.OPUS_4_8.value
-    assert ClaudeModel.OPUS_4_8.value in desc.primary_field.values
+    assert desc.primary_field.default == ClaudeModel.FABLE_5.value
+    assert ClaudeModel.FABLE_5.value in desc.primary_field.values
 
 
 def test_claude_build_accepts_1m_opus() -> None:
@@ -105,6 +114,30 @@ def test_claude_build_with_defaults() -> None:
     assert config.model is ClaudeModel.OPUS_4_7
     assert config.thinking_effort is ClaudeEffort.OFF
     assert config.permission_mode is ClaudePermissionMode.DEFAULT
+
+
+def test_claude_build_fable_defaults_to_supported_effort() -> None:
+    config = ClaudeSpec().build(_common(), ClaudeModel.FABLE_5.value, options={})
+    assert config.model is ClaudeModel.FABLE_5
+    assert config.thinking_effort is ClaudeEffort.XHIGH
+
+
+def test_claude_build_fable_accepts_supported_effort() -> None:
+    config = ClaudeSpec().build(
+        _common(),
+        ClaudeModel.FABLE_5.value,
+        options={"thinking_effort": "max"},
+    )
+    assert config.thinking_effort is ClaudeEffort.MAX
+
+
+def test_claude_build_fable_rejects_off_effort() -> None:
+    with pytest.raises(ValueError, match="not available"):
+        ClaudeSpec().build(
+            _common(),
+            ClaudeModel.FABLE_5.value,
+            options={"thinking_effort": "off"},
+        )
 
 
 def test_claude_build_with_full_options() -> None:

@@ -45,13 +45,22 @@ def test_claude_descriptor_exposes_model_meta(app_client: TestClient) -> None:
     claude = next(p for p in response.json() if p["name"] == "claude-code")
     meta = claude["model_meta"]
     assert set(meta.keys()) == {
+        "claude-fable-5",
         "claude-opus-4-8",
         "claude-opus-4-7[1m]",
         "claude-opus-4-7",
         "claude-sonnet-4-6",
         "claude-haiku-4-5",
     }
-    assert claude["primary_field"]["default"] == "claude-opus-4-8"
+    assert claude["primary_field"]["default"] == "claude-fable-5"
+    fable = meta["claude-fable-5"]
+    assert fable["context_window"] == 1_000_000
+    assert fable["input_per_mtok"] == 15.0
+    assert fable["output_per_mtok"] == 75.0
+    assert fable["cache_read_per_mtok"] == 1.5
+    assert fable["cache_write_per_mtok"] == 18.75
+    assert fable["effort_values"] == ["low", "medium", "high", "xhigh", "max"]
+    assert fable["effort_default"] == "xhigh"
     opus_48 = meta["claude-opus-4-8"]
     assert opus_48["context_window"] == 1_000_000
     assert opus_48["input_per_mtok"] == 5.0

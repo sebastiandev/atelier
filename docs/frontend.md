@@ -236,7 +236,7 @@ Parents own the connections array and pass it down. `ContextRow` calls `onConnec
 
 The dialog renders its provider/model fields from the descriptors at `GET /api/providers`. If you add a new provider on the backend (`SPECS` registry), the dialog picks it up with **no frontend code changes** — including the primary-field label ("Model" for Claude, "Mode" for Amp) and the dropdown values.
 
-Advanced per-provider options (Claude's `thinking_effort`, `permission_mode`) render in a collapsible "Advanced" `<details>` block when the descriptor's `options` map is non-empty. Each entry becomes a labeled `<select>`; defaults seed from the descriptor and reset on provider change. The dialog includes the `options` dict in the POST body only when it has entries, so providers without options (e.g. Amp today) never send a stray empty object.
+Advanced per-provider options (Claude's `thinking_effort`, `permission_mode`) render in a collapsible "Advanced" `<details>` block when the descriptor's `options` map is non-empty. Each entry becomes a labeled `<select>`; defaults seed from the descriptor and reset on provider change. When `model_meta` publishes model-specific option values/defaults, the dialog narrows the matching selector and only coerces the current value if the selected model no longer supports it. The dialog includes the `options` dict in the POST body only when it has entries, so providers without options never send a stray empty object.
 
 ## State
 

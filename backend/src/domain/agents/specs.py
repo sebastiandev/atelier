@@ -90,6 +90,8 @@ class ModelMeta:
     output_per_mtok: float | None = None
     cache_read_per_mtok: float | None = None
     cache_write_per_mtok: float | None = None
+    effort_values: tuple[str, ...] | None = None
+    effort_default: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -136,11 +138,52 @@ def _reject_unknown(provider: Provider, options: dict[str, Any], allowed: set[st
         )
 
 
+_MISSING = object()
+
+
+def _claude_effort_for_model(
+    model: ClaudeModel, raw_effort: Any = _MISSING
+) -> ClaudeEffort:
+    meta = _CLAUDE_MODEL_META.get(model.value)
+    allowed_values = (
+        meta.effort_values
+        if meta is not None and meta.effort_values is not None
+        else tuple(_enum_values(ClaudeEffort))
+    )
+    default = (
+        meta.effort_default
+        if meta is not None and meta.effort_default is not None
+        else ClaudeEffort.OFF.value
+    )
+    effort = ClaudeEffort(default if raw_effort is _MISSING else raw_effort)
+    if effort.value not in allowed_values:
+        raise ValueError(
+            f"thinking_effort {effort.value!r} is not available for model "
+            f"{model.value!r}; choose one of {list(allowed_values)!r}"
+        )
+    return effort
+
+
 _CLAUDE_MODEL_META: dict[str, ModelMeta] = {
     # Anthropic public list pricing per million tokens (USD). Cache write
     # ~1.25x input, cache read ~0.10x input - encoded explicitly here
     # so the FE doesn't have to derive it.
     #
+    ClaudeModel.FABLE_5.value: ModelMeta(
+        context_window=1_000_000,
+        input_per_mtok=15.0,
+        output_per_mtok=75.0,
+        cache_read_per_mtok=1.50,
+        cache_write_per_mtok=18.75,
+        effort_values=(
+            ClaudeEffort.LOW.value,
+            ClaudeEffort.MEDIUM.value,
+            ClaudeEffort.HIGH.value,
+            ClaudeEffort.XHIGH.value,
+            ClaudeEffort.MAX.value,
+        ),
+        effort_default=ClaudeEffort.XHIGH.value,
+    ),
     ClaudeModel.OPUS_4_8.value: ModelMeta(
         context_window=1_000_000,
         input_per_mtok=5.0,
@@ -225,7 +268,7 @@ class ClaudeSpec:
             primary_field=EnumOption(
                 label="Model",
                 values=_enum_values(ClaudeModel),
-                default=ClaudeModel.OPUS_4_8.value,
+                default=ClaudeModel.FABLE_5.value,
             ),
             options={
                 "thinking_effort": EnumOption(
@@ -252,10 +295,15 @@ class ClaudeSpec:
         self, common: CommonAgentConfig, model: str, options: dict[str, Any]
     ) -> ClaudeAgentConfig:
         _reject_unknown(self.name, options, self._allowed_options)
+        model_value = ClaudeModel(model)
+        raw_effort = (
+            options["thinking_effort"] if "thinking_effort" in options else _MISSING
+        )
+        effort = _claude_effort_for_model(model_value, raw_effort)
         return ClaudeAgentConfig(
             common=common,
-            model=ClaudeModel(model),
-            thinking_effort=ClaudeEffort(options.get("thinking_effort", ClaudeEffort.OFF.value)),
+            model=model_value,
+            thinking_effort=effort,
             permission_mode=ClaudePermissionMode(
                 options.get("permission_mode", ClaudePermissionMode.DEFAULT.value)
             ),

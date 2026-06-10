@@ -15,6 +15,7 @@ import {
   type CreateAgentPayload,
   type Persona,
   type ProviderDescriptor,
+  type ProviderField,
   PERSONAS,
   PERSONA_GLYPH,
   listConnections,
@@ -138,9 +139,10 @@ export function NewAgentDialog({
       .then((p) => {
         setProviders(p);
         if (p.length > 0) {
+          const defaultModel = p[0].primary_field.default;
           setProviderName(p[0].name);
-          setModel(p[0].primary_field.default);
-          setOptions(defaultsFor(p[0]));
+          setModel(defaultModel);
+          setOptions(defaultsFor(p[0], defaultModel));
         }
       })
       .catch((e) => setProvidersError(e instanceof Error ? e.message : String(e)));
@@ -167,10 +169,16 @@ export function NewAgentDialog({
     setProviderName(next);
     const p = providers?.find((x) => x.name === next);
     if (p) {
-      setModel(p.primary_field.default);
-      setOptions(defaultsFor(p));
+      const defaultModel = p.primary_field.default;
+      setModel(defaultModel);
+      setOptions(defaultsFor(p, defaultModel));
     }
   }
+
+  useEffect(() => {
+    if (!provider || !model) return;
+    setOptions((prev) => coerceOptionsForModel(provider, model, prev));
+  }, [provider, model]);
 
   function pickPersona(id: Persona) {
     setPersona(id);
@@ -544,24 +552,35 @@ export function NewAgentDialog({
                       {provider.advanced_intro && (
                         <p className="advanced-intro">{provider.advanced_intro}</p>
                       )}
-                      {Object.entries(provider.options).map(([key, field]) => (
-                        <label key={key} className="field">
-                          <span className="label">{field.label}</span>
-                          <select
-                            className="input"
-                            value={options[key] ?? field.default}
-                            onChange={(e) =>
-                              setOptions((prev) => ({ ...prev, [key]: e.target.value }))
-                            }
-                          >
-                            {field.values.map((v, i) => (
-                              <option key={v} value={v}>
-                                {field.value_labels?.[i] ?? v}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      ))}
+                      {Object.entries(provider.options).map(([key, field]) => {
+                        const effectiveField = optionFieldForModel(
+                          provider,
+                          model,
+                          key,
+                          field,
+                        );
+                        return (
+                          <label key={key} className="field">
+                            <span className="label">{effectiveField.label}</span>
+                            <select
+                              className="input"
+                              value={options[key] ?? effectiveField.default}
+                              onChange={(e) =>
+                                setOptions((prev) => ({
+                                  ...prev,
+                                  [key]: e.target.value,
+                                }))
+                              }
+                            >
+                              {effectiveField.values.map((v) => (
+                                <option key={v} value={v}>
+                                  {optionLabel(field, v)}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        );
+                      })}
                       {Object.entries(provider.text_options ?? {}).map(([key, field]) => {
                         if (
                           field.visible_when &&
@@ -828,13 +847,63 @@ function BranchPicker({
   );
 }
 
-function defaultsFor(provider: ProviderDescriptor): Record<string, string> {
+function defaultsFor(
+  provider: ProviderDescriptor,
+  model: string | null = provider.primary_field.default,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, field] of Object.entries(provider.options)) {
-    out[key] = field.default;
+    out[key] = optionFieldForModel(provider, model, key, field).default;
   }
   for (const [key, field] of Object.entries(provider.text_options ?? {})) {
     out[key] = field.default;
   }
   return out;
+}
+
+function coerceOptionsForModel(
+  provider: ProviderDescriptor,
+  model: string,
+  current: Record<string, string>,
+): Record<string, string> {
+  let changed = false;
+  const next = { ...current };
+  for (const [key, field] of Object.entries(provider.options)) {
+    const effectiveField = optionFieldForModel(provider, model, key, field);
+    const value = next[key] ?? effectiveField.default;
+    if (!effectiveField.values.includes(value)) {
+      next[key] = effectiveField.default;
+      changed = true;
+    } else if (next[key] === undefined) {
+      next[key] = value;
+      changed = true;
+    }
+  }
+  return changed ? next : current;
+}
+
+function optionFieldForModel(
+  provider: ProviderDescriptor,
+  model: string | null,
+  key: string,
+  field: ProviderField,
+): ProviderField {
+  if (key !== "thinking_effort" || !model) return field;
+  const meta = provider.model_meta?.[model];
+  const values = meta?.effort_values?.filter(Boolean);
+  if (!values || values.length === 0) return field;
+  const defaultValue =
+    meta?.effort_default && values.includes(meta.effort_default)
+      ? meta.effort_default
+      : values[0];
+  return {
+    ...field,
+    values,
+    default: defaultValue,
+  };
+}
+
+function optionLabel(field: ProviderField, value: string): string {
+  const idx = field.values.indexOf(value);
+  return idx >= 0 ? field.value_labels?.[idx] ?? value : value;
 }
