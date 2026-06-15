@@ -149,8 +149,10 @@ def test_tool_use_block_maps_to_tool_call() -> None:
     )
     assert isinstance(event, ToolCall)
     assert event.tool_id == "t-1"
-    assert event.name == "bash"
-    assert event.arguments == {"cmd": "ls"}
+    # Lowercase names canonicalize (added for OpenCode's ACP tool names;
+    # applies uniformly through canonicalize_tool).
+    assert event.name == "Bash"
+    assert event.arguments == {"command": "ls"}
 
 
 def test_atelier_record_pr_tool_use_emits_artifact_marker_then_tool_call() -> None:

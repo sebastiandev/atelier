@@ -90,3 +90,5 @@ These are the contracts the layers and process boundaries agree on. Changing one
 | Workspace layout | `~/Atelier/works/<slug>/work.json`, `agents/<slug>/agent.json`, `transcript.ndjson` | `infrastructure/filesystem/` |
 
 Anything else is internal.
+
+**Preferred provider seam (STORY-033, 2026-06-12):** new agent runtimes integrate through the Agent Client Protocol — one `AcpAdapter` behind the existing `AgentAdapter` port instead of a bespoke SDK adapter per provider. The domain `AgentEvent` union stays canonical (extended additively); ACP types never leave `infrastructure/agents/acp/`. See `docs/backend.md` → "ACP runtimes".

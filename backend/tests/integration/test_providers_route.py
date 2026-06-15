@@ -2,24 +2,40 @@
 
 from fastapi.testclient import TestClient
 
+from src.infrastructure.agents.opencode_models import OpenCodeModelOption
 
-def test_lists_registered_providers(app_client: TestClient) -> None:
+
+def test_lists_new_session_providers(app_client: TestClient) -> None:
     response = app_client.get("/api/providers")
     assert response.status_code == 200
     body = response.json()
     names = [p["name"] for p in body]
-    assert names == ["claude-code", "amp", "codex"]
+    assert names == ["claude-acp", "amp", "codex-acp", "opencode"]
+
+
+def test_acp_descriptors_are_wire_complete(app_client: TestClient) -> None:
+    response = app_client.get("/api/providers")
+    by_name = {p["name"]: p for p in response.json()}
+    claude_acp = by_name["claude-acp"]
+    assert claude_acp["label"] == "Claude Code (Anthropic)"
+    assert claude_acp["primary_field"]["default"] == "default"
+    assert "permission_mode" in claude_acp["options"]
+    codex_acp = by_name["codex-acp"]
+    assert codex_acp["label"] == "Codex (OpenAI)"
+    assert "mode" in codex_acp["options"]
+    assert "reasoning_effort" in codex_acp["options"]
+    opencode = by_name["opencode"]
+    assert opencode["label"] == "OpenCode"
+    assert opencode["primary_field"]["values"] == ["configured-default"]
+    assert "mode" in opencode["options"]
 
 
 def test_claude_descriptor_includes_thinking_effort(app_client: TestClient) -> None:
     response = app_client.get("/api/providers")
-    claude = next(p for p in response.json() if p["name"] == "claude-code")
+    claude = next(p for p in response.json() if p["name"] == "claude-acp")
     assert claude["primary_field"]["label"] == "Model"
     assert "thinking_effort" in claude["options"]
-    # Dialog pre-selects the highest-but-one tier (matches Claude Code CLI's
-    # default ``/effort`` setting). Build-time fallback when no value is sent
-    # is still "off" — see test_claude_build_with_defaults.
-    assert claude["options"]["thinking_effort"]["default"] == "xhigh"
+    assert claude["options"]["thinking_effort"]["default"] == "default"
     assert "xhigh" in claude["options"]["thinking_effort"]["values"]
 
 
@@ -42,39 +58,34 @@ def test_claude_descriptor_exposes_model_meta(app_client: TestClient) -> None:
     """FE reads pricing + context window from ``model_meta``; verify the
     wire format is exactly what AgentTile's TurnMetricsBar expects."""
     response = app_client.get("/api/providers")
-    claude = next(p for p in response.json() if p["name"] == "claude-code")
+    claude = next(p for p in response.json() if p["name"] == "claude-acp")
     meta = claude["model_meta"]
     assert set(meta.keys()) == {
-        "claude-fable-5",
-        "claude-opus-4-8",
-        "claude-opus-4-7[1m]",
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
+        "default",
+        "claude-fable-5[1m]",
+        "sonnet",
+        "sonnet[1m]",
+        "haiku",
     }
-    assert claude["primary_field"]["default"] == "claude-fable-5"
-    fable = meta["claude-fable-5"]
+    assert claude["primary_field"]["default"] == "default"
+    fable = meta["claude-fable-5[1m]"]
     assert fable["context_window"] == 1_000_000
     assert fable["input_per_mtok"] == 15.0
     assert fable["output_per_mtok"] == 75.0
     assert fable["cache_read_per_mtok"] == 1.5
     assert fable["cache_write_per_mtok"] == 18.75
-    assert fable["effort_values"] == ["low", "medium", "high", "xhigh", "max"]
+    assert fable["effort_values"] is None
     assert fable["effort_default"] == "xhigh"
-    opus_48 = meta["claude-opus-4-8"]
-    assert opus_48["context_window"] == 1_000_000
-    assert opus_48["input_per_mtok"] == 5.0
-    assert opus_48["output_per_mtok"] == 25.0
-    opus = meta["claude-opus-4-7"]
-    assert opus["context_window"] == 1_000_000
-    assert opus["input_per_mtok"] == 5.0
-    assert opus["output_per_mtok"] == 25.0
-    assert opus["cache_read_per_mtok"] == 0.5
-    assert opus["cache_write_per_mtok"] == 6.25
-    opus_1m = meta["claude-opus-4-7[1m]"]
-    assert opus_1m["context_window"] == 1_000_000
-    assert opus_1m["input_per_mtok"] == 5.0
-    assert opus_1m["output_per_mtok"] == 25.0
+    default = meta["default"]
+    assert default["context_window"] == 1_000_000
+    assert default["input_per_mtok"] == 5.0
+    assert default["output_per_mtok"] == 25.0
+    sonnet = meta["sonnet"]
+    assert sonnet["context_window"] == 200_000
+    assert sonnet["input_per_mtok"] == 3.0
+    assert sonnet["output_per_mtok"] == 15.0
+    sonnet_1m = meta["sonnet[1m]"]
+    assert sonnet_1m["context_window"] == 1_000_000
 
 
 def test_amp_descriptor_exposes_per_mode_context_window(app_client: TestClient) -> None:
@@ -91,33 +102,66 @@ def test_amp_descriptor_exposes_per_mode_context_window(app_client: TestClient) 
     assert meta["smart"]["output_per_mtok"] is None
 
 
-def test_codex_descriptor_has_dual_permission_layers(app_client: TestClient) -> None:
-    """Codex exposes ``sandbox`` (OS-level filesystem gating) AND
-    ``approval_mode`` (when to prompt) as independent enum pickers.
-    Both knobs are visible on the wire so the FE renders them both."""
+def test_codex_descriptor_has_acp_mode_and_reasoning(app_client: TestClient) -> None:
     response = app_client.get("/api/providers")
-    codex = next(p for p in response.json() if p["name"] == "codex")
+    codex = next(p for p in response.json() if p["name"] == "codex-acp")
     assert codex["primary_field"]["label"] == "Model"
     assert codex["primary_field"]["default"] == "gpt-5.5"
     assert "gpt-5.4" in codex["primary_field"]["values"]
     assert "gpt-5.5" in codex["primary_field"]["values"]
-    assert "gpt-5.5-pro" in codex["primary_field"]["values"]
-    assert "gpt-5.4-pro" in codex["primary_field"]["values"]
-    assert "sandbox" in codex["options"]
-    assert "approval_mode" in codex["options"]
+    assert "gpt-5.4-mini" in codex["primary_field"]["values"]
+    assert "mode" in codex["options"]
     assert "reasoning_effort" in codex["options"]
     assert codex["options"]["reasoning_effort"]["values"] == [
-        "minimal",
         "low",
         "medium",
         "high",
+        "xhigh",
     ]
     assert codex["options"]["reasoning_effort"]["default"] == "medium"
-    assert codex["options"]["sandbox"]["default"] == "workspace-write"
-    assert codex["options"]["approval_mode"]["default"] == "on-request"
-    assert "Sandbox" in codex["advanced_intro"]
+    assert codex["options"]["mode"]["default"] == "auto"
+    assert "Mode" in codex["advanced_intro"]
     assert codex["model_meta"]["gpt-5.5"]["context_window"] == 400_000
     assert codex["model_meta"]["gpt-5.5"]["input_per_mtok"] == 5.0
     assert codex["model_meta"]["gpt-5.5"]["output_per_mtok"] == 30.0
     assert codex["model_meta"]["gpt-5.4"]["context_window"] == 272_000
-    assert codex["model_meta"]["gpt-5.4-pro"]["input_per_mtok"] == 30.0
+    assert codex["model_meta"]["gpt-5.4-mini"]["input_per_mtok"] is None
+
+
+def test_opencode_models_endpoint_lists_cli_models(
+    app_client: TestClient, monkeypatch
+) -> None:
+    def fake_list(*, refresh: bool = False):
+        assert refresh is True
+        return [
+            OpenCodeModelOption(value="openai/gpt-5.5", label="OpenAI / GPT 5.5")
+        ]
+
+    monkeypatch.setattr(
+        "src.application.http.routes.providers.list_opencode_models",
+        fake_list,
+    )
+
+    response = app_client.get("/api/providers/opencode/models?refresh=true")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"value": "openai/gpt-5.5", "label": "OpenAI / GPT 5.5"}
+    ]
+
+
+def test_opencode_models_endpoint_returns_503_on_cli_failure(
+    app_client: TestClient, monkeypatch
+) -> None:
+    def fake_list(*, refresh: bool = False):
+        raise RuntimeError("opencode CLI is not installed")
+
+    monkeypatch.setattr(
+        "src.application.http.routes.providers.list_opencode_models",
+        fake_list,
+    )
+
+    response = app_client.get("/api/providers/opencode/models")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "opencode CLI is not installed"

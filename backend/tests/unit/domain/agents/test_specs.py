@@ -356,4 +356,17 @@ def test_codex_build_rejects_bad_sandbox() -> None:
 
 
 def test_specs_registry_covers_all_providers() -> None:
-    assert set(SPECS.keys()) == {"claude-code", "amp", "codex"}
+    assert set(SPECS.keys()) == {
+        "claude-code",
+        "amp",
+        "codex",
+        "claude-acp",
+        "codex-acp",
+        "opencode",
+    }
+
+
+def test_specs_registry_lists_legacy_providers_first() -> None:
+    """Wire-compat: older frontends index providers by order; the legacy
+    trio must stay in front of the ACP additions."""
+    assert list(SPECS)[:3] == ["claude-code", "amp", "codex"]

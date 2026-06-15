@@ -10,10 +10,15 @@ from src.domain.agents import (
     Error,
     MessageComplete,
     MessageDelta,
+    ModeChange,
+    PermissionRequest,
+    PlanUpdate,
     ProviderContextCompacted,
     StatusChange,
     ToolCall,
+    ToolCallUpdate,
     ToolResult,
+    TurnMetrics,
 )
 
 UTC_NOW = datetime(2026, 5, 1, 13, 49, tzinfo=UTC)
@@ -83,6 +88,90 @@ def test_events_are_frozen() -> None:
     event = MessageDelta(ts=UTC_NOW, text="hi")
     with pytest.raises(FrozenInstanceError):
         event.text = "no"  # type: ignore[misc]
+
+
+def test_tool_call_acp_enrichment_defaults_to_none() -> None:
+    event = ToolCall(ts=UTC_NOW, tool_id="t-1", name="Bash", arguments={})
+    assert event.kind is None
+    assert event.title is None
+    assert event.locations is None
+
+
+def test_tool_call_carries_acp_enrichment() -> None:
+    event = ToolCall(
+        ts=UTC_NOW,
+        tool_id="t-1",
+        name="Write",
+        arguments={"path": "a.txt", "content": "hi"},
+        kind="edit",
+        title="Write a.txt",
+        locations=({"path": "a.txt"},),
+    )
+    assert event.kind == "edit"
+    assert event.locations == ({"path": "a.txt"},)
+
+
+def test_tool_call_update_event() -> None:
+    event = ToolCallUpdate(ts=UTC_NOW, tool_id="t-1", status="in_progress")
+    assert event.type == "tool_call_update"
+    assert event.status == "in_progress"
+    assert event.title is None
+    assert event.kind is None
+    assert event.locations is None
+
+
+def test_tool_result_structured_diff_defaults_none() -> None:
+    event = ToolResult(ts=UTC_NOW, tool_id="t-1", content="ok")
+    assert event.diff is None
+    rich = ToolResult(
+        ts=UTC_NOW,
+        tool_id="t-1",
+        content="ok",
+        diff={"path": "a.txt", "old_text": None, "new_text": "hi"},
+    )
+    assert rich.diff is not None and rich.diff["new_text"] == "hi"
+
+
+def test_plan_update_event() -> None:
+    event = PlanUpdate(
+        ts=UTC_NOW,
+        entries=(
+            {"content": "read code", "priority": "high", "status": "completed"},
+            {"content": "write fix", "priority": "medium", "status": "pending"},
+        ),
+    )
+    assert event.type == "plan_update"
+    assert len(event.entries) == 2
+
+
+def test_mode_change_event() -> None:
+    event = ModeChange(ts=UTC_NOW, mode_id="plan")
+    assert event.type == "mode_change"
+    assert event.mode_id == "plan"
+
+
+def test_permission_request_acp_options_default_none() -> None:
+    event = PermissionRequest(
+        ts=UTC_NOW, request_id="r1", tool_name="Bash", tool_input={}
+    )
+    assert event.options is None
+    assert event.tool_id is None
+    rich = PermissionRequest(
+        ts=UTC_NOW,
+        request_id="r1",
+        tool_name="Write",
+        tool_input={},
+        options=({"option_id": "allow", "name": "Allow", "kind": "allow_once"},),
+        tool_id="t-1",
+    )
+    assert rich.options is not None and rich.options[0]["kind"] == "allow_once"
+
+
+def test_turn_metrics_cost_usd_defaults_none() -> None:
+    event = TurnMetrics(ts=UTC_NOW, duration_ms=100)
+    assert event.cost_usd is None
+    priced = TurnMetrics(ts=UTC_NOW, duration_ms=100, cost_usd=0.39)
+    assert priced.cost_usd == 0.39
 
 
 def test_match_dispatch_over_union() -> None:

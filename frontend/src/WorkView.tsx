@@ -59,6 +59,10 @@ import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { HandoffDialog } from "./HandoffDialog";
 import {
+  anchoredMenuPosition,
+  type FloatingMenuPosition,
+} from "./floatingMenu";
+import {
   ChatIcon,
   CheckIcon,
   DocIcon,
@@ -1400,13 +1404,36 @@ function V3RailAgentRow({
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(agent.name);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [menuPosition, setMenuPosition] = useState<FloatingMenuPosition | null>(
+    null,
+  );
+  const kebabRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
     const handler = () => setMenuOpen(false);
     window.addEventListener("click", handler);
-    return () => window.removeEventListener("click", handler);
+    window.addEventListener("resize", handler);
+    window.addEventListener("scroll", handler, true);
+    return () => {
+      window.removeEventListener("click", handler);
+      window.removeEventListener("resize", handler);
+      window.removeEventListener("scroll", handler, true);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen || !menuRef.current || !kebabRef.current) return;
+    const anchor = kebabRef.current.getBoundingClientRect();
+    const menu = menuRef.current.getBoundingClientRect();
+    setMenuPosition(
+      anchoredMenuPosition(anchor, {
+        width: menu.width,
+        height: menu.height,
+      }),
+    );
   }, [menuOpen]);
 
   useEffect(() => {
@@ -1525,13 +1552,21 @@ function V3RailAgentRow({
       )}
       {!editing && (
         <button
+          ref={kebabRef}
           type="button"
           className="rail-agent-kebab"
           aria-label={`More actions for ${agent.name}`}
           title="More"
           onClick={(e) => {
             e.stopPropagation();
-            setMenuOpen((v) => !v);
+            if (menuOpen) {
+              setMenuOpen(false);
+              return;
+            }
+            setMenuPosition(
+              anchoredMenuPosition(e.currentTarget.getBoundingClientRect()),
+            );
+            setMenuOpen(true);
           }}
         >
           ⋮
@@ -1539,7 +1574,9 @@ function V3RailAgentRow({
       )}
       {menuOpen && (
         <div
-          className="rail-agent-menu"
+          ref={menuRef}
+          className="rail-agent-menu floating"
+          style={menuPosition ?? undefined}
           onClick={(e) => e.stopPropagation()}
         >
           <button

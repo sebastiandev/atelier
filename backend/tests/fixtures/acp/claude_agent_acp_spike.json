@@ -1,0 +1,632 @@
+[
+ {
+  "tag": "initialize",
+  "payload": {
+   "agent_capabilities": {
+    "field_meta": {
+     "claudeCode": {
+      "promptQueueing": true
+     }
+    },
+    "auth": {},
+    "load_session": true,
+    "mcp_capabilities": {
+     "http": true,
+     "sse": true
+    },
+    "prompt_capabilities": {
+     "audio": false,
+     "embedded_context": true,
+     "image": true
+    },
+    "session_capabilities": {
+     "additional_directories": {},
+     "close": {},
+     "fork": {},
+     "list": {},
+     "resume": {}
+    }
+   },
+   "agent_info": {
+    "name": "@agentclientprotocol/claude-agent-acp",
+    "title": "Claude Agent",
+    "version": "0.44.0"
+   },
+   "auth_methods": [],
+   "protocol_version": 1
+  }
+ },
+ {
+  "tag": "new_session",
+  "payload": {
+   "config_options": [
+    {
+     "current_value": "default",
+     "options": [
+      {
+       "description": "Use a model classifier to approve/deny permission prompts",
+       "name": "Auto",
+       "value": "auto"
+      },
+      {
+       "description": "Standard behavior, prompts for dangerous operations",
+       "name": "Default",
+       "value": "default"
+      },
+      {
+       "description": "Auto-accept file edit operations",
+       "name": "Accept Edits",
+       "value": "acceptEdits"
+      },
+      {
+       "description": "Planning mode, no actual tool execution",
+       "name": "Plan Mode",
+       "value": "plan"
+      },
+      {
+       "description": "Don't prompt for permissions, deny if not pre-approved",
+       "name": "Don't Ask",
+       "value": "dontAsk"
+      },
+      {
+       "description": "Bypass all permission checks",
+       "name": "Bypass Permissions",
+       "value": "bypassPermissions"
+      }
+     ],
+     "category": "mode",
+     "description": "Session permission mode",
+     "id": "mode",
+     "name": "Mode",
+     "type": "select"
+    },
+    {
+     "current_value": "claude-fable-5[1m]",
+     "options": [
+      {
+       "description": "Opus 4.8 with 1M context \u00b7 Best for everyday, complex tasks",
+       "name": "Default (recommended)",
+       "value": "default"
+      },
+      {
+       "description": "Fable 5 \u00b7 Most capable for your hardest and longest-running tasks",
+       "name": "Fable",
+       "value": "claude-fable-5[1m]"
+      },
+      {
+       "description": "Sonnet 4.6 \u00b7 Efficient for routine tasks",
+       "name": "Sonnet",
+       "value": "sonnet"
+      },
+      {
+       "description": "Sonnet 4.6 with 1M context \u00b7 Draws from usage credits \u00b7 $3/$15 per Mtok",
+       "name": "Sonnet (1M context)",
+       "value": "sonnet[1m]"
+      },
+      {
+       "description": "Haiku 4.5 \u00b7 Fastest for quick answers",
+       "name": "Haiku",
+       "value": "haiku"
+      }
+     ],
+     "category": "model",
+     "description": "AI model to use",
+     "id": "model",
+     "name": "Model",
+     "type": "select"
+    },
+    {
+     "current_value": "xhigh",
+     "options": [
+      {
+       "name": "Default",
+       "value": "default"
+      },
+      {
+       "name": "Low",
+       "value": "low"
+      },
+      {
+       "name": "Medium",
+       "value": "medium"
+      },
+      {
+       "name": "High",
+       "value": "high"
+      },
+      {
+       "name": "Xhigh",
+       "value": "xhigh"
+      },
+      {
+       "name": "Max",
+       "value": "max"
+      }
+     ],
+     "category": "thought_level",
+     "description": "Available effort levels for this model",
+     "id": "effort",
+     "name": "Effort",
+     "type": "select"
+    }
+   ],
+   "modes": {
+    "available_modes": [
+     {
+      "description": "Use a model classifier to approve/deny permission prompts",
+      "id": "auto",
+      "name": "Auto"
+     },
+     {
+      "description": "Standard behavior, prompts for dangerous operations",
+      "id": "default",
+      "name": "Default"
+     },
+     {
+      "description": "Auto-accept file edit operations",
+      "id": "acceptEdits",
+      "name": "Accept Edits"
+     },
+     {
+      "description": "Planning mode, no actual tool execution",
+      "id": "plan",
+      "name": "Plan Mode"
+     },
+     {
+      "description": "Don't prompt for permissions, deny if not pre-approved",
+      "id": "dontAsk",
+      "name": "Don't Ask"
+     },
+     {
+      "description": "Bypass all permission checks",
+      "id": "bypassPermissions",
+      "name": "Bypass Permissions"
+     }
+    ],
+    "current_mode_id": "default"
+   },
+   "session_id": "02eb4bc9-d338-45f5-94b5-7a763470b964"
+  }
+ },
+ {
+  "tag": "update:available_commands_update",
+  "payload": {
+   "available_commands": [
+    {
+     "description": "Build a continuation prompt that captures current progress, decisions, and file references so a fresh conversation can resume without searching. Use when wrapping up a session, switching context, or when the user says \"checkpoint\", \"continuation prompt\", \"wrap up session\", or \"save context\". (user)",
+     "name": "checkpoint"
+    },
+    {
+     "description": "Bootstrap a fresh session from a checkpoint continuation prompt. Use at the start of a new conversation to resume work from where the last session left off. Invoke with /recap [slug]. (user)",
+     "name": "recap"
+    },
+    {
+     "description": "Deep research harness \u2014 fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report. (dynamic workflow)",
+     "name": "deep-research"
+    },
+    {
+     "description": "(frontend-design) Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, or applications. Generates creative, polished code that avoids generic AI aesthetics.",
+     "name": "frontend-design"
+    },
+    {
+     "description": "Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command.",
+     "name": "update-config"
+    },
+    {
+     "description": "Verify that a code change actually does what it's supposed to by running the app and observing behavior. Use when asked to verify a PR, confirm a fix works, test a change manually, check that a feature works, or validate local changes before pushing.",
+     "name": "verify"
+    },
+    {
+     "description": "Enable debug logging for this session and help diagnose issues",
+     "input": {
+      "hint": "[issue description]"
+     },
+     "name": "debug"
+    },
+    {
+     "description": "Review the current diff for correctness bugs and reuse/simplification/efficiency cleanups at the given effort level (low/medium: fewer, high-confidence findings; high\u2192max: broader coverage, may include uncertain findings). Pass --comment to post findings as inline PR comments, or --fix to apply the findings to the working tree after the review.",
+     "input": {
+      "hint": "[low|medium|high|xhigh|max] [--fix] [--comment] [<target>]"
+     },
+     "name": "code-review"
+    },
+    {
+     "description": "Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only \u2014 it does not hunt for bugs; use /code-review for that.",
+     "input": {
+      "hint": "[<target>]"
+     },
+     "name": "simplify"
+    },
+    {
+     "description": "Research and plan a large-scale change, then execute it in parallel across 5\u201330 isolated worktree agents that each open a PR.",
+     "input": {
+      "hint": "<instruction>"
+     },
+     "name": "batch"
+    },
+    {
+     "description": "Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts.",
+     "name": "fewer-permission-prompts"
+    },
+    {
+     "description": "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace.",
+     "input": {
+      "hint": "[interval] [prompt]"
+     },
+     "name": "loop"
+    },
+    {
+     "description": "Create, update, list, or run scheduled cloud agents (routines) that execute on a cron schedule.",
+     "name": "schedule"
+    },
+    {
+     "description": "Reference for the Claude API / Anthropic SDK \u2014 model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER \u2014 read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" \u2014 whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) \u2014 never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named \u2014 don't Read the file).",
+     "name": "claude-api"
+    },
+    {
+     "description": "Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).",
+     "name": "run"
+    },
+    {
+     "description": "Author or improve the run-<unit> skill \u2014 a per-project skill that tells agents how to build, launch, and drive this project's app. Use when the user asks to set up the project, get it running, write run instructions, or verify build/run steps work from a clean environment.",
+     "name": "run-skill-generator"
+    },
+    {
+     "description": "Free up context by summarizing the conversation so far",
+     "input": {
+      "hint": "<optional custom summarization instructions>"
+     },
+     "name": "compact"
+    },
+    {
+     "description": "Show current context usage",
+     "name": "context"
+    },
+    {
+     "description": "Dump the JS heap to ~/Desktop",
+     "name": "heapdump"
+    },
+    {
+     "description": "Initialize a new CLAUDE.md file with codebase documentation",
+     "name": "init"
+    },
+    {
+     "description": "Pick up skills added or changed on disk during this session",
+     "name": "reload-skills"
+    },
+    {
+     "description": "Review a pull request",
+     "name": "review"
+    },
+    {
+     "description": "Complete a security review of the pending changes on the current branch",
+     "name": "security-review"
+    },
+    {
+     "description": "Show the total cost and duration of the current session",
+     "name": "usage"
+    },
+    {
+     "description": "Generate a report analyzing your Claude Code sessions",
+     "name": "insights"
+    },
+    {
+     "description": "Set a goal \u2014 keep working until the condition is met",
+     "name": "goal"
+    },
+    {
+     "description": "Help teammates ramp on Claude Code with a guide from your usage",
+     "name": "team-onboarding"
+    }
+   ],
+   "session_update": "available_commands_update"
+  }
+ },
+ {
+  "tag": "update:usage_update",
+  "payload": {
+   "size": 1000000,
+   "used": 21867,
+   "session_update": "usage_update"
+  }
+ },
+ {
+  "tag": "update:agent_message_chunk",
+  "payload": {
+   "content": {
+    "text": "",
+    "type": "text"
+   },
+   "message_id": "msg_01KsK7RDfpSNAqKnrNQKG1RG",
+   "session_update": "agent_message_chunk"
+  }
+ },
+ {
+  "tag": "update:agent_message_chunk",
+  "payload": {
+   "content": {
+    "text": "h",
+    "type": "text"
+   },
+   "message_id": "msg_01KsK7RDfpSNAqKnrNQKG1RG",
+   "session_update": "agent_message_chunk"
+  }
+ },
+ {
+  "tag": "update:agent_message_chunk",
+  "payload": {
+   "content": {
+    "text": "ello from acp",
+    "type": "text"
+   },
+   "message_id": "msg_01KsK7RDfpSNAqKnrNQKG1RG",
+   "session_update": "agent_message_chunk"
+  }
+ },
+ {
+  "tag": "update:usage_update",
+  "payload": {
+   "size": 1000000,
+   "used": 21873,
+   "session_update": "usage_update"
+  }
+ },
+ {
+  "tag": "update:usage_update",
+  "payload": {
+   "field_meta": {
+    "_claude/rateLimit": {
+     "status": "allowed",
+     "resetsAt": 1781180400,
+     "rateLimitType": "overage",
+     "overageStatus": "allowed",
+     "overageResetsAt": 1781180400,
+     "isUsingOverage": false
+    }
+   },
+   "size": 1000000,
+   "used": 21873,
+   "session_update": "usage_update"
+  }
+ },
+ {
+  "tag": "update:usage_update",
+  "payload": {
+   "cost": {
+    "amount": 0.268175,
+    "currency": "USD"
+   },
+   "size": 1000000,
+   "used": 21873,
+   "session_update": "usage_update"
+  }
+ },
+ {
+  "tag": "prompt1.response",
+  "payload": {
+   "stop_reason": "end_turn",
+   "usage": {
+    "cached_read_tokens": 0,
+    "cached_write_tokens": 19666,
+    "input_tokens": 2200,
+    "output_tokens": 7,
+    "total_tokens": 21873
+   }
+  }
+ },
+ {
+  "tag": "update:usage_update",
+  "payload": {
+   "size": 1000000,
+   "used": 24084,
+   "session_update": "usage_update"
+  }
+ },
+ {
+  "tag": "update:tool_call",
+  "payload": {
+   "field_meta": {
+    "claudeCode": {
+     "toolName": "Write"
+    }
+   },
+   "content": [],
+   "kind": "edit",
+   "locations": [],
+   "raw_input": {},
+   "status": "pending",
+   "title": "Write",
+   "tool_call_id": "toolu_01X19spXLikkudW1RwKyspKv",
+   "session_update": "tool_call"
+  }
+ },
+ {
+  "tag": "update:tool_call_update",
+  "payload": {
+   "field_meta": {
+    "claudeCode": {
+     "toolName": "Write"
+    }
+   },
+   "content": [
+    {
+     "new_text": "ok",
+     "path": "/private/tmp/acp-spike-ws/spike.txt",
+     "type": "diff"
+    }
+   ],
+   "kind": "edit",
+   "locations": [
+    {
+     "path": "/private/tmp/acp-spike-ws/spike.txt"
+    }
+   ],
+   "raw_input": {
+    "file_path": "/private/tmp/acp-spike-ws/spike.txt",
+    "content": "ok"
+   },
+   "title": "Write /private/tmp/acp-spike-ws/spike.txt",
+   "tool_call_id": "toolu_01X19spXLikkudW1RwKyspKv",
+   "session_update": "tool_call_update"
+  }
+ },
+ {
+  "tag": "request_permission",
+  "payload": {
+   "options": [
+    {
+     "kind": "allow_always",
+     "name": "Always Allow all Write",
+     "option_id": "allow_always"
+    },
+    {
+     "kind": "allow_once",
+     "name": "Allow",
+     "option_id": "allow"
+    },
+    {
+     "kind": "reject_once",
+     "name": "Reject",
+     "option_id": "reject"
+    }
+   ],
+   "tool_call": {
+    "content": [
+     {
+      "new_text": "ok",
+      "path": "/private/tmp/acp-spike-ws/spike.txt",
+      "type": "diff"
+     }
+    ],
+    "kind": "edit",
+    "locations": [
+     {
+      "path": "/private/tmp/acp-spike-ws/spike.txt"
+     }
+    ],
+    "raw_input": {
+     "file_path": "/private/tmp/acp-spike-ws/spike.txt",
+     "content": "ok"
+    },
+    "title": "Write /private/tmp/acp-spike-ws/spike.txt",
+    "tool_call_id": "toolu_01X19spXLikkudW1RwKyspKv"
+   }
+  }
+ },
+ {
+  "tag": "update:tool_call_update",
+  "payload": {
+   "field_meta": {
+    "claudeCode": {
+     "toolResponse": {
+      "type": "create",
+      "filePath": "/private/tmp/acp-spike-ws/spike.txt",
+      "content": "ok",
+      "structuredPatch": [],
+      "originalFile": null,
+      "userModified": false
+     },
+     "toolName": "Write"
+    }
+   },
+   "tool_call_id": "toolu_01X19spXLikkudW1RwKyspKv",
+   "session_update": "tool_call_update"
+  }
+ },
+ {
+  "tag": "update:usage_update",
+  "payload": {
+   "size": 1000000,
+   "used": 24109,
+   "session_update": "usage_update"
+  }
+ },
+ {
+  "tag": "update:tool_call_update",
+  "payload": {
+   "field_meta": {
+    "claudeCode": {
+     "toolName": "Write"
+    }
+   },
+   "raw_output": "File created successfully at: /private/tmp/acp-spike-ws/spike.txt (file state is current in your context \u2014 no need to Read it back)",
+   "status": "completed",
+   "tool_call_id": "toolu_01X19spXLikkudW1RwKyspKv",
+   "session_update": "tool_call_update"
+  }
+ },
+ {
+  "tag": "update:usage_update",
+  "payload": {
+   "size": 1000000,
+   "used": 24161,
+   "session_update": "usage_update"
+  }
+ },
+ {
+  "tag": "update:agent_message_chunk",
+  "payload": {
+   "content": {
+    "text": "",
+    "type": "text"
+   },
+   "message_id": "msg_012Pn3mHwfzrwbt413FKC6k8",
+   "session_update": "agent_message_chunk"
+  }
+ },
+ {
+  "tag": "update:agent_message_chunk",
+  "payload": {
+   "content": {
+    "text": "Created",
+    "type": "text"
+   },
+   "message_id": "msg_012Pn3mHwfzrwbt413FKC6k8",
+   "session_update": "agent_message_chunk"
+  }
+ },
+ {
+  "tag": "update:agent_message_chunk",
+  "payload": {
+   "content": {
+    "text": " `/private/tmp/acp-spike-ws/spike.txt` containing `ok`.",
+    "type": "text"
+   },
+   "message_id": "msg_012Pn3mHwfzrwbt413FKC6k8",
+   "session_update": "agent_message_chunk"
+  }
+ },
+ {
+  "tag": "update:usage_update",
+  "payload": {
+   "size": 1000000,
+   "used": 24193,
+   "session_update": "usage_update"
+  }
+ },
+ {
+  "tag": "update:usage_update",
+  "payload": {
+   "cost": {
+    "amount": 0.3933695,
+    "currency": "USD"
+   },
+   "size": 1000000,
+   "used": 24193,
+   "session_update": "usage_update"
+  }
+ },
+ {
+  "tag": "prompt2.response",
+  "payload": {
+   "stop_reason": "end_turn",
+   "usage": {
+    "cached_read_tokens": 41557,
+    "cached_write_tokens": 4491,
+    "input_tokens": 2130,
+    "output_tokens": 124,
+    "total_tokens": 48302
+   }
+  }
+ }
+]

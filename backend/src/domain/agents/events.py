@@ -79,6 +79,13 @@ class ToolCall:
 
     Tools without a canonical concept pass through with their raw
     provider shape — the frontend falls back to a generic JSON view.
+
+    ``kind`` / ``title`` / ``locations`` are optional ACP enrichment
+    (STORY-033): ``kind`` is the protocol's tool category (``read`` /
+    ``edit`` / ``execute`` / ...), ``title`` a human-readable label,
+    ``locations`` a list of ``{path, line?}`` dicts for follow-the-agent
+    UX. Adapters without this granularity leave them ``None`` and the
+    serializer omits them, keeping legacy transcript lines byte-stable.
     """
 
     type: Literal["tool_call"] = "tool_call"
@@ -86,17 +93,105 @@ class ToolCall:
     tool_id: str
     name: str
     arguments: dict[str, Any]
+    kind: str | None = None
+    title: str | None = None
+    locations: tuple[dict[str, Any], ...] | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ToolCallUpdate:
+    """Mid-flight update to a running tool call (ACP granularity).
+
+    ``tool_id`` matches the originating ``ToolCall``. Only the fields
+    that actually changed are set; unset fields serialize away. The
+    terminal outcome of a tool still arrives as ``ToolResult`` — this
+    event exists so the frontend can move a tool card through
+    pending → in_progress and surface live ``locations`` without
+    waiting for completion. Adapters must coalesce noisy streams; one
+    event per meaningful transition, not one per output byte.
+    """
+
+    type: Literal["tool_call_update"] = "tool_call_update"
+    ts: datetime
+    tool_id: str
+    status: str | None = None
+    title: str | None = None
+    kind: str | None = None
+    locations: tuple[dict[str, Any], ...] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
 class ToolResult:
-    """A tool returned. `tool_id` matches the originating ToolCall."""
+    """A tool returned. `tool_id` matches the originating ToolCall.
+
+    ``diff`` is optional ACP enrichment: a ``{path, old_text, new_text}``
+    dict (``old_text`` is ``None`` for new files) extracted from the
+    protocol's structured diff content. It lets the frontend render the
+    diff viewer even for tools that aren't canonical Edit/MultiEdit.
+    """
 
     type: Literal["tool_result"] = "tool_result"
     ts: datetime
     tool_id: str
     content: str
     is_error: bool = False
+    diff: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class PlanUpdate:
+    """The agent published or revised its plan (ACP ``plan`` update).
+
+    Full-replacement semantics per the protocol: ``entries`` is the
+    complete current plan, not a delta — consumers replace any prior
+    rendered plan wholesale. Each entry is ``{content, priority, status}``
+    with priority ∈ high|medium|low and status ∈ pending|in_progress|
+    completed.
+    """
+
+    type: Literal["plan_update"] = "plan_update"
+    ts: datetime
+    entries: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, kw_only=True)
+class ModeChange:
+    """The agent's session mode changed (ACP ``current_mode_update``).
+
+    Emitted both for agent-initiated switches (e.g. a ``switch_mode``
+    tool) and as confirmation after a client-side ``session/set_mode``.
+    Rendered as an informational chip; Atelier does not interpret modes.
+    """
+
+    type: Literal["mode_change"] = "mode_change"
+    ts: datetime
+    mode_id: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class SessionConfigOptions:
+    """Provider-advertised mutable session options.
+
+    ACP agents can expose per-session knobs such as OpenCode's model
+    selector. Atelier records the advertised shape so the UI can render a
+    real control and rebuild it from transcript replay after reconnects.
+    The payload stays deliberately dict-shaped because option metadata is
+    provider-owned and varies across ACP servers.
+    """
+
+    type: Literal["session_config_options"] = "session_config_options"
+    ts: datetime
+    options: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, kw_only=True)
+class SessionConfigChanged:
+    """A mutable provider session option changed successfully."""
+
+    type: Literal["session_config_changed"] = "session_config_changed"
+    ts: datetime
+    config_id: str
+    value: str | bool
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -192,6 +287,14 @@ class PermissionRequest:
     request_id: str
     tool_name: str
     tool_input: dict[str, Any]
+    # Optional ACP enrichment: the agent-provided answer options
+    # (``{option_id, name, kind}`` with kind ∈ allow_once | allow_always |
+    # reject_once | reject_always) and the tool call this request gates,
+    # so the frontend can anchor the prompt to its tool card and label
+    # the buttons with the agent's own wording. ``None`` from adapters
+    # without this granularity; serializer omits.
+    options: tuple[dict[str, Any], ...] | None = None
+    tool_id: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -246,6 +349,11 @@ class TurnMetrics:
       Static provider descriptors publish best-effort model windows, but
       some CLIs reserve part of the API window. When present, consumers
       should prefer this value for context percentage.
+
+    - ``cost_usd`` is the provider-reported **cumulative session cost**
+      (ACP ``usage_update.cost``), when the agent reports one. It is
+      authoritative — consumers should prefer it over token-math price
+      estimates. ``None`` from adapters/providers that don't report cost.
     """
 
     type: Literal["turn_metrics"] = "turn_metrics"
@@ -258,6 +366,7 @@ class TurnMetrics:
     last_prompt_tokens: int = 0
     model: str | None = None
     context_window: int | None = None
+    cost_usd: float | None = None
     git_branch: str | None = None
     git_head: str | None = None
     git_detached: bool | None = None
@@ -269,7 +378,12 @@ AgentEvent = (
     | ThinkingDelta
     | ThinkingComplete
     | ToolCall
+    | ToolCallUpdate
     | ToolResult
+    | PlanUpdate
+    | ModeChange
+    | SessionConfigOptions
+    | SessionConfigChanged
     | StatusChange
     | ArtifactMarker
     | Error
@@ -289,15 +403,20 @@ __all__ = [
     "HandoffOffered",
     "MessageComplete",
     "MessageDelta",
+    "ModeChange",
     "PermissionDecision",
     "PermissionDecisionValue",
     "PermissionRequest",
+    "PlanUpdate",
     "ProviderContextCompacted",
+    "SessionConfigChanged",
+    "SessionConfigOptions",
     "SessionEstablished",
     "StatusChange",
     "ThinkingComplete",
     "ThinkingDelta",
     "ToolCall",
+    "ToolCallUpdate",
     "ToolResult",
     "TurnMetrics",
 ]

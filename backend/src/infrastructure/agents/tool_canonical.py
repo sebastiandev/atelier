@@ -37,6 +37,13 @@ _NAME_ALIASES: dict[str, str] = {
     "edit_file": "Edit",
     "finder": "Grep",
     "create_file": "Write",
+    # OpenCode (via ACP) names its tools in lowercase.
+    "bash": "Bash",
+    "edit": "Edit",
+    "read": "Read",
+    "write": "Write",
+    "grep": "Grep",
+    "glob": "Glob",
 }
 
 
@@ -76,12 +83,12 @@ def _bash(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _edit(raw: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    path = _first_present(raw, ("path", "file_path"))
+    path = _first_present(raw, ("path", "file_path", "filePath"))
     if path is not None:
         out["path"] = path
-    old = _first_present(raw, ("old_text", "old_string", "old_str"))
+    old = _first_present(raw, ("old_text", "old_string", "old_str", "oldString"))
     out["old_text"] = old if old is not None else ""
-    new = _first_present(raw, ("new_text", "new_string", "new_str"))
+    new = _first_present(raw, ("new_text", "new_string", "new_str", "newString"))
     out["new_text"] = new if new is not None else ""
     if "replace_all" in raw:
         out["replace_all"] = raw["replace_all"]
@@ -90,7 +97,7 @@ def _edit(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _multi_edit(raw: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    path = _first_present(raw, ("path", "file_path"))
+    path = _first_present(raw, ("path", "file_path", "filePath"))
     if path is not None:
         out["path"] = path
     edits_in = raw.get("edits", [])
@@ -99,8 +106,8 @@ def _multi_edit(raw: dict[str, Any]) -> dict[str, Any]:
         for e in edits_in:
             if not isinstance(e, dict):
                 continue
-            old = _first_present(e, ("old_text", "old_string", "old_str"))
-            new = _first_present(e, ("new_text", "new_string", "new_str"))
+            old = _first_present(e, ("old_text", "old_string", "old_str", "oldString"))
+            new = _first_present(e, ("new_text", "new_string", "new_str", "newString"))
             edit_norm: dict[str, Any] = {
                 "old_text": old if old is not None else "",
                 "new_text": new if new is not None else "",
@@ -114,7 +121,7 @@ def _multi_edit(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _read(raw: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    path = _first_present(raw, ("path", "file_path"))
+    path = _first_present(raw, ("path", "file_path", "filePath"))
     if path is not None:
         out["path"] = path
     if "line_range" in raw:
@@ -135,7 +142,7 @@ def _read(raw: dict[str, Any]) -> dict[str, Any]:
 
 def _write(raw: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
-    path = _first_present(raw, ("path", "file_path"))
+    path = _first_present(raw, ("path", "file_path", "filePath"))
     if path is not None:
         out["path"] = path
     content = _first_present(raw, ("content", "contents"))

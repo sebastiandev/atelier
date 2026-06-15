@@ -1,0 +1,354 @@
+{
+  "info": {
+    "id": "ses_145439de1ffe3NQU6PYbYA8xVa",
+    "slug": "brave-circuit",
+    "projectID": "global",
+    "directory": "/private/tmp/acp-smoke-ws",
+    "path": "private/tmp/acp-smoke-ws",
+    "title": "New session - 2026-06-12T07:29:28.606Z",
+    "agent": "build",
+    "model": {
+      "id": "big-pickle",
+      "providerID": "opencode"
+    },
+    "version": "1.17.4",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 9703,
+      "output": 82,
+      "reasoning": 37,
+      "cache": {
+        "read": 19072,
+        "write": 0
+      }
+    },
+    "time": {
+      "created": 1781249368606,
+      "updated": 1781249374104
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1781249368936
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "big-pickle"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_ebabc636800189PMhsXc42ZSuZ",
+        "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "<atelier-context>\nYou are agt-smoke, an Atelier test agent. Be terse.\n</atelier-context>",
+          "id": "prt_ebabc6369001ypN5mYene4gQ3G",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc636800189PMhsXc42ZSuZ"
+        },
+        {
+          "type": "text",
+          "text": "Reply with exactly: smoke ok",
+          "id": "prt_ebabc6369002OXUj7vo7155Glk",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc636800189PMhsXc42ZSuZ"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_ebabc636800189PMhsXc42ZSuZ",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/private/tmp/acp-smoke-ws",
+          "root": "/"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 9559,
+          "input": 9542,
+          "output": 4,
+          "reasoning": 13,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "big-pickle",
+        "providerID": "opencode",
+        "time": {
+          "created": 1781249368946,
+          "completed": 1781249370846
+        },
+        "finish": "stop",
+        "id": "msg_ebabc63720010eVnGUV6e6oXQM",
+        "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "id": "prt_ebabc6742001IkXn7veZqp5xvk",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc63720010eVnGUV6e6oXQM"
+        },
+        {
+          "type": "reasoning",
+          "text": "The user wants me to reply with exactly \"smoke ok\".",
+          "time": {
+            "start": 1781249370426,
+            "end": 1781249370691
+          },
+          "id": "prt_ebabc693a001avEI6Va9sOw08U",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc63720010eVnGUV6e6oXQM"
+        },
+        {
+          "type": "text",
+          "text": "smoke ok",
+          "time": {
+            "start": 1781249370692,
+            "end": 1781249370841
+          },
+          "id": "prt_ebabc6a44001OgN07ghTIterov",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc63720010eVnGUV6e6oXQM"
+        },
+        {
+          "reason": "stop",
+          "type": "step-finish",
+          "tokens": {
+            "total": 9559,
+            "input": 9542,
+            "output": 4,
+            "reasoning": 13,
+            "cache": {
+              "write": 0,
+              "read": 0
+            }
+          },
+          "cost": 0,
+          "id": "prt_ebabc6adb001bhoVfbU39wyk25",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc63720010eVnGUV6e6oXQM"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1781249370863
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "big-pickle"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_ebabc6aef001lPhZwCWt7PwSbX",
+        "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "Create a file named smoke-opencode.txt containing: hello",
+          "id": "prt_ebabc6aef002Bg6s0gnvycO0Om",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc6aef001lPhZwCWt7PwSbX"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_ebabc6aef001lPhZwCWt7PwSbX",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/private/tmp/acp-smoke-ws",
+          "root": "/"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 9657,
+          "input": 88,
+          "output": 75,
+          "reasoning": 22,
+          "cache": {
+            "write": 0,
+            "read": 9472
+          }
+        },
+        "modelID": "big-pickle",
+        "providerID": "opencode",
+        "time": {
+          "created": 1781249370865,
+          "completed": 1781249372809
+        },
+        "finish": "tool-calls",
+        "id": "msg_ebabc6af1001d0IJjeYH5qTe77",
+        "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "id": "prt_ebabc6d98001RQwvEelXNuTna7",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc6af1001d0IJjeYH5qTe77"
+        },
+        {
+          "type": "reasoning",
+          "text": "The user wants me to create a file named `smoke-opencode.txt` with the content \"hello\".",
+          "time": {
+            "start": 1781249372083,
+            "end": 1781249372417
+          },
+          "id": "prt_ebabc6fb30015ska0alyE9N79C",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc6af1001d0IJjeYH5qTe77"
+        },
+        {
+          "type": "tool",
+          "tool": "write",
+          "callID": "call_00_wADEhyZjZGhiBZIkbG6X5456",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "/private/tmp/acp-smoke-ws/smoke-opencode.txt",
+              "content": "hello"
+            },
+            "output": "Wrote file successfully.",
+            "metadata": {
+              "diagnostics": {},
+              "filepath": "/private/tmp/acp-smoke-ws/smoke-opencode.txt",
+              "exists": false,
+              "truncated": false
+            },
+            "title": "private/tmp/acp-smoke-ws/smoke-opencode.txt",
+            "time": {
+              "start": 1781249372678,
+              "end": 1781249372688
+            }
+          },
+          "id": "prt_ebabc7103001YNcVJs9qMa5eK5",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc6af1001d0IJjeYH5qTe77"
+        },
+        {
+          "reason": "tool-calls",
+          "type": "step-finish",
+          "tokens": {
+            "total": 9657,
+            "input": 88,
+            "output": 75,
+            "reasoning": 22,
+            "cache": {
+              "write": 0,
+              "read": 9472
+            }
+          },
+          "cost": 0,
+          "id": "prt_ebabc728400194Fb44pqv1MsQL",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc6af1001d0IJjeYH5qTe77"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_ebabc6aef001lPhZwCWt7PwSbX",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/private/tmp/acp-smoke-ws",
+          "root": "/"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 9678,
+          "input": 73,
+          "output": 3,
+          "reasoning": 2,
+          "cache": {
+            "write": 0,
+            "read": 9600
+          }
+        },
+        "modelID": "big-pickle",
+        "providerID": "opencode",
+        "time": {
+          "created": 1781249372812,
+          "completed": 1781249374102
+        },
+        "finish": "stop",
+        "id": "msg_ebabc728b001bzG4rptdv20A1M",
+        "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "id": "prt_ebabc7516001cln4qIj41gcVSj",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc728b001bzG4rptdv20A1M"
+        },
+        {
+          "type": "reasoning",
+          "text": "Done.",
+          "time": {
+            "start": 1781249373916,
+            "end": 1781249374063
+          },
+          "id": "prt_ebabc76dc001hjyUamewfPXyxK",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc728b001bzG4rptdv20A1M"
+        },
+        {
+          "type": "text",
+          "text": "Done.",
+          "time": {
+            "start": 1781249374065,
+            "end": 1781249374097
+          },
+          "id": "prt_ebabc7771001LtaBjq6rIHkrNm",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc728b001bzG4rptdv20A1M"
+        },
+        {
+          "reason": "stop",
+          "type": "step-finish",
+          "tokens": {
+            "total": 9678,
+            "input": 73,
+            "output": 3,
+            "reasoning": 2,
+            "cache": {
+              "write": 0,
+              "read": 9600
+            }
+          },
+          "cost": 0,
+          "id": "prt_ebabc77930010DKmvh9xipH4Ih",
+          "sessionID": "ses_145439de1ffe3NQU6PYbYA8xVa",
+          "messageID": "msg_ebabc728b001bzG4rptdv20A1M"
+        }
+      ]
+    }
+  ]
+}

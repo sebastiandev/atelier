@@ -8,13 +8,25 @@ from types import ModuleType
 from typing import Any
 
 from src.domain.models import Provider
-from src.infrastructure.cli_launcher import amp, claude, codex
+from src.infrastructure.cli_launcher import (
+    amp,
+    claude,
+    claude_acp,
+    codex,
+    codex_acp,
+    opencode,
+)
 from src.infrastructure.cli_launcher.terminal import LaunchResult, launch_in_terminal
 
 _PROVIDERS: dict[Provider, ModuleType] = {
     "claude-code": claude,
     "amp": amp,
     "codex": codex,
+    # ACP runtimes wrap the same CLIs, so detach resumes natively; the
+    # modules translate ACP option vocabularies back to CLI flags.
+    "claude-acp": claude_acp,
+    "codex-acp": codex_acp,
+    "opencode": opencode,
 }
 
 
@@ -31,13 +43,15 @@ def build_resume_command(
     impl = _PROVIDERS.get(provider)
     if impl is None:
         raise ValueError(f"unknown provider for CLI resume: {provider!r}")
-    if provider == "codex":
-        return codex.build_command(
-            session_id,
-            workdir,
-            model=model,
-            options=options,
-            additional_directories=additional_directories,
+    if provider in ("codex", "codex-acp"):
+        return str(
+            impl.build_command(
+                session_id,
+                workdir,
+                model=model,
+                options=options,
+                additional_directories=additional_directories,
+            )
         )
     return str(impl.build_command(session_id, workdir, model=model, options=options))
 

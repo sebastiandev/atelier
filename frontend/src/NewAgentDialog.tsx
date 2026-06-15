@@ -7,6 +7,7 @@ import {
 } from "react";
 
 import { FolderPickerDialog } from "./FolderPickerDialog";
+import { ModelPicker } from "./ModelPicker";
 
 import {
   type Connection,
@@ -14,12 +15,14 @@ import {
   type ContextEntry,
   type CreateAgentPayload,
   type Persona,
+  type OpenCodeModelOption,
   type ProviderDescriptor,
   type ProviderField,
   PERSONAS,
   PERSONA_GLYPH,
   listConnections,
   listGitBranches,
+  listOpenCodeModels,
   listProviders,
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
@@ -80,6 +83,8 @@ export function NewAgentDialog({
   const [providerName, setProviderName] = useState<string | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [options, setOptions] = useState<Record<string, string>>({});
+  const [opencodeModelsLoading, setOpencodeModelsLoading] = useState(false);
+  const [opencodeModelsError, setOpencodeModelsError] = useState<string | null>(null);
 
   // "fork" only available when forkFromAgent is supplied; "fresh" is the
   // baseline and the only choice in the regular new-agent flow.
@@ -164,6 +169,39 @@ export function NewAgentDialog({
     () => providers?.find((p) => p.name === providerName) ?? null,
     [providers, providerName],
   );
+
+  useEffect(() => {
+    if (providerName !== "opencode") return;
+    let cancelled = false;
+    setOpencodeModelsLoading(true);
+    setOpencodeModelsError(null);
+    listOpenCodeModels({ refresh: true })
+      .then((rows) => {
+        if (cancelled) return;
+        setProviders((current) =>
+          current?.map((p) =>
+            p.name === "opencode" ? withOpenCodeModelOptions(p, rows) : p,
+          ) ?? current,
+        );
+        setModel((current) => {
+          if (!current) return "configured-default";
+          if (current === "configured-default") return current;
+          if (rows.some((row) => row.value === current)) return current;
+          return "configured-default";
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setOpencodeModelsError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setOpencodeModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerName]);
 
   function changeProvider(next: string) {
     setProviderName(next);
@@ -529,17 +567,22 @@ export function NewAgentDialog({
               {provider && (
                 <label className="field">
                   <span className="label">{provider.primary_field.label}</span>
-                  <select
-                    className="input"
+                  <ModelPicker
+                    id={`new-agent-model-${provider.name}`}
                     value={model ?? provider.primary_field.default}
-                    onChange={(e) => setModel(e.target.value)}
-                  >
-                    {provider.primary_field.values.map((v, i) => (
-                      <option key={v} value={v}>
-                        {provider.primary_field.value_labels?.[i] ?? v}
-                      </option>
-                    ))}
-                  </select>
+                    options={modelPickerOptions(provider)}
+                    onChange={setModel}
+                  />
+                  {provider.name === "opencode" && opencodeModelsLoading && (
+                    <span className="hint">Refreshing OpenCode models…</span>
+                  )}
+                  {provider.name === "opencode" &&
+                    !opencodeModelsLoading &&
+                    opencodeModelsError && (
+                      <span className="hint">
+                        Could not refresh models; using OpenCode default.
+                      </span>
+                    )}
                 </label>
               )}
 
@@ -880,6 +923,41 @@ function coerceOptionsForModel(
     }
   }
   return changed ? next : current;
+}
+
+function withOpenCodeModelOptions(
+  provider: ProviderDescriptor,
+  models: OpenCodeModelOption[],
+): ProviderDescriptor {
+  const baseValue = provider.primary_field.default;
+  const baseLabel =
+    provider.primary_field.value_labels?.[
+      provider.primary_field.values.indexOf(baseValue)
+    ] ?? "OpenCode default (set in OpenCode config)";
+  const values = [baseValue];
+  const valueLabels = [baseLabel];
+  const seen = new Set(values);
+  for (const option of models) {
+    if (seen.has(option.value)) continue;
+    seen.add(option.value);
+    values.push(option.value);
+    valueLabels.push(option.label);
+  }
+  return {
+    ...provider,
+    primary_field: {
+      ...provider.primary_field,
+      values,
+      value_labels: valueLabels,
+    },
+  };
+}
+
+function modelPickerOptions(provider: ProviderDescriptor) {
+  return provider.primary_field.values.map((value, index) => ({
+    value,
+    label: provider.primary_field.value_labels?.[index] ?? value,
+  }));
 }
 
 function optionFieldForModel(

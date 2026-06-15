@@ -283,6 +283,30 @@ def test_set_agent_session_id_mirrors_agent_json_only_when_requested() -> None:
     assert persisted["options"] == {"reasoning_effort": "high"}
 
 
+def test_set_agent_model_updates_repo_and_agent_json() -> None:
+    service, repo, files, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(
+        AddAgentRequest(
+            work_slug="WRK-001",
+            name="Developer",
+            persona="developer",
+            role="dev",
+            provider="opencode",
+            model="configured-default",
+            folder=Path("/code/foo"),
+            contexts=(Context(type="text", value="handoff"),),
+        )
+    )
+
+    service.set_agent_model("agt-1", "opencode/gpt-5")
+
+    assert repo.agents["agt-1"].model == "opencode/gpt-5"
+    persisted = files.agent_jsons[("WRK-001", "agt-1")]
+    assert persisted["model"] == "opencode/gpt-5"
+    assert persisted["contexts"] == [{"type": "text", "value": "handoff"}]
+
+
 def test_backfill_missing_session_ids_from_transcripts_restores_latest_session() -> None:
     service, repo, _, log = _make_service()
     service.create_work(_new_work_request())

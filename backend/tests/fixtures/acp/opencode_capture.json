@@ -1,0 +1,88 @@
+{
+ "initialize": {
+  "agent_capabilities": {
+   "auth": {},
+   "load_session": true,
+   "mcp_capabilities": {
+    "http": true,
+    "sse": true
+   },
+   "prompt_capabilities": {
+    "audio": false,
+    "embedded_context": true,
+    "image": true
+   },
+   "session_capabilities": {
+    "close": {},
+    "fork": {},
+    "list": {},
+    "resume": {}
+   }
+  },
+  "agent_info": {
+   "name": "OpenCode",
+   "version": "1.17.4"
+  },
+  "auth_methods": [
+   {
+    "description": "Run `opencode auth login` in the terminal",
+    "id": "opencode-login",
+    "name": "Login with opencode"
+   }
+  ],
+  "protocol_version": 1
+ },
+ "new_session": {
+  "config_options": [
+   {
+    "current_value": "opencode/big-pickle",
+    "options": [
+     {
+      "name": "OpenCode Zen/Big Pickle",
+      "value": "opencode/big-pickle"
+     },
+     {
+      "name": "OpenCode Zen/DeepSeek V4 Flash Free",
+      "value": "opencode/deepseek-v4-flash-free"
+     },
+     {
+      "name": "OpenCode Zen/MiMo V2.5 Free",
+      "value": "opencode/mimo-v2.5-free"
+     },
+     {
+      "name": "OpenCode Zen/Nemotron 3 Ultra Free",
+      "value": "opencode/nemotron-3-ultra-free"
+     },
+     {
+      "name": "OpenCode Zen/North Mini Code Free",
+      "value": "opencode/north-mini-code-free"
+     }
+    ],
+    "category": "model",
+    "id": "model",
+    "name": "Model",
+    "type": "select"
+   },
+   {
+    "current_value": "build",
+    "options": [
+     {
+      "description": "The default agent. Executes tools based on configured permissions.",
+      "name": "build",
+      "value": "build"
+     },
+     {
+      "description": "Plan mode. Disallows all edit tools.",
+      "name": "plan",
+      "value": "plan"
+     }
+    ],
+    "category": "mode",
+    "id": "mode",
+    "name": "Session Mode",
+    "type": "select"
+   }
+  ],
+  "session_id": "ses_1454588d0ffex6B3j247gYZmce"
+ }
+}

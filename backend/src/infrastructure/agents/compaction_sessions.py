@@ -12,13 +12,20 @@ from src.domain.agents.compactions import (
     CompactionSessionStartResult,
 )
 from src.domain.agents.configs import (
+    AcpAgentConfig,
     AgentConfig,
     AmpAgentConfig,
+    ClaudeAcpAgentConfig,
+    ClaudeAcpPermissionMode,
     ClaudeAgentConfig,
     ClaudePermissionMode,
+    CodexAcpAgentConfig,
+    CodexAcpMode,
     CodexAgentConfig,
     CodexApprovalMode,
     CodexSandbox,
+    OpenCodeAgentConfig,
+    OpenCodeMode,
 )
 from src.domain.agents.events import (
     Error,
@@ -138,6 +145,26 @@ def _summary_config(config: AgentConfig) -> AgentConfig:
             approval_mode=CodexApprovalMode.NEVER,
             summary_only=True,
         )
+    if isinstance(config, ClaudeAcpAgentConfig):
+        return dataclasses.replace(
+            config,
+            common=common,
+            permission_mode=ClaudeAcpPermissionMode.PLAN,
+            summary_only=True,
+        )
+    if isinstance(config, CodexAcpAgentConfig):
+        return dataclasses.replace(
+            config, common=common, mode=CodexAcpMode.READ_ONLY, summary_only=True
+        )
+    if isinstance(config, OpenCodeAgentConfig):
+        return dataclasses.replace(
+            config, common=common, mode=OpenCodeMode.PLAN, summary_only=True
+        )
+    if isinstance(config, AcpAgentConfig):
+        # Generic ACP provider (e.g. OpenCode): summary_only makes the
+        # adapter auto-reject every permission request, which is the
+        # safest tool denial the protocol offers uniformly.
+        return dataclasses.replace(config, common=common, summary_only=True)
     raise TypeError(f"unsupported agent config: {type(config)!r}")
 
 

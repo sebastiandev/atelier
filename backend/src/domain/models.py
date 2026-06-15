@@ -30,7 +30,13 @@ from typing import Any, Literal
 WorkStatus = Literal["active", "completed", "deleted"]
 ContextType = Literal["sentry", "honeycomb", "jira", "url", "text", "file", "agentout"]
 Persona = Literal["architect", "developer", "product", "ux", "writer", "custom"]
-Provider = Literal["claude-code", "amp", "codex"]
+# claude-acp / codex-acp / opencode are ACP-backed runtimes (STORY-033);
+# the first two coexist with the bespoke claude-code / codex adapters
+# until parity is validated — removing the legacy pair is a deliberate
+# follow-up story.
+Provider = Literal[
+    "claude-code", "amp", "codex", "claude-acp", "codex-acp", "opencode"
+]
 ConnectionType = Literal["sentry", "honeycomb", "jira"]
 HandoffTargetDialog = Literal["new-agent"]
 ChatGroundingKind = Literal["project", "work", "folder"]

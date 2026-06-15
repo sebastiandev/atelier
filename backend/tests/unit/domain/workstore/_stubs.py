@@ -109,6 +109,11 @@ class StubRepository:
         if agent is not None:
             agent.status = status
 
+    def set_agent_model(self, agent_slug: str, model: str) -> None:
+        agent = self.agents.get(agent_slug)
+        if agent is not None:
+            agent.model = model
+
     # -- Artifact / Handoff --
 
     def add_artifact(self, artifact: Artifact) -> Artifact:

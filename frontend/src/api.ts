@@ -457,6 +457,22 @@ export function listProviders(): Promise<ProviderDescriptor[]> {
   return fetch("/api/providers").then((r) => jsonOrThrow<ProviderDescriptor[]>(r));
 }
 
+export type OpenCodeModelOption = {
+  value: string;
+  label: string;
+};
+
+export function listOpenCodeModels(
+  options: { refresh?: boolean } = {},
+): Promise<OpenCodeModelOption[]> {
+  const params = new URLSearchParams();
+  if (options.refresh) params.set("refresh", "true");
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return fetch(`/api/providers/opencode/models${suffix}`).then((r) =>
+    jsonOrThrow<OpenCodeModelOption[]>(r),
+  );
+}
+
 export type FolderEntry = {
   name: string;
   is_dir: boolean;

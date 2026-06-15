@@ -256,24 +256,227 @@ class CodexAgentConfig:
     summary_only: bool = False
 
 
-AgentConfig = ClaudeAgentConfig | AmpAgentConfig | CodexAgentConfig
+class ClaudeAcpModel(str, Enum):
+    """Model choices exposed by the official ``claude-agent-acp`` wrapper.
+
+    These are the wrapper's session-config-option *values* (captured live
+    2026-06-11, wrapper 0.44.0) — aliases resolved by the Claude Code
+    runtime, not API model ids. ``DEFAULT`` defers to the user's Claude
+    CLI configuration (currently resolves to Opus 4.8 with 1M context).
+    """
+
+    DEFAULT = "default"
+    FABLE_5_1M = "claude-fable-5[1m]"
+    SONNET = "sonnet"
+    SONNET_1M = "sonnet[1m]"
+    HAIKU = "haiku"
+
+
+class ClaudeAcpEffort(str, Enum):
+    """Thinking-effort ladder of the claude-agent-acp ``effort`` option.
+
+    Same ladder as ``ClaudeEffort`` except the wrapper models "no
+    override" as ``default`` (defer to CLI config) rather than ``off``.
+    """
+
+    DEFAULT = "default"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
+
+
+class ClaudeAcpPermissionMode(str, Enum):
+    """Permission modes of the claude-agent-acp ``mode`` option.
+
+    Superset of ``ClaudePermissionMode``: ``AUTO`` uses a model
+    classifier to approve/deny prompts, ``DONT_ASK`` denies anything not
+    pre-approved. Prompts that do fire round-trip through Atelier's
+    Allow / Deny UI via ACP ``session/request_permission``.
+    """
+
+    AUTO = "auto"
+    DEFAULT = "default"
+    ACCEPT_EDITS = "acceptEdits"
+    PLAN = "plan"
+    DONT_ASK = "dontAsk"
+    BYPASS = "bypassPermissions"
+
+
+@dataclass(frozen=True, kw_only=True)
+class AcpAgentConfig:
+    """Shared base for providers driven through the ACP client adapter.
+
+    One ``AcpAdapter`` serves every ACP provider; per-provider configs
+    subclass this base (``functools.singledispatch`` resolves subclasses
+    to the base registration via the MRO) and express their knobs as
+    protocol-level values through the two hooks below. The adapter
+    applies them **tolerantly** after ``session/new``: ids/values the
+    agent doesn't advertise are skipped with a debug log, never a start
+    failure — adapter wrappers evolve their option surface faster than
+    we ship.
+
+    Subclassing (vs. the ``common`` composition used by the bespoke
+    configs) is deliberate here: the adapter dispatches on the base type
+    and only ever reads the shared surface, so the inheritance is the
+    point. ``kw_only=True`` keeps frozen-dataclass field ordering sane.
+    """
+
+    common: CommonAgentConfig
+    summary_only: bool = False
+
+    def acp_config_values(self) -> tuple[tuple[str, str], ...]:
+        """``(config_id, value)`` pairs to apply via session/set_config_option."""
+        return ()
+
+    def acp_mode_id(self) -> str | None:
+        """Session mode to apply via session/set_mode, or None to leave as-is."""
+        return None
+
+
+@dataclass(frozen=True, kw_only=True)
+class ClaudeAcpAgentConfig(AcpAgentConfig):
+    """Claude via the official claude-agent-acp wrapper.
+
+    All three knobs travel as ACP session config options (the wrapper
+    exposes no session modes). Values are always sent explicitly — the
+    wrapper otherwise inherits whatever the user's CLI config says,
+    which would make Atelier agents non-deterministic across machines.
+    """
+
+    model: ClaudeAcpModel = ClaudeAcpModel.DEFAULT
+    thinking_effort: ClaudeAcpEffort = ClaudeAcpEffort.DEFAULT
+    permission_mode: ClaudeAcpPermissionMode = ClaudeAcpPermissionMode.DEFAULT
+
+    def acp_config_values(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("model", self.model.value),
+            ("effort", self.thinking_effort.value),
+            ("mode", self.permission_mode.value),
+        )
+
+
+class CodexAcpModel(str, Enum):
+    """Model values exposed by Zed's codex-acp wrapper (0.16.0, captured
+    live 2026-06-11). No Pro tiers — the wrapper surfaces the standard
+    Codex runtime models only."""
+
+    GPT_5_5 = "gpt-5.5"
+    GPT_5_4 = "gpt-5.4"
+    GPT_5_4_MINI = "gpt-5.4-mini"
+
+
+class CodexAcpEffort(str, Enum):
+    """codex-acp ``reasoning_effort`` ladder — one tier above the bespoke
+    adapter's (``xhigh`` is ACP-only today)."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+
+
+class CodexAcpMode(str, Enum):
+    """codex-acp session modes (also mirrored as the ``mode`` config
+    option). Collapses the bespoke adapter's independent sandbox +
+    approval knobs into Codex's own three-tier policy:
+
+    - ``READ_ONLY`` — read files only; approval required to edit or run.
+    - ``AUTO`` — read/edit/run inside the workspace; approval for
+      network access or out-of-workspace edits. Matches the bespoke
+      default (workspace-write + on-request) and is Atelier's default.
+    - ``FULL_ACCESS`` — no approvals; use only for trusted runs.
+    """
+
+    READ_ONLY = "read-only"
+    AUTO = "auto"
+    FULL_ACCESS = "full-access"
+
+
+@dataclass(frozen=True, kw_only=True)
+class CodexAcpAgentConfig(AcpAgentConfig):
+    """Codex via Zed's codex-acp wrapper. All knobs travel as ACP
+    session config options; sent explicitly so Atelier agents don't
+    inherit per-machine Codex config."""
+
+    model: CodexAcpModel = CodexAcpModel.GPT_5_5
+    reasoning_effort: CodexAcpEffort = CodexAcpEffort.MEDIUM
+    mode: CodexAcpMode = CodexAcpMode.AUTO
+
+    def acp_config_values(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("model", self.model.value),
+            ("reasoning_effort", self.reasoning_effort.value),
+            ("mode", self.mode.value),
+        )
+
+
+OPENCODE_CONFIGURED_MODEL = "configured-default"
+"""Sentinel primary-field value for OpenCode: don't send a model config
+option — the session runs whatever the user's OpenCode config selects
+(``opencode models`` to inspect). OpenCode's model list is per-user and
+dynamic, so a static enum can't enumerate it; a descriptor-driven picker
+fed by ACP configOptions is a named follow-up story."""
+
+
+class OpenCodeMode(str, Enum):
+    """OpenCode session modes (= OpenCode agents). ``build`` is the
+    stock do-work mode; ``plan`` designs without executing."""
+
+    BUILD = "build"
+    PLAN = "plan"
+
+
+@dataclass(frozen=True, kw_only=True)
+class OpenCodeAgentConfig(AcpAgentConfig):
+    """OpenCode via its native ``opencode acp`` server.
+
+    ``configured-default`` suppresses the model config option so OpenCode
+    uses its own default. Any explicit ``provider/model`` value travels
+    as ACP ``model`` when the session advertises it.
+    """
+
+    model: str = OPENCODE_CONFIGURED_MODEL
+    mode: OpenCodeMode = OpenCodeMode.BUILD
+
+    def acp_config_values(self) -> tuple[tuple[str, str], ...]:
+        values: list[tuple[str, str]] = [("mode", self.mode.value)]
+        if self.model != OPENCODE_CONFIGURED_MODEL:
+            values.insert(0, ("model", self.model))
+        return tuple(values)
+
+
+AgentConfig = ClaudeAgentConfig | AmpAgentConfig | CodexAgentConfig | AcpAgentConfig
 
 
 __all__ = [
     "AMP_DEFAULT_AUTO_ALLOWED_TOOLS",
     "DEFAULT_ALLOWED_TOOLS",
+    "OPENCODE_CONFIGURED_MODEL",
+    "AcpAgentConfig",
     "AgentConfig",
     "AmpAgentConfig",
     "AmpMode",
     "AmpPermissionMode",
+    "ClaudeAcpAgentConfig",
+    "ClaudeAcpEffort",
+    "ClaudeAcpModel",
+    "ClaudeAcpPermissionMode",
     "ClaudeAgentConfig",
     "ClaudeEffort",
     "ClaudeModel",
     "ClaudePermissionMode",
+    "CodexAcpAgentConfig",
+    "CodexAcpEffort",
+    "CodexAcpMode",
+    "CodexAcpModel",
     "CodexAgentConfig",
     "CodexApprovalMode",
     "CodexModel",
     "CodexReasoningEffort",
     "CodexSandbox",
     "CommonAgentConfig",
+    "OpenCodeAgentConfig",
+    "OpenCodeMode",
 ]

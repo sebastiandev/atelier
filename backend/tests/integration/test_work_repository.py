@@ -28,14 +28,16 @@ def _new_work(name: str = "Migration") -> Work:
     )
 
 
-def _new_agent(work_id: int, name: str = "Architect") -> Agent:
+def _new_agent(
+    work_id: int, name: str = "Architect", model: str = "claude-opus-4-7"
+) -> Agent:
     return Agent(
         work_id=work_id,
         name=name,
         persona="architect",
         role="architect",
         provider="claude-code",
-        model="claude-opus-4-7",
+        model=model,
         folder=Path("/code/foo"),
         status="idle",
         started_at=UTC_NOW,
@@ -212,6 +214,16 @@ def test_delete_agent(repo: SqlWorkRepository) -> None:
     repo.add_agent(_new_agent(work_id=work.id))
     repo.delete_agent("agt-1")
     assert repo.get_agent_by_slug("agt-1") is None
+
+
+def test_set_agent_model_persists(repo: SqlWorkRepository) -> None:
+    work = repo.add_work(_new_work())
+    assert work.id is not None
+    repo.add_agent(_new_agent(work_id=work.id, model="configured-default"))
+    repo.set_agent_model("agt-1", "opencode/gpt-5")
+    fetched = repo.get_agent_by_slug("agt-1")
+    assert fetched is not None
+    assert fetched.model == "opencode/gpt-5"
 
 
 def test_set_agent_session_id_persists(repo: SqlWorkRepository) -> None:

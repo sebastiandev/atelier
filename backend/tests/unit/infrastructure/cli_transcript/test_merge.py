@@ -849,3 +849,57 @@ def test_amp_merge_accepts_camelcase_usage_from_threads_export(
     assert metrics["cache_creation_input_tokens"] == 7
     assert metrics["last_prompt_tokens"] == 60
     assert metrics["model"] == "gpt-5"
+
+
+# ---------------------------------------------------------------------------
+# OpenCode (export-based, like Amp)
+# ---------------------------------------------------------------------------
+
+_OPENCODE_FIXTURE = (
+    Path(__file__).resolve().parents[3] / "fixtures" / "acp" / "opencode_export.json"
+)
+
+
+def _patch_opencode_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = _OPENCODE_FIXTURE.read_text()
+
+    class _Result:
+        returncode = 0
+        stdout = payload
+        stderr = ""
+
+    monkeypatch.setattr(
+        "src.infrastructure.cli_transcript.opencode.subprocess.run",
+        lambda *a, **kw: _Result(),
+    )
+
+
+def test_opencode_merge_translates_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_opencode_export(monkeypatch)
+    events = merge_cli_transcript(
+        "opencode", "ses_x", Path("/tmp/wd"), {"message_count": 0}
+    )
+    types = [e["type"] for e in events]
+    assert "user_input" in types
+    assert "message_complete" in types
+    assert "thinking_complete" in types
+    call = next(e for e in events if e["type"] == "tool_call")
+    # OpenCode's lowercase "write" + camelCase filePath canonicalize.
+    assert call["name"] == "Write"
+    assert call["arguments"]["path"].endswith("smoke-opencode.txt")
+    result = next(e for e in events if e["type"] == "tool_result")
+    assert result["tool_id"] == call["tool_id"]
+
+
+def test_opencode_merge_respects_cursor(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_opencode_export(monkeypatch)
+    full = merge_cli_transcript("opencode", "ses_x", Path("/tmp/wd"), {"message_count": 0})
+    after = merge_cli_transcript("opencode", "ses_x", Path("/tmp/wd"), {"message_count": 5})
+    assert len(full) > 0
+    assert after == []
+
+
+def test_opencode_cursor_counts_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_opencode_export(monkeypatch)
+    cursor = sdk_cursor_at_detach("opencode", "ses_x", Path("/tmp/wd"))
+    assert cursor == {"provider": "opencode", "message_count": 5}

@@ -38,14 +38,15 @@ import {
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { useDragHandle } from "./dragHandleContext";
+import { CheckIcon, SearchIcon } from "./Icons";
 import { MarkdownText } from "./MarkdownText";
 import { shortenPath } from "./pathFormat";
+import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
 import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
 import {
   type AgentEvent,
-  type PendingPermission,
   type PermissionDecision,
   useAgentStream,
 } from "./useAgentStream";
@@ -157,6 +158,8 @@ export function AgentTile({
     sendInput,
     sendStop,
     sendPermission,
+    sendSessionConfig,
+    sendSessionConfigRefresh,
     pendingPermissions,
     pendingHandoff,
   } = useAgentStream(agentSlug);
@@ -356,8 +359,45 @@ export function AgentTile({
     return () => window.clearTimeout(handle);
   }, [rawActivityPhase, activityPhase]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
+  const sessionModelConfig = useMemo(
+    () => latestSessionConfigOption(events, "model"),
+    [events],
+  );
+  const liveSessionModelValue =
+    typeof sessionModelConfig?.currentValue === "string"
+      ? sessionModelConfig.currentValue
+      : null;
+  const displayModel = liveSessionModelValue ?? model;
+  const sessionConfigOptionsSeq = useMemo(
+    () => latestEventSeq(events, "session_config_options"),
+    [events],
+  );
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelQuery, setModelQuery] = useState("");
+  const [modelActiveIndex, setModelActiveIndex] = useState(0);
+  const [modelRefreshing, setModelRefreshing] = useState(false);
+  const modelRefreshStartedSeqRef = useRef(0);
+  const modelPickerRef = useRef<HTMLDivElement>(null);
+  const modelSearchRef = useRef<HTMLInputElement>(null);
+  const modelResultsRef = useRef<HTMLDivElement>(null);
+  const modelPickerId = useMemo(
+    () => `composer-model-${agentSlug.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    [agentSlug],
+  );
+  const filteredSessionModelChoices = useMemo(() => {
+    if (sessionModelConfig === null) return [];
+    const query = normalizeModelQuery(modelQuery);
+    if (!query) return sessionModelConfig.choices;
+    const terms = query.split(" ").filter(Boolean);
+    return sessionModelConfig.choices.filter((choice) => {
+      const haystack = normalizeModelQuery(
+        `${choice.name ?? ""} ${String(choice.value)} ${choice.description ?? ""}`,
+      );
+      return terms.every((term) => haystack.includes(term));
+    });
+  }, [modelQuery, sessionModelConfig]);
   const { byName: providersByName } = useProviderDescriptors();
-  const modelMeta = lookupModelMeta(providersByName, provider, model);
+  const modelMeta = lookupModelMeta(providersByName, provider, displayModel);
   const latestCompactionSeq = useMemo(
     () => latestEventSeq(events, "context_compacted"),
     [events],
@@ -693,6 +733,126 @@ export function AgentTile({
   // user never thinks a click landed.
   const composerDisabled = status !== "connected";
   const sendDisabled = composerDisabled || compacting;
+  const sessionModelValue = liveSessionModelValue;
+  const sessionModelLabel =
+    sessionModelConfig && sessionModelValue
+      ? labelForSessionConfigValue(sessionModelConfig, sessionModelValue)
+      : null;
+  const showSessionModelSelect =
+    sessionModelConfig !== null &&
+    sessionModelValue !== null &&
+    sessionModelConfig.choices.length > 0;
+  const sessionModelDisabled =
+    composerDisabled || isCurrentlyActive || compactionBlocked;
+  const sessionModelTitle = sessionModelLabel
+    ? isCurrentlyActive
+      ? `Wait for the current turn to finish before changing model (${sessionModelValue})`
+      : `Model: ${sessionModelLabel} (${sessionModelValue})`
+    : undefined;
+  useEffect(() => {
+    if (!modelPickerOpen) return;
+    requestAnimationFrame(() => modelSearchRef.current?.focus());
+  }, [modelPickerOpen]);
+  useEffect(() => {
+    if (!modelPickerOpen) return;
+    setModelActiveIndex(0);
+  }, [filteredSessionModelChoices, modelPickerOpen]);
+  useEffect(() => {
+    if (!modelPickerOpen) return;
+    const active = modelResultsRef.current?.querySelector<HTMLElement>(
+      '[data-active="true"]',
+    );
+    active?.scrollIntoView({ block: "nearest" });
+  }, [modelActiveIndex, modelPickerOpen]);
+  useEffect(() => {
+    if (!modelPickerOpen) return;
+    const close = (event: Event) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        modelPickerRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setModelPickerOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [modelPickerOpen]);
+  useEffect(() => {
+    if (!modelPickerOpen || showSessionModelSelect) return;
+    setModelPickerOpen(false);
+  }, [modelPickerOpen, showSessionModelSelect]);
+  useEffect(() => {
+    if (!modelRefreshing) return;
+    if (sessionConfigOptionsSeq > modelRefreshStartedSeqRef.current) {
+      setModelRefreshing(false);
+      return;
+    }
+    const handle = window.setTimeout(() => setModelRefreshing(false), 1500);
+    return () => window.clearTimeout(handle);
+  }, [modelRefreshing, sessionConfigOptionsSeq]);
+
+  function openSessionModelPicker() {
+    if (sessionModelDisabled || guardBlockedCompaction()) return;
+    const opening = !modelPickerOpen;
+    setModelPickerOpen(opening);
+    setModelQuery("");
+    setModelActiveIndex(0);
+    if (opening) {
+      modelRefreshStartedSeqRef.current = sessionConfigOptionsSeq;
+      setModelRefreshing(true);
+      sendSessionConfigRefresh("model");
+    }
+  }
+
+  function chooseSessionModel(choice: SessionConfigChoice) {
+    if (sessionModelDisabled || guardBlockedCompaction()) return;
+    sendSessionConfig("model", choice.value);
+    setModelPickerOpen(false);
+    setModelQuery("");
+  }
+
+  function handleModelSearchKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setModelPickerOpen(false);
+      return;
+    }
+    const maxIndex = filteredSessionModelChoices.length - 1;
+    if (maxIndex < 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setModelActiveIndex((index) => Math.min(index + 1, maxIndex));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setModelActiveIndex((index) => Math.max(index - 1, 0));
+      return;
+    }
+    if (e.key === "Home") {
+      e.preventDefault();
+      setModelActiveIndex(0);
+      return;
+    }
+    if (e.key === "End") {
+      e.preventDefault();
+      setModelActiveIndex(maxIndex);
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const choice =
+        filteredSessionModelChoices[Math.min(modelActiveIndex, maxIndex)];
+      if (choice) chooseSessionModel(choice);
+    }
+  }
+
   const tileClass = `agent-tile mode-${mode}` + (maximized ? " maximized" : "");
   const title = agentName || agentSlug;
   const composerPlaceholder =
@@ -764,13 +924,13 @@ export function AgentTile({
         </div>
         <div className="tile-header-meta">
           {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}
-          {provider && model && (
+          {provider && displayModel && (
             <span
               className="provider-pill mono"
               data-provider={shortProvider(provider)}
-              {...hintHandlers(`Provider: ${provider} · Model: ${model}`)}
+              {...hintHandlers(`Provider: ${provider} · Model: ${displayModel}`)}
             >
-              {shortProvider(provider)} · {shortModel(model)}
+              {providerPillLabel(provider)} · {shortModel(displayModel)}
             </span>
           )}
           <span className="conn-status" data-conn-status={status}>{status}</span>
@@ -973,18 +1133,13 @@ export function AgentTile({
           />
         )}
         {pendingPermissions.length > 0 && (
-          <div className="permission-prompts">
-            {pendingPermissions.map((p) => (
-              <PermissionPrompt
-                key={p.request_id}
-                prompt={p}
-                onDecide={(requestId, decision) => {
-                  if (guardBlockedCompaction()) return;
-                  sendPermission(requestId, decision);
-                }}
-              />
-            ))}
-          </div>
+          <PermissionApprovalDialog
+            pendingPermissions={pendingPermissions}
+            onDecide={(requestId, decision) => {
+              if (guardBlockedCompaction()) return false;
+              sendPermission(requestId, decision);
+            }}
+          />
         )}
         {pendingHandoff && (
           <HandoffPrompt
@@ -1111,6 +1266,94 @@ export function AgentTile({
                 </div>
               )}
             </div>
+            {showSessionModelSelect && (
+              <div
+                className="composer-model-picker"
+                ref={modelPickerRef}
+                title={sessionModelTitle}
+              >
+                <button
+                  type="button"
+                  className="composer-model-trigger"
+                  disabled={sessionModelDisabled}
+                  onClick={openSessionModelPicker}
+                  aria-haspopup="listbox"
+                  aria-expanded={modelPickerOpen}
+                >
+                  <span className="composer-model-prefix">Model:</span>
+                  <span className="composer-model-current">
+                    {sessionModelLabel}
+                  </span>
+                  <span className="composer-model-caret" aria-hidden>
+                    ▾
+                  </span>
+                </button>
+                {modelPickerOpen && (
+                  <div className="composer-model-menu">
+                    <label className="composer-model-search">
+                      <SearchIcon size={12} />
+                      <input
+                        ref={modelSearchRef}
+                        value={modelQuery}
+                        onChange={(e) => setModelQuery(e.target.value)}
+                        onKeyDown={handleModelSearchKeyDown}
+                        placeholder="Search models"
+                        aria-controls={`${modelPickerId}-results`}
+                        aria-activedescendant={
+                          filteredSessionModelChoices[modelActiveIndex]
+                            ? `${modelPickerId}-option-${modelActiveIndex}`
+                            : undefined
+                        }
+                      />
+                    </label>
+                    <div
+                      ref={modelResultsRef}
+                      id={`${modelPickerId}-results`}
+                      className="composer-model-results"
+                      role="listbox"
+                    >
+                      {filteredSessionModelChoices.length === 0 ? (
+                        <div className="composer-model-empty">No models found</div>
+                      ) : (
+                        filteredSessionModelChoices.map((choice, index) => {
+                          const selected = choice.value === sessionModelValue;
+                          const active = index === modelActiveIndex;
+                          return (
+                            <button
+                              key={String(choice.value)}
+                              id={`${modelPickerId}-option-${index}`}
+                              type="button"
+                              className="composer-model-option"
+                              data-active={active ? "true" : undefined}
+                              data-selected={selected ? "true" : undefined}
+                              role="option"
+                              aria-selected={selected}
+                              onMouseEnter={() => setModelActiveIndex(index)}
+                              onClick={() => chooseSessionModel(choice)}
+                            >
+                              <span className="composer-model-option-check">
+                                {selected ? <CheckIcon size={11} /> : null}
+                              </span>
+                              <span className="composer-model-option-main">
+                                <span className="composer-model-option-name">
+                                  {choice.name ?? String(choice.value)}
+                                </span>
+                                <span className="composer-model-option-value">
+                                  {String(choice.value)}
+                                </span>
+                              </span>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div className="composer-model-foot">
+                      {modelRefreshing ? "Refreshing models..." : "Type to filter"}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <span className="spacer" />
             <button
               type="submit"
@@ -1266,7 +1509,12 @@ type TodoItem = {
   activeForm?: string;
 };
 
-type ToolResultPayload = { content: string; isError: boolean };
+// Structured diff carried by ACP tool results — lets the diff viewer
+// render even when the tool isn't canonical Edit/MultiEdit (the
+// provider's raw args may be opaque, but the diff is first-class).
+type ToolDiff = { path: string; old_text: string | null; new_text: string };
+
+type ToolResultPayload = { content: string; isError: boolean; diff?: ToolDiff | null };
 
 export type RenderUnit =
   | { kind: "assistant"; key: number; text: string; complete: boolean }
@@ -1281,6 +1529,10 @@ export type RenderUnit =
       // seen. Renderers fold the result into the same card so the user
       // sees one paired unit instead of two siblings.
       result?: ToolResultPayload;
+      // Live status from ACP tool_call_update frames (pending →
+      // in_progress → done is implied by `result` arriving). Absent for
+      // providers without mid-flight tool updates.
+      status?: string;
     }
   | { kind: "tool_result"; key: number; content: string; isError: boolean }
   | { kind: "todo_list"; key: number; todos: TodoItem[] }
@@ -1399,6 +1651,7 @@ export function groupEvents(events: AgentEvent[]): RenderUnit[] {
       const payload: ToolResultPayload = {
         content: stringField(ev, "content"),
         isError: ev.is_error === true,
+        diff: parseToolDiff(ev.diff),
       };
       if (matched) {
         matched.result = payload;
@@ -1424,6 +1677,18 @@ export function groupEvents(events: AgentEvent[]): RenderUnit[] {
       } else if (unit) {
         out.push(unit);
       }
+    } else if (ev.type === "tool_call_update") {
+      // Mid-flight ACP update: fold into the matching card; never a row
+      // of its own. Unknown tool_id (replay edges) is dropped silently.
+      const tid = stringField(ev, "tool_id");
+      const matched = tid ? toolCallByTd.get(tid) : undefined;
+      const status = stringField(ev, "status");
+      if (matched && status) matched.status = status;
+    } else if (ev.type === "plan_update") {
+      pendingAssistant = null;
+      pendingThinking = null;
+      const todos = parsePlanEntries(ev.entries);
+      if (todos) out.push({ kind: "todo_list", key: ev.seq, todos });
     } else if (ev.type === "permission_request") {
       // Don't push a transcript line — the prompt UI lives above the
       // composer for unresolved requests. We only record the tool_name
@@ -1480,8 +1745,44 @@ function parseTodos(raw: unknown): TodoItem[] | null {
   return out;
 }
 
+function parseToolDiff(raw: unknown): ToolDiff | null {
+  if (!raw || typeof raw !== "object") return null;
+  const d = raw as { path?: unknown; old_text?: unknown; new_text?: unknown };
+  if (typeof d.path !== "string" || typeof d.new_text !== "string") return null;
+  return {
+    path: d.path,
+    old_text: typeof d.old_text === "string" ? d.old_text : null,
+    new_text: d.new_text,
+  };
+}
+
+// ACP plan entries ({content, priority, status}) reuse the todo-list
+// row: same statuses, same render. Priority is dropped — the ordering
+// the agent chose already encodes it.
+function parsePlanEntries(raw: unknown): TodoItem[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const out: TodoItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const content = (entry as { content?: unknown }).content;
+    const status = (entry as { status?: unknown }).status;
+    if (typeof content !== "string") return null;
+    if (status !== "pending" && status !== "in_progress" && status !== "completed") {
+      return null;
+    }
+    out.push({ content, status });
+  }
+  return out;
+}
+
 function renderUnitFor(ev: AgentEvent): RenderUnit | null {
   switch (ev.type) {
+    case "mode_change":
+      return {
+        kind: "status",
+        key: ev.seq,
+        status: `mode → ${stringField(ev, "mode_id") || "?"}`,
+      };
     case "user_input":
       return { kind: "user", key: ev.seq, text: stringField(ev, "text") };
     case "user_stop":
@@ -1590,6 +1891,99 @@ function latestStatus(events: AgentEvent[]): string {
     }
   }
   return "idle";
+}
+
+type SessionConfigValue = string | boolean;
+type SessionConfigChoice = {
+  value: SessionConfigValue;
+  name?: string;
+  description?: string;
+};
+type SessionConfigOption = {
+  id: string;
+  name: string;
+  currentValue: SessionConfigValue | null;
+  choices: SessionConfigChoice[];
+};
+
+function latestSessionConfigOption(
+  events: AgentEvent[],
+  configId: string,
+): SessionConfigOption | null {
+  let option: SessionConfigOption | null = null;
+  for (const ev of events) {
+    if (ev.type === "session_config_options" && Array.isArray(ev.options)) {
+      const raw = ev.options.find(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          (item as Record<string, unknown>).id === configId,
+      );
+      option = raw ? parseSessionConfigOption(raw) : option;
+    } else if (
+      ev.type === "session_config_changed" &&
+      ev.config_id === configId &&
+      option !== null &&
+      isSessionConfigValue(ev.value)
+    ) {
+      option = {
+        id: option.id,
+        name: option.name,
+        choices: option.choices,
+        currentValue: ev.value,
+      };
+    }
+  }
+  return option;
+}
+
+function parseSessionConfigOption(raw: unknown): SessionConfigOption | null {
+  if (!raw || typeof raw !== "object") return null;
+  const data = raw as Record<string, unknown>;
+  if (typeof data.id !== "string" || !data.id) return null;
+  const choices = Array.isArray(data.options)
+    ? data.options
+        .map(parseSessionConfigChoice)
+        .filter((choice): choice is SessionConfigChoice => choice !== null)
+    : [];
+  return {
+    id: data.id,
+    name: typeof data.name === "string" && data.name ? data.name : data.id,
+    currentValue: isSessionConfigValue(data.current_value)
+      ? data.current_value
+      : null,
+    choices,
+  };
+}
+
+function parseSessionConfigChoice(raw: unknown): SessionConfigChoice | null {
+  if (!raw || typeof raw !== "object") return null;
+  const data = raw as Record<string, unknown>;
+  if (!isSessionConfigValue(data.value)) return null;
+  return {
+    value: data.value,
+    name: typeof data.name === "string" && data.name ? data.name : undefined,
+    description:
+      typeof data.description === "string" && data.description
+        ? data.description
+        : undefined,
+  };
+}
+
+function isSessionConfigValue(value: unknown): value is SessionConfigValue {
+  return typeof value === "string" || typeof value === "boolean";
+}
+
+function labelForSessionConfigValue(
+  option: SessionConfigOption,
+  value: SessionConfigValue,
+): string {
+  const choice = option.choices.find((item) => item.value === value);
+  return choice?.name ?? String(value);
+}
+
+function normalizeModelQuery(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9./:_-]+/g, " ").trim();
 }
 
 export type TurnRollup = {
@@ -1727,6 +2121,10 @@ export type SessionTotals = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  // Provider-reported cumulative session cost (ACP usage_update). The
+  // protocol reports a running total, so the latest value wins — never
+  // sum it across turns. Null when the provider doesn't report cost.
+  reportedCostUsd: number | null;
 };
 
 export function sessionMetrics(events: AgentEvent[]): SessionTotals {
@@ -1735,6 +2133,7 @@ export function sessionMetrics(events: AgentEvent[]): SessionTotals {
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
+    reportedCostUsd: null,
   };
   for (const ev of events) {
     if (ev.type !== "turn_metrics") continue;
@@ -1742,6 +2141,9 @@ export function sessionMetrics(events: AgentEvent[]): SessionTotals {
     totals.outputTokens += numberField(ev, "output_tokens");
     totals.cacheReadTokens += numberField(ev, "cache_read_input_tokens");
     totals.cacheCreationTokens += numberField(ev, "cache_creation_input_tokens");
+    if (typeof ev.cost_usd === "number") {
+      totals.reportedCostUsd = ev.cost_usd;
+    }
   }
   return totals;
 }
@@ -2008,6 +2410,8 @@ function computeSessionCost(
   session: SessionTotals,
   meta: ModelMeta | null,
 ): number | null {
+  // Authoritative provider-reported cost beats any token-math estimate.
+  if (session.reportedCostUsd !== null) return session.reportedCostUsd;
   if (!meta) return null;
   // Only emit a cost when at least the input+output rates are known.
   // Cache-write/read fall back to input/output respectively when the
@@ -2033,7 +2437,15 @@ function formatCost(usd: number): string {
 
 function shortProvider(provider: string): string {
   if (provider === "claude-code") return "claude";
+  // ACP runtimes reuse their base provider's pill tint; the ⌁ prefix in
+  // the label (not the tint) is what tells them apart.
+  if (provider === "claude-acp") return "claude";
+  if (provider === "codex-acp") return "codex";
   return provider;
+}
+
+function providerPillLabel(provider: string): string {
+  return shortProvider(provider);
 }
 
 function shortModel(model: string): string {
@@ -2159,6 +2571,7 @@ function Unit({
           name={unit.name}
           args={unit.args}
           result={unit.result}
+          status={unit.status}
         />
       );
     case "tool_result":
@@ -2341,10 +2754,12 @@ function ToolCallView({
   name,
   args,
   result,
+  status,
 }: {
   name: string;
   args: Record<string, unknown> | string;
   result?: ToolResultPayload;
+  status?: string;
 }) {
   // Defensive: an older build of this component stored args as a JSON
   // string. After HMR the cached units still carry that shape, and the
@@ -2353,7 +2768,9 @@ function ToolCallView({
   const parsed = normalizeArgs(args);
   const renderer = TOOL_RENDERERS[name];
   if (renderer) return <>{renderer(parsed, result)}</>;
-  return <DefaultToolCallView name={name} args={parsed} result={result} />;
+  return (
+    <DefaultToolCallView name={name} args={parsed} result={result} status={status} />
+  );
 }
 
 function normalizeArgs(
@@ -2734,21 +3151,41 @@ function DefaultToolCallView({
   name,
   args,
   result,
+  status,
 }: {
   name: string;
   args: Record<string, unknown>;
   result?: ToolResultPayload;
+  status?: string;
 }) {
+  // ACP structured diff: providers whose raw args are opaque (codex-acp
+  // wraps them in internal envelopes) still hand us a first-class
+  // {path, old_text, new_text} — render the real diff viewer instead of
+  // a JSON dump.
+  const diff = result?.diff ?? null;
+  const running = !result && (status === "pending" || status === "in_progress");
   return (
-    <details className="msg msg-tool" open={resultLooksLikeDiff(result)}>
+    <details className="msg msg-tool" open={diff !== null || resultLooksLikeDiff(result)}>
       <summary>
         <span className="tool-marker">▸</span>
         <span className="tool-name">{name}</span>
+        {diff && (
+          <span className="tool-summary-detail mono">{shortenPath(diff.path)}</span>
+        )}
+        {running && <span className="tool-summary-detail">{status}…</span>}
       </summary>
-      <MarkdownText
-        text={"```json\n" + JSON.stringify(args, null, 2) + "\n```"}
-      />
-      {result && (
+      {diff ? (
+        <DiffView
+          oldText={diff.old_text ?? ""}
+          newText={diff.new_text}
+          lang={inferLanguage(diff.path)}
+        />
+      ) : (
+        <MarkdownText
+          text={"```json\n" + JSON.stringify(args, null, 2) + "\n```"}
+        />
+      )}
+      {result && (!diff || result.isError) && (
         <ToolResultBody content={result.content} isError={result.isError} />
       )}
     </details>
@@ -3116,65 +3553,6 @@ function CompactionModal({
   );
 }
 
-function PermissionPrompt({
-  prompt,
-  onDecide,
-}: {
-  prompt: PendingPermission;
-  onDecide: (request_id: string, decision: PermissionDecision) => void;
-}) {
-  const [showInput, setShowInput] = useState(false);
-  const summary = summariseToolInput(prompt.tool_name, prompt.tool_input);
-  return (
-    <div className="permission-prompt" role="alertdialog" aria-label={`Permission for ${prompt.tool_name}`}>
-      <div className="permission-prompt-hd">
-        <span className="permission-prompt-icon" aria-hidden>🔒</span>
-        <span className="permission-prompt-title">
-          Allow <span className="tool-name">{prompt.tool_name}</span>?
-        </span>
-        <button
-          type="button"
-          className="permission-prompt-toggle"
-          onClick={() => setShowInput((v) => !v)}
-          aria-expanded={showInput}
-        >
-          {showInput ? "Hide details" : "Show details"}
-        </button>
-      </div>
-      {summary && <div className="permission-prompt-summary mono">{summary}</div>}
-      {showInput && (
-        <pre className="permission-prompt-input">
-          {JSON.stringify(prompt.tool_input, null, 2)}
-        </pre>
-      )}
-      <div className="permission-prompt-actions">
-        <button
-          type="button"
-          className="btn sm primary"
-          onClick={() => onDecide(prompt.request_id, "allow")}
-        >
-          Allow once
-        </button>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={() => onDecide(prompt.request_id, "allow_always")}
-          title={`Allow ${prompt.tool_name} for the rest of this session`}
-        >
-          Allow always
-        </button>
-        <button
-          type="button"
-          className="btn sm ghost"
-          onClick={() => onDecide(prompt.request_id, "deny")}
-        >
-          Deny
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function HandoffPrompt({
   threadId,
   switching,
@@ -3217,26 +3595,6 @@ function HandoffPrompt({
       </div>
     </div>
   );
-}
-
-function summariseToolInput(toolName: string, input: Record<string, unknown>): string {
-  // Pull the most informative single field per tool so the user can
-  // decide without expanding the full JSON. Falls through to empty on
-  // tools we don't have a special case for; the user can click "Show
-  // details" to see everything.
-  if (toolName === "Bash") {
-    const cmd = input.command;
-    return typeof cmd === "string" ? cmd : "";
-  }
-  if (toolName === "Edit" || toolName === "Write" || toolName === "Read") {
-    const path = input.file_path ?? input.path;
-    return typeof path === "string" ? path : "";
-  }
-  if (toolName === "WebFetch") {
-    const url = input.url;
-    return typeof url === "string" ? url : "";
-  }
-  return "";
 }
 
 function TodoList({ todos }: { todos: TodoItem[] }) {

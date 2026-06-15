@@ -18,6 +18,7 @@ import {
   type ChatSummary,
   type CreateChatPayload,
   type ProjectSummary,
+  type OpenCodeModelOption,
   type ProviderDescriptor,
   type WorkChatContextFolder,
   type WorkSummary,
@@ -27,6 +28,7 @@ import {
   getChatCompactionSummary,
   getChat,
   getWorkChatContextDoc,
+  listOpenCodeModels,
   listProjects,
   listProviders,
   listWorks,
@@ -35,6 +37,10 @@ import {
 } from "./api";
 import { BrandMark } from "./BrandMark";
 import { useDragHandle } from "./dragHandleContext";
+import {
+  anchoredMenuPosition,
+  type FloatingMenuPosition,
+} from "./floatingMenu";
 import {
   ChatIcon,
   DocIcon,
@@ -45,12 +51,12 @@ import {
   SparkIcon,
 } from "./Icons";
 import { FolderPickerDialog } from "./FolderPickerDialog";
+import { ModelPicker } from "./ModelPicker";
+import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
 import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   type AgentEvent,
-  type PendingPermission,
-  type PermissionDecision,
   useAgentStream,
 } from "./useAgentStream";
 
@@ -287,15 +293,10 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
         )}
         <div className="chat-composer-wrap">
           {pendingPermissions.length > 0 && (
-            <div className="permission-prompts chat-permissions">
-              {pendingPermissions.map((p) => (
-                <ChatPermissionPrompt
-                  key={p.request_id}
-                  prompt={p}
-                  onDecide={sendPermission}
-                />
-              ))}
-            </div>
+            <PermissionApprovalDialog
+              pendingPermissions={pendingPermissions}
+              onDecide={sendPermission}
+            />
           )}
           <div className="chat-composer">
             <textarea
@@ -745,15 +746,10 @@ export function ChatTile({
           />
         )}
         {pendingPermissions.length > 0 && (
-          <div className="permission-prompts chat-permissions">
-            {pendingPermissions.map((p) => (
-              <ChatPermissionPrompt
-                key={p.request_id}
-                prompt={p}
-                onDecide={sendPermission}
-              />
-            ))}
-          </div>
+          <PermissionApprovalDialog
+            pendingPermissions={pendingPermissions}
+            onDecide={sendPermission}
+          />
         )}
         <form
           className="chat-tile-composer"
@@ -822,6 +818,8 @@ export function ChatComposer({
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
   const [provider, setProvider] = useState<string>("");
   const [model, setModel] = useState<string>("");
+  const [opencodeModelsLoading, setOpencodeModelsLoading] = useState(false);
+  const [opencodeModelsError, setOpencodeModelsError] = useState<string | null>(null);
   const [grounding, setGrounding] = useState<ChatGrounding | null>(presetGrounding ?? null);
   const [workingDirectory, setWorkingDirectory] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -846,6 +844,39 @@ export function ChatComposer({
   const groundingInfo = resolveGrounding(grounding, projects, works);
   const pickerProjects = linkProjects ?? projects;
   const pickerWorks = linkWorks ?? works;
+
+  useEffect(() => {
+    if (provider !== "opencode") return;
+    let cancelled = false;
+    setOpencodeModelsLoading(true);
+    setOpencodeModelsError(null);
+    listOpenCodeModels({ refresh: true })
+      .then((rows) => {
+        if (cancelled) return;
+        setProviders((current) =>
+          current.map((p) =>
+            p.name === "opencode" ? withOpenCodeModelOptions(p, rows) : p,
+          ),
+        );
+        setModel((current) => {
+          if (!current) return "configured-default";
+          if (current === "configured-default") return current;
+          if (rows.some((row) => row.value === current)) return current;
+          return "configured-default";
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setOpencodeModelsError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setOpencodeModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [provider]);
 
   async function start() {
     const first_message = message.trim();
@@ -909,11 +940,25 @@ export function ChatComposer({
                 <option key={p.name} value={p.name}>{p.label}</option>
               ))}
             </select>
-            <select className="cb-select" value={model} onChange={(e) => setModel(e.target.value)}>
-              {(providerObj?.primary_field.values ?? []).map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
+            <span className="cb-model-wrap">
+              {providerObj && (
+                <ModelPicker
+                  id={`new-chat-model-${providerObj.name}`}
+                  className="compact"
+                  value={model || providerObj.primary_field.default}
+                  options={modelPickerOptions(providerObj)}
+                  onChange={setModel}
+                />
+              )}
+              {provider === "opencode" && opencodeModelsLoading && (
+                <span className="cb-model-hint">refreshing models…</span>
+              )}
+              {provider === "opencode" &&
+                !opencodeModelsLoading &&
+                opencodeModelsError && (
+                  <span className="cb-model-hint">using OpenCode default</span>
+                )}
+            </span>
             {!hideGrounding && (
               <GroundingPicker
                 projects={pickerProjects}
@@ -967,6 +1012,11 @@ export function ChatRow({
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(chat.title);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [menuPosition, setMenuPosition] = useState<FloatingMenuPosition | null>(
+    null,
+  );
+  const kebabRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const grounding = resolveGrounding(chat.grounding, projects, works);
   const promotedWork = chat.promoted_to_work_slug
@@ -1006,7 +1056,25 @@ export function ChatRow({
     if (!menuOpen) return;
     const handler = () => setMenuOpen(false);
     window.addEventListener("click", handler);
-    return () => window.removeEventListener("click", handler);
+    window.addEventListener("resize", handler);
+    window.addEventListener("scroll", handler, true);
+    return () => {
+      window.removeEventListener("click", handler);
+      window.removeEventListener("resize", handler);
+      window.removeEventListener("scroll", handler, true);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen || !menuRef.current || !kebabRef.current) return;
+    const anchor = kebabRef.current.getBoundingClientRect();
+    const menu = menuRef.current.getBoundingClientRect();
+    setMenuPosition(
+      anchoredMenuPosition(anchor, {
+        width: menu.width,
+        height: menu.height,
+      }),
+    );
   }, [menuOpen]);
 
   useEffect(() => {
@@ -1140,6 +1208,7 @@ export function ChatRow({
       )}
       {!editing && (onRenamed || onDelete) && (
         <button
+          ref={kebabRef}
           type="button"
           className="rail-agent-kebab chat-row-kebab"
           aria-label={`More actions for ${chat.title}`}
@@ -1147,14 +1216,26 @@ export function ChatRow({
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            setMenuOpen((v) => !v);
+            if (menuOpen) {
+              setMenuOpen(false);
+              return;
+            }
+            setMenuPosition(
+              anchoredMenuPosition(e.currentTarget.getBoundingClientRect()),
+            );
+            setMenuOpen(true);
           }}
         >
           ⋮
         </button>
       )}
       {menuOpen && (
-        <div className="rail-agent-menu chat-row-menu" onClick={(e) => e.stopPropagation()}>
+        <div
+          ref={menuRef}
+          className="rail-agent-menu chat-row-menu floating"
+          style={menuPosition ?? undefined}
+          onClick={(e) => e.stopPropagation()}
+        >
           {onRenamed && (
             <button
               className="menu-item"
@@ -1735,50 +1816,6 @@ function chatMessagesFromEvents(events: AgentEvent[]): ChatMessage[] {
     }));
 }
 
-function ChatPermissionPrompt({
-  prompt,
-  onDecide,
-}: {
-  prompt: PendingPermission;
-  onDecide: (requestId: string, decision: PermissionDecision) => void;
-}) {
-  return (
-    <div className="permission-prompt chat-permission" role="alertdialog">
-      <div className="permission-prompt-hd">
-        <span className="permission-prompt-title">
-          Permission for <span className="tool-name">{prompt.tool_name}</span>
-        </span>
-      </div>
-      <pre className="permission-prompt-input">
-        {JSON.stringify(prompt.tool_input, null, 2)}
-      </pre>
-      <div className="permission-prompt-actions">
-        <button
-          type="button"
-          className="btn sm"
-          onClick={() => onDecide(prompt.request_id, "deny")}
-        >
-          Deny
-        </button>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={() => onDecide(prompt.request_id, "allow")}
-        >
-          Allow
-        </button>
-        <button
-          type="button"
-          className="btn primary sm"
-          onClick={() => onDecide(prompt.request_id, "allow_always")}
-        >
-          Always
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function eventSeq(event: AgentEvent): number {
   return typeof event.seq === "number" ? event.seq : -Date.now();
 }
@@ -1837,7 +1874,44 @@ function providerLabelFor(provider: string): string {
 
 function shortProvider(provider: string): string {
   if (provider === "claude-code") return "claude";
+  if (provider === "claude-acp") return "claude";
+  if (provider === "codex-acp") return "codex";
   return provider;
+}
+
+function withOpenCodeModelOptions(
+  provider: ProviderDescriptor,
+  models: OpenCodeModelOption[],
+): ProviderDescriptor {
+  const baseValue = provider.primary_field.default;
+  const baseLabel =
+    provider.primary_field.value_labels?.[
+      provider.primary_field.values.indexOf(baseValue)
+    ] ?? "OpenCode default (set in OpenCode config)";
+  const values = [baseValue];
+  const valueLabels = [baseLabel];
+  const seen = new Set(values);
+  for (const option of models) {
+    if (seen.has(option.value)) continue;
+    seen.add(option.value);
+    values.push(option.value);
+    valueLabels.push(option.label);
+  }
+  return {
+    ...provider,
+    primary_field: {
+      ...provider.primary_field,
+      values,
+      value_labels: valueLabels,
+    },
+  };
+}
+
+function modelPickerOptions(provider: ProviderDescriptor) {
+  return provider.primary_field.values.map((value, index) => ({
+    value,
+    label: provider.primary_field.value_labels?.[index] ?? value,
+  }));
 }
 
 function shortModel(model: string): string {

@@ -511,6 +511,24 @@ class WorkStoreService:
         with self._lock:
             self._repo.set_agent_status(agent_slug, status)
 
+    def set_agent_model(self, agent_slug: str, model: str) -> None:
+        # Model is a definition field in agent.json. Live session config
+        # changes update both sides so resume/detach and reconcile agree
+        # with the running provider session's selected model.
+        with self._lock:
+            agent = self._repo.get_agent_by_slug(agent_slug)
+            if agent is None:
+                raise ValueError(f"agent not found: {agent_slug}")
+            work_slug = self._repo.get_work_slug_for_agent(agent_slug)
+            if work_slug is None:
+                raise ValueError(f"work not found for agent: {agent_slug}")
+            self._repo.set_agent_model(agent_slug, model)
+            agent.model = model
+            existing_contexts = self.get_agent_contexts(work_slug, agent_slug)
+            self._files.write_agent_json(
+                work_slug, agent_slug, serialize_agent(agent, existing_contexts)
+            )
+
     def rename_agent(self, agent_slug: str, name: str) -> Agent:
         # Name is FS-canonical per reconcile's authority split (see
         # ``reconcile.py``: definition fields live in agent.json, runtime

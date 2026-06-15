@@ -9,9 +9,11 @@ Each ``Spec`` plays two roles:
      ``options`` dict) and produces a typed ``AgentConfig`` with all
      enum coercion + validation done. Unknown option keys are rejected.
 
-The same ``Spec`` instance is consulted by both ``GET /api/providers``
-and ``POST /api/works/.../agents`` so the descriptor and the validator
-cannot drift.
+The same ``Spec`` instance is used for public descriptors and
+``POST /api/works/.../agents`` validation. ``GET /api/providers``
+filters that registry through ``NEW_SESSION_PROVIDERS`` so legacy
+providers can keep validating/resuming old agents without being offered
+for new sessions.
 
 Wire convention: the top-level ``model: str`` field is each provider's
 *primary selector*. Claude interprets it as a model id; Amp interprets
@@ -25,20 +27,31 @@ from typing import Any, ClassVar, Protocol
 
 from src.domain.agents.configs import (
     AMP_DEFAULT_AUTO_ALLOWED_TOOLS,
+    OPENCODE_CONFIGURED_MODEL,
     AgentConfig,
     AmpAgentConfig,
     AmpMode,
     AmpPermissionMode,
+    ClaudeAcpAgentConfig,
+    ClaudeAcpEffort,
+    ClaudeAcpModel,
+    ClaudeAcpPermissionMode,
     ClaudeAgentConfig,
     ClaudeEffort,
     ClaudeModel,
     ClaudePermissionMode,
+    CodexAcpAgentConfig,
+    CodexAcpEffort,
+    CodexAcpMode,
+    CodexAcpModel,
     CodexAgentConfig,
     CodexApprovalMode,
     CodexModel,
     CodexReasoningEffort,
     CodexSandbox,
     CommonAgentConfig,
+    OpenCodeAgentConfig,
+    OpenCodeMode,
 )
 from src.domain.models import Provider
 
@@ -487,20 +500,316 @@ class CodexSpec:
         )
 
 
+_CLAUDE_ACP_MODEL_META: dict[str, ModelMeta] = {
+    # Wrapper option values are runtime aliases; pricing/window mirror the
+    # models they resolve to (per the wrapper's own option descriptions,
+    # captured 2026-06-11): default→Opus 4.8 (1M), sonnet[1m] keeps
+    # standard Sonnet pricing here — long-context surcharges are not
+    # modelled. ACP agents report authoritative cost via usage_update,
+    # so these numbers only back the dialog's price hints and the FE's
+    # fallback estimate.
+    ClaudeAcpModel.DEFAULT.value: ModelMeta(
+        context_window=1_000_000,
+        input_per_mtok=5.0,
+        output_per_mtok=25.0,
+        cache_read_per_mtok=0.50,
+        cache_write_per_mtok=6.25,
+    ),
+    ClaudeAcpModel.FABLE_5_1M.value: ModelMeta(
+        context_window=1_000_000,
+        input_per_mtok=15.0,
+        output_per_mtok=75.0,
+        cache_read_per_mtok=1.50,
+        cache_write_per_mtok=18.75,
+        effort_default=ClaudeAcpEffort.XHIGH.value,
+    ),
+    ClaudeAcpModel.SONNET.value: ModelMeta(
+        context_window=200_000,
+        input_per_mtok=3.0,
+        output_per_mtok=15.0,
+        cache_read_per_mtok=0.30,
+        cache_write_per_mtok=3.75,
+    ),
+    ClaudeAcpModel.SONNET_1M.value: ModelMeta(
+        context_window=1_000_000,
+        input_per_mtok=3.0,
+        output_per_mtok=15.0,
+        cache_read_per_mtok=0.30,
+        cache_write_per_mtok=3.75,
+    ),
+    ClaudeAcpModel.HAIKU.value: ModelMeta(
+        context_window=200_000,
+        input_per_mtok=1.0,
+        output_per_mtok=5.0,
+        cache_read_per_mtok=0.10,
+        cache_write_per_mtok=1.25,
+    ),
+}
+
+
+class ClaudeAcpSpec:
+    """Claude through the official claude-agent-acp wrapper (ACP runtime).
+
+    Coexists with ``ClaudeSpec`` (the bespoke claude-agent-sdk adapter)
+    while the ACP path is validated. Model values are the wrapper's own
+    config-option aliases, not API model ids.
+    """
+
+    name: ClassVar[Provider] = "claude-acp"
+    label: ClassVar[str] = "Claude Code (Anthropic)"
+
+    _allowed_options: ClassVar[set[str]] = {"thinking_effort", "permission_mode"}
+
+    _ADVANCED_INTRO: ClassVar[str] = (
+        "Runs Claude Code through the Agent Client Protocol (the same "
+        "wrapper Zed and JetBrains embed). Permission prompts round-trip "
+        "through Atelier's Allow / Deny UI. 'Auto' uses a model "
+        "classifier to settle prompts; 'Don't ask' denies anything not "
+        "pre-approved. Settings are applied per-session and override "
+        "your Claude CLI defaults."
+    )
+
+    def describe(self) -> ProviderDescriptor:
+        return ProviderDescriptor(
+            name=self.name,
+            label=self.label,
+            primary_field=EnumOption(
+                label="Model",
+                values=_enum_values(ClaudeAcpModel),
+                default=ClaudeAcpModel.DEFAULT.value,
+                value_labels=[
+                    "CLI default — Opus 4.8 1M (recommended)",
+                    "Fable 5 (1M)",
+                    "Sonnet 4.6",
+                    "Sonnet 4.6 (1M)",
+                    "Haiku 4.5",
+                ],
+            ),
+            options={
+                "thinking_effort": EnumOption(
+                    label="Thinking effort",
+                    values=_enum_values(ClaudeAcpEffort),
+                    default=ClaudeAcpEffort.DEFAULT.value,
+                ),
+                "permission_mode": EnumOption(
+                    label="Permission mode",
+                    values=_enum_values(ClaudeAcpPermissionMode),
+                    default=ClaudeAcpPermissionMode.DEFAULT.value,
+                    value_labels=[
+                        "Auto (classifier decides)",
+                        "Ask per tool",
+                        "Auto-accept edits",
+                        "Plan only (no execution)",
+                        "Don't ask (deny unapproved)",
+                        "Bypass all permissions (risky)",
+                    ],
+                ),
+            },
+            advanced_intro=self._ADVANCED_INTRO,
+            model_meta=dict(_CLAUDE_ACP_MODEL_META),
+        )
+
+    def build(
+        self, common: CommonAgentConfig, model: str, options: dict[str, Any]
+    ) -> ClaudeAcpAgentConfig:
+        _reject_unknown(self.name, options, self._allowed_options)
+        return ClaudeAcpAgentConfig(
+            common=common,
+            model=ClaudeAcpModel(model),
+            thinking_effort=ClaudeAcpEffort(
+                options.get("thinking_effort", ClaudeAcpEffort.DEFAULT.value)
+            ),
+            permission_mode=ClaudeAcpPermissionMode(
+                options.get("permission_mode", ClaudeAcpPermissionMode.DEFAULT.value)
+            ),
+        )
+
+
+_CODEX_ACP_MODEL_META: dict[str, ModelMeta] = {
+    # gpt-5.5 / gpt-5.4 mirror the bespoke Codex meta; gpt-5.4-mini has
+    # no published Codex-side pricing/window, so its meta stays blank
+    # (the FE shows "—" and relies on usage_update for real numbers).
+    CodexAcpModel.GPT_5_5.value: ModelMeta(
+        context_window=400_000,
+        input_per_mtok=5.0,
+        output_per_mtok=30.0,
+        cache_read_per_mtok=0.50,
+    ),
+    CodexAcpModel.GPT_5_4.value: ModelMeta(
+        context_window=272_000,
+        input_per_mtok=2.50,
+        output_per_mtok=15.0,
+        cache_read_per_mtok=0.25,
+    ),
+    CodexAcpModel.GPT_5_4_MINI.value: ModelMeta(),
+}
+
+
+class CodexAcpSpec:
+    """Codex through Zed's codex-acp wrapper (ACP runtime).
+
+    Coexists with ``CodexSpec`` (openai-codex-sdk app-server adapter)
+    while the ACP path is validated. Unlike the bespoke adapter's
+    independent sandbox/approval knobs, codex-acp exposes Codex's own
+    three-tier mode — and its approval prompts round-trip through
+    Atelier's permission UI, which the bespoke SDK path can't do in
+    legacy mode.
+    """
+
+    name: ClassVar[Provider] = "codex-acp"
+    label: ClassVar[str] = "Codex (OpenAI)"
+
+    _allowed_options: ClassVar[set[str]] = {"reasoning_effort", "mode"}
+
+    _ADVANCED_INTRO: ClassVar[str] = (
+        "Runs Codex through the Agent Client Protocol. Mode is Codex's "
+        "own access policy: Read Only (approval to edit/run), Auto "
+        "(work freely in the workspace, approval for network or outside "
+        "edits — the default), or Full Access (no approvals — risky). "
+        "Approval prompts appear in Atelier's Allow / Deny UI."
+    )
+
+    def describe(self) -> ProviderDescriptor:
+        return ProviderDescriptor(
+            name=self.name,
+            label=self.label,
+            primary_field=EnumOption(
+                label="Model",
+                values=_enum_values(CodexAcpModel),
+                default=CodexAcpModel.GPT_5_5.value,
+            ),
+            options={
+                "reasoning_effort": EnumOption(
+                    label="Reasoning effort",
+                    values=_enum_values(CodexAcpEffort),
+                    default=CodexAcpEffort.MEDIUM.value,
+                ),
+                "mode": EnumOption(
+                    label="Mode",
+                    values=_enum_values(CodexAcpMode),
+                    default=CodexAcpMode.AUTO.value,
+                    value_labels=[
+                        "Read only (ask to edit/run)",
+                        "Auto — workspace access (default)",
+                        "Full access (risky)",
+                    ],
+                ),
+            },
+            advanced_intro=self._ADVANCED_INTRO,
+            model_meta=dict(_CODEX_ACP_MODEL_META),
+        )
+
+    def build(
+        self, common: CommonAgentConfig, model: str, options: dict[str, Any]
+    ) -> CodexAcpAgentConfig:
+        _reject_unknown(self.name, options, self._allowed_options)
+        return CodexAcpAgentConfig(
+            common=common,
+            model=CodexAcpModel(model),
+            reasoning_effort=CodexAcpEffort(
+                options.get("reasoning_effort", CodexAcpEffort.MEDIUM.value)
+            ),
+            mode=CodexAcpMode(options.get("mode", CodexAcpMode.AUTO.value)),
+        )
+
+
+class OpenCodeSpec:
+    """OpenCode via its native ACP server.
+
+    The model is configured-default by design: OpenCode's model list is
+    per-user (Ollama / LM Studio / zen models / any provider the user
+    wired up), so Atelier passes through whatever the user's OpenCode
+    config selects rather than pretending to enumerate it at descriptor
+    time. Once a session is running, ACP configOptions drive the live
+    model picker.
+    """
+
+    name: ClassVar[Provider] = "opencode"
+    label: ClassVar[str] = "OpenCode"
+
+    _allowed_options: ClassVar[set[str]] = {"mode"}
+
+    _ADVANCED_INTRO: ClassVar[str] = (
+        "Runs OpenCode through the Agent Client Protocol. The model is "
+        "whatever your OpenCode config selects (run `opencode models` "
+        "to inspect, `opencode providers` to add providers — including "
+        "local Ollama / LM Studio endpoints). Atelier does not manage "
+        "or validate local model servers. Permission prompts round-trip "
+        "through Atelier's Allow / Deny UI."
+    )
+
+    def describe(self) -> ProviderDescriptor:
+        return ProviderDescriptor(
+            name=self.name,
+            label=self.label,
+            primary_field=EnumOption(
+                label="Model",
+                values=[OPENCODE_CONFIGURED_MODEL],
+                default=OPENCODE_CONFIGURED_MODEL,
+                value_labels=["OpenCode default (set in OpenCode config)"],
+            ),
+            options={
+                "mode": EnumOption(
+                    label="Mode",
+                    values=_enum_values(OpenCodeMode),
+                    default=OpenCodeMode.BUILD.value,
+                    value_labels=[
+                        "Build (full agent)",
+                        "Plan (design only, no execution)",
+                    ],
+                ),
+            },
+            advanced_intro=self._ADVANCED_INTRO,
+            # No pricing/window meta: the underlying model is unknown to
+            # Atelier. Context % and cost come from ACP usage_update at
+            # runtime when OpenCode reports them.
+        )
+
+    def build(
+        self, common: CommonAgentConfig, model: str, options: dict[str, Any]
+    ) -> OpenCodeAgentConfig:
+        _reject_unknown(self.name, options, self._allowed_options)
+        return OpenCodeAgentConfig(
+            common=common,
+            model=model,
+            mode=OpenCodeMode(options.get("mode", OpenCodeMode.BUILD.value)),
+        )
+
+
 SPECS: dict[Provider, Spec] = {
     "claude-code": ClaudeSpec(),
     "amp": AmpSpec(),
     "codex": CodexSpec(),
+    "claude-acp": ClaudeAcpSpec(),
+    "codex-acp": CodexAcpSpec(),
+    "opencode": OpenCodeSpec(),
 }
+
+NEW_SESSION_PROVIDERS: tuple[Provider, ...] = (
+    "claude-acp",
+    "amp",
+    "codex-acp",
+    "opencode",
+)
+"""Provider ids exposed for new agents/chats.
+
+Legacy ``claude-code`` / ``codex`` stay registered in ``SPECS`` so
+existing agents can resume and old records still validate, but new
+sessions should use the ACP-backed runtimes.
+"""
 
 
 __all__ = [
+    "NEW_SESSION_PROVIDERS",
     "SPECS",
     "AmpSpec",
+    "ClaudeAcpSpec",
     "ClaudeSpec",
+    "CodexAcpSpec",
     "CodexSpec",
     "EnumOption",
     "ModelMeta",
+    "OpenCodeSpec",
     "ProviderDescriptor",
     "Spec",
     "TextOption",

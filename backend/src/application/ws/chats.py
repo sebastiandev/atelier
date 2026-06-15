@@ -8,7 +8,14 @@ from contextlib import suppress
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from src.domain.agents import ResolvePermission, SendInput, StopTurn, parse_user_action
+from src.domain.agents import (
+    RefreshSessionConfigOptions,
+    ResolvePermission,
+    SendInput,
+    SetSessionConfigOption,
+    StopTurn,
+    parse_user_action,
+)
 from src.domain.commands.chats import connect
 from src.domain.supervisor import (
     AgentSubscription,
@@ -117,6 +124,10 @@ async def _receive_inputs(
                     await supervisor.resolve_permission(
                         chat_slug, request_id, decision
                     )
+                case SetSessionConfigOption(config_id=config_id, value=value):
+                    await supervisor.set_config_option(chat_slug, config_id, value)
+                case RefreshSessionConfigOptions(config_id=config_id):
+                    await supervisor.refresh_config_options(chat_slug, config_id)
         except AgentTerminated:
             with suppress(Exception):
                 await websocket.send_json(

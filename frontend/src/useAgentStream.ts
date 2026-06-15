@@ -11,12 +11,22 @@ export type AgentEvent = {
 
 export type PermissionDecision = "allow" | "allow_always" | "deny";
 
+// ACP agents name their own answer options (kind ∈ allow_once |
+// allow_always | reject_once | reject_always). Absent for providers
+// that only speak Atelier's three-way decision.
+export type PermissionOptionInfo = {
+  option_id: string;
+  name: string;
+  kind: string;
+};
+
 export type PendingPermission = {
   request_id: string;
   tool_name: string;
   tool_input: Record<string, unknown>;
   ts: string;
   seq: number;
+  options?: PermissionOptionInfo[];
 };
 
 export type PendingHandoff = {
@@ -195,6 +205,20 @@ export function useAgentStream(
     }
   }
 
+  function sendSessionConfig(config_id: string, value: string | boolean) {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "session_config", config_id, value }));
+    }
+  }
+
+  function sendSessionConfigRefresh(config_id: string) {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "session_config_refresh", config_id }));
+    }
+  }
+
   // Derive the open prompts from the event log. A `permission_request`
   // opens one; a matching `permission_decision` closes it. The transcript
   // is the source of truth, so this trivially survives WS reconnects —
@@ -212,6 +236,9 @@ export function useAgentStream(
               : {},
           ts: ev.ts,
           seq: ev.seq,
+          options: Array.isArray(ev.options)
+            ? (ev.options as PermissionOptionInfo[])
+            : undefined,
         });
       } else if (
         ev.type === "permission_decision" &&
@@ -252,6 +279,8 @@ export function useAgentStream(
     sendInput,
     sendStop,
     sendPermission,
+    sendSessionConfig,
+    sendSessionConfigRefresh,
     pendingPermissions,
     pendingHandoff,
   };

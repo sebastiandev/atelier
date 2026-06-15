@@ -19,8 +19,10 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from src.domain.agents import (
+    RefreshSessionConfigOptions,
     ResolvePermission,
     SendInput,
+    SetSessionConfigOption,
     StopTurn,
     UserAction,
 )
@@ -68,6 +70,12 @@ async def execute(
             await supervisor.stop_turn(agent_slug)
         case ResolvePermission(request_id=request_id, decision=decision):
             await supervisor.resolve_permission(agent_slug, request_id, decision)
+        case SetSessionConfigOption(config_id=config_id, value=value):
+            await supervisor.set_config_option(agent_slug, config_id, value)
+            if config_id == "model" and isinstance(value, str):
+                await asyncio.to_thread(workstore.set_agent_model, agent_slug, value)
+        case RefreshSessionConfigOptions(config_id=config_id):
+            await supervisor.refresh_config_options(agent_slug, config_id)
 
 
 def _prepend_context_hint(

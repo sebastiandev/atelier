@@ -39,7 +39,7 @@ Three roles, one unifying registry:
 
 1. **Config** (`domain/agents/configs.py`) — typed runtime instance. `CommonAgentConfig` carries the cross-provider bits (workdir, system_prompt). Each provider gets a frozen dataclass that wraps `common: CommonAgentConfig` and adds its own knobs (`ClaudeAgentConfig` has `model: ClaudeModel`, `thinking_effort: ClaudeEffort`, ...). Composition over inheritance — frozen dataclasses + ABC + defaults play badly together.
 
-2. **Spec** (`domain/agents/specs.py`) — descriptor + builder. `Spec.describe()` returns a `ProviderDescriptor` that the new-agent dialog renders into form fields. `Spec.build(common, model, options)` validates the wire-format dict into a typed `AgentConfig`. Same Spec instance powers `GET /api/providers` and `POST /api/works/<slug>/agents`, so descriptor and validator can't drift. The `SPECS` registry maps `provider name → Spec`.
+2. **Spec** (`domain/agents/specs.py`) — descriptor + builder. `Spec.describe()` returns a `ProviderDescriptor` that the new-agent dialog renders into form fields. `Spec.build(common, model, options)` validates the wire-format dict into a typed `AgentConfig`. The `SPECS` registry maps every supported provider name → Spec, including legacy providers needed to resume existing agents. `GET /api/providers` filters that registry through `NEW_SESSION_PROVIDERS`, so new agents/chats use the ACP-backed Claude/Codex runtimes while old `claude-code` / `codex` rows still validate and resume.
    Claude and Codex descriptors also publish `model_meta` so agent tiles can estimate session cost and context usage from public per-model metadata. Context windows are only populated where the provider-side limit is documented, because API windows and CLI/runtime windows do not always match. `model_meta` may also carry optional per-model option constraints such as Claude Fable's effort values/default; clients that do not understand those fields can ignore them.
 
 3. **Adapter** (`infrastructure/agents/`) — implements `AgentAdapter` Protocol from `domain/agents/ports.py`. Selected via singledispatch on the AgentConfig type:
@@ -56,9 +56,30 @@ Three roles, one unifying registry:
 4. Add the literal value to `Provider` in `domain/models.py`.
 5. Add `_convert` unit tests covering the SDK → AgentEvent mapping, plus a manual smoke against the live SDK. (Adapters wrapping external SDKs — Claude, Amp, Codex — are exempt from the parametrised contract suite; the `StubAgentAdapter` keeps that suite hermetic. Integration tests that need a deterministic adapter for `provider="amp"` rely on the autouse fixture in `tests/integration/conftest.py`.)
 
+### ACP runtimes (preferred seam for new providers)
+
+Since STORY-033 (2026-06-12), providers that speak the [Agent Client Protocol](https://agentclientprotocol.com) skip step 3 entirely: one `AcpAdapter` (`infrastructure/agents/acp/adapter.py`) serves every ACP agent. It spawns the agent binary as a subprocess (argv wired per-provider in `infrastructure/agents/acp/providers.py`), speaks JSON-RPC/ndjson over stdio via the official `agent-client-protocol` PyPI SDK, and maps `session/update` notifications onto the `AgentEvent` union in `infrastructure/agents/acp/mapping.py`. ACP/pydantic types never leave `infrastructure/`.
+
+Current ACP providers: `claude-acp` (npx `@agentclientprotocol/claude-agent-acp`, maintained by Anthropic+Zed+JetBrains), `codex-acp` (npx `@zed-industries/codex-acp`), `opencode` (local `opencode acp`). The first two **coexist** with the bespoke `claude-code` / `codex` adapters until parity is validated; removing the legacy pair is a deliberate follow-up. Amp has no ACP path and stays bespoke.
+
+Per-provider knobs travel as ACP *session config options*: each config subclasses `AcpAgentConfig` and implements `acp_config_values()` / `acp_mode_id()` (`domain/agents/configs.py`). Application is **tolerant** — option ids/values the agent doesn't advertise are skipped at debug level, never a start failure, because wrapper option surfaces drift faster than Atelier ships. Advertised mutable options are also emitted as `session_config_options` events and can be changed later through the `session_config` WS action; the adapter validates against the advertised values and emits `session_config_changed` on success. The `session_config_refresh` WS action re-applies the current provider value and re-emits the returned full option list, so clients can refresh choices after external auth/config changes without starting a new agent. Captured real payloads live in `backend/tests/fixtures/acp/` and back the unit tests; re-capture them when bumping a pinned wrapper version.
+
+Notable mechanics, with pointers:
+
+- **Permissions** are protocol-native: `session/request_permission` carries agent-named options (`allow_once`/`allow_always`/`reject_once`/`reject_always`); the adapter maps Atelier's three-way decision onto them and answers `cancelled` after a stop (`adapter.py:request_permission`). Permission labels prefer the logical provider tool name remembered from `session/update`; ACP titles can be human action labels such as a search query, so they are only a fallback. No socket bridges or approval RPC shims.
+- **System prompt**: ACP has no system-prompt parameter; the persona/brief is prepended to the first prompt of a fresh session as an `<atelier-context>` block (resumed sessions already carry it in-history).
+- **Usage**: `usage_update` streams context fill (`used`/`size` → ctx %) and cumulative USD cost (→ `TurnMetrics.cost_usd`, authoritative over FE token-math); `PromptResponse.usage` supplies per-turn token splits. codex-acp reports fill but not splits/cost.
+- **Restore**: `session/load` (replay suppressed — Atelier's transcript already has those turns) → `session/resume` → fresh session with a warning event, in that capability order.
+- **Detach/catch-up**: claude-acp/codex-acp session ids are the native CLIs' ids, so `cli_launcher/claude_acp.py` + `codex_acp.py` just translate option vocabularies and the existing `cli_transcript` readers apply. OpenCode resumes via `opencode --session <sid>` and catches up through `opencode export` (`cli_transcript/opencode.py`) — no private DB parsing.
+- **Compaction**: summary-only ACP sessions auto-reject every permission request; claude-acp additionally pins `plan` mode, codex-acp `read-only`, opencode `plan` (`compaction_sessions.py:_summary_config`).
+- **OpenCode model behavior**: `OPENCODE_CONFIGURED_MODEL` remains the descriptor default so new-agent creation can use the user's OpenCode default. `GET /api/providers/opencode/models?refresh=true` shells out to `opencode models --refresh` and lets creation surfaces append the user's connected provider models before the session starts. Once the ACP session starts, OpenCode's advertised `model` config option drives the live picker; opening the picker sends `session_config_refresh`, selecting a value sends `session/set_config_option` for future turns, and the selected model is persisted on the agent row/`agent.json` so detach/resume stays aligned.
+- **Known gaps** (smoke-verified 2026-06-12): codex-acp wraps tool args/results in internal envelopes, so canonical args degrade to title + kind + structured diff (the FE diff viewer still renders); codex-acp reports no token splits/cost.
+
 ## AgentEvent union
 
-Frozen variants in `domain/agents/events.py`: `MessageDelta`, `MessageComplete`, `ThinkingDelta`, `ThinkingComplete`, `ToolCall`, `ToolResult`, `StatusChange`, `ArtifactMarker`, `Error`, `TurnMetrics`, `SessionEstablished`, `ProviderContextCompacted`, plus `UserInput` (originating from the WS input channel, not the adapter).
+Frozen variants in `domain/agents/events.py`: `MessageDelta`, `MessageComplete`, `ThinkingDelta`, `ThinkingComplete`, `ToolCall`, `ToolCallUpdate`, `ToolResult`, `PlanUpdate`, `ModeChange`, `SessionConfigOptions`, `SessionConfigChanged`, `StatusChange`, `ArtifactMarker`, `Error`, `TurnMetrics`, `SessionEstablished`, `ProviderContextCompacted`, plus `UserInput` (originating from the WS input channel, not the adapter).
+
+STORY-033 extended the union **additively** for ACP granularity: new variants (`PlanUpdate` — full-replacement plan entries; `ToolCallUpdate` — coalesced mid-flight tool status/locations; `ModeChange`; `SessionConfigOptions` / `SessionConfigChanged` — mutable provider controls such as OpenCode's model) and new optional fields (`ToolCall.kind/title/locations`, `ToolResult.diff`, `PermissionRequest.options/tool_id`, `TurnMetrics.cost_usd`). The serializer (`domain/supervisor/service.py:_OMIT_WHEN_NONE`) drops the optional keys when unset, so events from pre-ACP adapters stay byte-identical, legacy transcripts replay unchanged, and old frontend builds never see unknown keys (`tests/unit/domain/agents/test_events_compat.py` locks this in).
 
 Each has a `Literal` `type` discriminator; the frontend pattern-matches on it.
 
@@ -412,11 +433,13 @@ The cursor is a `seq` integer. `read_from_cursor(work_slug, agent_slug, cursor)`
 
 **Server → client**: each frame is one `AgentEvent` serialized as JSON. The supervisor maintains the seq monotonicity, so the client can persist the last seq and resume from there on reconnect.
 
-**Client → server**: the WS receive loop parses each frame into a typed `UserAction` (`domain/agents/user_actions.py`) and forwards to `handle_user_action.execute`. Three action types:
+**Client → server**: the WS receive loop parses each frame into a typed `UserAction` (`domain/agents/user_actions.py`) and forwards to `handle_user_action.execute`. Four action types:
 
 - `{"type":"input","text":"..."}` → `SendInput` — appends a `user_input` transcript line and forwards to the adapter (creates the lazy pump if not yet running).
 - `{"type":"stop"}` → `StopTurn` — appends a `user_stop` transcript line and calls `adapter.stop_turn()`. Claude interrupts mid-turn via the SDK's control protocol; Amp's adapter no-ops for now (the SDK exposes no per-turn cancel — full per-turn cancel for Amp is a tracked follow-up). The user-facing intent is always recorded.
 - `{"type":"permission","request_id":"...","decision":"allow|allow_always|deny"}` → `ResolvePermission` — answers a `PermissionRequest` the adapter previously emitted. The decision values come from `get_args(PermissionDecisionValue)` so the wire and the domain stay in lockstep.
+- `{"type":"session_config","config_id":"model","value":"provider/model"}` → `SetSessionConfigOption` — applies a provider-advertised mutable session option, starting a lazy adapter if needed. Unsupported ids/values are rejected by the adapter; successful changes are replayable through `session_config_changed`.
+- `{"type":"session_config_refresh","config_id":"model"}` → `RefreshSessionConfigOptions` — asks a provider-advertised option to re-emit its full choice list, starting a lazy adapter if needed. ACP adapters implement this by re-applying the current value and publishing the returned `session_config_options`.
 
 Frames that don't parse to a known action are ignored.
 

@@ -381,6 +381,43 @@ class AgentSupervisorService:
             return
         await state.adapter.resolve_permission(request_id, decision)
 
+    async def set_config_option(
+        self, agent_slug: str, config_id: str, value: str | bool
+    ) -> None:
+        """Apply a mutable provider session option to the running adapter.
+
+        This is intentionally narrow and provider-advertised. ACP-backed
+        sessions use it for OpenCode's live model selector; providers
+        without a compatible adapter method reject the action cleanly.
+        """
+        state = self._require_state(agent_slug)
+        await self._await_ready(state)
+        setter = getattr(state.adapter, "set_config_option", None)
+        if setter is None:
+            raise ValueError(f"agent {agent_slug} does not support session config")
+        if not state.started:
+            await self._start_lazy_adapter(state)
+        if state.task is None:
+            state.task = asyncio.create_task(
+                self._run_agent(state), name=f"agent-{state.agent_slug}"
+            )
+        await setter(config_id, value)
+
+    async def refresh_config_options(self, agent_slug: str, config_id: str) -> None:
+        """Ask the running adapter to re-emit provider session options."""
+        state = self._require_state(agent_slug)
+        await self._await_ready(state)
+        refresher = getattr(state.adapter, "refresh_config_options", None)
+        if refresher is None:
+            raise ValueError(f"agent {agent_slug} does not support session config")
+        if not state.started:
+            await self._start_lazy_adapter(state)
+        if state.task is None:
+            state.task = asyncio.create_task(
+                self._run_agent(state), name=f"agent-{state.agent_slug}"
+            )
+        await refresher(config_id)
+
     async def stop_turn(self, agent_slug: str) -> None:
         # Records the user's intent in the transcript before forwarding
         # to the adapter, mirroring send_input. Adapters whose SDK can't
@@ -790,14 +827,33 @@ class AgentSupervisorService:
         return state
 
 
+# Optional keys dropped from the wire/transcript dict when None, per
+# event type. Keeps lines emitted by adapters that don't set a field
+# byte-identical to their pre-ACP shape (STORY-033 compat invariant) —
+# old transcripts round-trip and old frontend builds never see unknown
+# keys on events they already render.
+_OMIT_WHEN_NONE: dict[str, tuple[str, ...]] = {
+    "tool_call": ("kind", "title", "locations"),
+    "tool_call_update": ("status", "title", "kind", "locations"),
+    "tool_result": ("diff",),
+    "permission_request": ("options", "tool_id"),
+    "turn_metrics": (
+        "context_window",
+        "cost_usd",
+        "git_branch",
+        "git_head",
+        "git_detached",
+    ),
+}
+
+
 def _event_to_dict(event: AgentEvent) -> dict[str, Any]:
     """Flatten a frozen variant into a JSON-friendly dict, ts as ISO-8601."""
     d = dataclasses.asdict(event)
     d["ts"] = event.ts.isoformat()
-    if d.get("type") == "turn_metrics":
-        for key in ("context_window", "git_branch", "git_head", "git_detached"):
-            if d.get(key) is None:
-                d.pop(key, None)
+    for key in _OMIT_WHEN_NONE.get(d.get("type", ""), ()):
+        if d.get(key) is None:
+            d.pop(key, None)
     return d
 
 
