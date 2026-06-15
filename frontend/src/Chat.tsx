@@ -20,6 +20,7 @@ import {
   type ProjectSummary,
   type OpenCodeModelOption,
   type ProviderDescriptor,
+  type ProviderField,
   type WorkChatContextFolder,
   type WorkSummary,
   compactChat,
@@ -818,6 +819,7 @@ export function ChatComposer({
   const [providers, setProviders] = useState<ProviderDescriptor[]>([]);
   const [provider, setProvider] = useState<string>("");
   const [model, setModel] = useState<string>("");
+  const [providerOptions, setProviderOptions] = useState<Record<string, string>>({});
   const [opencodeModelsLoading, setOpencodeModelsLoading] = useState(false);
   const [opencodeModelsError, setOpencodeModelsError] = useState<string | null>(null);
   const [grounding, setGrounding] = useState<ChatGrounding | null>(presetGrounding ?? null);
@@ -834,6 +836,7 @@ export function ChatComposer({
         if (first) {
           setProvider(first.name);
           setModel(first.primary_field.default);
+          setProviderOptions(defaultsForChatProvider(first));
         }
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -841,6 +844,9 @@ export function ChatComposer({
   }, []);
 
   const providerObj = providers.find((p) => p.name === provider);
+  const permissionOption = providerObj
+    ? chatPermissionOption(providerObj)
+    : null;
   const groundingInfo = resolveGrounding(grounding, projects, works);
   const pickerProjects = linkProjects ?? projects;
   const pickerWorks = linkWorks ?? works;
@@ -887,6 +893,7 @@ export function ChatComposer({
       first_message,
       grounding,
       working_directory: workingDirectory,
+      options: chatOptionsPayload(providerObj, permissionOption, providerOptions),
     };
     try {
       const created = await createChat(payload);
@@ -934,6 +941,9 @@ export function ChatComposer({
                 const desc = providers.find((p) => p.name === next);
                 setProvider(next);
                 setModel(desc?.primary_field.default ?? "");
+                setProviderOptions(
+                  desc ? defaultsForChatProvider(desc) : {},
+                );
               }}
             >
               {providers.map((p) => (
@@ -959,6 +969,29 @@ export function ChatComposer({
                   <span className="cb-model-hint">using OpenCode default</span>
                 )}
             </span>
+            {permissionOption && (
+              <select
+                className="cb-select cb-permission-select"
+                aria-label={permissionOption.field.label}
+                value={
+                  providerOptions[permissionOption.key] ??
+                  permissionOption.field.default
+                }
+                onChange={(e) =>
+                  setProviderOptions((prev) => ({
+                    ...prev,
+                    [permissionOption.key]: e.target.value,
+                  }))
+                }
+              >
+                {permissionOption.field.values.map((value) => (
+                  <option key={value} value={value}>
+                    {permissionOption.field.label}:{" "}
+                    {optionLabel(permissionOption.field, value)}
+                  </option>
+                ))}
+              </select>
+            )}
             {!hideGrounding && (
               <GroundingPicker
                 projects={pickerProjects}
@@ -1912,6 +1945,46 @@ function modelPickerOptions(provider: ProviderDescriptor) {
     value,
     label: provider.primary_field.value_labels?.[index] ?? value,
   }));
+}
+
+type ChatPermissionOption = {
+  key: string;
+  field: ProviderField;
+};
+
+const CHAT_PERMISSION_OPTION_KEYS = [
+  "permission_mode",
+  "mode",
+  "approval_mode",
+] as const;
+
+function chatPermissionOption(provider: ProviderDescriptor): ChatPermissionOption | null {
+  for (const key of CHAT_PERMISSION_OPTION_KEYS) {
+    const field = provider.options[key];
+    if (field) return { key, field };
+  }
+  return null;
+}
+
+function defaultsForChatProvider(provider: ProviderDescriptor): Record<string, string> {
+  const permission = chatPermissionOption(provider);
+  return permission ? { [permission.key]: permission.field.default } : {};
+}
+
+function chatOptionsPayload(
+  provider: ProviderDescriptor | undefined,
+  permission: ChatPermissionOption | null,
+  current: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!provider || !permission) return undefined;
+  const value = current[permission.key] ?? permission.field.default;
+  if (value === permission.field.default) return undefined;
+  return { [permission.key]: value };
+}
+
+function optionLabel(field: ProviderField, value: string): string {
+  const idx = field.values.indexOf(value);
+  return idx >= 0 ? field.value_labels?.[idx] ?? value : value;
 }
 
 function shortModel(model: string): string {

@@ -163,6 +163,7 @@ export type CreateChatPayload = {
   title?: string | null;
   grounding?: ChatGrounding | null;
   working_directory?: string | null;
+  options?: Record<string, string>;
 };
 
 export function listChats(scope?: {

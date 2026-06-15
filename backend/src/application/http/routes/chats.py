@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -24,6 +25,7 @@ from src.application.http.schemas import (
     WorkChatRef,
     WorkDetail,
 )
+from src.domain.agents import SPECS, CommonAgentConfig
 from src.domain.agents.compactions import CompactionSessionClient
 from src.domain.agents.handoffs import Summarizer
 from src.domain.chatstore import (
@@ -113,7 +115,15 @@ def list_chats_endpoint(
 
 
 @router.post("/chats", response_model=ChatDetail, status_code=status.HTTP_201_CREATED)
-def create_chat_endpoint(payload: NewChatRequest, chatstore: ChatStoreDep) -> ChatDetail:
+def create_chat_endpoint(
+    payload: NewChatRequest,
+    chatstore: ChatStoreDep,
+    settings: SettingsDep,
+) -> ChatDetail:
+    try:
+        _validate_chat_provider_config(payload, settings)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     record = chatstore.create_chat(
         CreateChatRequest(
             provider=payload.provider,
@@ -129,6 +139,7 @@ def create_chat_endpoint(payload: NewChatRequest, chatstore: ChatStoreDep) -> Ch
                 else None
             ),
             working_directory=payload.working_directory,
+            options=payload.options or None,
         )
     )
     return _to_detail(record)
@@ -554,6 +565,23 @@ def _to_detail(record: ChatRecord) -> ChatDetail:
     return ChatDetail(
         **summary.model_dump(),
         transcript=[_message_to_schema(m) for m in record.transcript],
+    )
+
+
+def _validate_chat_provider_config(payload: NewChatRequest, settings: Settings) -> None:
+    workdir = (
+        Path(payload.working_directory).expanduser()
+        if payload.working_directory
+        else settings.workspace_root
+    )
+    SPECS[payload.provider].build(
+        CommonAgentConfig(
+            workdir=workdir,
+            writable_roots=(workdir,),
+            system_prompt="",
+        ),
+        payload.model,
+        payload.options,
     )
 
 

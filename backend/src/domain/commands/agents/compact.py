@@ -159,7 +159,9 @@ async def execute(
     )
 
     now = clock()
-    workstore.append_transcript_event_with_seq(
+    await _append_compaction_event(
+        workstore,
+        supervisor,
         work_slug,
         req.agent_slug,
         {
@@ -167,6 +169,21 @@ async def execute(
             "ts": now.isoformat(),
             "reason": req.reason,
             "old_session_id": old_session_id,
+            "provider": agent.provider,
+        },
+    )
+    await _append_compaction_event(
+        workstore,
+        supervisor,
+        work_slug,
+        req.agent_slug,
+        {
+            "type": "compaction_progress",
+            "ts": clock().isoformat(),
+            "phase": "summarizing",
+            "message": "Summarizing transcript",
+            "old_session_id": old_session_id,
+            "reason": req.reason,
             "provider": agent.provider,
         },
     )
@@ -205,7 +222,9 @@ async def execute(
     )
     transcript_path = str(Path(summary_path).parent.parent / "transcript.ndjson")
 
-    workstore.append_transcript_event_with_seq(
+    await _append_compaction_event(
+        workstore,
+        supervisor,
         work_slug,
         req.agent_slug,
         {
@@ -214,6 +233,22 @@ async def execute(
             "summary_path": summary_path,
             "old_session_id": old_session_id,
             "reason": req.reason,
+        },
+    )
+    await _append_compaction_event(
+        workstore,
+        supervisor,
+        work_slug,
+        req.agent_slug,
+        {
+            "type": "compaction_progress",
+            "ts": clock().isoformat(),
+            "phase": "starting_session",
+            "message": "Starting fresh session",
+            "old_session_id": old_session_id,
+            "summary_path": summary_path,
+            "reason": req.reason,
+            "provider": agent.provider,
         },
     )
 
@@ -229,7 +264,9 @@ async def execute(
             seed_message=seed_message,
         )
     except Exception as exc:
-        workstore.append_transcript_event_with_seq(
+        await _append_compaction_event(
+            workstore,
+            supervisor,
             work_slug,
             req.agent_slug,
             {
@@ -262,6 +299,23 @@ async def execute(
         summary_path=summary_path,
         transcript_path=transcript_path,
     )
+    await _append_compaction_event(
+        workstore,
+        supervisor,
+        work_slug,
+        req.agent_slug,
+        {
+            "type": "compaction_progress",
+            "ts": clock().isoformat(),
+            "phase": "linking_session",
+            "message": "Linking previous session",
+            "old_session_id": old_session_id,
+            "new_session_id": started.session_id,
+            "summary_path": summary_path,
+            "reason": req.reason,
+            "provider": agent.provider,
+        },
+    )
     breadcrumb_result = await session_client.write_breadcrumb(
         config=config,
         context=context,
@@ -273,7 +327,9 @@ async def execute(
         req.agent_slug, started.session_id, mirror_agent_json=True
     )
     workstore.set_agent_status(req.agent_slug, AgentStatus.IDLE)
-    workstore.append_transcript_event_with_seq(
+    await _append_compaction_event(
+        workstore,
+        supervisor,
         work_slug,
         req.agent_slug,
         {
@@ -285,7 +341,9 @@ async def execute(
             "error": breadcrumb_result.error,
         },
     )
-    workstore.append_transcript_event_with_seq(
+    await _append_compaction_event(
+        workstore,
+        supervisor,
         work_slug,
         req.agent_slug,
         {
@@ -353,6 +411,27 @@ async def _summarize_with_provider(
         return fallback(events, summary_context)
 
 
+async def _append_compaction_event(
+    workstore: WorkStore,
+    supervisor: AgentSupervisorService,
+    work_slug: str,
+    agent_slug: str,
+    payload: dict[str, Any],
+) -> None:
+    publisher = getattr(supervisor, "publish_external_event", None)
+    if callable(publisher):
+        try:
+            if await publisher(agent_slug, payload):
+                return
+        except Exception as exc:
+            _log.warning(
+                "live compaction progress publish failed for %s: %r",
+                agent_slug,
+                exc,
+            )
+    workstore.append_transcript_event_with_seq(work_slug, agent_slug, payload)
+
+
 def _summary_source_events(
     *,
     workstore: WorkStore,
@@ -360,6 +439,7 @@ def _summary_source_events(
     agent_slug: str,
     events: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    events = _events_for_summary(events)
     previous_index = _last_compaction_boundary_index(events)
     if previous_index is None:
         return trim_transcript_to_char_cap(events)
@@ -380,6 +460,23 @@ def _summary_source_events(
             },
         )
     return trim_transcript_to_char_cap(selected)
+
+
+_COMPACTION_MAINTENANCE_EVENT_TYPES = {
+    "compaction_failed",
+    "compaction_old_session_breadcrumb",
+    "compaction_progress",
+    "compaction_requested",
+    "compaction_summary_created",
+}
+
+
+def _events_for_summary(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in events
+        if event.get("type") not in _COMPACTION_MAINTENANCE_EVENT_TYPES
+    ]
 
 
 def _last_compaction_boundary_index(events: list[dict[str, Any]]) -> int | None:

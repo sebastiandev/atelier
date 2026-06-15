@@ -427,6 +427,27 @@ export function AgentTile({
   const compactionActivationKeys = new Set(["Enter", " "]);
 
   useEffect(() => {
+    if (compactionDialog?.phase !== "compacting") return;
+    const progress = latestCompactionProgressEvent(
+      events,
+      compactionDialog.progressStartedAt,
+    );
+    if (progress === null || progress.phase === compactionDialog.progressPhase) {
+      return;
+    }
+    setCompactionDialog((current) =>
+      current?.phase === "compacting"
+        ? { ...current, progressPhase: progress.phase }
+        : current,
+    );
+  }, [
+    compactionDialog?.phase,
+    compactionDialog?.progressPhase,
+    compactionDialog?.progressStartedAt,
+    events,
+  ]);
+
+  useEffect(() => {
     if (!compactionBlocked) {
       setCompactionModalDismissed(false);
       setCompactionDialog((current) =>
@@ -495,8 +516,15 @@ export function AgentTile({
   async function handleCompact() {
     if (compactionDialog === null) return;
     const currentDialog = compactionDialog;
+    const progressStartedAt = Date.now();
     setCompacting(true);
-    setCompactionDialog({ ...currentDialog, phase: "compacting", error: null });
+    setCompactionDialog({
+      ...currentDialog,
+      phase: "compacting",
+      error: null,
+      progressPhase: "summarizing",
+      progressStartedAt,
+    });
     try {
       await compactAgent(
         agentSlug,
@@ -505,17 +533,18 @@ export function AgentTile({
       setCompactedMetricsSeq((prev) =>
         lastMetrics ? Math.max(prev ?? 0, lastMetrics.seq) : prev,
       );
-      setCompactionDialog({
-        ...currentDialog,
+      setCompactionDialog((current) => ({
+        ...(current ?? currentDialog),
         phase: "success",
         error: null,
-      });
+        progressPhase: null,
+      }));
     } catch (err) {
-      setCompactionDialog({
-        ...currentDialog,
+      setCompactionDialog((current) => ({
+        ...(current ?? currentDialog),
         phase: "error",
         error: err instanceof Error ? err.message : String(err),
-      });
+      }));
     } finally {
       setCompacting(false);
     }
@@ -1837,7 +1866,9 @@ function renderUnitFor(ev: AgentEvent): RenderUnit | null {
       return {
         kind: "error",
         key: ev.seq,
-        message: `Compaction failed: ${stringField(ev, "message")}`,
+        message: `Compaction failed: ${
+          stringField(ev, "message") || stringField(ev, "error") || "unknown error"
+        }`,
       };
     default:
       return null;
@@ -2015,11 +2046,17 @@ export type ContextSnapshot = {
 
 type CompactionLevel = "none" | "notice" | "recommended" | "urgent" | "blocked";
 type CompactionDialogPhase = "confirm" | "compacting" | "success" | "error";
+type CompactionProgressPhase =
+  | "summarizing"
+  | "starting_session"
+  | "linking_session";
 type CompactionDialogState = {
   context: ContextSnapshot;
   level: CompactionLevel;
   tone: ContextTone;
   phase: CompactionDialogPhase;
+  progressPhase: CompactionProgressPhase | null;
+  progressStartedAt: number | null;
   error: string | null;
 };
 
@@ -2114,6 +2151,31 @@ export function latestEventSeq(events: AgentEvent[], type: string): number {
     if (events[i].type === type) return events[i].seq;
   }
   return 0;
+}
+
+function latestCompactionProgressEvent(
+  events: AgentEvent[],
+  startedAt: number | null,
+): { phase: CompactionProgressPhase; seq: number } | null {
+  const minTs = startedAt === null ? 0 : startedAt - 2000;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i];
+    if (ev.type !== "compaction_progress") continue;
+    const phase = stringField(ev, "phase");
+    if (!isCompactionProgressPhase(phase)) continue;
+    const eventTs = Date.parse(ev.ts);
+    if (Number.isFinite(eventTs) && eventTs < minTs) continue;
+    return { phase, seq: ev.seq };
+  }
+  return null;
+}
+
+function isCompactionProgressPhase(value: string): value is CompactionProgressPhase {
+  return (
+    value === "summarizing" ||
+    value === "starting_session" ||
+    value === "linking_session"
+  );
 }
 
 export type SessionTotals = {
@@ -2397,6 +2459,8 @@ function createCompactionDialog(
     level,
     tone: contextToneFor(context.pct),
     phase: "confirm",
+    progressPhase: null,
+    progressStartedAt: null,
     error: null,
   };
 }
@@ -2404,6 +2468,43 @@ function createCompactionDialog(
 function clampPct(pct: number): number {
   if (!Number.isFinite(pct)) return 0;
   return Math.max(0, Math.min(100, pct));
+}
+
+function compactionProgressCopy(phase: CompactionProgressPhase | null): {
+  label: string;
+  description: string;
+  action: string;
+} {
+  switch (phase) {
+    case "starting_session":
+      return {
+        label: "Starting fresh session",
+        description: "The summary is ready. Starting a fresh provider session from it.",
+        action: "Starting session...",
+      };
+    case "linking_session":
+      return {
+        label: "Linking previous session",
+        description: "The fresh session is ready. Linking the previous session for traceability.",
+        action: "Linking session...",
+      };
+    case "summarizing":
+    default:
+      return {
+        label: "Summarizing transcript",
+        description:
+          "Summarizing older turns with the provider. Large or legacy sessions can take a couple minutes.",
+        action: "Summarizing...",
+      };
+  }
+}
+
+function formatElapsedSeconds(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const remainder = safe % 60;
+  if (minutes === 0) return `${remainder}s`;
+  return `${minutes}m ${remainder.toString().padStart(2, "0")}s`;
 }
 
 function computeSessionCost(
@@ -3404,8 +3505,14 @@ function CompactionModal({
   const cardRef = useRef<HTMLDivElement>(null);
   const primaryRef = useRef<HTMLButtonElement>(null);
   const { context, error, level, phase, tone } = dialog;
+  const [now, setNow] = useState(() => Date.now());
   const blocked = level === "blocked";
   const canCancel = Boolean(onClose) && phase !== "compacting";
+  const progress = compactionProgressCopy(dialog.progressPhase);
+  const elapsed =
+    phase === "compacting" && dialog.progressStartedAt !== null
+      ? formatElapsedSeconds(Math.max(0, Math.floor((now - dialog.progressStartedAt) / 1000)))
+      : null;
   const title =
     phase === "compacting"
       ? "Compacting agent..."
@@ -3416,7 +3523,7 @@ function CompactionModal({
           : "Compact context";
   const body =
     phase === "compacting"
-      ? "Summarising older turns. This usually takes a few seconds."
+      ? progress.description
       : phase === "success"
         ? "New session started from summary. The next turn will report updated context."
         : phase === "error"
@@ -3431,6 +3538,13 @@ function CompactionModal({
     if (phase === "confirm" || phase === "error") {
       primaryRef.current?.focus();
     }
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "compacting") return;
+    setNow(Date.now());
+    const handle = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(handle);
   }, [phase]);
 
   function handleLayerMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
@@ -3509,7 +3623,7 @@ function CompactionModal({
           </div>
           <div className="compaction-modal-fact">
             <span className="compaction-modal-dot" aria-hidden />
-            <span>Takes about 3-5 seconds; previous session is preserved</span>
+            <span>Can take a couple minutes on large legacy sessions</span>
           </div>
         </div>
         <div className="compaction-modal-progress">
@@ -3518,6 +3632,12 @@ function CompactionModal({
           </div>
           <span className="compaction-modal-readout mono">{readout}</span>
         </div>
+        {phase === "compacting" && (
+          <div className="compaction-modal-phase" aria-live="polite">
+            <span className="compaction-modal-phase-label">{progress.label}</span>
+            {elapsed && <span className="compaction-modal-phase-time">{elapsed}</span>}
+          </div>
+        )}
         {phase === "error" && error && (
           <div className="compaction-modal-error">{error}</div>
         )}
@@ -3534,7 +3654,7 @@ function CompactionModal({
             )}
             {phase === "compacting" ? (
               <span className="compaction-modal-spinner" aria-live="polite">
-                Compacting...
+                {progress.action}
               </span>
             ) : (
               <button

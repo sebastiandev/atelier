@@ -101,7 +101,7 @@ def build_chat_runtime_config(
         writable_roots=(runtime.workdir,),
         system_prompt=system_prompt,
     )
-    config = SPECS[chat.provider].build(common, chat.model, {})
+    config = SPECS[chat.provider].build(common, chat.model, chat.options or {})
     context = AgentStartContext(
         workdir=runtime.workdir,
         model=chat.model,

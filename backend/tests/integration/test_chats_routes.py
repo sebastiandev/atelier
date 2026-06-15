@@ -15,6 +15,7 @@ from src.domain.agents.compactions import (
     BreadcrumbResult,
     CompactionSessionStartResult,
 )
+from src.domain.agents.configs import AmpAgentConfig, AmpPermissionMode
 from src.domain.commands.chats.connect import build_chat_runtime_config
 from src.settings import Settings
 
@@ -148,6 +149,50 @@ def test_create_chat_separates_link_from_working_folder(
     assert context.workdir == working_dir
     assert runtime.workdir == working_dir
     assert runtime.link_label.startswith(f"work {work['slug']}")
+
+
+def test_create_chat_persists_provider_options_for_runtime(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    response = app_client.post(
+        "/api/chats",
+        json={
+            **_new_amp_chat("Use relaxed permissions for exploration"),
+            "options": {"permission_mode": "allow_all"},
+        },
+    )
+
+    assert response.status_code == 201
+    chat_json = json.loads(
+        (test_settings.workspace_root / "chats" / "CHT-001" / "chat.json").read_text()
+    )
+    assert chat_json["options"] == {"permission_mode": "allow_all"}
+
+    record = app_client.app.state.chatstore.get_chat("CHT-001")
+    assert record is not None
+    config, _context, _runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        test_settings,
+    )
+    assert isinstance(config, AmpAgentConfig)
+    assert config.permission_mode is AmpPermissionMode.ALLOW_ALL
+
+
+def test_create_chat_rejects_invalid_provider_options(
+    app_client: TestClient,
+) -> None:
+    response = app_client.post(
+        "/api/chats",
+        json={
+            **_new_amp_chat("Bad options should fail early"),
+            "options": {"unknown": "value"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert "unknown options" in response.json()["detail"]
 
 
 def test_send_chat_message_appends_user_and_assistant_turns(
@@ -491,12 +536,20 @@ def test_compact_chat_replaces_session_and_records_boundary(
         ).read_text().splitlines()
     ]
     event_types = [row.get("type") for row in transcript_rows if "type" in row]
-    assert event_types[-4:] == [
+    assert event_types[-7:] == [
         "compaction_requested",
+        "compaction_progress",
         "compaction_summary_created",
+        "compaction_progress",
+        "compaction_progress",
         "compaction_old_session_breadcrumb",
         "context_compacted",
     ]
+    assert [
+        row["phase"]
+        for row in transcript_rows
+        if row.get("type") == "compaction_progress"
+    ] == ["summarizing", "starting_session", "linking_session"]
     assert transcript_rows[-1]["new_session_id"] == "new-chat-session"
 
 

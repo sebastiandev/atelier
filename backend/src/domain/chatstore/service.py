@@ -54,6 +54,7 @@ class ChatStoreService:
                 grounding_kind=req.grounding.kind if req.grounding else None,
                 grounding_ref=req.grounding.ref if req.grounding else None,
                 working_directory=_clean_optional_path(req.working_directory),
+                options=req.options or None,
                 created_at=now,
                 updated_at=now,
             )

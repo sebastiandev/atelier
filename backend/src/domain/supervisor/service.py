@@ -543,6 +543,33 @@ class AgentSupervisorService:
         async with state.publish_lock:
             state.seq = max(state.seq, last_seq)
 
+    async def publish_external_event(
+        self, agent_slug: str, payload: dict[str, Any]
+    ) -> bool:
+        """Persist and fan out an event produced outside the adapter pump.
+
+        Compaction and other maintenance commands may write transcript
+        markers while the provider adapter is intentionally stopped. When a
+        browser has already reattached lazily, this helper lets those markers
+        use the same disk-first fanout path as normal adapter events. If no
+        state is registered, callers should fall back to their store's
+        append-with-seq helper; a later websocket reconnect will replay it.
+        """
+
+        state = self._states.get(agent_slug)
+        if state is None:
+            return False
+        await self._await_ready(state)
+        async with state.publish_lock:
+            last_seq = await asyncio.to_thread(
+                self._transcript_log.last_seq,
+                state.work_slug,
+                state.agent_slug,
+            )
+            state.seq = max(state.seq, last_seq)
+            await self._publish_locked(state, payload)
+        return True
+
     # -- internals --
 
     async def _await_ready(self, state: _AgentState) -> None:
@@ -724,30 +751,35 @@ class AgentSupervisorService:
 
     async def _publish(self, state: _AgentState, payload: dict[str, Any]) -> None:
         async with state.publish_lock:
-            state.seq += 1
-            stamped: dict[str, Any] = {"seq": state.seq, **payload}
-            # NDJSON append + fsync is sync; bridge to the asyncio loop.
-            await asyncio.to_thread(
-                self._transcript_log.append,
-                state.work_slug,
+            await self._publish_locked(state, payload)
+
+    async def _publish_locked(
+        self, state: _AgentState, payload: dict[str, Any]
+    ) -> None:
+        state.seq += 1
+        stamped: dict[str, Any] = {"seq": state.seq, **payload}
+        # NDJSON append + fsync is sync; bridge to the asyncio loop.
+        await asyncio.to_thread(
+            self._transcript_log.append,
+            state.work_slug,
+            state.agent_slug,
+            stamped,
+        )
+        sub = state.subscriber
+        if sub is None:
+            return
+        try:
+            sub.queue.put_nowait(stamped)
+        except asyncio.QueueFull:
+            # Slow consumer — drop the subscriber. The disk has the
+            # event; reconnect with ?cursor=N picks it up.
+            _log.warning(
+                "dropping slow WS subscriber for agent=%s at seq=%d",
                 state.agent_slug,
-                stamped,
+                state.seq,
             )
-            sub = state.subscriber
-            if sub is None:
-                return
-            try:
-                sub.queue.put_nowait(stamped)
-            except asyncio.QueueFull:
-                # Slow consumer — drop the subscriber. The disk has the
-                # event; reconnect with ?cursor=N picks it up.
-                _log.warning(
-                    "dropping slow WS subscriber for agent=%s at seq=%d",
-                    state.agent_slug,
-                    state.seq,
-                )
-                sub.kicked.set()
-                state.subscriber = None
+            sub.kicked.set()
+            state.subscriber = None
 
     async def _record_marker(
         self, state: _AgentState, event: ArtifactMarker

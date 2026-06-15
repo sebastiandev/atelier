@@ -227,11 +227,24 @@ async def test_compact_replaces_session_and_records_boundary(tmp_path: Path) -> 
     event_types = [
         event["type"] for event in transcript.events[("WRK-001", "agt-1")]
     ]
-    assert event_types[-4:] == [
+    assert event_types[-7:] == [
         "compaction_requested",
+        "compaction_progress",
         "compaction_summary_created",
+        "compaction_progress",
+        "compaction_progress",
         "compaction_old_session_breadcrumb",
         "context_compacted",
+    ]
+    progress_phases = [
+        event["phase"]
+        for event in transcript.events[("WRK-001", "agt-1")]
+        if event.get("type") == "compaction_progress"
+    ]
+    assert progress_phases == [
+        "summarizing",
+        "starting_session",
+        "linking_session",
     ]
 
 

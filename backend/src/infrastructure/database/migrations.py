@@ -25,7 +25,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 15
+CURRENT_SCHEMA_VERSION = 16
 
 
 class SchemaMismatchError(RuntimeError):
@@ -209,6 +209,13 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
                     text("ALTER TABLE chats ADD COLUMN working_directory TEXT")
                 )
             existing = 15
+        if existing == 15:
+            # v15 → v16: persist provider-specific chat options. Nullable and
+            # optional in chat.json, so existing chats continue with provider
+            # defaults.
+            if not _has_column(conn, "chats", "options"):
+                conn.execute(text("ALTER TABLE chats ADD COLUMN options TEXT"))
+            existing = 16
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

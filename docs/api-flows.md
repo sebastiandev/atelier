@@ -151,6 +151,7 @@ irreversible and stops any live chat runtime before removing transcript files.
 ```
 Browser ──► Router (chats.py)
                 │
+                ├─► SPECS[provider].build(model, options)  ← 422 on bad config
                 ├─► ChatStore.create_chat(req)
                 │       ├─► repo.add_chat(chat)       ← assigns CHT-NNN
                 │       ├─► files.write_chat_json(...)
@@ -158,7 +159,7 @@ Browser ──► Router (chats.py)
                 └─► returns ChatDetail
 ```
 
-Create-chat records only the modal's first user message plus optional Project/Work link (`grounding`) and optional provider cwd (`working_directory`). The provider turn starts when the chat websocket opens and `chats/connect.py` claims that first prompt (see [WS `/api/chats/{slug}/stream`](#ws-apichatsslugstream)). `POST /api/chats/{slug}/messages` remains as a compatibility append route for older clients; the current frontend sends follow-up turns over the websocket.
+Create-chat records only the modal's first user message plus optional Project/Work link (`grounding`), optional provider cwd (`working_directory`), and any non-default provider permission/mode options. The provider turn starts when the chat websocket opens and `chats/connect.py` claims that first prompt (see [WS `/api/chats/{slug}/stream`](#ws-apichatsslugstream)). `POST /api/chats/{slug}/messages` remains as a compatibility append route for older clients; the current frontend sends follow-up turns over the websocket.
 
 ---
 
@@ -562,6 +563,7 @@ Browser ──► Router (agents.py) ──► commands.compact.execute(...)
                                        ├─► WorktreeManager.ensure(...)
                                        ├─► WorktreeManager.describe_state(workdir)
                                        ├─► await supervisor.stop_agent(slug)
+                                       ├─► append compaction_progress phase markers
                                        ├─► summarizer(transcript, work/agent context)
                                        ├─► WorkStore.write_agent_compaction_doc(...)
                                        ├─► CompactionSessionClient.start_fresh_session(...)
@@ -592,6 +594,7 @@ Browser ──► Router (chats.py) ──► commands.chats.compact.execute(...
                                       ├─► reject missing session / mid-turn        ← 409
                                       ├─► build chat provider config from working directory/link
                                       ├─► await chat_supervisor.stop_agent(slug)
+                                      ├─► append compaction_progress phase markers
                                       ├─► summarize transcript
                                       ├─► ChatStore.write_chat_compaction_doc(...)
                                       ├─► CompactionSessionClient.start_fresh_session(...)

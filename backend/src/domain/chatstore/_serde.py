@@ -22,6 +22,8 @@ def serialize_chat(chat: Chat) -> dict[str, Any]:
         out["session_id"] = chat.session_id
     if chat.working_directory:
         out["working_directory"] = chat.working_directory
+    if chat.options:
+        out["options"] = chat.options
     if chat.grounding_kind and chat.grounding_ref:
         out["grounding"] = {
             "kind": chat.grounding_kind,
@@ -41,6 +43,11 @@ def deserialize_chat(data: dict[str, Any]) -> Chat:
         grounding_kind=grounding.kind if grounding else None,
         grounding_ref=grounding.ref if grounding else None,
         working_directory=data.get("working_directory"),
+        options=(
+            data["options"]
+            if isinstance(data.get("options"), dict)
+            else None
+        ),
         created_at=datetime.fromisoformat(data["created_at"]),
         updated_at=datetime.fromisoformat(data["updated_at"]),
         session_id=data.get("session_id"),

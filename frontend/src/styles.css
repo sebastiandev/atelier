@@ -343,7 +343,7 @@
 
 .cb-controls {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--line-soft);
@@ -355,15 +355,16 @@
   gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .cb-controls .spacer {
-  flex: 1;
+  display: none;
 }
 
 .cb-controls > .btn {
   flex: 0 0 auto;
+  margin-left: auto;
   white-space: nowrap;
 }
 
@@ -381,7 +382,7 @@
 }
 
 .cb-select {
-  flex: 1 1 180px;
+  flex: 0 1 210px;
   appearance: none;
   -webkit-appearance: none;
   cursor: pointer;
@@ -401,7 +402,7 @@
 
 .cb-model-wrap {
   display: flex;
-  flex: 1 1 180px;
+  flex: 0 1 260px;
   min-width: 0;
   flex-direction: column;
   gap: 3px;
@@ -593,7 +594,7 @@
 }
 
 .model-picker.compact {
-  flex: 1 1 220px;
+  flex: 0 1 100%;
 }
 
 .model-picker.compact .model-picker-trigger {
@@ -615,13 +616,41 @@
 
 .cb-ground-pop {
   position: relative;
-  flex: 1 1 150px;
+  flex: 0 1 180px;
   min-width: 120px;
   max-width: 240px;
 }
 
 .cb-workdir-pop {
-  flex-basis: 160px;
+  flex-basis: 180px;
+}
+
+.cb-permission-select {
+  flex: 0 1 170px;
+}
+
+@media (max-width: 820px) {
+  .cb-controls {
+    flex-wrap: wrap;
+  }
+
+  .cb-selects {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .cb-controls > .btn {
+    margin-left: 0;
+  }
+
+  .cb-select,
+  .cb-model-wrap,
+  .cb-permission-select,
+  .cb-ground-pop,
+  .cb-workdir-pop {
+    flex: 1 1 180px;
+    max-width: none;
+  }
 }
 
 .cb-ground-btn {
@@ -3680,6 +3709,28 @@ h5.md-h {
   color: var(--fg-3);
   font-size: 12.5px;
   white-space: nowrap;
+}
+.compaction-modal-phase {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -0.35rem 0 1rem;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--fg-3);
+  font-size: 12px;
+}
+.compaction-modal-phase-label {
+  color: var(--fg-2);
+  font-weight: 600;
+}
+.compaction-modal-phase-time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--font-mono);
 }
 .compaction-modal-error {
   margin: 0 0 1rem;

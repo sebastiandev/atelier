@@ -428,6 +428,9 @@ class NewChatRequest(BaseModel):
     title: str | None = None
     grounding: ChatGroundingSchema | None = None
     working_directory: str | None = None
+    # Provider-specific knobs for chats. Today the frontend exposes only
+    # permission/mode, but this stays generic to match the agent surface.
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 class PatchChatRequest(BaseModel):

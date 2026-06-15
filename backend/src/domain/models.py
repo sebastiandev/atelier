@@ -162,6 +162,10 @@ class Chat:
     grounding_kind: ChatGroundingKind | None = None
     grounding_ref: str | None = None
     working_directory: str | None = None
+    # Provider-specific options selected when the chat is created. Nullable
+    # for chats created before this field existed; callers treat None as
+    # provider defaults.
+    options: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
     session_id: str | None = None

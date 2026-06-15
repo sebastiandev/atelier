@@ -1,6 +1,7 @@
 """DTOs for the ChatStore boundary."""
 
 from dataclasses import dataclass
+from typing import Any
 
 from src.domain.models import (
     Chat,
@@ -25,6 +26,7 @@ class CreateChatRequest:
     title: str | None = None
     grounding: ChatGrounding | None = None
     working_directory: str | None = None
+    options: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

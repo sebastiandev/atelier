@@ -208,6 +208,9 @@ chats_table = Table(
     Column("grounding_kind", String, nullable=True),
     Column("grounding_ref", String, nullable=True),
     Column("working_directory", String, nullable=True),
+    # Provider-specific chat runtime options (permission/mode, etc.).
+    # Nullable for chats created before this field existed.
+    Column("options", JsonDict, nullable=True),
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
     # Provider session/thread ID once a chat stream has established one.

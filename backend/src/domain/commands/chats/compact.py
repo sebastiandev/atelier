@@ -99,13 +99,29 @@ async def execute(
     await supervisor.stop_agent(req.chat_slug)
 
     now = clock()
-    chatstore.append_transcript_event_with_seq(
+    await _append_compaction_event(
+        chatstore,
+        supervisor,
         req.chat_slug,
         {
             "type": "compaction_requested",
             "ts": now.isoformat(),
             "reason": req.reason,
             "old_session_id": old_session_id,
+            "provider": record.chat.provider,
+        },
+    )
+    await _append_compaction_event(
+        chatstore,
+        supervisor,
+        req.chat_slug,
+        {
+            "type": "compaction_progress",
+            "ts": clock().isoformat(),
+            "phase": "summarizing",
+            "message": "Summarizing transcript",
+            "old_session_id": old_session_id,
+            "reason": req.reason,
             "provider": record.chat.provider,
         },
     )
@@ -146,7 +162,9 @@ async def execute(
     )
     transcript_path = str(Path(summary_path).parent.parent / "transcript.ndjson")
 
-    chatstore.append_transcript_event_with_seq(
+    await _append_compaction_event(
+        chatstore,
+        supervisor,
         req.chat_slug,
         {
             "type": "compaction_summary_created",
@@ -154,6 +172,21 @@ async def execute(
             "summary_path": summary_path,
             "old_session_id": old_session_id,
             "reason": req.reason,
+        },
+    )
+    await _append_compaction_event(
+        chatstore,
+        supervisor,
+        req.chat_slug,
+        {
+            "type": "compaction_progress",
+            "ts": clock().isoformat(),
+            "phase": "starting_session",
+            "message": "Starting fresh session",
+            "old_session_id": old_session_id,
+            "summary_path": summary_path,
+            "reason": req.reason,
+            "provider": record.chat.provider,
         },
     )
 
@@ -169,7 +202,9 @@ async def execute(
             seed_message=seed_message,
         )
     except Exception as exc:
-        chatstore.append_transcript_event_with_seq(
+        await _append_compaction_event(
+            chatstore,
+            supervisor,
             req.chat_slug,
             {
                 "type": "compaction_failed",
@@ -188,6 +223,22 @@ async def execute(
         summary_path=summary_path,
         transcript_path=transcript_path,
     )
+    await _append_compaction_event(
+        chatstore,
+        supervisor,
+        req.chat_slug,
+        {
+            "type": "compaction_progress",
+            "ts": clock().isoformat(),
+            "phase": "linking_session",
+            "message": "Linking previous session",
+            "old_session_id": old_session_id,
+            "new_session_id": started.session_id,
+            "summary_path": summary_path,
+            "reason": req.reason,
+            "provider": record.chat.provider,
+        },
+    )
     breadcrumb_result = await session_client.write_breadcrumb(
         config=config,
         context=maintenance_context,
@@ -196,7 +247,9 @@ async def execute(
     )
 
     chatstore.set_chat_session_id(req.chat_slug, started.session_id)
-    chatstore.append_transcript_event_with_seq(
+    await _append_compaction_event(
+        chatstore,
+        supervisor,
         req.chat_slug,
         {
             "type": "compaction_old_session_breadcrumb",
@@ -207,7 +260,9 @@ async def execute(
             "error": breadcrumb_result.error,
         },
     )
-    chatstore.append_transcript_event_with_seq(
+    await _append_compaction_event(
+        chatstore,
+        supervisor,
         req.chat_slug,
         {
             "type": "context_compacted",
@@ -257,6 +312,26 @@ async def _summarize_with_provider(
             exc,
         )
         return fallback(events, summary_context)
+
+
+async def _append_compaction_event(
+    chatstore: ChatStore,
+    supervisor: AgentSupervisorService,
+    chat_slug: str,
+    payload: dict[str, Any],
+) -> None:
+    publisher = getattr(supervisor, "publish_external_event", None)
+    if callable(publisher):
+        try:
+            if await publisher(chat_slug, payload):
+                return
+        except Exception as exc:
+            _log.warning(
+                "live chat compaction progress publish failed for %s: %r",
+                chat_slug,
+                exc,
+            )
+    chatstore.append_transcript_event_with_seq(chat_slug, payload)
 
 
 def _summary_source_events(
@@ -325,6 +400,8 @@ def _event_for_summary(event: dict[str, Any]) -> dict[str, Any] | None:
     if isinstance(event_type, str):
         if event_type in {
             "chat_initial_prompt_delivered",
+            "compaction_failed",
+            "compaction_progress",
             "compaction_requested",
             "compaction_summary_created",
             "compaction_old_session_breadcrumb",
