@@ -72,6 +72,11 @@ from src.infrastructure.agents.tool_canonical import canonicalize_tool
 logger = logging.getLogger(__name__)
 
 _SHUTDOWN = object()
+_RECOVERY_PROMPT = (
+    "Continue from where you left off after the transport reconnect. "
+    "Do not repeat completed tool calls unless their results are missing."
+)
+_MAX_RECOVERY_ATTEMPTS_PER_TURN = 8
 
 # Atelier decision → acceptable ACP option kinds, most-specific first.
 _DECISION_KINDS: dict[PermissionDecisionValue, tuple[str, ...]] = {
@@ -294,9 +299,13 @@ class AcpAdapter:
             if not fut.done():
                 fut.set_result(_CANCELLED)
         await self._user_inputs.put(_SHUTDOWN)
+        await self._close_transport()
+
+    async def _close_transport(self) -> None:
         if self._conn is not None:
             with suppress(Exception):
                 await self._conn.close()
+            self._conn = None
         if self._proc is not None and self._proc.returncode is None:
             self._proc.terminate()
             try:
@@ -305,10 +314,12 @@ class AcpAdapter:
                 self._proc.kill()
                 with suppress(Exception):
                     await self._proc.wait()
+        self._proc = None
         if self._stderr_task is not None and not self._stderr_task.done():
             self._stderr_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._stderr_task
+        self._stderr_task = None
 
     # -- ACP client callbacks (invoked by the SDK router) -----------------------
 
@@ -597,25 +608,31 @@ class AcpAdapter:
                 return
             assert isinstance(text, str)
             await self._outgoing.put(StatusChange(ts=_now(), status="thinking"))
-            blocks: list[dict[str, Any]] = []
-            if self._fresh_session and self._config.common.system_prompt:
-                blocks.append(
-                    {
-                        "type": "text",
-                        "text": (
-                            "<atelier-context>\n"
-                            f"{self._config.common.system_prompt}\n"
-                            "</atelier-context>"
-                        ),
-                    }
-                )
-            self._fresh_session = False
-            blocks.append({"type": "text", "text": text})
             started = time.monotonic()
+            prompt_text = text
+            recovery_attempts = 0
             try:
-                response = await self._conn.prompt(
-                    prompt=blocks, session_id=self._session_id or ""
-                )
+                while True:
+                    blocks = self._prompt_blocks(prompt_text)
+                    assert self._conn is not None
+                    try:
+                        response = await self._conn.prompt(
+                            prompt=blocks, session_id=self._session_id or ""
+                        )
+                        break
+                    except Exception as e:
+                        for event in self._mapper.flush_turn():
+                            await self._outgoing.put(event)
+                        if not _is_terminal_connection_error(e):
+                            raise
+                        recovery_attempts += 1
+                        if recovery_attempts > _MAX_RECOVERY_ATTEMPTS_PER_TURN:
+                            raise
+                        recovered = await self._recover_connection()
+                        if not recovered:
+                            raise
+                        prompt_text = _RECOVERY_PROMPT
+
                 for event in self._mapper.flush_turn():
                     await self._outgoing.put(event)
                 stop_reason = getattr(response, "stop_reason", "end_turn")
@@ -639,6 +656,54 @@ class AcpAdapter:
                     await self._outgoing.put(event)
                 await self._outgoing.put(Error(ts=_now(), message=str(e)))
                 await self._outgoing.put(StatusChange(ts=_now(), status="idle"))
+                if _is_terminal_connection_error(e):
+                    await self._outgoing.put(_SHUTDOWN)
+                    return
+
+    def _prompt_blocks(self, text: str) -> list[dict[str, Any]]:
+        blocks: list[dict[str, Any]] = []
+        if self._fresh_session and self._config.common.system_prompt:
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": (
+                        "<atelier-context>\n"
+                        f"{self._config.common.system_prompt}\n"
+                        "</atelier-context>"
+                    ),
+                }
+            )
+        self._fresh_session = False
+        blocks.append({"type": "text", "text": text})
+        return blocks
+
+    async def _recover_connection(self) -> bool:
+        session_id = self._session_id
+        if session_id is None or self._closed:
+            return False
+        await self._close_transport()
+        self._conn = await self._connect()
+        init = await self._conn.initialize(protocol_version=1)
+        if getattr(init, "protocol_version", 1) != 1:
+            return False
+        caps = getattr(init, "agent_capabilities", None)
+        self._pending_warning = None
+        self._session_id = None
+        response = await self._restore_session(
+            caps,
+            str(self._config.common.workdir),
+            session_id,
+            [_atelier_mcp_server()],
+        )
+        if response is None or self._session_id != session_id:
+            await self._close_transport()
+            self._session_id = session_id
+            return False
+        self._session_config_options = _config_options_payload(response)
+        self._advertised_config_values = _advertised_options(response)
+        await self._apply_session_settings(response)
+        self._fresh_session = False
+        return True
 
     def _build_turn_metrics(self, response: Any, started: float) -> TurnMetrics:
         usage = getattr(response, "usage", None)
@@ -737,6 +802,10 @@ def _find_config_option(
 def _string_attr(obj: Any, name: str) -> str | None:
     value = getattr(obj, name, None)
     return value if isinstance(value, str) and value else None
+
+
+def _is_terminal_connection_error(exc: BaseException) -> bool:
+    return isinstance(exc, ConnectionError)
 
 
 def _advertised_options(session_response: Any) -> dict[str, set[str | bool]]:

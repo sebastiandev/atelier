@@ -509,6 +509,110 @@ def test_refusal_stop_reason_surfaces_error() -> None:
 
     asyncio.run(scenario())
 
+
+def test_connection_closed_prompt_terminates_event_stream() -> None:
+    async def scenario() -> None:
+        async def closed_prompt(fake: FakeConnection, session_id: str) -> Any:
+            raise ConnectionError("Connection closed")
+
+        adapter, _fake = _build(prompt_script=[closed_prompt])
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        events: list[Any] = []
+        await adapter.send_input("go")
+        gen: Any = adapter.events()
+        while True:
+            try:
+                event = await asyncio.wait_for(anext(gen), timeout=1)
+            except StopAsyncIteration:
+                break
+            events.append(event)
+
+        assert any(isinstance(e, Error) and e.message == "Connection closed" for e in events)
+        assert isinstance(events[-1], StatusChange)
+        assert events[-1].status == "idle"
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_connection_closed_prompt_recovers_by_resuming_session() -> None:
+    async def scenario() -> None:
+        async def closed_prompt(fake: FakeConnection, session_id: str) -> Any:
+            raise ConnectionError("Connection closed")
+
+        adapter, fake = _build(
+            caps=_caps(load_session=True),
+            prompt_script=[closed_prompt, None],
+        )
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        events: list[Any] = []
+        await adapter.send_input("go")
+        gen: Any = adapter.events()
+        async for event in gen:
+            events.append(event)
+            if isinstance(event, StatusChange) and event.status == "idle":
+                break
+        await gen.aclose()
+
+        assert not any(
+            isinstance(e, Error) and e.message == "Connection closed" for e in events
+        )
+        assert any(isinstance(e, TurnMetrics) for e in events)
+        assert fake.called("load_session") == [
+            {"cwd": str(WORKDIR), "session_id": "sess_1"}
+        ]
+        prompts = fake.called("prompt")
+        assert prompts[1]["prompt"] == [
+            {
+                "type": "text",
+                "text": (
+                    "Continue from where you left off after the transport reconnect. "
+                    "Do not repeat completed tool calls unless their results are missing."
+                ),
+            }
+        ]
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_non_connection_prompt_error_keeps_event_stream_open() -> None:
+    async def scenario() -> None:
+        async def bad_turn(fake: FakeConnection, session_id: str) -> Any:
+            raise RuntimeError("provider rejected turn")
+
+        adapter, _fake = _build(prompt_script=[bad_turn, None])
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        events: list[Any] = []
+        await adapter.send_input("bad")
+        gen: Any = adapter.events()
+        async for event in gen:
+            events.append(event)
+            if isinstance(event, StatusChange) and event.status == "idle":
+                break
+
+        assert any(
+            isinstance(e, Error) and e.message == "provider rejected turn"
+            for e in events
+        )
+
+        await adapter.send_input("recover")
+        recovered: list[Any] = []
+        async for event in gen:
+            recovered.append(event)
+            if isinstance(event, StatusChange) and event.status == "idle":
+                break
+
+        assert any(isinstance(e, TurnMetrics) for e in recovered)
+        await gen.aclose()
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
 def test_permission_round_trip_allow() -> None:
     async def scenario() -> None:
         response_holder: dict[str, Any] = {}
