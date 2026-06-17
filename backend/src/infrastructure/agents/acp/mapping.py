@@ -44,6 +44,7 @@ from src.domain.agents import (
     MessageDelta,
     ModeChange,
     PlanUpdate,
+    ProviderContextCompacted,
     ThinkingComplete,
     ThinkingDelta,
     ToolCall,
@@ -276,6 +277,8 @@ class AcpUpdateMapper:
         self._message_parts = []
         self._message_id = None
         events: list[AgentEvent] = [MessageComplete(ts=_now(), text=text)]
+        if text.startswith("Context compacted"):
+            events.append(ProviderContextCompacted(ts=_now(), provider="acp"))
         # Same belt-and-suspenders fallback the other adapters carry: a
         # model that emits the ``atelier_artifact`` JSON line in chat
         # instead of calling the MCP tool still gets recorded.

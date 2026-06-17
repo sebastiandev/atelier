@@ -399,7 +399,11 @@ export function AgentTile({
   const { byName: providersByName } = useProviderDescriptors();
   const modelMeta = lookupModelMeta(providersByName, provider, displayModel);
   const latestCompactionSeq = useMemo(
-    () => latestEventSeq(events, "context_compacted"),
+    () =>
+      Math.max(
+        latestEventSeq(events, "context_compacted"),
+        latestEventSeq(events, "provider_context_compacted"),
+      ),
     [events],
   );
   const [compactedMetricsSeq, setCompactedMetricsSeq] = useState<number | null>(

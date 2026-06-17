@@ -130,7 +130,11 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     ? lookupModelMeta(providersByName, chat.provider, chat.model)
     : null;
   const latestCompactionSeq = useMemo(
-    () => latestEventSeq(events, "context_compacted"),
+    () =>
+      Math.max(
+        latestEventSeq(events, "context_compacted"),
+        latestEventSeq(events, "provider_context_compacted"),
+      ),
     [events],
   );
   const [compactedMetricsSeq, setCompactedMetricsSeq] = useState<number | null>(
@@ -477,7 +481,11 @@ export function ChatTile({
     ? lookupModelMeta(providersByName, chat.provider, chat.model)
     : null;
   const latestCompactionSeq = useMemo(
-    () => latestEventSeq(events, "context_compacted"),
+    () =>
+      Math.max(
+        latestEventSeq(events, "context_compacted"),
+        latestEventSeq(events, "provider_context_compacted"),
+      ),
     [events],
   );
   const [compactedMetricsSeq, setCompactedMetricsSeq] = useState<number | null>(

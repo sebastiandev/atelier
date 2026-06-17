@@ -28,7 +28,7 @@ TOOL_RECORD_DOC = "record_doc"
 # Most clients surface MCP tools to the model as ``mcp__<server>__<tool>``.
 # Both adapters land them at the ToolUseBlock layer; the detector below
 # accepts the prefixed and bare forms so we're robust to either client.
-_PREFIXES = ("mcp__atelier__", "")
+_PREFIXES = ("mcp__atelier__", "atelier/", "")
 
 
 _PR_INPUT_SCHEMA: dict[str, Any] = {
@@ -140,6 +140,7 @@ def marker_payload_for_tool(
     The adapter calls this on every observed ToolUseBlock — a return of
     ``None`` means "fall through to the regular ToolCall event".
     """
+    tool_name, arguments = _normalize_tool_invocation(tool_name, arguments)
     bare = _strip_known_prefix(tool_name)
     artifact_type = _TOOL_TO_TYPE.get(bare)
     if artifact_type is None:
@@ -148,7 +149,31 @@ def marker_payload_for_tool(
     return payload
 
 
+def _normalize_tool_invocation(
+    tool_name: str, arguments: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """Normalize ACP's wrapped MCP shape to the direct tool call shape.
+
+    Codex ACP reports MCP calls as a generic ``Tool: atelier/record_pr`` with
+    ``{"server": "atelier", "tool": "record_pr", "arguments": {...}}``.
+    Other adapters report the actual MCP tool name directly. Both should feed
+    the same artifact recorder.
+    """
+    server = arguments.get("server")
+    nested_tool = arguments.get("tool")
+    nested_args = arguments.get("arguments")
+    if (
+        server == MCP_SERVER_NAME
+        and isinstance(nested_tool, str)
+        and isinstance(nested_args, dict)
+    ):
+        return nested_tool, dict(nested_args)
+    return tool_name, arguments
+
+
 def _strip_known_prefix(name: str) -> str:
+    if name.startswith("Tool: "):
+        name = name[len("Tool: ") :]
     for prefix in _PREFIXES:
         if name.startswith(prefix):
             return name[len(prefix) :]

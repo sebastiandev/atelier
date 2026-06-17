@@ -25,6 +25,29 @@ def test_marker_payload_for_pr_with_prefixed_name() -> None:
     }
 
 
+def test_marker_payload_for_pr_with_acp_wrapped_name() -> None:
+    payload = marker_payload_for_tool(
+        "Tool: atelier/record_pr",
+        {
+            "server": "atelier",
+            "tool": "record_pr",
+            "arguments": {
+                "url": "https://x/2",
+                "title": "Fix bar",
+                "status": "open",
+                "repo": "x/y",
+            },
+        },
+    )
+    assert payload == {
+        "type": "pr",
+        "url": "https://x/2",
+        "title": "Fix bar",
+        "status": "open",
+        "repo": "x/y",
+    }
+
+
 def test_marker_payload_for_jira_with_bare_name() -> None:
     payload = marker_payload_for_tool(
         "record_jira",

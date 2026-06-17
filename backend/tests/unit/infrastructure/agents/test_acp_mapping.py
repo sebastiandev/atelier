@@ -25,6 +25,7 @@ from src.domain.agents import (
     MessageDelta,
     ModeChange,
     PlanUpdate,
+    ProviderContextCompacted,
     ThinkingComplete,
     ThinkingDelta,
     ToolCall,
@@ -113,6 +114,16 @@ def test_message_artifact_marker_fallback_scan() -> None:
     mapper.handle(_msg(marker))
     flushed = mapper.flush_turn()
     assert any(isinstance(e, ArtifactMarker) for e in flushed)
+
+
+def test_context_compacted_message_emits_provider_compaction_marker() -> None:
+    mapper = AcpUpdateMapper()
+    mapper.handle(_msg("Context compacted\nContinuing from saved state."))
+    flushed = mapper.flush_turn()
+
+    assert any(isinstance(e, MessageComplete) for e in flushed)
+    marker = next(e for e in flushed if isinstance(e, ProviderContextCompacted))
+    assert marker.provider == "acp"
 
 
 def _tool_start_empty() -> ToolCallStart:
@@ -271,6 +282,37 @@ def test_artifact_mcp_tool_call_emits_marker() -> None:
     assert len(markers) == 1
     assert markers[0].payload["type"] == "pr"
     assert markers[0].payload["url"] == "https://x/pull/2"
+
+
+def test_artifact_mcp_tool_call_emits_marker_for_acp_wrapped_shape() -> None:
+    mapper = AcpUpdateMapper()
+    events = mapper.handle(
+        ToolCallStart(
+            session_update="tool_call",
+            tool_call_id="t6",
+            title="Tool: atelier/record_pr",
+            kind="other",
+            raw_input={
+                "server": "atelier",
+                "tool": "record_pr",
+                "arguments": {
+                    "url": "https://x/pull/3",
+                    "title": "Fix",
+                    "status": "open",
+                    "repo": "x/y",
+                },
+            },
+        )
+    )
+    markers = [e for e in events if isinstance(e, ArtifactMarker)]
+    assert len(markers) == 1
+    assert markers[0].payload == {
+        "type": "pr",
+        "url": "https://x/pull/3",
+        "title": "Fix",
+        "status": "open",
+        "repo": "x/y",
+    }
 
 
 def test_plan_maps_to_plan_update() -> None:
