@@ -19,6 +19,7 @@ from typing import Any
 
 # Server name (mcp_servers key for Claude / mcpConfig key for Amp).
 MCP_SERVER_NAME = "atelier"
+TOOL_RECORDING_ACK = "Artifact will be recorded by Atelier."
 
 # Bare tool names registered with the MCP server.
 TOOL_RECORD_PR = "record_pr"
@@ -149,6 +150,16 @@ def marker_payload_for_tool(
     return payload
 
 
+def marker_text_for_tool(tool_name: str, arguments: dict[str, Any]) -> str:
+    payload = marker_payload_for_tool(tool_name, arguments)
+    if payload is None:
+        return TOOL_RECORDING_ACK
+    return (
+        f"{TOOL_RECORDING_ACK}\n"
+        f"{json.dumps({'atelier_artifact': payload}, separators=(',', ':'))}"
+    )
+
+
 def _normalize_tool_invocation(
     tool_name: str, arguments: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
@@ -226,13 +237,63 @@ def scan_text_for_artifact_markers(text: str) -> list[dict[str, Any]]:
     return found
 
 
+def scan_tool_output_for_artifact_markers(output: Any) -> list[dict[str, Any]]:
+    """Recover markers from Atelier MCP output after ACP loses tool args.
+
+    Only scans output that carries our acknowledgement text, so arbitrary
+    shell output containing an ``atelier_artifact`` example stays inert.
+    """
+    texts: list[str] = []
+    _collect_texts(output, texts)
+    if not any(TOOL_RECORDING_ACK in text for text in texts):
+        return []
+    found: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for text in texts:
+        for payload in scan_text_for_artifact_markers(text):
+            key = json.dumps(payload, sort_keys=True)
+            if key not in seen:
+                seen.add(key)
+                found.append(payload)
+    return found
+
+
+def _collect_texts(value: Any, out: list[str]) -> None:
+    if isinstance(value, str):
+        out.append(value)
+        for line in value.splitlines():
+            candidate = line.strip()
+            if not candidate.startswith(("{", "[")):
+                continue
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            _collect_texts(parsed, out)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _collect_texts(item, out)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_texts(item, out)
+        return
+    text = getattr(value, "text", None)
+    if isinstance(text, str):
+        out.append(text)
+
+
 __all__ = [
     "MCP_SERVER_NAME",
     "TOOL_DESCRIPTIONS",
+    "TOOL_RECORDING_ACK",
     "TOOL_RECORD_DOC",
     "TOOL_RECORD_JIRA",
     "TOOL_RECORD_PR",
     "TOOL_SCHEMAS",
     "marker_payload_for_tool",
+    "marker_text_for_tool",
     "scan_text_for_artifact_markers",
+    "scan_tool_output_for_artifact_markers",
 ]

@@ -31,6 +31,7 @@ from src.infrastructure.agents.atelier_mcp_tools import (
     TOOL_RECORD_JIRA,
     TOOL_RECORD_PR,
     TOOL_SCHEMAS,
+    marker_text_for_tool,
 )
 
 _TOOL_NAMES = (TOOL_RECORD_PR, TOOL_RECORD_JIRA, TOOL_RECORD_DOC)
@@ -52,13 +53,11 @@ def _build_server() -> Server[Any]:
 
     @server.call_tool()  # type: ignore[untyped-decorator]
     async def call_tool(
-        name: str, _arguments: dict[str, Any]
+        name: str, arguments: dict[str, Any]
     ) -> list[TextContent]:
         if name not in _TOOL_NAMES:
             raise ValueError(f"unknown tool: {name}")
-        return [
-            TextContent(type="text", text="Artifact will be recorded by Atelier.")
-        ]
+        return [TextContent(type="text", text=marker_text_for_tool(name, arguments))]
 
     return server
 

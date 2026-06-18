@@ -315,6 +315,44 @@ def test_artifact_mcp_tool_call_emits_marker_for_acp_wrapped_shape() -> None:
     }
 
 
+def test_artifact_marker_recovers_from_generic_tool_output() -> None:
+    mapper = AcpUpdateMapper()
+    assert (
+        mapper.handle(
+            ToolCallStart(
+                session_update="tool_call",
+                tool_call_id="t7",
+                title="tool",
+                kind="other",
+                raw_input={},
+            )
+        )
+        == []
+    )
+    events = mapper.handle(
+        ToolCallProgress(
+            session_update="tool_call_update",
+            tool_call_id="t7",
+            status="completed",
+            raw_output=(
+                "Wall time: 0.0109 seconds\n"
+                'Output:\n[{"type":"text","text":"Artifact will be recorded by Atelier.\\n'
+                '{\\"atelier_artifact\\":{\\"type\\":\\"pr\\",'
+                '\\"url\\":\\"https://x/pull/4\\",\\"title\\":\\"Fix\\",'
+                '\\"status\\":\\"draft\\"}}"}]'
+            ),
+        )
+    )
+    assert [type(e) for e in events] == [ToolCall, ArtifactMarker, ToolResult]
+    marker = next(e for e in events if isinstance(e, ArtifactMarker))
+    assert marker.payload == {
+        "type": "pr",
+        "url": "https://x/pull/4",
+        "title": "Fix",
+        "status": "draft",
+    }
+
+
 def test_plan_maps_to_plan_update() -> None:
     mapper = AcpUpdateMapper()
     events = mapper.handle(

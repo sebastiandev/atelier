@@ -8,7 +8,9 @@ from src.infrastructure.agents.atelier_mcp_tools import (
     TOOL_RECORD_PR,
     TOOL_SCHEMAS,
     marker_payload_for_tool,
+    marker_text_for_tool,
     scan_text_for_artifact_markers,
+    scan_tool_output_for_artifact_markers,
 )
 
 
@@ -71,6 +73,41 @@ def test_marker_payload_for_doc() -> None:
         "path": "docs/design.md",
         "title": "Design",
     }
+
+
+def test_marker_text_for_tool_includes_fallback_marker() -> None:
+    text = marker_text_for_tool(
+        "record_pr",
+        {"url": "https://x/3", "title": "Fix baz", "status": "draft"},
+    )
+    [payload] = scan_text_for_artifact_markers(text)
+    assert payload == {
+        "type": "pr",
+        "url": "https://x/3",
+        "title": "Fix baz",
+        "status": "draft",
+    }
+
+
+def test_scan_tool_output_extracts_marker_from_acp_output_shape() -> None:
+    output = (
+        "Wall time: 0.0109 seconds\n"
+        'Output:\n[{"type":"text","text":"Artifact will be recorded by Atelier.\\n'
+        '{\\"atelier_artifact\\":{\\"type\\":\\"pr\\",\\"url\\":\\"https://x/4\\",'
+        '\\"title\\":\\"Fix qux\\",\\"status\\":\\"open\\"}}"}]'
+    )
+    [payload] = scan_tool_output_for_artifact_markers(output)
+    assert payload == {
+        "type": "pr",
+        "url": "https://x/4",
+        "title": "Fix qux",
+        "status": "open",
+    }
+
+
+def test_scan_tool_output_ignores_markers_without_ack() -> None:
+    output = '{"atelier_artifact": {"type": "pr", "url": "https://x/5", "title": "Nope"}}'
+    assert scan_tool_output_for_artifact_markers(output) == []
 
 
 def test_unrelated_tool_returns_none() -> None:

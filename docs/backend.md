@@ -486,7 +486,7 @@ This is "no duplicates, no gaps" by construction — events with `seq <= cursor`
 
 ## Artifact Recording
 
-Adapters emit `ArtifactMarker` events for `record_pr`, `record_jira`, and `record_doc` tool calls, plus a fallback scan for `{"atelier_artifact": ...}` text markers. The supervisor records those markers through `domain/agents/artifacts.py`, which validates the payload and calls `WorkStore.record_artifact`. Recording is idempotent by work-scoped artifact identity: PR/Jira artifacts use `url`; doc artifacts use resolved `doc_path`. `WorkStore.list_artifacts_for_work` applies the same de-dupe on read so legacy duplicate rows do not render twice in the left rail.
+Adapters emit `ArtifactMarker` events for `record_pr`, `record_jira`, and `record_doc` tool calls, plus a fallback scan for `{"atelier_artifact": ...}` text markers. ACP-backed agents also echo that marker in the Atelier MCP acknowledgement so a resumed/generic `tool` frame with lost tool arguments can still be recovered from the completed tool output. The supervisor records those markers through `domain/agents/artifacts.py`, which validates the payload and calls `WorkStore.record_artifact`. Recording is idempotent by work-scoped artifact identity: PR/Jira artifacts use `url`; doc artifacts use resolved `doc_path`. `WorkStore.list_artifacts_for_work` applies the same de-dupe on read so legacy duplicate rows do not render twice in the left rail.
 
 ### Branch listing for the picker
 

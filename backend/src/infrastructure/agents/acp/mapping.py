@@ -54,6 +54,7 @@ from src.domain.agents import (
 from src.infrastructure.agents.atelier_mcp_tools import (
     marker_payload_for_tool,
     scan_text_for_artifact_markers,
+    scan_tool_output_for_artifact_markers,
 )
 from src.infrastructure.agents.tool_canonical import canonicalize_tool
 
@@ -75,6 +76,7 @@ class _ToolState:
     output_parts: list[str] = field(default_factory=list)
     call_emitted: bool = False
     result_emitted: bool = False
+    artifact_marker_emitted: bool = False
 
 
 @dataclass
@@ -327,6 +329,12 @@ class AcpUpdateMapper:
             output = _stringify_raw_output(update.raw_output) or "\n".join(
                 state.output_parts
             )
+            if not state.artifact_marker_emitted:
+                for payload in scan_tool_output_for_artifact_markers(
+                    [update.raw_output, *state.output_parts]
+                ):
+                    events.append(ArtifactMarker(ts=_now(), payload=payload))
+                    state.artifact_marker_emitted = True
             events.append(
                 ToolResult(
                     ts=_now(),
@@ -397,6 +405,7 @@ class AcpUpdateMapper:
         marker_payload = marker_payload_for_tool(provider_name, dict(raw_args))
         if marker_payload is not None:
             events.append(ArtifactMarker(ts=_now(), payload=marker_payload))
+            state.artifact_marker_emitted = True
         canon_name, canon_args = canonicalize_tool(provider_name, dict(raw_args))
         events.append(
             ToolCall(
