@@ -29,7 +29,9 @@ fenced context block; resumed sessions already carry it in-history.
 
 import asyncio
 import logging
+import os
 import re
+import signal
 import sys
 import time
 import uuid
@@ -307,13 +309,7 @@ class AcpAdapter:
                 await self._conn.close()
             self._conn = None
         if self._proc is not None and self._proc.returncode is None:
-            self._proc.terminate()
-            try:
-                await asyncio.wait_for(self._proc.wait(), timeout=5)
-            except TimeoutError:
-                self._proc.kill()
-                with suppress(Exception):
-                    await self._proc.wait()
+            await _terminate_process_tree(self._proc)
         self._proc = None
         if self._stderr_task is not None and not self._stderr_task.done():
             self._stderr_task.cancel()
@@ -477,6 +473,7 @@ class AcpAdapter:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self._config.common.workdir),
+            start_new_session=os.name == "posix",
         )
         assert self._proc.stdin is not None and self._proc.stdout is not None
         self._stderr_task = asyncio.create_task(
@@ -726,6 +723,30 @@ class AcpAdapter:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is not None:
+        return
+    if os.name == "posix":
+        with suppress(ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+            return
+        except TimeoutError:
+            with suppress(ProcessLookupError):
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            with suppress(Exception):
+                await proc.wait()
+            return
+    proc.terminate()
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5)
+    except TimeoutError:
+        proc.kill()
+        with suppress(Exception):
+            await proc.wait()
 
 
 def _atelier_mcp_server() -> McpServerStdio:

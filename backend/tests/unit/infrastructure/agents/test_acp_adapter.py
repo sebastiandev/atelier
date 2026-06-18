@@ -6,6 +6,7 @@ tests exercise the real queue choreography end to end.
 """
 
 import asyncio
+import signal
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ from src.domain.agents import (
     TurnMetrics,
 )
 from src.infrastructure.agents.acp import AcpAdapter
+from src.infrastructure.agents.acp import adapter as acp_adapter
 
 WORKDIR = Path("/tmp/acp-test-ws")
 
@@ -822,6 +824,31 @@ def test_restore_uses_resume_when_load_not_supported() -> None:
         await adapter.close()
 
     asyncio.run(scenario())
+
+
+def test_terminate_process_tree_kills_process_group_on_posix(monkeypatch: Any) -> None:
+    if acp_adapter.os.name != "posix":
+        return
+
+    class Proc:
+        pid = 123
+        returncode = None
+
+        async def wait(self) -> None:
+            self.returncode = 0
+
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(acp_adapter.os, "getpgid", lambda pid: 456)
+    monkeypatch.setattr(
+        acp_adapter.os,
+        "killpg",
+        lambda pgid, sig: killed.append((pgid, sig)),
+    )
+
+    asyncio.run(acp_adapter._terminate_process_tree(Proc()))  # type: ignore[arg-type]
+
+    assert killed == [(456, signal.SIGTERM)]
+
 
 def test_close_is_idempotent_and_closes_connection() -> None:
     async def scenario() -> None:
