@@ -462,22 +462,26 @@ function Kbd({ children }: { children: string }) {
 }
 
 function describePermission(prompt: PendingPermission): PermissionDescriptor {
-  const arg = primaryArgument(prompt);
-  const tool = displayToolName(prompt, arg);
+  const command = commandText(prompt);
+  const arg = primaryArgument(prompt, command);
+  const tool = displayToolName(prompt, arg, command);
   const description = permissionDescription(prompt, tool);
   const detail = detailText(prompt, tool, arg);
-  const target = arg ? ` ${arg}` : "";
   return {
     tool,
     arg,
     description,
     detail,
-    summary: `${tool} wants to ${description}${target}.`,
+    summary: permissionSummary(prompt, tool, description, arg),
     patterns: permissionPatterns(tool, arg),
   };
 }
 
-function primaryArgument(prompt: PendingPermission): string {
+function primaryArgument(
+  prompt: PendingPermission,
+  command: string | null,
+): string {
+  if (command) return command;
   const input = prompt.tool_input;
   for (const key of [
     "command",
@@ -500,13 +504,21 @@ function primaryArgument(prompt: PendingPermission): string {
   return "";
 }
 
-function displayToolName(prompt: PendingPermission, arg: string): string {
+function displayToolName(
+  prompt: PendingPermission,
+  arg: string,
+  command: string | null,
+): string {
   const optionTool = toolNameFromOptions(prompt.options);
   const directTool = canonicalToolName(prompt.tool_name);
   const cleanName = stripOuterQuotes(prompt.tool_name.trim());
   const cleanArg = stripOuterQuotes(arg.trim());
 
   if (directTool) return directTool;
+  if (command && (cleanName === "shell_command" || isShellCommandLike(cleanName))) {
+    return "Bash";
+  }
+  if (command && cleanName && !optionTool) return "Bash";
   if (optionTool && isLikelyActionTitle(prompt.tool_name, cleanName, cleanArg)) {
     return optionTool;
   }
@@ -551,6 +563,16 @@ function isLikelyActionTitle(
   return /\s/.test(cleanName);
 }
 
+function isShellCommandLike(value: string): boolean {
+  const clean = value.trim();
+  if (!clean) return false;
+  if (clean.includes(" && ") || clean.includes(" || ")) return true;
+  if (clean.startsWith("/bin/") || clean.startsWith("./")) return true;
+  return /^(bash|zsh|sh|source|git|gh|uv|python|pytest|npm|pnpm|yarn|dt|rg|sed|find|rm|cp|mv)\b/.test(
+    clean,
+  );
+}
+
 function stripOuterQuotes(value: string): string {
   if (
     value.length >= 2 &&
@@ -560,6 +582,19 @@ function stripOuterQuotes(value: string): string {
     return value.slice(1, -1);
   }
   return value;
+}
+
+function permissionSummary(
+  prompt: PendingPermission,
+  tool: string,
+  description: string,
+  arg: string,
+): string {
+  const reason = stringInput(prompt.tool_input, "reason");
+  if (reason) return ensureSentence(reason);
+  if (tool === "Bash") return "Bash wants to run a shell command.";
+  const target = arg ? ` ${arg}` : "";
+  return `${tool} wants to ${description}${target}.`;
 }
 
 function permissionDescription(
@@ -602,11 +637,83 @@ function permissionDescription(
 }
 
 function detailText(prompt: PendingPermission, tool: string, arg: string): string {
-  if (tool === "Bash") return arg || "(empty command)";
+  if (tool === "Bash") return commandText(prompt) || arg || "(empty command)";
   if (Object.keys(prompt.tool_input).length === 0) {
     return `${tool}${arg ? ` ${arg}` : ""}`;
   }
   return JSON.stringify(prompt.tool_input, null, 2);
+}
+
+function commandText(prompt: PendingPermission): string | null {
+  const cleanName = stripOuterQuotes(prompt.tool_name.trim());
+  if (isShellCommandLike(cleanName)) return cleanName;
+
+  const parsed = parsedCommandText(prompt.tool_input);
+  if (parsed) return parsed;
+
+  return commandFromValue(prompt.tool_input.command);
+}
+
+function parsedCommandText(input: Record<string, unknown>): string | null {
+  const parsed = input.parsed_cmd;
+  if (!Array.isArray(parsed)) return null;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const cmd = (item as Record<string, unknown>).cmd;
+    if (typeof cmd === "string" && cmd.trim()) return cmd.trim();
+  }
+  return null;
+}
+
+function commandFromValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    const clean = value.trim();
+    if (!clean) return null;
+    const nested = commandFromJson(clean);
+    return nested ?? clean;
+  }
+  if (Array.isArray(value)) return shellCommandFromArray(value);
+  return null;
+}
+
+function commandFromJson(value: string): string | null {
+  if (!value.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    return commandFromValue((parsed as Record<string, unknown>).command);
+  } catch {
+    return null;
+  }
+}
+
+function shellCommandFromArray(value: unknown[]): string | null {
+  const parts = value.map((part) => String(part));
+  if (parts.length === 0) return null;
+  if (
+    parts.length >= 3 &&
+    /(?:^|\/)(?:ba|z|)?sh$/.test(parts[0]) &&
+    (parts[1] === "-lc" || parts[1] === "-c")
+  ) {
+    return parts[2].trim() || null;
+  }
+  return parts.map(shellQuoteForDisplay).join(" ").trim() || null;
+}
+
+function shellQuoteForDisplay(value: string): string {
+  if (/^[A-Za-z0-9_./:=@%+,\-]+$/.test(value)) return value;
+  return JSON.stringify(value);
+}
+
+function stringInput(input: Record<string, unknown>, key: string): string {
+  const value = input[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function ensureSentence(value: string): string {
+  const clean = value.trim();
+  if (!clean) return "";
+  return /[.!?]$/.test(clean) ? clean : `${clean}.`;
 }
 
 function permissionPatterns(tool: string, arg: string): string[] {
