@@ -2752,35 +2752,11 @@ body {
 }
 
 .chat-tile-composer {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 0.55rem;
   margin: 0 1rem 1rem;
-  padding: 0.7rem 0.75rem;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: var(--bg-1);
-  position: relative;
 }
 
 .chat-tile-composer:focus-within {
   border-color: var(--chat-line);
-}
-
-.chat-tile-composer textarea {
-  min-width: 0;
-  width: 100%;
-  border: 0;
-  outline: 0;
-  resize: none;
-  overflow-y: hidden;
-  background: transparent;
-  color: var(--fg);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.45;
-  padding: 0.15rem 0;
 }
 
 .chat-tile .composer-send:hover:not(:disabled) {

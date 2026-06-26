@@ -523,6 +523,12 @@ export function ChatTile({
         : contextSnapshotFor(lastMetrics, modelMeta),
     [lastMetrics, modelMeta, staleMetricsSeq],
   );
+  const composerTone = contextToneFor(contextSnapshot?.pct ?? null);
+  const composerStyle = contextSnapshot
+    ? ({
+        "--ctx-pct": `${Math.max(0, Math.min(100, contextSnapshot.pct))}%`,
+      } as CSSProperties)
+    : undefined;
 
   const hintHandlers = (text: string) => ({
     onMouseEnter: () => setHint(text),
@@ -781,13 +787,22 @@ export function ChatTile({
           />
         )}
         <form
-          className="chat-tile-composer"
+          className={`composer chat-tile-composer${activityPhase ? " is-working" : ""}`}
+          data-ctx-tone={composerTone}
+          style={composerStyle}
           onSubmit={(e) => {
             e.preventDefault();
             send();
           }}
         >
-          <ChatContextGauge context={contextSnapshot} />
+          {contextSnapshot && (
+            <div className="composer-context-gauge" aria-hidden="true">
+              <span />
+            </div>
+          )}
+          <div className="composer-activity-rail" aria-hidden="true">
+            {activityPhase && <span />}
+          </div>
           <textarea
             rows={1}
             value={draft}
@@ -811,18 +826,21 @@ export function ChatTile({
             }
             disabled={composerDisabled}
           />
-          <LiveEffortSelect
-            events={events}
-            disabled={composerDisabled || isActive}
-            onChange={sendSessionConfig}
-          />
-          <button
-            type="submit"
-            className="composer-send"
-            disabled={composerDisabled || !draft.trim()}
-          >
-            Send
-          </button>
+          <div className="composer-actions">
+            <LiveEffortSelect
+              events={events}
+              disabled={composerDisabled || isActive}
+              onChange={sendSessionConfig}
+            />
+            <span className="spacer" />
+            <button
+              type="submit"
+              className="composer-send"
+              disabled={composerDisabled || !draft.trim()}
+            >
+              Send
+            </button>
+          </div>
         </form>
       </div>
     </div>
