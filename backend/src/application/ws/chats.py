@@ -9,6 +9,7 @@ from contextlib import suppress
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.domain.agents import (
+    SPECS,
     RefreshSessionConfigOptions,
     ResolvePermission,
     SendInput,
@@ -16,6 +17,7 @@ from src.domain.agents import (
     StopTurn,
     parse_user_action,
 )
+from src.domain.chatstore import ChatStore
 from src.domain.commands.chats import connect
 from src.domain.supervisor import (
     AgentSubscription,
@@ -52,7 +54,7 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
             await websocket.accept()
             send_task = asyncio.create_task(_drain(sub, websocket))
             recv_task = asyncio.create_task(
-                _receive_inputs(websocket, supervisor, chat_slug)
+                _receive_inputs(websocket, supervisor, chatstore, chat_slug)
             )
             kick_task = asyncio.create_task(sub.kicked.wait())
             try:
@@ -91,6 +93,7 @@ async def _drain(sub: AgentSubscription, websocket: WebSocket) -> None:
 async def _receive_inputs(
     websocket: WebSocket,
     supervisor: AgentSupervisorService,
+    chatstore: ChatStore,
     chat_slug: str,
 ) -> None:
     while True:
@@ -126,6 +129,10 @@ async def _receive_inputs(
                     )
                 case SetSessionConfigOption(config_id=config_id, value=value):
                     await supervisor.set_config_option(chat_slug, config_id, value)
+                    if isinstance(value, str):
+                        key = _stored_chat_option_key(chatstore, chat_slug, config_id)
+                        if key is not None:
+                            chatstore.set_chat_option(chat_slug, key, value)
                 case RefreshSessionConfigOptions(config_id=config_id):
                     await supervisor.refresh_config_options(chat_slug, config_id)
         except AgentTerminated:
@@ -162,3 +169,19 @@ def _parse_cursor(value: str | None) -> int:
     except ValueError:
         return 0
     return max(n, 0)
+
+
+def _stored_chat_option_key(
+    chatstore: ChatStore, chat_slug: str, config_id: str
+) -> str | None:
+    record = chatstore.get_chat(chat_slug)
+    if record is None:
+        return None
+    option_keys = SPECS[record.chat.provider].describe().options.keys()
+    if config_id in option_keys:
+        return config_id
+    if config_id == "effort":
+        for key in ("thinking_effort", "reasoning_effort"):
+            if key in option_keys:
+                return key
+    return None

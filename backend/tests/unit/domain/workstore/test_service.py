@@ -307,6 +307,35 @@ def test_set_agent_model_updates_repo_and_agent_json() -> None:
     assert persisted["contexts"] == [{"type": "text", "value": "handoff"}]
 
 
+def test_set_agent_option_updates_existing_repo_row_and_agent_json() -> None:
+    service, repo, files, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(
+        AddAgentRequest(
+            work_slug="WRK-001",
+            name="Developer",
+            persona="developer",
+            role="dev",
+            provider="codex-acp",
+            model="gpt-5.5",
+            folder=Path("/code/foo"),
+            contexts=(Context(type="text", value="handoff"),),
+            options={"mode": "auto", "reasoning_effort": "medium"},
+        )
+    )
+
+    service.set_agent_option("agt-1", "reasoning_effort", "xhigh")
+
+    assert list(repo.agents) == ["agt-1"]
+    assert repo.agents["agt-1"].options == {
+        "mode": "auto",
+        "reasoning_effort": "xhigh",
+    }
+    persisted = files.agent_jsons[("WRK-001", "agt-1")]
+    assert persisted["options"] == repo.agents["agt-1"].options
+    assert persisted["contexts"] == [{"type": "text", "value": "handoff"}]
+
+
 def test_backfill_missing_session_ids_from_transcripts_restores_latest_session() -> None:
     service, repo, _, log = _make_service()
     service.create_work(_new_work_request())

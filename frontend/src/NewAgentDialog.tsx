@@ -15,9 +15,7 @@ import {
   type ContextEntry,
   type CreateAgentPayload,
   type Persona,
-  type OpenCodeModelOption,
   type ProviderDescriptor,
-  type ProviderField,
   PERSONAS,
   PERSONA_GLYPH,
   listConnections,
@@ -27,6 +25,14 @@ import {
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
+import {
+  coerceProviderOptionsForModel,
+  modelPickerOptions,
+  optionFieldForModel,
+  optionLabel,
+  providerDefaults,
+  withOpenCodeModelOptions,
+} from "./providerDescriptors";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 import {
   NO_FOLDERS,
@@ -147,7 +153,7 @@ export function NewAgentDialog({
           const defaultModel = p[0].primary_field.default;
           setProviderName(p[0].name);
           setModel(defaultModel);
-          setOptions(defaultsFor(p[0], defaultModel));
+          setOptions(providerDefaults(p[0], defaultModel));
         }
       })
       .catch((e) => setProvidersError(e instanceof Error ? e.message : String(e)));
@@ -209,13 +215,13 @@ export function NewAgentDialog({
     if (p) {
       const defaultModel = p.primary_field.default;
       setModel(defaultModel);
-      setOptions(defaultsFor(p, defaultModel));
+      setOptions(providerDefaults(p, defaultModel));
     }
   }
 
   useEffect(() => {
     if (!provider || !model) return;
-    setOptions((prev) => coerceOptionsForModel(provider, model, prev));
+    setOptions((prev) => coerceProviderOptionsForModel(provider, model, prev));
   }, [provider, model]);
 
   function pickPersona(id: Persona) {
@@ -888,100 +894,4 @@ function BranchPicker({
       </div>
     </div>
   );
-}
-
-function defaultsFor(
-  provider: ProviderDescriptor,
-  model: string | null = provider.primary_field.default,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, field] of Object.entries(provider.options)) {
-    out[key] = optionFieldForModel(provider, model, key, field).default;
-  }
-  for (const [key, field] of Object.entries(provider.text_options ?? {})) {
-    out[key] = field.default;
-  }
-  return out;
-}
-
-function coerceOptionsForModel(
-  provider: ProviderDescriptor,
-  model: string,
-  current: Record<string, string>,
-): Record<string, string> {
-  let changed = false;
-  const next = { ...current };
-  for (const [key, field] of Object.entries(provider.options)) {
-    const effectiveField = optionFieldForModel(provider, model, key, field);
-    const value = next[key] ?? effectiveField.default;
-    if (!effectiveField.values.includes(value)) {
-      next[key] = effectiveField.default;
-      changed = true;
-    } else if (next[key] === undefined) {
-      next[key] = value;
-      changed = true;
-    }
-  }
-  return changed ? next : current;
-}
-
-function withOpenCodeModelOptions(
-  provider: ProviderDescriptor,
-  models: OpenCodeModelOption[],
-): ProviderDescriptor {
-  const baseValue = provider.primary_field.default;
-  const baseLabel =
-    provider.primary_field.value_labels?.[
-      provider.primary_field.values.indexOf(baseValue)
-    ] ?? "OpenCode default (set in OpenCode config)";
-  const values = [baseValue];
-  const valueLabels = [baseLabel];
-  const seen = new Set(values);
-  for (const option of models) {
-    if (seen.has(option.value)) continue;
-    seen.add(option.value);
-    values.push(option.value);
-    valueLabels.push(option.label);
-  }
-  return {
-    ...provider,
-    primary_field: {
-      ...provider.primary_field,
-      values,
-      value_labels: valueLabels,
-    },
-  };
-}
-
-function modelPickerOptions(provider: ProviderDescriptor) {
-  return provider.primary_field.values.map((value, index) => ({
-    value,
-    label: provider.primary_field.value_labels?.[index] ?? value,
-  }));
-}
-
-function optionFieldForModel(
-  provider: ProviderDescriptor,
-  model: string | null,
-  key: string,
-  field: ProviderField,
-): ProviderField {
-  if (key !== "thinking_effort" || !model) return field;
-  const meta = provider.model_meta?.[model];
-  const values = meta?.effort_values?.filter(Boolean);
-  if (!values || values.length === 0) return field;
-  const defaultValue =
-    meta?.effort_default && values.includes(meta.effort_default)
-      ? meta.effort_default
-      : values[0];
-  return {
-    ...field,
-    values,
-    default: defaultValue,
-  };
-}
-
-function optionLabel(field: ProviderField, value: string): string {
-  const idx = field.values.indexOf(value);
-  return idx >= 0 ? field.value_labels?.[idx] ?? value : value;
 }

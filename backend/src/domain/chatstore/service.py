@@ -100,6 +100,18 @@ class ChatStoreService:
             self._files.write_chat_json(chat_slug, serialize_chat(chat))
             return ChatRecord(chat=chat, transcript=self._read_transcript(chat_slug))
 
+    def set_chat_option(self, chat_slug: str, key: str, value: Any) -> None:
+        with self._lock:
+            chat = self._repo.get_chat_by_slug(chat_slug)
+            if chat is None:
+                raise ValueError(f"chat not found: {chat_slug}")
+            options = dict(chat.options or {})
+            options[key] = value
+            chat.options = options
+            chat.updated_at = self._clock()
+            self._repo.update_chat(chat)
+            self._files.write_chat_json(chat_slug, serialize_chat(chat))
+
     def delete_chat(self, chat_slug: str) -> None:
         with self._lock:
             if self._repo.get_chat_by_slug(chat_slug) is None:

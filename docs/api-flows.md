@@ -91,7 +91,7 @@ Browser ──► Router (providers.py)
 
 Same `Spec` instances back the create-agent validator (`spec.build`) so the descriptor and validator can't drift. The public response is filtered to providers available for new sessions; legacy providers can stay in `SPECS` for existing agents without appearing in the modal. The response carries `primary_field` + `options` (enums) + `text_options` (free-form fields like Amp's custom allowlist) + `advanced_intro` (explainer copy).
 
-The new-session order is `claude-acp`, `amp`, `codex-acp`, `opencode`; the ACP-backed Claude/Codex descriptors use the familiar user-facing labels. OpenCode's descriptor default is the sentinel `configured-default`; creation surfaces can call `GET /api/providers/opencode/models?refresh=true` to append the user's connected OpenCode models before launch, and once the ACP session starts advertised `model` configOptions power the refresh-on-open searchable model selector in `AgentTile`. See `docs/backend.md` → "ACP runtimes".
+The new-session order is `claude-acp`, `amp`, `codex-acp`, `opencode`; the ACP-backed Claude/Codex descriptors use the familiar user-facing labels. OpenCode's descriptor default is the sentinel `configured-default`; creation surfaces can call `GET /api/providers/opencode/models?refresh=true` to append the user's connected OpenCode models before launch, and once the ACP session starts advertised `model`/effort configOptions power the live selectors in agent/chat composers. See `docs/backend.md` → "ACP runtimes".
 
 ## `GET /api/providers/opencode/models`
 

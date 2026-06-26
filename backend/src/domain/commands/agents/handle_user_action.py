@@ -19,6 +19,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from src.domain.agents import (
+    SPECS,
     RefreshSessionConfigOptions,
     ResolvePermission,
     SendInput,
@@ -74,6 +75,12 @@ async def execute(
             await supervisor.set_config_option(agent_slug, config_id, value)
             if config_id == "model" and isinstance(value, str):
                 await asyncio.to_thread(workstore.set_agent_model, agent_slug, value)
+            elif isinstance(value, str):
+                key = _stored_option_key(workstore, agent_slug, config_id)
+                if key is not None:
+                    await asyncio.to_thread(
+                        workstore.set_agent_option, agent_slug, key, value
+                    )
         case RefreshSessionConfigOptions(config_id=config_id):
             await supervisor.refresh_config_options(agent_slug, config_id)
 
@@ -97,6 +104,28 @@ def _prepend_context_hint(
         "for the updated index.]"
     )
     return f"{hint}\n\n{text}"
+
+
+def _stored_option_key(
+    workstore: WorkStore, agent_slug: str, config_id: str
+) -> str | None:
+    work_slug = workstore.get_work_slug_for_agent(agent_slug)
+    if work_slug is None:
+        return None
+    agent = next(
+        (item for item in workstore.list_agents_for_work(work_slug) if item.slug == agent_slug),
+        None,
+    )
+    if agent is None:
+        return None
+    option_keys = SPECS[agent.provider].describe().options.keys()
+    if config_id in option_keys:
+        return config_id
+    if config_id == "effort":
+        for key in ("thinking_effort", "reasoning_effort"):
+            if key in option_keys:
+                return key
+    return None
 
 
 __all__ = ["execute"]

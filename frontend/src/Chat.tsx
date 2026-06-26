@@ -1,13 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   TranscriptUnits,
   TurnMetricsBar,
+  EFFORT_SESSION_CONFIG_IDS,
+  type ContextSnapshot,
   contextSnapshotFor,
+  contextToneFor,
   deriveActivityPhase,
   groupEvents,
   isAgentActive,
   latestEventSeq,
+  labelForSessionConfigValue,
+  latestSessionConfigOptionByIds,
   latestMetrics,
   sessionMetrics,
 } from "./AgentTile";
@@ -18,9 +30,7 @@ import {
   type ChatSummary,
   type CreateChatPayload,
   type ProjectSummary,
-  type OpenCodeModelOption,
   type ProviderDescriptor,
-  type ProviderField,
   type WorkChatContextFolder,
   type WorkSummary,
   compactChat,
@@ -54,7 +64,18 @@ import {
 import { FolderPickerDialog } from "./FolderPickerDialog";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
-import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
+import {
+  coerceProviderOptionsForModel,
+  modelPickerOptions,
+  optionLabel,
+  providerDefaults,
+  providerEffortOption,
+  providerOptionsPayload,
+  providerPermissionOption,
+  lookupModelMeta,
+  useProviderDescriptors,
+  withOpenCodeModelOptions,
+} from "./providerDescriptors";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   type AgentEvent,
@@ -79,6 +100,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     sendInput,
     sendStop,
     sendPermission,
+    sendSessionConfig,
     pendingPermissions,
   } = useAgentStream(chatSlug, { resource: "chats" });
 
@@ -102,7 +124,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     void refresh();
   }, [chatSlug]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
   }, [events.length]);
 
@@ -237,14 +259,6 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
         </div>
 
         <div className="chat-rail-foot">
-          <button
-            className="btn"
-            disabled={compacting || isActive}
-            onClick={() => void compactCurrentChat()}
-            title={isActive ? "Wait for the current chat turn to finish" : "Compact this chat context"}
-          >
-            <DocIcon size={12} /> {compacting ? "Compacting..." : "Compact context"}
-          </button>
           {chat.promoted_to_work_slug ? (
             <a className="btn" href={`/works/${chat.promoted_to_work_slug}`}>
               <SparkIcon size={12} /> Open {chat.promoted_to_work_slug}
@@ -304,6 +318,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             />
           )}
           <div className="chat-composer">
+            <ChatContextGauge context={contextSnapshot} />
             <textarea
               rows={1}
               value={draft}
@@ -324,6 +339,11 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             <div className="row">
               <span className="hint mono">Enter send · Shift+Enter newline</span>
               <span className="spacer" />
+              <LiveEffortSelect
+                events={events}
+                disabled={composerDisabled || isActive}
+                onChange={sendSessionConfig}
+              />
               {!chat.promoted_to_work_slug && (
                 <button className="btn sm" onClick={() => setPromoteOpen(true)}>
                   <SparkIcon size={11} /> Start work
@@ -394,6 +414,7 @@ export function ChatTile({
     sendInput,
     sendStop,
     sendPermission,
+    sendSessionConfig,
     pendingPermissions,
   } = useAgentStream(chatSlug, { resource: "chats" });
 
@@ -415,7 +436,7 @@ export function ChatTile({
     };
   }, [chatSlug]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
   }, [events.length]);
 
@@ -767,6 +788,7 @@ export function ChatTile({
             send();
           }}
         >
+          <ChatContextGauge context={contextSnapshot} />
           <textarea
             rows={1}
             value={draft}
@@ -789,6 +811,11 @@ export function ChatTile({
                 : "Loading chat..."
             }
             disabled={composerDisabled}
+          />
+          <LiveEffortSelect
+            events={events}
+            disabled={composerDisabled || isActive}
+            onChange={sendSessionConfig}
           />
           <button
             type="submit"
@@ -844,7 +871,7 @@ export function ChatComposer({
         if (first) {
           setProvider(first.name);
           setModel(first.primary_field.default);
-          setProviderOptions(defaultsForChatProvider(first));
+          setProviderOptions(providerDefaults(first, first.primary_field.default));
         }
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -852,12 +879,18 @@ export function ChatComposer({
   }, []);
 
   const providerObj = providers.find((p) => p.name === provider);
-  const permissionOption = providerObj
-    ? chatPermissionOption(providerObj)
-    : null;
+  const permissionOption = providerObj ? providerPermissionOption(providerObj) : null;
+  const effortOption = providerObj ? providerEffortOption(providerObj, model) : null;
   const groundingInfo = resolveGrounding(grounding, projects, works);
   const pickerProjects = linkProjects ?? projects;
   const pickerWorks = linkWorks ?? works;
+
+  useEffect(() => {
+    if (!providerObj || !model) return;
+    setProviderOptions((prev) =>
+      coerceProviderOptionsForModel(providerObj, model, prev),
+    );
+  }, [providerObj, model]);
 
   useEffect(() => {
     if (provider !== "opencode") return;
@@ -901,7 +934,7 @@ export function ChatComposer({
       first_message,
       grounding,
       working_directory: workingDirectory,
-      options: chatOptionsPayload(providerObj, permissionOption, providerOptions),
+      options: providerOptionsPayload(providerObj, model, providerOptions),
     };
     try {
       const created = await createChat(payload);
@@ -948,10 +981,9 @@ export function ChatComposer({
                 const next = e.target.value;
                 const desc = providers.find((p) => p.name === next);
                 setProvider(next);
-                setModel(desc?.primary_field.default ?? "");
-                setProviderOptions(
-                  desc ? defaultsForChatProvider(desc) : {},
-                );
+                const defaultModel = desc?.primary_field.default ?? "";
+                setModel(defaultModel);
+                setProviderOptions(desc ? providerDefaults(desc, defaultModel) : {});
               }}
             >
               {providers.map((p) => (
@@ -996,6 +1028,29 @@ export function ChatComposer({
                   <option key={value} value={value}>
                     {permissionOption.field.label}:{" "}
                     {optionLabel(permissionOption.field, value)}
+                  </option>
+                ))}
+              </select>
+            )}
+            {effortOption && (
+              <select
+                className="cb-select cb-effort-select"
+                aria-label={effortOption.field.label}
+                value={
+                  providerOptions[effortOption.key] ??
+                  effortOption.field.default
+                }
+                onChange={(e) =>
+                  setProviderOptions((prev) => ({
+                    ...prev,
+                    [effortOption.key]: e.target.value,
+                  }))
+                }
+              >
+                {effortOption.field.values.map((value) => (
+                  <option key={value} value={value}>
+                    {effortOption.field.label}:{" "}
+                    {optionLabel(effortOption.field, value)}
                   </option>
                 ))}
               </select>
@@ -1719,6 +1774,64 @@ function WorkingFolderCard({ folder }: { folder: WorkingFolderInfo }) {
   );
 }
 
+function LiveEffortSelect({
+  events,
+  disabled,
+  onChange,
+}: {
+  events: AgentEvent[];
+  disabled: boolean;
+  onChange: (configId: string, value: string) => void;
+}) {
+  const config = useMemo(
+    () => latestSessionConfigOptionByIds(events, EFFORT_SESSION_CONFIG_IDS),
+    [events],
+  );
+  const value = typeof config?.currentValue === "string" ? config.currentValue : null;
+  if (!config || !value || config.choices.length === 0) return null;
+  const label = labelForSessionConfigValue(config, value);
+  return (
+    <label className="composer-effort-picker" title={`${config.name}: ${label}`}>
+      <span className="composer-effort-prefix">Effort:</span>
+      <select
+        className="composer-effort-select"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(config.id, e.target.value)}
+      >
+        {config.choices.map((choice) => (
+          <option key={String(choice.value)} value={String(choice.value)}>
+            {choice.name ?? String(choice.value)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ChatContextGauge({ context }: { context: ContextSnapshot | null }) {
+  if (!context) return null;
+  const pct = Math.max(0, Math.min(context.pct, 100));
+  const tone = contextToneFor(context.pct);
+  const style = { "--ctx-pct": `${pct}%` } as CSSProperties;
+  const title = `Context: ${context.promptTokens.toLocaleString()} / ${context.contextWindow.toLocaleString()} (${context.pct.toFixed(1)}%)`;
+  return (
+    <div
+      className="chat-context-gauge"
+      data-ctx-tone={tone}
+      style={style}
+      title={title}
+    >
+      <span className="chat-context-gauge-track" aria-hidden>
+        <span />
+      </span>
+      <span className="chat-context-gauge-label">
+        ctx {context.pct.toFixed(0)}%
+      </span>
+    </div>
+  );
+}
+
 type ChatRuntimeItem =
   | {
       kind: "message";
@@ -1918,81 +2031,6 @@ function shortProvider(provider: string): string {
   if (provider === "claude-acp") return "claude";
   if (provider === "codex-acp") return "codex";
   return provider;
-}
-
-function withOpenCodeModelOptions(
-  provider: ProviderDescriptor,
-  models: OpenCodeModelOption[],
-): ProviderDescriptor {
-  const baseValue = provider.primary_field.default;
-  const baseLabel =
-    provider.primary_field.value_labels?.[
-      provider.primary_field.values.indexOf(baseValue)
-    ] ?? "OpenCode default (set in OpenCode config)";
-  const values = [baseValue];
-  const valueLabels = [baseLabel];
-  const seen = new Set(values);
-  for (const option of models) {
-    if (seen.has(option.value)) continue;
-    seen.add(option.value);
-    values.push(option.value);
-    valueLabels.push(option.label);
-  }
-  return {
-    ...provider,
-    primary_field: {
-      ...provider.primary_field,
-      values,
-      value_labels: valueLabels,
-    },
-  };
-}
-
-function modelPickerOptions(provider: ProviderDescriptor) {
-  return provider.primary_field.values.map((value, index) => ({
-    value,
-    label: provider.primary_field.value_labels?.[index] ?? value,
-  }));
-}
-
-type ChatPermissionOption = {
-  key: string;
-  field: ProviderField;
-};
-
-const CHAT_PERMISSION_OPTION_KEYS = [
-  "permission_mode",
-  "mode",
-  "approval_mode",
-] as const;
-
-function chatPermissionOption(provider: ProviderDescriptor): ChatPermissionOption | null {
-  for (const key of CHAT_PERMISSION_OPTION_KEYS) {
-    const field = provider.options[key];
-    if (field) return { key, field };
-  }
-  return null;
-}
-
-function defaultsForChatProvider(provider: ProviderDescriptor): Record<string, string> {
-  const permission = chatPermissionOption(provider);
-  return permission ? { [permission.key]: permission.field.default } : {};
-}
-
-function chatOptionsPayload(
-  provider: ProviderDescriptor | undefined,
-  permission: ChatPermissionOption | null,
-  current: Record<string, string>,
-): Record<string, string> | undefined {
-  if (!provider || !permission) return undefined;
-  const value = current[permission.key] ?? permission.field.default;
-  if (value === permission.field.default) return undefined;
-  return { [permission.key]: value };
-}
-
-function optionLabel(field: ProviderField, value: string): string {
-  const idx = field.values.indexOf(value);
-  return idx >= 0 ? field.value_labels?.[idx] ?? value : value;
 }
 
 function shortModel(model: string): string {

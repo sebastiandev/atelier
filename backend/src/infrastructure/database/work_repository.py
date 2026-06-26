@@ -146,6 +146,7 @@ class SqlWorkRepository:
                 existing.stopped_at = agent.stopped_at
                 existing.session_id = agent.session_id
                 existing.parent_session_id = agent.parent_session_id
+                existing.options = agent.options
         return agent
 
     def set_agent_session_id(self, agent_slug: str, session_id: str) -> None:

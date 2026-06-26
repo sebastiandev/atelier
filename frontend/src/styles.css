@@ -282,7 +282,7 @@
 }
 
 .chat-bar {
-  width: min(760px, 92vw);
+  width: min(1120px, 94vw);
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -355,7 +355,7 @@
   gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
 }
 
 .cb-controls .spacer {
@@ -629,6 +629,10 @@
   flex: 0 1 170px;
 }
 
+.cb-effort-select {
+  flex: 0 1 150px;
+}
+
 @media (max-width: 820px) {
   .cb-controls {
     flex-wrap: wrap;
@@ -646,6 +650,7 @@
   .cb-select,
   .cb-model-wrap,
   .cb-permission-select,
+  .cb-effort-select,
   .cb-ground-pop,
   .cb-workdir-pop {
     flex: 1 1 180px;
@@ -902,7 +907,11 @@
 
 .chat-rail-foot {
   border-top: 1px solid var(--line);
-  padding: 14px 18px;
+  display: flex;
+  min-height: 132px;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 10px 18px 18px;
 }
 
 .chat-rail-foot .btn {
@@ -1076,8 +1085,13 @@
 
 .chat-composer-wrap {
   border-top: 1px solid var(--line);
-  padding: 14px 24px 18px;
+  padding: 10px 24px 18px;
   background: var(--panel);
+}
+
+.chat-right > .turn-metrics + .chat-composer-wrap {
+  border-top-color: var(--line-soft);
+  padding-top: 0;
 }
 
 .chat-permissions {
@@ -1092,6 +1106,12 @@
   border-radius: 10px;
   background: var(--bg-1);
   padding: 10px 12px;
+  position: relative;
+}
+
+.chat-right > .turn-metrics + .chat-composer-wrap .chat-composer {
+  border-top-color: var(--line-soft);
+  border-radius: 0 0 8px 8px;
 }
 
 .chat-composer:focus-within {
@@ -1125,6 +1145,58 @@
 
 .chat-composer .hint {
   font-size: 11px;
+  white-space: nowrap;
+}
+
+.chat-context-gauge {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: -0.2rem 0 0.45rem;
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  cursor: help;
+}
+
+.chat-context-gauge-track {
+  min-width: 72px;
+  flex: 1 1 auto;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  overflow: hidden;
+}
+
+.chat-context-gauge-track span {
+  display: block;
+  width: var(--ctx-pct, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--info);
+  transition: width 300ms ease, background 200ms ease, box-shadow 200ms ease;
+}
+
+.chat-context-gauge[data-ctx-tone="warn"] {
+  color: var(--ctx-warn);
+}
+
+.chat-context-gauge[data-ctx-tone="warn"] .chat-context-gauge-track span {
+  background: var(--ctx-warn);
+}
+
+.chat-context-gauge[data-ctx-tone="crit"] {
+  color: var(--ctx-crit);
+}
+
+.chat-context-gauge[data-ctx-tone="crit"] .chat-context-gauge-track span {
+  background: var(--ctx-crit);
+  box-shadow: 0 0 8px var(--ctx-crit);
+}
+
+.chat-context-gauge-label {
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 
@@ -2695,6 +2767,7 @@ body {
   border: 1px solid var(--line-soft);
   border-radius: 8px;
   background: var(--bg-1);
+  position: relative;
 }
 
 .chat-tile-composer:focus-within {
@@ -4565,6 +4638,56 @@ h5.md-h {
   border-top: 1px solid var(--line);
   margin-top: 0.4rem;
   padding: 0.45rem 0.15rem 0.05rem;
+}
+.composer-effort-picker {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 170px;
+  height: 30px;
+  gap: 0.4rem;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  padding: 0 0.55rem;
+  font-size: 12px;
+}
+.composer-effort-picker:hover {
+  color: var(--fg);
+  border-color: var(--muted);
+  background: var(--bg-2);
+}
+.composer-effort-picker:focus-within {
+  color: var(--fg);
+  border-color: var(--muted);
+  background: var(--bg-2);
+}
+.composer-effort-prefix {
+  flex: 0 0 auto;
+  color: var(--fg-2);
+}
+.composer-effort-select {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  outline: 0;
+  color: var(--fg);
+  background:
+    linear-gradient(45deg, transparent 50%, currentColor 50%) calc(100% - 7px) 50% / 5px 5px no-repeat,
+    linear-gradient(135deg, currentColor 50%, transparent 50%) calc(100% - 2px) 50% / 5px 5px no-repeat;
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  cursor: pointer;
+  padding: 0 14px 0 0;
+}
+.composer-effort-select:disabled {
+  cursor: not-allowed;
+}
+.composer-effort-picker:has(.composer-effort-select:disabled) {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 .composer-send {
   background: var(--bg-2);

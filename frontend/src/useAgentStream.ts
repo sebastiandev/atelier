@@ -51,6 +51,7 @@ const CLOSE_CODE_AGENT_NOT_RUNNING = 4404;
 // Resets to 0 on a successful connect so transient blips don't push us
 // to the cap.
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
+const STREAM_EVENT_FLUSH_MS = 50;
 
 function delayForAttempt(attempt: number): number {
   return RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
@@ -81,19 +82,12 @@ export function useAgentStream(
   const lastSeqRef = useRef(0);
   const retryAttemptRef = useRef(0);
   const connectionIdRef = useRef(0);
+  const pendingEventsRef = useRef<AgentEvent[]>([]);
+  const flushHandleRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let retryHandle: number | null = null;
-
-    // Reset on agent change / fresh mount. Cursor goes to 0 so the server
-    // replays the full transcript; lastSeqRef advances as events arrive
-    // and is what an in-session WS reconnect resumes from (no duplicates).
-    setEvents([]);
-    setStatus("connecting");
-    lastSeqRef.current = 0;
-    retryAttemptRef.current = 0;
-    connectionIdRef.current += 1;
 
     function isCurrentConnection(ws: WebSocket, connectionId: number): boolean {
       return (
@@ -109,6 +103,41 @@ export function useAgentStream(
         retryHandle = null;
       }
     }
+
+    function clearPendingFlush() {
+      if (flushHandleRef.current !== null) {
+        window.clearTimeout(flushHandleRef.current);
+        flushHandleRef.current = null;
+      }
+    }
+
+    function flushPendingEvents() {
+      clearPendingFlush();
+      const pending = pendingEventsRef.current;
+      if (pending.length === 0) return;
+      pendingEventsRef.current = [];
+      setEvents((prev) => [...prev, ...pending]);
+    }
+
+    function scheduleEventFlush() {
+      if (flushHandleRef.current !== null) return;
+      flushHandleRef.current = window.setTimeout(() => {
+        flushHandleRef.current = null;
+        if (cancelled) return;
+        flushPendingEvents();
+      }, STREAM_EVENT_FLUSH_MS);
+    }
+
+    // Reset on agent change / fresh mount. Cursor goes to 0 so the server
+    // replays the full transcript; lastSeqRef advances as events arrive
+    // and is what an in-session WS reconnect resumes from (no duplicates).
+    clearPendingFlush();
+    pendingEventsRef.current = [];
+    setEvents([]);
+    setStatus("connecting");
+    lastSeqRef.current = 0;
+    retryAttemptRef.current = 0;
+    connectionIdRef.current += 1;
 
     function scheduleReconnect(connectionId: number) {
       clearRetry();
@@ -147,7 +176,8 @@ export function useAgentStream(
           if (typeof event.seq === "number") {
             lastSeqRef.current = event.seq;
           }
-          setEvents((prev) => [...prev, event]);
+          pendingEventsRef.current.push(event);
+          scheduleEventFlush();
         } catch {
           // Malformed frame — drop silently.
         }
@@ -155,6 +185,7 @@ export function useAgentStream(
 
       ws.onclose = (ev) => {
         if (!isCurrentConnection(ws, connectionId)) return;
+        flushPendingEvents();
         wsRef.current = null;
         if (ev.code === CLOSE_CODE_AGENT_NOT_RUNNING) {
           setStatus("stopped");
@@ -177,6 +208,8 @@ export function useAgentStream(
       cancelled = true;
       connectionIdRef.current += 1;
       clearRetry();
+      clearPendingFlush();
+      pendingEventsRef.current = [];
       wsRef.current?.close();
       wsRef.current = null;
     };

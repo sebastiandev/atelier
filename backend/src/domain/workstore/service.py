@@ -529,6 +529,23 @@ class WorkStoreService:
                 work_slug, agent_slug, serialize_agent(agent, existing_contexts)
             )
 
+    def set_agent_option(self, agent_slug: str, key: str, value: Any) -> None:
+        with self._lock:
+            agent = self._repo.get_agent_by_slug(agent_slug)
+            if agent is None:
+                raise ValueError(f"agent not found: {agent_slug}")
+            work_slug = self._repo.get_work_slug_for_agent(agent_slug)
+            if work_slug is None:
+                raise ValueError(f"work not found for agent: {agent_slug}")
+            options = dict(agent.options or {})
+            options[key] = value
+            agent.options = options
+            self._repo.upsert_agent(agent)
+            existing_contexts = self.get_agent_contexts(work_slug, agent_slug)
+            self._files.write_agent_json(
+                work_slug, agent_slug, serialize_agent(agent, existing_contexts)
+            )
+
     def rename_agent(self, agent_slug: str, name: str) -> Agent:
         # Name is FS-canonical per reconcile's authority split (see
         # ``reconcile.py``: definition fields live in agent.json, runtime

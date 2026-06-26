@@ -64,6 +64,11 @@ const SIMPLE_PICKER_TYPES: { id: SimpleContextType; label: string }[] = [
 ];
 
 const SIMPLE_CONTEXT_TYPES: ReadonlySet<string> = new Set(["text", "url", "file"]);
+export const EFFORT_SESSION_CONFIG_IDS = [
+  "thinking_effort",
+  "reasoning_effort",
+  "effort",
+];
 
 function isSimpleType(type: string): type is SimpleContextType {
   return SIMPLE_CONTEXT_TYPES.has(type);
@@ -363,9 +368,17 @@ export function AgentTile({
     () => latestSessionConfigOption(events, "model"),
     [events],
   );
+  const sessionEffortConfig = useMemo(
+    () => latestSessionConfigOptionByIds(events, EFFORT_SESSION_CONFIG_IDS),
+    [events],
+  );
   const liveSessionModelValue =
     typeof sessionModelConfig?.currentValue === "string"
       ? sessionModelConfig.currentValue
+      : null;
+  const liveSessionEffortValue =
+    typeof sessionEffortConfig?.currentValue === "string"
+      ? sessionEffortConfig.currentValue
       : null;
   const displayModel = liveSessionModelValue ?? model;
   const sessionConfigOptionsSeq = useMemo(
@@ -591,7 +604,7 @@ export function AgentTile({
   }, [visibleCap]);
 
   // Auto-scroll to bottom on new content.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (pendingScrollRestoreRef.current !== null) {
       pendingScrollRestoreRef.current = null;
       return;
@@ -777,10 +790,24 @@ export function AgentTile({
     sessionModelConfig.choices.length > 0;
   const sessionModelDisabled =
     composerDisabled || isCurrentlyActive || compactionBlocked;
+  const sessionEffortDisabled = sessionModelDisabled;
   const sessionModelTitle = sessionModelLabel
     ? isCurrentlyActive
       ? `Wait for the current turn to finish before changing model (${sessionModelValue})`
       : `Model: ${sessionModelLabel} (${sessionModelValue})`
+    : undefined;
+  const sessionEffortLabel =
+    sessionEffortConfig && liveSessionEffortValue
+      ? labelForSessionConfigValue(sessionEffortConfig, liveSessionEffortValue)
+      : null;
+  const showSessionEffortSelect =
+    sessionEffortConfig !== null &&
+    liveSessionEffortValue !== null &&
+    sessionEffortConfig.choices.length > 0;
+  const sessionEffortTitle = sessionEffortLabel
+    ? isCurrentlyActive
+      ? `Wait for the current turn to finish before changing effort (${liveSessionEffortValue})`
+      : `${sessionEffortConfig?.name ?? "Effort"}: ${sessionEffortLabel}`
     : undefined;
   useEffect(() => {
     if (!modelPickerOpen) return;
@@ -848,6 +875,13 @@ export function AgentTile({
     sendSessionConfig("model", choice.value);
     setModelPickerOpen(false);
     setModelQuery("");
+  }
+
+  function changeSessionEffort(value: string) {
+    if (!sessionEffortConfig || sessionEffortDisabled || guardBlockedCompaction()) {
+      return;
+    }
+    sendSessionConfig(sessionEffortConfig.id, value);
   }
 
   function handleModelSearchKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
@@ -1386,6 +1420,26 @@ export function AgentTile({
                   </div>
                 )}
               </div>
+            )}
+            {showSessionEffortSelect && (
+              <label
+                className="composer-effort-picker"
+                title={sessionEffortTitle}
+              >
+                <span className="composer-effort-prefix">Effort:</span>
+                <select
+                  className="composer-effort-select"
+                  value={liveSessionEffortValue}
+                  disabled={sessionEffortDisabled}
+                  onChange={(e) => changeSessionEffort(e.target.value)}
+                >
+                  {sessionEffortConfig.choices.map((choice) => (
+                    <option key={String(choice.value)} value={String(choice.value)}>
+                      {choice.name ?? String(choice.value)}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
             <span className="spacer" />
             <button
@@ -1928,20 +1982,20 @@ function latestStatus(events: AgentEvent[]): string {
   return "idle";
 }
 
-type SessionConfigValue = string | boolean;
-type SessionConfigChoice = {
+export type SessionConfigValue = string | boolean;
+export type SessionConfigChoice = {
   value: SessionConfigValue;
   name?: string;
   description?: string;
 };
-type SessionConfigOption = {
+export type SessionConfigOption = {
   id: string;
   name: string;
   currentValue: SessionConfigValue | null;
   choices: SessionConfigChoice[];
 };
 
-function latestSessionConfigOption(
+export function latestSessionConfigOption(
   events: AgentEvent[],
   configId: string,
 ): SessionConfigOption | null {
@@ -1970,6 +2024,17 @@ function latestSessionConfigOption(
     }
   }
   return option;
+}
+
+export function latestSessionConfigOptionByIds(
+  events: AgentEvent[],
+  configIds: readonly string[],
+): SessionConfigOption | null {
+  for (const configId of configIds) {
+    const option = latestSessionConfigOption(events, configId);
+    if (option !== null) return option;
+  }
+  return null;
 }
 
 function parseSessionConfigOption(raw: unknown): SessionConfigOption | null {
@@ -2009,7 +2074,7 @@ function isSessionConfigValue(value: unknown): value is SessionConfigValue {
   return typeof value === "string" || typeof value === "boolean";
 }
 
-function labelForSessionConfigValue(
+export function labelForSessionConfigValue(
   option: SessionConfigOption,
   value: SessionConfigValue,
 ): string {
@@ -2447,7 +2512,7 @@ export function TurnMetricsBar({
 
 type ContextTone = "ok" | "warn" | "crit";
 
-function contextToneFor(pct: number | null): ContextTone {
+export function contextToneFor(pct: number | null): ContextTone {
   if (pct === null) return "ok";
   if (pct >= COMPACTION_URGENT_PCT) return "crit";
   if (pct >= COMPACTION_RECOMMENDED_PCT) return "warn";

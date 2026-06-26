@@ -150,6 +150,10 @@ class WorkStore(Protocol):
         """
         ...
 
+    def set_agent_option(self, agent_slug: str, key: str, value: Any) -> None:
+        """Persist one provider option selected through live session config."""
+        ...
+
     def rename_agent(self, agent_slug: str, name: str) -> Agent:
         """Update the agent's display name. Writes both the SQL row and
         ``agent.json`` (name is FS-canonical per reconcile's authority

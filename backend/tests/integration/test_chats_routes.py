@@ -180,6 +180,38 @@ def test_create_chat_persists_provider_options_for_runtime(
     assert config.permission_mode is AmpPermissionMode.ALLOW_ALL
 
 
+def test_set_chat_option_updates_chat_json_and_runtime_config(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    app_client.post(
+        "/api/chats",
+        json={
+            **_new_amp_chat("Tune chat effort"),
+            "options": {"permission_mode": "default"},
+        },
+    )
+
+    app_client.app.state.chatstore.set_chat_option(
+        "CHT-001", "permission_mode", "allow_all"
+    )
+
+    chat_json = json.loads(
+        (test_settings.workspace_root / "chats" / "CHT-001" / "chat.json").read_text()
+    )
+    assert chat_json["options"] == {"permission_mode": "allow_all"}
+
+    record = app_client.app.state.chatstore.get_chat("CHT-001")
+    assert record is not None
+    config, _context, _runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        test_settings,
+    )
+    assert isinstance(config, AmpAgentConfig)
+    assert config.permission_mode is AmpPermissionMode.ALLOW_ALL
+
+
 def test_create_chat_rejects_invalid_provider_options(
     app_client: TestClient,
 ) -> None:
