@@ -905,25 +905,19 @@
   color: var(--fg-3);
 }
 
-.chat-rail-foot {
-  border-top: 1px solid var(--line);
-  display: flex;
-  min-height: 132px;
-  flex-direction: column;
-  justify-content: flex-end;
-  padding: 10px 18px 18px;
+.chat-rail-action {
+  margin: 14px 18px 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-soft);
 }
 
-.chat-rail-foot .btn {
+.chat-rail-action .btn {
   width: 100%;
   justify-content: center;
   white-space: nowrap;
 }
-.chat-rail-foot .btn + .btn {
-  margin-top: 8px;
-}
 
-.chat-rail-foot .hint {
+.chat-rail-action .hint {
   text-align: center;
   margin-top: 6px;
   font-size: 10.5px;

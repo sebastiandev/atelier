@@ -256,22 +256,21 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             <span className="cm-prov">{providerLabel}</span>
             <span className="cm-model mono">{chat.model}</span>
           </div>
-        </div>
-
-        <div className="chat-rail-foot">
-          {chat.promoted_to_work_slug ? (
-            <a className="btn" href={`/works/${chat.promoted_to_work_slug}`}>
-              <SparkIcon size={12} /> Open {chat.promoted_to_work_slug}
-            </a>
-          ) : (
-            <button className="btn primary" onClick={() => setPromoteOpen(true)}>
-              <SparkIcon size={12} /> Start work from this
-            </button>
-          )}
-          <div className="hint mono">
-            {chat.promoted_to_work_slug ? "this chat seeded a work unit" : "turn this thread into a tracked work unit"}
+          <div className="chat-rail-action">
+            {chat.promoted_to_work_slug ? (
+              <a className="btn" href={`/works/${chat.promoted_to_work_slug}`}>
+                <SparkIcon size={12} /> Open {chat.promoted_to_work_slug}
+              </a>
+            ) : (
+              <button className="btn primary" onClick={() => setPromoteOpen(true)}>
+                <SparkIcon size={12} /> Start work from this
+              </button>
+            )}
+            <div className="hint mono">
+              {chat.promoted_to_work_slug ? "this chat seeded a work unit" : "turn this thread into a tracked work unit"}
+            </div>
+            {compactError && <div className="form-error compact">{compactError}</div>}
           </div>
-          {compactError && <div className="form-error compact">{compactError}</div>}
         </div>
       </aside>
 
