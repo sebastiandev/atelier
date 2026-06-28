@@ -78,6 +78,21 @@ Browser ──► Router (settings.py)
 
 ---
 
+## `POST /api/fs/uploads/images`
+
+```
+Browser ──► Router (fs.py)
+                │
+                ├─► validate multipart file is png/jpeg/gif/tiff/webp by MIME or filename and <= 20 MB
+                ├─► choose workspace or work-scoped attachments/images dir
+                └─► write paste-<timestamp>-<uuid>.<ext>
+                    returns {path, filename, content_type, size}
+```
+
+Used by composer paste handling. Work-scoped callers pass `work_slug` and receive a path under `~/Atelier/works/<WRK>/attachments/images/`; unscoped chats use `~/Atelier/attachments/images/`. Agent composers turn the returned path into a normal `file` context, while chat composers insert the path into the draft because chat websocket context frames are intentionally rejected.
+
+---
+
 ## `GET /api/providers`
 
 ```
@@ -411,8 +426,9 @@ commands.start.execute(workstore, worktree_manager, settings, req)
    │       └─► writes agents/<slug>/context.md  (index)
    │       returns abs_path | None
    ├─► WorktreeManager.ensure(work, agent, source, base_ref="master", branch_name=req.branch_name)
-   │       └─► branch_name=None  → `git worktree add --detach ... master`  (default)
-   │       └─► branch_name="x"   → `git worktree add -b x ... master` with self-heal-on-collision
+   │       └─► resolves base ref: `master` if present, otherwise `main` if present
+   │       └─► branch_name=None  → `git worktree add --detach ... <base>`  (default)
+   │       └─► branch_name="x"   → `git worktree add -b x ... <base>` with self-heal-on-collision
    │       └─► non-git folder    → returns folder unchanged
    │   (or WorktreeManager.ensure_forked(...) when fork_from_agent is set — source agent HEAD + working state)
    ├─► mount project shared folders and work chat-context folders into workdir

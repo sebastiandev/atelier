@@ -1,5 +1,6 @@
 import {
   type CSSProperties,
+  type ClipboardEvent as ReactClipboardEvent,
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -34,12 +35,21 @@ import {
   listConnections,
   patchAgent,
   switchAgentThread,
+  uploadImageAttachment,
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { useDragHandle } from "./dragHandleContext";
 import { CheckIcon, SearchIcon } from "./Icons";
 import { MarkdownText } from "./MarkdownText";
+import {
+  appendWithSpacing,
+  clipboardHasText,
+  imageFilesFromClipboard,
+  imageFilesFromSystemClipboard,
+  isPasteKeyboardShortcut,
+  nextImageLabels,
+} from "./pasteImages";
 import { shortenPath } from "./pathFormat";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
 import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
@@ -305,6 +315,8 @@ export function AgentTile({
   // shipped along with the input frame and the backend writes them into
   // the agent's context dir.
   const [pendingContexts, setPendingContexts] = useState<ContextEntry[]>([]);
+  const [contextUploadError, setContextUploadError] = useState<string | null>(null);
+  const [uploadingImageCount, setUploadingImageCount] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [connections, setConnections] = useState<Connection[]>([]);
   const { descriptors: connectionDescriptors } = useConnectionDescriptors();
@@ -320,6 +332,8 @@ export function AgentTile({
   }, []);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const clipboardFallbackTimerRef = useRef<number | null>(null);
+  const systemClipboardPasteInFlightRef = useRef(false);
 
   // Cap the rendered slice so multi-thousand-event transcripts don't
   // blow the DOM. Default holds the last 500 events; "Load older"
@@ -665,11 +679,13 @@ export function AgentTile({
 
   function submit() {
     if (guardBlockedCompaction()) return;
+    if (uploadingImageCount > 0) return;
     const text = draft.trim();
-    if (!text) return;
-    sendInput(text, submittableContexts);
+    if (!text && submittableContexts.length === 0) return;
+    sendInput(text || "Review the attached context.", submittableContexts);
     setDraft("");
     setPendingContexts([]);
+    setContextUploadError(null);
     setPickerOpen(false);
     setThinkingSinceSeq(events[events.length - 1]?.seq ?? 0);
   }
@@ -714,6 +730,10 @@ export function AgentTile({
       openCompactionModal();
       return;
     }
+    if (isPasteKeyboardShortcut(e)) {
+      scheduleSystemClipboardImagePaste();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       submit();
@@ -732,6 +752,91 @@ export function AgentTile({
       e.preventDefault();
       sendStop();
       setThinkingSinceSeq(null);
+    }
+  }
+
+  async function uploadPastedImages(images: File[]) {
+    setContextUploadError(null);
+    setUploadingImageCount((count) => count + images.length);
+    try {
+      const uploads = await Promise.all(
+        images.map((file) => uploadImageAttachment(file, { workSlug })),
+      );
+      setPendingContexts((prev) => [
+        ...prev,
+        ...uploads.map((upload) => ({
+          type: "file",
+          value: upload.path,
+          conn_id: null,
+        })),
+      ]);
+    } catch (err) {
+      setContextUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploadingImageCount((count) => Math.max(0, count - images.length));
+    }
+  }
+
+  function addImageMarkers(count: number) {
+    const labels = nextImageLabels(draft, count);
+    setDraft((current) => appendWithSpacing(current, labels.join(" ")));
+  }
+
+  async function handlePaste(e: ReactClipboardEvent<HTMLTextAreaElement>) {
+    cancelSystemClipboardImagePaste();
+    if (guardBlockedCompaction()) return;
+    let images = imageFilesFromClipboard(e.clipboardData);
+    if (images.length > 0) {
+      e.preventDefault();
+      addImageMarkers(images.length);
+      await uploadPastedImages(images);
+      return;
+    }
+    if (clipboardHasText(e.clipboardData)) return;
+    try {
+      images = await imageFilesFromSystemClipboard();
+    } catch (err) {
+      setContextUploadError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (images.length === 0) {
+      setContextUploadError("Clipboard did not expose an image to Atelier.");
+      return;
+    }
+    addImageMarkers(images.length);
+    await uploadPastedImages(images);
+  }
+
+  function scheduleSystemClipboardImagePaste() {
+    cancelSystemClipboardImagePaste();
+    clipboardFallbackTimerRef.current = window.setTimeout(() => {
+      clipboardFallbackTimerRef.current = null;
+      void handleSystemClipboardImagePaste();
+    }, 80);
+  }
+
+  function cancelSystemClipboardImagePaste() {
+    if (clipboardFallbackTimerRef.current === null) return;
+    window.clearTimeout(clipboardFallbackTimerRef.current);
+    clipboardFallbackTimerRef.current = null;
+  }
+
+  async function handleSystemClipboardImagePaste() {
+    if (systemClipboardPasteInFlightRef.current) return;
+    if (guardBlockedCompaction()) return;
+    systemClipboardPasteInFlightRef.current = true;
+    try {
+      const images = await imageFilesFromSystemClipboard();
+      if (images.length === 0) {
+        setContextUploadError("Clipboard did not expose an image to Atelier.");
+        return;
+      }
+      addImageMarkers(images.length);
+      await uploadPastedImages(images);
+    } catch (err) {
+      setContextUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      systemClipboardPasteInFlightRef.current = false;
     }
   }
 
@@ -1246,6 +1351,14 @@ export function AgentTile({
           <div className="composer-activity-rail" aria-hidden>
             {composerActivity && <span />}
           </div>
+          {contextUploadError && (
+            <div className="form-error">{contextUploadError}</div>
+          )}
+          {uploadingImageCount > 0 && (
+            <div className="composer-upload-status mono">
+              uploading {uploadingImageCount} image{uploadingImageCount === 1 ? "" : "s"}...
+            </div>
+          )}
           {pendingContexts.length > 0 && (
             <div className="composer-contexts">
               {pendingContexts.map((c, i) =>
@@ -1286,6 +1399,7 @@ export function AgentTile({
               if (compactionBlocked) openCompactionModal();
             }}
             onKeyDown={handleKeyDown}
+            onPaste={(e) => void handlePaste(e)}
             placeholder={composerPlaceholder}
             rows={1}
             disabled={composerDisabled}
@@ -1445,9 +1559,13 @@ export function AgentTile({
             <button
               type="submit"
               className="composer-send"
-              disabled={sendDisabled || (!compactionBlocked && !draft.trim())}
+              disabled={
+                sendDisabled ||
+                uploadingImageCount > 0 ||
+                (!compactionBlocked && !draft.trim() && submittableContexts.length === 0)
+              }
             >
-              Send
+              {uploadingImageCount > 0 ? "Uploading..." : "Send"}
             </button>
           </div>
         </form>

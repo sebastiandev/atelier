@@ -1,4 +1,5 @@
 import {
+  type ClipboardEvent as ReactClipboardEvent,
   type CSSProperties,
   useEffect,
   useLayoutEffect,
@@ -45,6 +46,7 @@ import {
   listWorks,
   patchChat,
   promoteChat,
+  uploadImageAttachment,
 } from "./api";
 import { BrandMark } from "./BrandMark";
 import { useDragHandle } from "./dragHandleContext";
@@ -76,11 +78,136 @@ import {
   useProviderDescriptors,
   withOpenCodeModelOptions,
 } from "./providerDescriptors";
+import {
+  appendWithSpacing,
+  clipboardHasText,
+  imageFilesFromClipboard,
+  imageFilesFromSystemClipboard,
+  isPasteKeyboardShortcut,
+  nextImageLabels,
+} from "./pasteImages";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   type AgentEvent,
   useAgentStream,
 } from "./useAgentStream";
+
+type PendingImageNote = {
+  label: string;
+  path: string;
+};
+
+async function appendPastedImagesToChatDraft(
+  e: ReactClipboardEvent<HTMLTextAreaElement>,
+  currentDraft: string,
+  workSlug: string | null,
+  setDraft: (update: (current: string) => string) => void,
+  setImageNotes: (update: (current: PendingImageNote[]) => PendingImageNote[]) => void,
+  setUploadError: (message: string | null) => void,
+  setUploadingCount: (update: (current: number) => number) => void,
+) {
+  let images = imageFilesFromClipboard(e.clipboardData);
+  if (images.length > 0) {
+    e.preventDefault();
+  } else {
+    if (clipboardHasText(e.clipboardData)) return;
+    try {
+      images = await imageFilesFromSystemClipboard();
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (images.length === 0) {
+      setUploadError("Clipboard did not expose an image to Atelier.");
+      return;
+    }
+  }
+  await appendImagesToChatDraft(
+    images,
+    currentDraft,
+    workSlug,
+    setDraft,
+    setImageNotes,
+    setUploadError,
+    setUploadingCount,
+  );
+}
+
+async function appendSystemClipboardImagesToChatDraft(
+  currentDraft: string,
+  workSlug: string | null,
+  setDraft: (update: (current: string) => string) => void,
+  setImageNotes: (update: (current: PendingImageNote[]) => PendingImageNote[]) => void,
+  setUploadError: (message: string | null) => void,
+  setUploadingCount: (update: (current: number) => number) => void,
+) {
+  try {
+    const images = await imageFilesFromSystemClipboard();
+    if (images.length === 0) {
+      setUploadError("Clipboard did not expose an image to Atelier.");
+      return;
+    }
+    await appendImagesToChatDraft(
+      images,
+      currentDraft,
+      workSlug,
+      setDraft,
+      setImageNotes,
+      setUploadError,
+      setUploadingCount,
+    );
+  } catch (err) {
+    setUploadError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+async function appendImagesToChatDraft(
+  images: File[],
+  currentDraft: string,
+  workSlug: string | null,
+  setDraft: (update: (current: string) => string) => void,
+  setImageNotes: (update: (current: PendingImageNote[]) => PendingImageNote[]) => void,
+  setUploadError: (message: string | null) => void,
+  setUploadingCount: (update: (current: number) => number) => void,
+) {
+  const labels = nextImageLabels(currentDraft, images.length);
+  const markerText = labels.join(" ");
+  setDraft((current) => appendWithSpacing(current, markerText));
+  setUploadError(null);
+  setUploadingCount((count) => count + images.length);
+  try {
+    const uploads = await Promise.all(
+      images.map((file) =>
+        uploadImageAttachment(file, { workSlug }),
+      ),
+    );
+    setImageNotes((current) => [
+      ...current,
+      ...labels.map((label, index) => ({
+        label,
+        path: uploads[index]?.path ?? "",
+      })),
+    ]);
+  } catch (err) {
+    setUploadError(err instanceof Error ? err.message : String(err));
+  } finally {
+    setUploadingCount((count) => Math.max(0, count - images.length));
+  }
+}
+
+function linkedWorkSlug(chat: ChatDetail | null): string | null {
+  return linkedWorkSlugFromGrounding(chat?.grounding ?? null);
+}
+
+function linkedWorkSlugFromGrounding(grounding: ChatGrounding | null): string | null {
+  return grounding?.kind === "work" ? grounding.ref : null;
+}
+
+function messageWithPendingImages(body: string, notes: PendingImageNote[]): string {
+  if (notes.length === 0) return body;
+  const imageLines = notes.map((note) => `${note.label}: ${note.path}`).join("\n");
+  return `${body}\n\n${imageLines}`;
+}
 
 export function ChatView({ chatSlug }: { chatSlug: string }) {
   const [chat, setChat] = useState<ChatDetail | null>(null);
@@ -89,9 +216,14 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [compactError, setCompactError] = useState<string | null>(null);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [uploadingImageCount, setUploadingImageCount] = useState(0);
+  const [pendingImageNotes, setPendingImageNotes] = useState<PendingImageNote[]>([]);
   const [compacting, setCompacting] = useState(false);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
+  const clipboardFallbackTimerRef = useRef<number | null>(null);
+  const systemClipboardPasteInFlightRef = useRef(false);
   const lastRuntimeSeqRef = useRef(0);
   const { byName: providersByName } = useProviderDescriptors();
   const {
@@ -177,9 +309,42 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
 
   function send() {
     const body = draft.trim();
-    if (!body || !chat) return;
-    sendInput(body);
+    if (!body || !chat || uploadingImageCount > 0) return;
+    sendInput(messageWithPendingImages(body, pendingImageNotes));
     setDraft("");
+    setPendingImageNotes([]);
+    setImageUploadError(null);
+  }
+
+  function cancelSystemClipboardImagePaste() {
+    if (clipboardFallbackTimerRef.current === null) return;
+    window.clearTimeout(clipboardFallbackTimerRef.current);
+    clipboardFallbackTimerRef.current = null;
+  }
+
+  function scheduleSystemClipboardImagePaste() {
+    cancelSystemClipboardImagePaste();
+    clipboardFallbackTimerRef.current = window.setTimeout(() => {
+      clipboardFallbackTimerRef.current = null;
+      void handleSystemClipboardImagePaste();
+    }, 80);
+  }
+
+  async function handleSystemClipboardImagePaste() {
+    if (systemClipboardPasteInFlightRef.current || !chat) return;
+    systemClipboardPasteInFlightRef.current = true;
+    try {
+      await appendSystemClipboardImagesToChatDraft(
+        draft,
+        linkedWorkSlug(chat),
+        setDraft,
+        setPendingImageNotes,
+        setImageUploadError,
+        setUploadingImageCount,
+      );
+    } finally {
+      systemClipboardPasteInFlightRef.current = false;
+    }
   }
 
   async function compactCurrentChat() {
@@ -318,11 +483,22 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
           )}
           <div className="chat-composer">
             <ChatContextGauge context={contextSnapshot} />
+            {imageUploadError && <div className="form-error">{imageUploadError}</div>}
+            {uploadingImageCount > 0 && (
+              <div className="composer-upload-status mono">
+                uploading {uploadingImageCount} image
+                {uploadingImageCount === 1 ? "" : "s"}...
+              </div>
+            )}
             <textarea
               rows={1}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
+                if (isPasteKeyboardShortcut(e)) {
+                  scheduleSystemClipboardImagePaste();
+                  return;
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   send();
@@ -331,6 +507,18 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
                   e.preventDefault();
                   sendStop();
                 }
+              }}
+              onPaste={(e) => {
+                cancelSystemClipboardImagePaste();
+                void appendPastedImagesToChatDraft(
+                  e,
+                  draft,
+                  linkedWorkSlug(chat),
+                  setDraft,
+                  setPendingImageNotes,
+                  setImageUploadError,
+                  setUploadingImageCount,
+                );
               }}
               placeholder={`Message ${chat.model}...`}
               disabled={composerDisabled}
@@ -350,10 +538,10 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               )}
               <button
                 className="btn primary sm"
-                disabled={composerDisabled || !draft.trim()}
+                disabled={composerDisabled || uploadingImageCount > 0 || !draft.trim()}
                 onClick={send}
               >
-                <SendIcon size={12} /> Send
+                <SendIcon size={12} /> {uploadingImageCount > 0 ? "Uploading..." : "Send"}
               </button>
             </div>
           </div>
@@ -399,10 +587,15 @@ export function ChatTile({
   const [hint, setHint] = useState<string | null>(null);
   const [startingAgent, setStartingAgent] = useState(false);
   const [compacting, setCompacting] = useState(false);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [uploadingImageCount, setUploadingImageCount] = useState(0);
+  const [pendingImageNotes, setPendingImageNotes] = useState<PendingImageNote[]>([]);
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
   const streamRef = useRef<HTMLDivElement>(null);
+  const clipboardFallbackTimerRef = useRef<number | null>(null);
+  const systemClipboardPasteInFlightRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const lastSummarySeqRef = useRef(0);
   const dragHandle = useDragHandle();
@@ -540,9 +733,42 @@ export function ChatTile({
   function send() {
     if (!chat) return;
     const body = draft.trim();
-    if (!body) return;
-    sendInput(body);
+    if (!body || uploadingImageCount > 0) return;
+    sendInput(messageWithPendingImages(body, pendingImageNotes));
     setDraft("");
+    setPendingImageNotes([]);
+    setImageUploadError(null);
+  }
+
+  function cancelSystemClipboardImagePaste() {
+    if (clipboardFallbackTimerRef.current === null) return;
+    window.clearTimeout(clipboardFallbackTimerRef.current);
+    clipboardFallbackTimerRef.current = null;
+  }
+
+  function scheduleSystemClipboardImagePaste() {
+    cancelSystemClipboardImagePaste();
+    clipboardFallbackTimerRef.current = window.setTimeout(() => {
+      clipboardFallbackTimerRef.current = null;
+      void handleSystemClipboardImagePaste();
+    }, 80);
+  }
+
+  async function handleSystemClipboardImagePaste() {
+    if (systemClipboardPasteInFlightRef.current || !chat) return;
+    systemClipboardPasteInFlightRef.current = true;
+    try {
+      await appendSystemClipboardImagesToChatDraft(
+        draft,
+        linkedWorkSlug(chat),
+        setDraft,
+        setPendingImageNotes,
+        setImageUploadError,
+        setUploadingImageCount,
+      );
+    } finally {
+      systemClipboardPasteInFlightRef.current = false;
+    }
   }
 
   async function startAgent() {
@@ -803,11 +1029,22 @@ export function ChatTile({
           <div className="composer-activity-rail" aria-hidden="true">
             {activityPhase && <span />}
           </div>
+          {imageUploadError && <div className="form-error">{imageUploadError}</div>}
+          {uploadingImageCount > 0 && (
+            <div className="composer-upload-status mono">
+              uploading {uploadingImageCount} image
+              {uploadingImageCount === 1 ? "" : "s"}...
+            </div>
+          )}
           <textarea
             rows={1}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              if (isPasteKeyboardShortcut(e)) {
+                scheduleSystemClipboardImagePaste();
+                return;
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 send();
@@ -816,6 +1053,18 @@ export function ChatTile({
                 e.preventDefault();
                 sendStop();
               }
+            }}
+            onPaste={(e) => {
+              cancelSystemClipboardImagePaste();
+              void appendPastedImagesToChatDraft(
+                e,
+                draft,
+                linkedWorkSlug(chat),
+                setDraft,
+                setPendingImageNotes,
+                setImageUploadError,
+                setUploadingImageCount,
+              );
             }}
             placeholder={
               chat
@@ -836,9 +1085,9 @@ export function ChatTile({
             <button
               type="submit"
               className="composer-send"
-              disabled={composerDisabled || !draft.trim()}
+              disabled={composerDisabled || uploadingImageCount > 0 || !draft.trim()}
             >
-              Send
+              {uploadingImageCount > 0 ? "Uploading..." : "Send"}
             </button>
           </div>
         </form>
@@ -878,7 +1127,12 @@ export function ChatComposer({
   const [workingDirectory, setWorkingDirectory] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [imageUploadError, setImageUploadError] = useState<string | null>(null);
+  const [uploadingImageCount, setUploadingImageCount] = useState(0);
+  const [pendingImageNotes, setPendingImageNotes] = useState<PendingImageNote[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const clipboardFallbackTimerRef = useRef<number | null>(null);
+  const systemClipboardPasteInFlightRef = useRef(false);
 
   useEffect(() => {
     listProviders()
@@ -944,11 +1198,11 @@ export function ChatComposer({
 
   async function start() {
     const first_message = message.trim();
-    if (!provider || !model || !first_message) return;
+    if (!provider || !model || !first_message || uploadingImageCount > 0) return;
     const payload: CreateChatPayload = {
       provider,
       model,
-      first_message,
+      first_message: messageWithPendingImages(first_message, pendingImageNotes),
       grounding,
       working_directory: workingDirectory,
       options: providerOptionsPayload(providerObj, model, providerOptions),
@@ -961,6 +1215,37 @@ export function ChatComposer({
     }
   }
 
+  function cancelSystemClipboardImagePaste() {
+    if (clipboardFallbackTimerRef.current === null) return;
+    window.clearTimeout(clipboardFallbackTimerRef.current);
+    clipboardFallbackTimerRef.current = null;
+  }
+
+  function scheduleSystemClipboardImagePaste() {
+    cancelSystemClipboardImagePaste();
+    clipboardFallbackTimerRef.current = window.setTimeout(() => {
+      clipboardFallbackTimerRef.current = null;
+      void handleSystemClipboardImagePaste();
+    }, 80);
+  }
+
+  async function handleSystemClipboardImagePaste() {
+    if (systemClipboardPasteInFlightRef.current) return;
+    systemClipboardPasteInFlightRef.current = true;
+    try {
+      await appendSystemClipboardImagesToChatDraft(
+        message,
+        linkedWorkSlugFromGrounding(grounding),
+        setMessage,
+        setPendingImageNotes,
+        setImageUploadError,
+        setUploadingImageCount,
+      );
+    } finally {
+      systemClipboardPasteInFlightRef.current = false;
+    }
+  }
+
   return (
     <div
       className="chat-bar-scrim"
@@ -969,6 +1254,10 @@ export function ChatComposer({
       }}
       onKeyDown={(e) => {
         if (e.key === "Escape") onClose();
+        if (isPasteKeyboardShortcut(e)) {
+          scheduleSystemClipboardImagePaste();
+          return;
+        }
         if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
           void start();
@@ -981,12 +1270,31 @@ export function ChatComposer({
           <span className="cb-hint">a quick exploratory conversation</span>
           <span className="esc-tag">esc</span>
         </div>
+        {imageUploadError && <div className="form-error">{imageUploadError}</div>}
+        {uploadingImageCount > 0 && (
+          <div className="composer-upload-status mono">
+            uploading {uploadingImageCount} image
+            {uploadingImageCount === 1 ? "" : "s"}...
+          </div>
+        )}
         <textarea
           ref={inputRef}
           className="cb-input"
           rows={2}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
+          onPaste={(e) => {
+            cancelSystemClipboardImagePaste();
+            void appendPastedImagesToChatDraft(
+              e,
+              message,
+              linkedWorkSlugFromGrounding(grounding),
+              setMessage,
+              setPendingImageNotes,
+              setImageUploadError,
+              setUploadingImageCount,
+            );
+          }}
           placeholder="What's on your mind? Think out loud..."
         />
         <div className="cb-controls">
@@ -1089,8 +1397,13 @@ export function ChatComposer({
           </div>
           <span className="spacer" />
           {error && <span className="form-error compact">{error}</span>}
-          <button className="btn primary sm" disabled={!message.trim() || !provider || !model} onClick={() => void start()}>
-            Start chat <span className="kbd" style={{ marginLeft: 4 }}>⌘↵</span>
+          <button
+            className="btn primary sm"
+            disabled={!message.trim() || !provider || !model || uploadingImageCount > 0}
+            onClick={() => void start()}
+          >
+            {uploadingImageCount > 0 ? "Uploading..." : "Start chat"}{" "}
+            <span className="kbd" style={{ marginLeft: 4 }}>⌘↵</span>
           </button>
         </div>
       </div>

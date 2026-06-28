@@ -304,6 +304,47 @@ def test_ensure_uses_explicit_base_ref_instead_of_current_checkout(
     assert head.returncode != 0
 
 
+def test_ensure_falls_back_from_master_to_main_when_master_is_missing(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    _git(repo, "switch", "-q", "-c", "feature")
+    (repo / "README.md").write_text("feature branch\n")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "feature")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo, base_ref="master")
+
+    assert (workdir / "README.md").read_text() == "hello\n"
+    head = subprocess.run(
+        ["git", "symbolic-ref", "-q", "HEAD"],
+        cwd=str(workdir),
+        capture_output=True,
+    )
+    assert head.returncode != 0
+
+
+def test_ensure_named_branch_falls_back_from_master_to_main_when_master_is_missing(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure(
+        "WRK-001",
+        "agt-1",
+        repo,
+        base_ref="master",
+        branch_name="my-feature",
+    )
+
+    assert (workdir / "README.md").read_text() == "hello\n"
+    head = subprocess.run(
+        ["git", "symbolic-ref", "HEAD"],
+        cwd=str(workdir),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert head == "refs/heads/my-feature"
+
+
 def test_ensure_with_branch_name_creates_named_branch(
     manager: GitWorktreeManager, repo: Path
 ) -> None:

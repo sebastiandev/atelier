@@ -58,6 +58,7 @@ class GitWorktreeManager:
         # Make sure the parent dir exists so `git worktree add` doesn't
         # fail on the first agent in a brand-new work.
         target.parent.mkdir(parents=True, exist_ok=True)
+        base_ref = _resolve_base_ref(source, base_ref)
         if branch_name is None:
             return self._add_detached(work_slug, agent_slug, source, target, base_ref)
         return self._add_branch(work_slug, agent_slug, source, target, base_ref, branch_name)
@@ -525,6 +526,24 @@ def _is_git_repo(path: Path) -> bool:
         _run_git(path, "rev-parse", "--git-dir")
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def _resolve_base_ref(source: Path, base_ref: str) -> str:
+    if base_ref != "master":
+        return base_ref
+    if _ref_exists(source, "master"):
+        return "master"
+    if _ref_exists(source, "main"):
+        return "main"
+    return base_ref
+
+
+def _ref_exists(source: Path, ref: str) -> bool:
+    try:
+        _run_git(source, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        return True
+    except subprocess.CalledProcessError:
         return False
 
 

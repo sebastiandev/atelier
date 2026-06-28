@@ -62,6 +62,8 @@ _CONNECTION_BACKED_TYPES = frozenset({"jira", "sentry", "honeycomb"})
 # whatever branch the user's source checkout currently has selected.
 # Handoff/forked agents intentionally bypass this and inherit the source
 # agent's own worktree state via ``ensure_forked``.
+# The git-backed manager treats this as "master preferred" and falls
+# back to "main" for repos that never had a master branch.
 FRESH_AGENT_BASE_REF = "master"
 
 

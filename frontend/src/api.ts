@@ -486,6 +486,13 @@ export type FolderListing = {
   entries: FolderEntry[];
 };
 
+export type ImageUploadResponse = {
+  path: string;
+  filename: string;
+  content_type: string;
+  size: number;
+};
+
 export function listFolder(
   path?: string | null,
   showHidden: boolean = false,
@@ -497,6 +504,21 @@ export function listFolder(
   return fetch(`/api/fs/list${qs ? `?${qs}` : ""}`).then((r) =>
     jsonOrThrow<FolderListing>(r),
   );
+}
+
+export function uploadImageAttachment(
+  file: File,
+  options: { workSlug?: string | null } = {},
+): Promise<ImageUploadResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const params = new URLSearchParams();
+  if (options.workSlug) params.set("work_slug", options.workSlug);
+  const qs = params.toString();
+  return fetch(`/api/fs/uploads/images${qs ? `?${qs}` : ""}`, {
+    method: "POST",
+    body: form,
+  }).then((r) => jsonOrThrow<ImageUploadResponse>(r));
 }
 
 // ─── Shared folders ────────────────────────────────────────────────────────

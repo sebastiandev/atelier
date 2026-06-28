@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from src.settings import Settings
+
 
 def _make_tree(parent: Path) -> Path:
     """Build a controlled tree under a fresh subdir so the workspace root
@@ -118,3 +120,82 @@ def test_400_when_path_is_a_file(
     file_path.write_text("ok", encoding="utf-8")
     res = app_client.get("/api/fs/list", params={"path": str(file_path)})
     assert res.status_code == 400
+
+
+def test_upload_image_stores_under_workspace_root(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    res = app_client.post(
+        "/api/fs/uploads/images",
+        files={"file": ("clip.png", b"\x89PNG\r\n", "image/png")},
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    path = Path(body["path"])
+    assert body["content_type"] == "image/png"
+    assert body["size"] == 6
+    assert path.parent == test_settings.workspace_root / "attachments" / "images"
+    assert path.suffix == ".png"
+    assert path.read_bytes() == b"\x89PNG\r\n"
+
+
+def test_upload_image_stores_under_work_when_work_slug_supplied(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    res = app_client.post(
+        "/api/fs/uploads/images",
+        params={"work_slug": "WRK-001"},
+        files={"file": ("clip.webp", b"RIFFwebp", "image/webp")},
+    )
+
+    assert res.status_code == 200
+    path = Path(res.json()["path"])
+    assert path.parent == (
+        test_settings.workspace_root / "works" / "WRK-001" / "attachments" / "images"
+    )
+    assert path.suffix == ".webp"
+    assert path.read_bytes() == b"RIFFwebp"
+
+
+def test_upload_image_accepts_known_extension_when_mime_is_generic(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    res = app_client.post(
+        "/api/fs/uploads/images",
+        files={"file": ("clip.jpg", b"\xff\xd8\xff", "application/octet-stream")},
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    path = Path(body["path"])
+    assert body["content_type"] == "image/jpeg"
+    assert path.parent == test_settings.workspace_root / "attachments" / "images"
+    assert path.suffix == ".jpg"
+    assert path.read_bytes() == b"\xff\xd8\xff"
+
+
+def test_upload_image_accepts_tiff_clipboard_payload(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    res = app_client.post(
+        "/api/fs/uploads/images",
+        files={"file": ("clipboard-image.tiff", b"MM\x00*", "image/tiff")},
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    path = Path(body["path"])
+    assert body["content_type"] == "image/tiff"
+    assert path.parent == test_settings.workspace_root / "attachments" / "images"
+    assert path.suffix == ".tiff"
+    assert path.read_bytes() == b"MM\x00*"
+
+
+def test_upload_image_rejects_non_images(app_client: TestClient) -> None:
+    res = app_client.post(
+        "/api/fs/uploads/images",
+        files={"file": ("note.txt", b"hello", "text/plain")},
+    )
+
+    assert res.status_code == 415
