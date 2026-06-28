@@ -22,6 +22,7 @@ import { codeToTokensBase, type ThemedToken } from "shiki";
 // they want to scroll into history.
 const TRANSCRIPT_CAP_INITIAL = 500;
 const TRANSCRIPT_CAP_STEP = 500;
+const ACTIVE_EVENT_STALE_MS = 5 * 60 * 1000;
 
 import {
   compactAgent,
@@ -657,6 +658,7 @@ export function AgentTile({
         ev.type === "status_change" ||
         ev.type === "turn_metrics" ||
         ev.type === "error" ||
+        ev.type === "client_error" ||
         ev.type === "message_delta" ||
         ev.type === "message_complete"
       ) {
@@ -665,6 +667,12 @@ export function AgentTile({
       }
     }
   }, [events, thinkingSinceSeq]);
+
+  useEffect(() => {
+    if (thinkingSinceSeq !== null && status !== "connected") {
+      setThinkingSinceSeq(null);
+    }
+  }, [status, thinkingSinceSeq]);
 
   // Drop entries the user opened but never typed into (empty value) —
   // they'd 422 server-side. Connection-backed rows also need a conn_id
@@ -799,10 +807,7 @@ export function AgentTile({
       setContextUploadError(err instanceof Error ? err.message : String(err));
       return;
     }
-    if (images.length === 0) {
-      setContextUploadError("Clipboard did not expose an image to Atelier.");
-      return;
-    }
+    if (images.length === 0) return;
     addImageMarkers(images.length);
     await uploadPastedImages(images);
   }
@@ -827,10 +832,7 @@ export function AgentTile({
     systemClipboardPasteInFlightRef.current = true;
     try {
       const images = await imageFilesFromSystemClipboard();
-      if (images.length === 0) {
-        setContextUploadError("Clipboard did not expose an image to Atelier.");
-        return;
-      }
+      if (images.length === 0) return;
       addImageMarkers(images.length);
       await uploadPastedImages(images);
     } catch (err) {
@@ -2018,6 +2020,7 @@ function renderUnitFor(ev: AgentEvent): RenderUnit | null {
     case "artifact_marker":
       return { kind: "artifact", key: ev.seq, payload: ev.payload };
     case "error":
+    case "client_error":
       return {
         kind: "error",
         key: ev.seq,
@@ -2065,6 +2068,7 @@ export function isAgentActive(events: AgentEvent[]): boolean {
   // back to inactive even if the cumulative status remains "thinking".
   const last = events[events.length - 1];
   if (!last) return false;
+  if (isActiveEventStale(last)) return false;
   switch (last.type) {
     case "message_delta":
     case "thinking_delta":
@@ -2079,6 +2083,11 @@ export function isAgentActive(events: AgentEvent[]): boolean {
     default:
       return false;
   }
+}
+
+function isActiveEventStale(ev: AgentEvent): boolean {
+  const ts = Date.parse(ev.ts);
+  return Number.isFinite(ts) && Date.now() - ts > ACTIVE_EVENT_STALE_MS;
 }
 
 function latestStatus(events: AgentEvent[]): string {

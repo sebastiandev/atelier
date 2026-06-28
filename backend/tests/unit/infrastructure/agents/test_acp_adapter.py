@@ -531,8 +531,39 @@ def test_connection_closed_prompt_terminates_event_stream() -> None:
             events.append(event)
 
         assert any(isinstance(e, Error) and e.message == "Connection closed" for e in events)
-        assert isinstance(events[-1], StatusChange)
-        assert events[-1].status == "idle"
+        assert not any(
+            isinstance(e, StatusChange) and e.status == "idle" for e in events
+        )
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_connection_closed_prompt_rejects_followup_before_stream_drains() -> None:
+    async def scenario() -> None:
+        async def closed_prompt(fake: FakeConnection, session_id: str) -> Any:
+            raise ConnectionError("Connection closed")
+
+        adapter, _fake = _build(prompt_script=[closed_prompt])
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        await adapter.send_input("go")
+        gen: Any = adapter.events()
+        events: list[Any] = []
+        while True:
+            event = await asyncio.wait_for(anext(gen), timeout=1)
+            events.append(event)
+            if isinstance(event, Error) and event.message == "Connection closed":
+                break
+
+        with pytest.raises(ConnectionError, match="Connection closed"):
+            await adapter.send_input("again")
+
+        assert not any(
+            isinstance(e, StatusChange) and e.status == "idle" for e in events
+        )
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(gen), timeout=1)
         await adapter.close()
 
     asyncio.run(scenario())
@@ -575,6 +606,57 @@ def test_connection_closed_prompt_recovers_by_resuming_session() -> None:
                 ),
             }
         ]
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_restored_session_connection_loop_falls_back_to_fresh_session() -> None:
+    async def scenario() -> None:
+        async def closed_prompt(fake: FakeConnection, session_id: str) -> Any:
+            raise ConnectionError("Connection closed")
+
+        adapter, fake = _build(
+            caps=_caps(load_session=True),
+            prompt_script=[closed_prompt, closed_prompt, None],
+        )
+        await adapter.start(
+            AgentStartContext(
+                workdir=WORKDIR, model="m", system_prompt="s", session_id="sess_old"
+            )
+        )
+
+        events = await _collect_turn(adapter, "go")
+
+        established = [e.session_id for e in events if isinstance(e, SessionEstablished)]
+        assert established == ["sess_old", "sess_1"]
+        assert any(
+            isinstance(e, Error) and "started a fresh session" in e.message
+            for e in events
+        )
+        assert any(isinstance(e, TurnMetrics) for e in events)
+        assert fake.called("load_session") == [
+            {"cwd": str(WORKDIR), "session_id": "sess_old"},
+            {"cwd": str(WORKDIR), "session_id": "sess_old"},
+        ]
+        assert len(fake.called("new_session")) == 1
+        prompts = fake.called("prompt")
+        assert prompts[0]["session_id"] == "sess_old"
+        assert prompts[0]["prompt"] == [{"type": "text", "text": "go"}]
+        assert prompts[1]["session_id"] == "sess_old"
+        assert prompts[1]["prompt"] == [
+            {
+                "type": "text",
+                "text": (
+                    "Continue from where you left off after the transport reconnect. "
+                    "Do not repeat completed tool calls unless their results are missing."
+                ),
+            }
+        ]
+        assert prompts[2]["session_id"] == "sess_1"
+        assert len(prompts[2]["prompt"]) == 2
+        assert "<atelier-context>" in prompts[2]["prompt"][0]["text"]
+        assert prompts[2]["prompt"][1] == {"type": "text", "text": "go"}
         await adapter.close()
 
     asyncio.run(scenario())

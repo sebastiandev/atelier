@@ -60,7 +60,7 @@ Three roles, one unifying registry:
 
 Since STORY-033 (2026-06-12), providers that speak the [Agent Client Protocol](https://agentclientprotocol.com) skip step 3 entirely: one `AcpAdapter` (`infrastructure/agents/acp/adapter.py`) serves every ACP agent. It spawns the agent binary as a subprocess (argv wired per-provider in `infrastructure/agents/acp/providers.py`), speaks JSON-RPC/ndjson over stdio via the official `agent-client-protocol` PyPI SDK, and maps `session/update` notifications onto the `AgentEvent` union in `infrastructure/agents/acp/mapping.py`. ACP/pydantic types never leave `infrastructure/`.
 
-ACP subprocesses run in their own process group on POSIX so reconnect/close kills wrapper children too (`codex-acp` often runs under npm/node and launches the real binary plus MCP servers). This prevents orphaned provider subprocesses from surviving after transport recovery.
+ACP subprocesses run in their own process group on POSIX so reconnect/close kills wrapper children too (`codex-acp` often runs under npm/node and launches the real binary plus MCP servers). This prevents orphaned provider subprocesses from surviving after transport recovery. The subprocess stdout reader uses a 50MB line buffer (`AcpAdapter._connect`) because ACP JSON-RPC frames can exceed asyncio's 64KB default during replay or multimodal turns; if this regresses, backend logs show `LimitOverrunError` / `chunk exceed the limit` before any transcript rows append.
 
 Current ACP providers: `claude-acp` (npx `@agentclientprotocol/claude-agent-acp`, maintained by Anthropic+Zed+JetBrains), `codex-acp` (npx `@zed-industries/codex-acp`), `opencode` (local `opencode acp`). The first two **coexist** with the bespoke `claude-code` / `codex` adapters until parity is validated; removing the legacy pair is a deliberate follow-up. Amp has no ACP path and stays bespoke.
 
@@ -71,7 +71,7 @@ Notable mechanics, with pointers:
 - **Permissions** are protocol-native: `session/request_permission` carries agent-named options (`allow_once`/`allow_always`/`reject_once`/`reject_always`); the adapter maps Atelier's three-way decision onto them and answers `cancelled` after a stop (`adapter.py:request_permission`). Permission labels prefer the logical provider tool name remembered from `session/update`; ACP titles can be human action labels such as a search query, so they are only a fallback. No socket bridges or approval RPC shims.
 - **System prompt**: ACP has no system-prompt parameter; the persona/brief is prepended to the first prompt of a fresh session as an `<atelier-context>` block (resumed sessions already carry it in-history).
 - **Usage**: `usage_update` streams context fill (`used`/`size` → ctx %) and cumulative USD cost (→ `TurnMetrics.cost_usd`, authoritative over FE token-math); `PromptResponse.usage` supplies per-turn token splits. codex-acp reports fill but not splits/cost.
-- **Restore**: `session/load` (replay suppressed — Atelier's transcript already has those turns) → `session/resume` → fresh session with a warning event, in that capability order.
+- **Restore**: `session/load` (replay suppressed — Atelier's transcript already has those turns) → `session/resume` → fresh session with a warning event, in that capability order. If a restored ACP session accepts restore but then repeatedly closes on prompt delivery, the adapter reconnects once, then starts a fresh provider session and emits a new `session_established` event so the supervisor persists the replacement id instead of looping on the poisoned one.
 - **Detach/catch-up**: claude-acp/codex-acp session ids are the native CLIs' ids, so `cli_launcher/claude_acp.py` + `codex_acp.py` just translate option vocabularies and the existing `cli_transcript` readers apply. OpenCode resumes via `opencode --session <sid>` and catches up through `opencode export` (`cli_transcript/opencode.py`) — no private DB parsing.
 - **Compaction**: summary-only ACP sessions auto-reject every permission request; claude-acp additionally pins `plan` mode, codex-acp `read-only`, opencode `plan` (`compaction_sessions.py:_summary_config`).
 - **OpenCode model behavior**: `OPENCODE_CONFIGURED_MODEL` remains the descriptor default so new-agent creation can use the user's OpenCode default. `GET /api/providers/opencode/models?refresh=true` shells out to `opencode models --refresh` and lets creation surfaces append the user's connected provider models before the session starts. Once the ACP session starts, OpenCode's advertised `model` config option drives the live picker; opening the picker sends `session_config_refresh`, selecting a value sends `session/set_config_option` for future turns, and the selected model is persisted on the agent row/`agent.json` so detach/resume stays aligned.
@@ -135,7 +135,7 @@ Every line that lands in the transcript — whether it originated from the SDK, 
 
 The ORDER is the load-bearing invariant: **no event reaches a subscriber before it's already on disk.** A crash between step 2 and step 3 leaves the event durable; the browser hasn't seen it yet but picks it up on the next reconnect via replay-from-cursor.
 
-`send_input` and `resolve_permission` use the same `_publish` for their outbound transcript lines (`user_input`, plus any adapter-emitted `permission_*` lines), so seqs interleave one canonical conversation regardless of who originated each line.
+`send_input` first makes sure lazy start/resume has succeeded and the adapter accepted the text, then stamps the `user_input` while holding the same publish lock. That keeps accepted user turns before provider output in seq order, but avoids durable transcript rows for text the provider rejected. `resolve_permission` uses the same `_publish` path for outbound permission lines, so seqs interleave one canonical conversation regardless of who originated each line.
 
 ### Lifecycle: register, start, resume
 
@@ -434,6 +434,8 @@ The cursor is a `seq` integer. `read_from_cursor(work_slug, agent_slug, cursor)`
 ## WS protocol
 
 `/api/agents/{agent_slug}/stream?cursor=N`
+
+For stuck `thinking` / `reconnecting` states, start with `docs/troubleshooting.md`. In particular, prove whether the transcript is appending and whether the supervisor has evicted the live state before assuming the frontend or ACP restore path is the root cause.
 
 **Server → client**: each frame is one `AgentEvent` serialized as JSON. The supervisor maintains the seq monotonicity, so the client can persist the last seq and resume from there on reconnect.
 

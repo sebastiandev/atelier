@@ -82,6 +82,7 @@ export function useAgentStream(
   const lastSeqRef = useRef(0);
   const retryAttemptRef = useRef(0);
   const connectionIdRef = useRef(0);
+  const clientEventOrdinalRef = useRef(0);
   const pendingEventsRef = useRef<AgentEvent[]>([]);
   const flushHandleRef = useRef<number | null>(null);
 
@@ -136,6 +137,7 @@ export function useAgentStream(
     setEvents([]);
     setStatus("connecting");
     lastSeqRef.current = 0;
+    clientEventOrdinalRef.current = 0;
     retryAttemptRef.current = 0;
     connectionIdRef.current += 1;
 
@@ -172,10 +174,20 @@ export function useAgentStream(
       ws.onmessage = (msg) => {
         if (!isCurrentConnection(ws, connectionId)) return;
         try {
-          const event = JSON.parse(msg.data) as AgentEvent;
-          if (typeof event.seq === "number") {
-            lastSeqRef.current = event.seq;
-          }
+          const parsed = JSON.parse(msg.data) as Record<string, unknown>;
+          const hasServerSeq = typeof parsed.seq === "number";
+          if (hasServerSeq) lastSeqRef.current = parsed.seq as number;
+          const event = (
+            hasServerSeq
+              ? parsed
+              : {
+                  ...parsed,
+                  seq:
+                    lastSeqRef.current +
+                    Math.min(++clientEventOrdinalRef.current, 999) / 1000,
+                  ts: typeof parsed.ts === "string" ? parsed.ts : new Date().toISOString(),
+                }
+          ) as AgentEvent;
           pendingEventsRef.current.push(event);
           scheduleEventFlush();
         } catch {

@@ -117,10 +117,7 @@ async function appendPastedImagesToChatDraft(
       setUploadError(err instanceof Error ? err.message : String(err));
       return;
     }
-    if (images.length === 0) {
-      setUploadError("Clipboard did not expose an image to Atelier.");
-      return;
-    }
+    if (images.length === 0) return;
   }
   await appendImagesToChatDraft(
     images,
@@ -143,10 +140,7 @@ async function appendSystemClipboardImagesToChatDraft(
 ) {
   try {
     const images = await imageFilesFromSystemClipboard();
-    if (images.length === 0) {
-      setUploadError("Clipboard did not expose an image to Atelier.");
-      return;
-    }
+    if (images.length === 0) return;
     await appendImagesToChatDraft(
       images,
       currentDraft,
@@ -274,11 +268,12 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
 
   const runtimeUnits = useMemo(() => groupEvents(events), [events]);
   const isActive = isAgentActive(events);
+  const streamActive = streamStatus === "connected" && isActive;
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const activityPhase = useMemo(
-    () => deriveActivityPhase(events, isActive),
-    [events, isActive],
+    () => deriveActivityPhase(events, streamActive),
+    [events, streamActive],
   );
   const modelMeta = chat
     ? lookupModelMeta(providersByName, chat.provider, chat.model)
@@ -348,7 +343,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   }
 
   async function compactCurrentChat() {
-    if (!chat || compacting || isActive) return;
+    if (!chat || compacting || streamActive) return;
     setCompacting(true);
     try {
       await compactChat(chat.slug);
@@ -462,7 +457,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             )}
           </div>
         </div>
-        {(lastMetrics || isActive) && (
+        {(lastMetrics || streamActive) && (
           <TurnMetricsBar
             metrics={lastMetrics}
             session={sessionTotals}
@@ -503,7 +498,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
                   e.preventDefault();
                   send();
                 }
-                if (e.key === "Escape" && isActive) {
+                if (e.key === "Escape" && streamActive) {
                   e.preventDefault();
                   sendStop();
                 }
@@ -528,7 +523,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               <span className="spacer" />
               <LiveEffortSelect
                 events={events}
-                disabled={composerDisabled || isActive}
+                disabled={composerDisabled || streamActive}
                 onChange={sendSessionConfig}
               />
               {!chat.promoted_to_work_slug && (
@@ -684,11 +679,12 @@ export function ChatTile({
 
   const runtimeUnits = useMemo(() => groupEvents(events), [events]);
   const isActive = isAgentActive(events);
+  const streamActive = streamStatus === "connected" && isActive;
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const activityPhase = useMemo(
-    () => deriveActivityPhase(events, isActive),
-    [events, isActive],
+    () => deriveActivityPhase(events, streamActive),
+    [events, streamActive],
   );
   const modelMeta = chat
     ? lookupModelMeta(providersByName, chat.provider, chat.model)
@@ -785,7 +781,7 @@ export function ChatTile({
   }
 
   async function compactCurrentChat() {
-    if (!chat || compacting || isActive) return;
+    if (!chat || compacting || streamActive) return;
     setCompacting(true);
     try {
       await compactChat(chat.slug);
@@ -838,7 +834,7 @@ export function ChatTile({
   const composerDisabled = !chat || streamStatus !== "connected";
   const dotStatus = error
     ? "error"
-    : isActive
+    : streamActive
       ? "thinking"
       : streamStatus === "connected"
         ? "idle"
@@ -994,7 +990,7 @@ export function ChatTile({
             <div className="chat-opening">Loading {chatSlug}...</div>
           )}
         </div>
-        {(lastMetrics || isActive) && (
+        {(lastMetrics || streamActive) && (
           <TurnMetricsBar
             metrics={lastMetrics}
             session={sessionTotals}
@@ -1049,7 +1045,7 @@ export function ChatTile({
                 e.preventDefault();
                 send();
               }
-              if (e.key === "Escape" && isActive) {
+              if (e.key === "Escape" && streamActive) {
                 e.preventDefault();
                 sendStop();
               }
@@ -1078,7 +1074,7 @@ export function ChatTile({
           <div className="composer-actions">
             <LiveEffortSelect
               events={events}
-              disabled={composerDisabled || isActive}
+              disabled={composerDisabled || streamActive}
               onChange={sendSessionConfig}
             />
             <span className="spacer" />

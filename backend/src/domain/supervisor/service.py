@@ -36,10 +36,11 @@ If the process crashes between step 2 and step 3, the event is durable;
 the browser just hasn't seen it yet. It picks it up on the next
 reconnect via the replay path below.
 
-User input takes the same path: ``send_input`` writes a ``user_input``
-line (under the same lock, with its own stamped seq) BEFORE forwarding
-to the SDK. Result: the transcript is one ordered conversation, both
-sides interleaved by ``seq``.
+User input takes the same path after the adapter accepts it: ``send_input``
+forwards to the adapter and writes a ``user_input`` line under the same
+lock, with its own stamped seq, before any provider output can be stamped.
+Result: the transcript is one ordered conversation, both sides interleaved
+by ``seq``, without durable user turns that the provider rejected.
 
 ═══════════════════════════════════════════════════════════════════════
 Replay on reconnect — how the cursor works
@@ -76,8 +77,7 @@ Per running agent there are three concurrent things going on:
     │   the stale socket. publish puts events into the current queue. │
     └─────────────────────────────────────────────────────────────────┘
     ┌─ User input ────────────────────────────────────────────────────┐
-    │   send_input() writes user_input transcript line + forwards     │
-    │   the text to adapter.send_input()                              │
+    │   send_input() forwards text + writes accepted user_input       │
     └─────────────────────────────────────────────────────────────────┘
 
 A per-agent ``publish_lock`` serializes the three steps of publishing,
@@ -314,15 +314,6 @@ class AgentSupervisorService:
             raise AgentTerminated(
                 f"agent {agent_slug} pump ended; reconnect to rebuild"
             )
-        if record_user_input:
-            await self._publish(
-                state,
-                {
-                    "type": "user_input",
-                    "ts": datetime.now(UTC).isoformat(),
-                    "text": text,
-                },
-            )
         try:
             if not state.started:
                 await self._start_lazy_adapter(state)
@@ -333,21 +324,36 @@ class AgentSupervisorService:
                 state.task = asyncio.create_task(
                     self._run_agent(state), name=f"agent-{state.agent_slug}"
                 )
-            await state.adapter.send_input(text)
+            async with state.publish_lock:
+                if state.task is not None and state.task.done():
+                    raise AgentTerminated(
+                        f"agent {agent_slug} pump ended; reconnect to rebuild"
+                    )
+                await state.adapter.send_input(text)
+                if record_user_input:
+                    await self._publish_locked(
+                        state,
+                        {
+                            "type": "user_input",
+                            "ts": datetime.now(UTC).isoformat(),
+                            "text": text,
+                        },
+                    )
         except Exception as exc:
             root = (
                 exc.__cause__
                 if isinstance(exc, AgentTerminated) and exc.__cause__ is not None
                 else exc
             )
-            await self._publish(
-                state,
-                {
-                    "type": "error",
-                    "ts": datetime.now(UTC).isoformat(),
-                    "message": f"failed to deliver user input: {root!r}",
-                },
-            )
+            if not isinstance(root, ConnectionError):
+                await self._publish(
+                    state,
+                    {
+                        "type": "error",
+                        "ts": datetime.now(UTC).isoformat(),
+                        "message": f"failed to deliver user input: {root!r}",
+                    },
+                )
             await self._evict_failed_start(state)
             raise AgentTerminated(
                 f"agent {agent_slug} failed to accept input; reconnect to rebuild"

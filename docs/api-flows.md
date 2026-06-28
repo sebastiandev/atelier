@@ -199,7 +199,7 @@ Browser ──► WS Router (application/ws/chats.py)
                                 └─► live provider events
 ```
 
-Inbound frames mirror the agent stream for the chat-safe subset: `input` writes a `user_input` line and forwards to the adapter, `stop` writes `user_stop` and calls `adapter.stop_turn()`, and `permission` resolves any pending provider permission. Context attachment frames are rejected with a `client_error` frame because chats do not own agent context folders. The separate `chat_supervisor` writes to `~/Atelier/chats/<CHT>/transcript.ndjson` through `FsChatTranscriptLog` and persists provider session ids to `chats.session_id`. If `working_directory` is set it is used as cwd/writable root; otherwise Work/Project links use their Atelier metadata folders, while legacy folder-grounded chats use that folder as cwd.
+Inbound frames mirror the agent stream for the chat-safe subset: `input` starts/resumes the adapter if needed, records `user_input` only after the adapter accepts the text, `stop` writes `user_stop` and calls `adapter.stop_turn()`, and `permission` resolves any pending provider permission. Context attachment frames are rejected with a `client_error` frame because chats do not own agent context folders. The separate `chat_supervisor` writes to `~/Atelier/chats/<CHT>/transcript.ndjson` through `FsChatTranscriptLog` and persists provider session ids to `chats.session_id`. If `working_directory` is set it is used as cwd/writable root; otherwise Work/Project links use their Atelier metadata folders, while legacy folder-grounded chats use that folder as cwd.
 
 ---
 
@@ -447,7 +447,7 @@ Router ──► supervisor.start_agent(work, agent_slug, adapter, context, firs
                 │                                                 Amp: open Unix permission socket
                 │                                                 Codex: open app-server state
                 ├─► if first_message is not None:
-                │       supervisor.send_input(slug, first_message)  ← lands as user_input seq=1
+                │       supervisor.send_input(slug, first_message)  ← records user_input after adapter accept
                 └─► task = asyncio.create_task(self._run_agent(state))
                               │
                               └─► async for event in adapter.events():
@@ -490,7 +490,7 @@ Browser ─── connect ?cursor=N ───► Router (ws/agents.py)
 Atomicity (`subscribe` snapshots `from_seq` *under the publish lock* and registers the queue under the same lock) gives "no overlap, no gap": every event with `seq ≤ from_seq` is on disk and replayable; every event with `seq > from_seq` flows only through the queue.
 
 The `recv` task dispatches inbound frames:
-- `{"type":"input","text":"…"}` → `supervisor.send_input(slug, text)` (writes `user_input` line, forwards to adapter).
+- `{"type":"input","text":"…"}` → `supervisor.send_input(slug, text)` (starts/resumes as needed, then writes `user_input` only if the adapter accepts the text).
 - `{"type":"stop"}` → `supervisor.stop_turn(slug)` (writes `user_stop` line, calls `adapter.stop_turn()`).
 - `{"type":"permission","request_id":"…","decision":"allow|allow_always|deny"}` → `supervisor.resolve_permission(slug, rid, decision)` (delegates to `adapter.resolve_permission`, which completes the open future).
 

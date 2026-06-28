@@ -16,6 +16,7 @@ the code wins — but please update the doc.
 | [`api-flows.md`](api-flows.md) | One sequence diagram per HTTP/WS endpoint — what each route does, which command runs, which ports get touched |
 | [`frontend.md`](frontend.md) | Frontend-specific: routing, `AgentTile` modes, `useAgentStream`, state, dialog conventions |
 | [`design-system.md`](design-system.md) | Visual conventions: brand mark, section headers, card rhythm, inline icons, time formats, stat badges |
+| [`troubleshooting.md`](troubleshooting.md) | Evidence-first checks for stuck streams, reconnect loops, and stale agent/chat UI states |
 
 ## Other authoritative sources
 

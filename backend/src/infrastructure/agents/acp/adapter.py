@@ -79,6 +79,7 @@ _RECOVERY_PROMPT = (
     "Do not repeat completed tool calls unless their results are missing."
 )
 _MAX_RECOVERY_ATTEMPTS_PER_TURN = 8
+_ACP_STDIO_BUFFER_LIMIT_BYTES = 50 * 1024 * 1024
 
 # Atelier decision → acceptable ACP option kinds, most-specific first.
 _DECISION_KINDS: dict[PermissionDecisionValue, tuple[str, ...]] = {
@@ -150,6 +151,9 @@ class AcpAdapter:
         self._pump_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._closed = False
+        self._terminal_error: BaseException | None = None
+        self._restored_session_id: str | None = None
+        self._fresh_fallback_used = False
         self._pending: dict[str, asyncio.Future[str]] = {}
         self._pending_options: dict[str, list[PermissionOption]] = {}
         self._decided: set[str] = set()
@@ -186,6 +190,10 @@ class AcpAdapter:
         await self._apply_session_settings(session_response)
 
     async def send_input(self, text: str) -> None:
+        if self._closed:
+            raise RuntimeError("ACP session is closed")
+        if self._terminal_error is not None:
+            raise self._terminal_error
         await self._user_inputs.put(text)
 
     async def stop_turn(self) -> None:
@@ -474,6 +482,7 @@ class AcpAdapter:
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self._config.common.workdir),
             start_new_session=os.name == "posix",
+            limit=_ACP_STDIO_BUFFER_LIMIT_BYTES,
         )
         assert self._proc.stdin is not None and self._proc.stdout is not None
         self._stderr_task = asyncio.create_task(
@@ -518,12 +527,17 @@ class AcpAdapter:
                 finally:
                     self._replaying = False
                 self._session_id = session_id
+                self._restored_session_id = session_id
                 return response
-            if session_caps is not None and getattr(session_caps, "resume", None) is not None:
+            if (
+                session_caps is not None
+                and getattr(session_caps, "resume", None) is not None
+            ):
                 response = await self._conn.resume_session(
                     cwd=cwd, session_id=session_id, mcp_servers=mcp_servers
                 )
                 self._session_id = session_id
+                self._restored_session_id = session_id
                 return response
             self._pending_warning = (
                 "Agent does not support session restore; started a fresh session."
@@ -533,6 +547,61 @@ class AcpAdapter:
                 f"Previous session not restored ({exc}); started a fresh one."
             )
         return None
+
+    async def _start_fresh_session_after_restore(self) -> bool:
+        if (
+            self._restored_session_id is None
+            or self._fresh_fallback_used
+            or self._closed
+        ):
+            return False
+        old_session_id = self._restored_session_id
+        self._fresh_fallback_used = True
+        try:
+            await self._close_transport()
+            self._conn = await self._connect()
+            init = await self._conn.initialize(protocol_version=1)
+            if getattr(init, "protocol_version", 1) != 1:
+                return False
+            assert self._conn is not None
+            response = await self._conn.new_session(
+                cwd=str(self._config.common.workdir),
+                mcp_servers=[_atelier_mcp_server()],
+            )
+            session_id = getattr(response, "session_id", None)
+            if not isinstance(session_id, str) or not session_id:
+                return False
+            self._session_id = session_id
+            self._restored_session_id = None
+            self._fresh_session = True
+            self._terminal_error = None
+            self._session_config_options = _config_options_payload(response)
+            self._advertised_config_values = _advertised_options(response)
+            await self._apply_session_settings(response)
+            await self._outgoing.put(
+                Error(
+                    ts=_now(),
+                    message=(
+                        "Previous provider session disconnected; "
+                        "started a fresh session."
+                    ),
+                )
+            )
+            await self._outgoing.put(
+                SessionEstablished(ts=_now(), session_id=session_id)
+            )
+            logger.info(
+                "acp: replaced disconnected restored session %s with fresh %s",
+                old_session_id,
+                session_id,
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "acp: failed to replace disconnected restored session %s",
+                old_session_id,
+            )
+            return False
 
     async def _apply_session_settings(self, session_response: Any) -> None:
         """Apply config options + mode from the typed config, tolerantly."""
@@ -607,6 +676,7 @@ class AcpAdapter:
             await self._outgoing.put(StatusChange(ts=_now(), status="thinking"))
             started = time.monotonic()
             prompt_text = text
+            original_prompt_text = text
             recovery_attempts = 0
             try:
                 while True:
@@ -623,10 +693,25 @@ class AcpAdapter:
                         if not _is_terminal_connection_error(e):
                             raise
                         recovery_attempts += 1
+                        if (
+                            prompt_text == _RECOVERY_PROMPT
+                            and await self._start_fresh_session_after_restore()
+                        ):
+                            prompt_text = original_prompt_text
+                            recovery_attempts = 0
+                            continue
                         if recovery_attempts > _MAX_RECOVERY_ATTEMPTS_PER_TURN:
+                            if await self._start_fresh_session_after_restore():
+                                prompt_text = original_prompt_text
+                                recovery_attempts = 0
+                                continue
                             raise
                         recovered = await self._recover_connection()
                         if not recovered:
+                            if await self._start_fresh_session_after_restore():
+                                prompt_text = original_prompt_text
+                                recovery_attempts = 0
+                                continue
                             raise
                         prompt_text = _RECOVERY_PROMPT
 
@@ -652,10 +737,11 @@ class AcpAdapter:
                 for event in self._mapper.flush_turn():
                     await self._outgoing.put(event)
                 await self._outgoing.put(Error(ts=_now(), message=str(e)))
-                await self._outgoing.put(StatusChange(ts=_now(), status="idle"))
                 if _is_terminal_connection_error(e):
+                    self._terminal_error = e
                     await self._outgoing.put(_SHUTDOWN)
                     return
+                await self._outgoing.put(StatusChange(ts=_now(), status="idle"))
 
     def _prompt_blocks(self, text: str) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []

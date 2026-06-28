@@ -269,6 +269,48 @@ def test_send_input_writes_user_input_then_forwards_to_adapter() -> None:
     assert inputs == ["hello there"]
 
 
+def test_send_input_failure_does_not_write_user_input() -> None:
+    class _RejectingSendAdapter:
+        def __init__(self) -> None:
+            self.closed = False
+            self._closed_evt = asyncio.Event()
+
+        async def start(self, context: AgentStartContext) -> None: ...
+
+        async def send_input(self, text: str) -> None:
+            raise ConnectionError("Connection closed")
+
+        async def events(self):  # type: ignore[no-untyped-def]
+            await self._closed_evt.wait()
+            if False:
+                yield  # pragma: no cover
+
+        async def stop_turn(self) -> None: ...
+
+        async def resolve_permission(self, request_id: str, decision: str) -> None: ...
+
+        async def close(self) -> None:
+            self.closed = True
+            self._closed_evt.set()
+
+    async def run() -> tuple[list[dict[str, Any]], bool, bool]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log)
+        adapter = _RejectingSendAdapter()
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+
+        with pytest.raises(AgentTerminated):
+            await supervisor.send_input("agt-1", "hello?")
+
+        events = list(log.events.get(("WRK-001", "agt-1"), []))
+        return events, "agt-1" in supervisor._states, adapter.closed
+
+    events, still_registered, closed = _run(run())
+    assert events == []
+    assert still_registered is False
+    assert closed is True
+
+
 def test_send_input_to_unknown_agent_raises() -> None:
     async def run() -> None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
@@ -663,9 +705,10 @@ def test_send_input_starts_lazy_adapter_before_lazy_pump() -> None:
     assert start_calls == 1
 
 
-def test_lazy_start_failure_persists_user_input_and_error() -> None:
-    """The transcript is the source of truth. Even if lazy provider
-    startup fails, the user's submitted message must survive refresh."""
+def test_lazy_start_failure_does_not_write_user_input() -> None:
+    """A lazy resume/start failure means the provider never accepted the
+    input. Record the delivery error, but do not stamp the user's text as
+    a durable conversation turn."""
 
     class _StartFailingAdapter:
         def __init__(self) -> None:
@@ -702,9 +745,8 @@ def test_lazy_start_failure_persists_user_input_and_error() -> None:
         return events, "agt-1" in supervisor._states, adapter.closed
 
     events, still_registered, closed = _run(run())
-    assert [e["type"] for e in events] == ["user_input", "error"]
-    assert events[0]["text"] == "do the thing"
-    assert "codex app-server did not answer" in events[1]["message"]
+    assert [e["type"] for e in events] == ["error"]
+    assert "codex app-server did not answer" in events[0]["message"]
     assert still_registered is False
     assert closed is True
 
