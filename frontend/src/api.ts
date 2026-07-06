@@ -303,6 +303,19 @@ export function completeWork(slug: string): Promise<CompleteWorkResponse> {
 }
 
 /**
+ * Permanently delete a work. Backend stops live agents/chats, removes
+ * worktrees, deletes associated work chats, and removes the Atelier work
+ * folder. This cannot be undone.
+ */
+export async function deleteWork(slug: string): Promise<void> {
+  const r = await fetch(`/api/works/${slug}`, { method: "DELETE" });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`Delete failed (${r.status}): ${detail}`);
+  }
+}
+
+/**
  * Re-parent a work to a different project. Pass `null` to make the work
  * Loose (no project). 404 if the work is unknown; 422 if the target
  * project doesn't exist.

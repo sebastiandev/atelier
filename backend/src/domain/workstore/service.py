@@ -317,6 +317,15 @@ class WorkStoreService:
                 serialize_work_record(existing, contexts, from_chat, folders),
             )
 
+    def delete_work(self, work_slug: str) -> None:
+        with self._lock:
+            self._require_work(work_slug)
+            # FS first: a crash between the two leaves an orphan DB row that
+            # startup reconcile can repair, rather than a visible DB work
+            # pointing at files that have already gone away.
+            self._files.remove_work_dir(work_slug)
+            self._repo.delete_work(work_slug)
+
     def delete_agent(self, agent_slug: str) -> None:
         with self._lock:
             work_slug = self._repo.get_work_slug_for_agent(agent_slug)

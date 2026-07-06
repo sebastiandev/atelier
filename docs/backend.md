@@ -379,6 +379,8 @@ Production wires ``_CodexAppServerClient`` via ``_default_client_factory``. Test
 
 **Filesystem is canonical.** SQLite is treated as a derived index. The `WorkStoreService` and `ProjectStoreService` each write DB first then FS within a service-level `threading.RLock`; a crash between the two leaves an orphan DB row, and startup `reconcile` (`domain/workstore/reconcile.py`, `domain/projectstore/reconcile.py`) repairs it: delete DB rows whose FS dir is gone; restore DB rows from `work.json` / `project.json` / `agent.json` if the FS has them but DB doesn't; FS wins on any field conflict.
 
+Permanent Work deletion is the exception that intentionally removes the FS side first. `domain/commands/works/delete.py` stops agent and chat supervisors, removes per-agent git worktrees, deletes work-associated chats, then calls `WorkStoreService.delete_work`, which removes `~/Atelier/works/<slug>/` before deleting the SQL row. A crash in that narrow gap leaves an orphan row that startup reconcile already knows how to remove.
+
 **Reconcile order matters.** `reconcile_projects(repo, files)` runs **before** `reconcile_works` in the FastAPI lifespan startup hook because `works.project_slug` is a slug FK to `projects.slug`; if a work's project hasn't been inserted yet, the work upsert violates the FK. The order is fixed in `main.py`'s lifespan (look for the comment "Projects reconcile FIRST"). Same rule will apply to any future cross-store reference.
 
 The reconcile invariant is the AC for STORY-005 — see `tests/integration/test_workstore_e2e.py` for the round-trip guarantees. Project-side reconcile is unit-tested with stubs in `domain/projectstore/reconcile.py`.

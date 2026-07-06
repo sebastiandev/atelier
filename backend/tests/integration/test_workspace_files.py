@@ -29,6 +29,18 @@ def test_read_work_json_returns_none_when_missing(files: FsWorkspaceFiles) -> No
     assert files.read_work_json("WRK-404") is None
 
 
+def test_remove_work_dir_deletes_whole_tree(
+    files: FsWorkspaceFiles, tmp_path: Path
+) -> None:
+    files.write_work_json("WRK-001", {"slug": "WRK-001"})
+    files.write_brief("WRK-001", "brief")
+    files.ensure_agent_dir("WRK-001", "agt-1")
+
+    files.remove_work_dir("WRK-001")
+
+    assert not (tmp_path / "Atelier" / "works" / "WRK-001").exists()
+
+
 def test_read_work_json_returns_none_on_corrupt_file(
     files: FsWorkspaceFiles, tmp_path: Path
 ) -> None:

@@ -57,6 +57,7 @@ import {
 } from "./Chat";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
+import { DeleteWorkDialog } from "./DeleteWorkDialog";
 import { HandoffDialog } from "./HandoffDialog";
 import {
   anchoredMenuPosition,
@@ -69,6 +70,7 @@ import {
   MoveIcon,
   SearchIcon,
   SlidersIcon,
+  TrashIcon,
 } from "./Icons";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
@@ -115,6 +117,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [deleteTarget, setDeleteTarget] = useState<AgentSummary | null>(null);
   const [deleteChatTarget, setDeleteChatTarget] = useState<ChatSummary | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
+  const [deleteWorkOpen, setDeleteWorkOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   // Projects list for the move picker — fetched lazily when the dialog
   // opens so the WorkView doesn't pay the cost on every mount.
@@ -296,6 +299,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       if (
         agentDialogOpen ||
         completeOpen ||
+        deleteWorkOpen ||
         moveOpen ||
         handoffSource !== null ||
         deleteTarget !== null ||
@@ -333,6 +337,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }, [
     agentDialogOpen,
     completeOpen,
+    deleteWorkOpen,
     moveOpen,
     handoffSource,
     deleteTarget,
@@ -654,6 +659,18 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         />
       )}
 
+      {deleteWorkOpen && (
+        <DeleteWorkDialog
+          work={work}
+          agentCount={agents.length}
+          chatCount={chats.length}
+          onClose={() => setDeleteWorkOpen(false)}
+          onDeleted={() => {
+            window.location.assign("/");
+          }}
+        />
+      )}
+
       {moveOpen && allProjects !== null && (
         <MoveWorkDialog
           work={work}
@@ -782,6 +799,15 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                 <MoveIcon size={12} />
               </button>
             )}
+            <button
+              className="btn icon sm danger"
+              onClick={() => setDeleteWorkOpen(true)}
+              title="Delete this work permanently"
+              aria-label="Delete this work permanently"
+              data-tip="Delete"
+            >
+              <TrashIcon size={12} />
+            </button>
           </div>
         </div>
 

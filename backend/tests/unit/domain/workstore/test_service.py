@@ -731,6 +731,29 @@ def test_soft_delete_unknown_raises() -> None:
         service.soft_delete_work("WRK-404")
 
 
+def test_delete_work_removes_repo_row_and_work_files() -> None:
+    service, repo, files, _ = _make_service()
+    service.create_work(_new_work_request())
+    service.add_agent_to_work(_agent_request())
+    files.write_handoff_doc("WRK-001", "note.md", "handoff")
+
+    service.delete_work("WRK-001")
+
+    assert "WRK-001" not in repo.works
+    assert repo.agents == {}
+    assert "WRK-001" not in files.work_dirs
+    assert "WRK-001" not in files.work_jsons
+    assert "WRK-001" not in files.briefs
+    assert files.agent_dirs == set()
+    assert files.handoff_docs == {}
+
+
+def test_delete_work_unknown_raises() -> None:
+    service, _, _, _ = _make_service()
+    with pytest.raises(ValueError, match="work not found"):
+        service.delete_work("WRK-404")
+
+
 # ---------------------------------------------------------------------------
 # is_session_ingested
 # ---------------------------------------------------------------------------

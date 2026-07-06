@@ -185,7 +185,7 @@ def test_patch_404_for_deleted(app_client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Delete (soft)
+# Delete (permanent)
 # ---------------------------------------------------------------------------
 
 
@@ -196,28 +196,21 @@ def test_delete_returns_204(app_client: TestClient) -> None:
     assert response.content == b""
 
 
-def test_delete_preserves_filesystem(app_client: TestClient, test_settings: Settings) -> None:
+def test_delete_removes_filesystem(app_client: TestClient, test_settings: Settings) -> None:
     app_client.post("/api/works", json=_new_work())
     work_dir = test_settings.workspace_root / "works" / "WRK-001"
     assert work_dir.exists()
 
     app_client.delete("/api/works/WRK-001")
 
-    assert work_dir.exists()
-    assert (work_dir / "work.json").exists()
-    assert (work_dir / "brief.md").exists()
+    assert not work_dir.exists()
 
 
-def test_delete_marks_status_deleted_in_work_json(
-    app_client: TestClient, test_settings: Settings
-) -> None:
+def test_delete_removes_work_record(app_client: TestClient) -> None:
     app_client.post("/api/works", json=_new_work())
     app_client.delete("/api/works/WRK-001")
 
-    work_json = json.loads(
-        (test_settings.workspace_root / "works" / "WRK-001" / "work.json").read_text()
-    )
-    assert work_json["status"] == "deleted"
+    assert app_client.get("/api/works/WRK-001").status_code == 404
 
 
 def test_delete_returns_404_for_unknown(app_client: TestClient) -> None:
@@ -233,7 +226,7 @@ def test_soft_delete_survives_app_restart(app_client: TestClient, test_settings:
     """Restart the app on the same workspace; reconcile reads work.json and
     the deleted status persists."""
     app_client.post("/api/works", json=_new_work())
-    app_client.delete("/api/works/WRK-001")
+    app_client.app.state.workstore.soft_delete_work("WRK-001")
 
     # Boot a fresh app on the same on-disk workspace.
     from src.main import create_app
@@ -407,7 +400,7 @@ def test_reconcile_keeps_deleted_state_in_db_after_restart(
     from src.main import create_app
 
     app_client.post("/api/works", json=_new_work())
-    app_client.delete("/api/works/WRK-001")
+    app_client.app.state.workstore.soft_delete_work("WRK-001")
 
     # Wipe the DB row to force reconcile to re-derive from FS on next startup.
     engine = create_database_engine(test_settings)

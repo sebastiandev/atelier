@@ -188,6 +188,28 @@ export function MoveIcon({ size = 14, ...rest }: IconProps) {
   );
 }
 
+export function TrashIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M2.5 4.5h11" />
+      <path d="M6.5 2.5h3l.7 2H5.8l.7-2z" />
+      <path d="M4.5 4.5l.6 8a1.5 1.5 0 0 0 1.5 1.4h2.8a1.5 1.5 0 0 0 1.5-1.4l.6-8" />
+      <path d="M7 7v4M9 7v4" />
+    </svg>
+  );
+}
+
 export function SparkIcon({ size = 14, ...rest }: IconProps) {
   return (
     <svg

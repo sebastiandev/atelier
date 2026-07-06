@@ -73,7 +73,7 @@ These are non-obvious and load-bearing — break them at your peril.
 
 **Migration steps don't `.create()` brand-new tables.** `metadata.create_all` runs at the top of `initialize_database`; a per-version migration step that calls `<new_table>.create(conn)` for a brand-new table will fail on the second startup with "table already exists". New tables are picked up by `create_all`; the per-version step only does the work `create_all` can't do on existing databases (`ALTER TABLE` for new columns, data backfills, drops/renames). See `infrastructure/database/migrations.py` (v6→v7 added `works.project_slug`).
 
-**Soft-delete via the WorkStatus literal**, not a `deleted_at` column. Status `"deleted"` filters out from `_require_work` and the FS dir is preserved. No schema migration needed; reconciliation persists the deleted state across restarts.
+**Legacy soft-delete via the WorkStatus literal**, not a `deleted_at` column. Status `"deleted"` filters out from `_require_work` and the FS dir is preserved. Reconcile still persists that state for existing installs, but the user-facing `DELETE /api/works/{slug}` path is now permanent: it stops runtimes, removes worktrees, deletes associated work chats, removes `~/Atelier/works/<slug>/`, then deletes the SQL row.
 
 **UI session state stays in the frontend.** Pinning, layout positions, focus state, glyph overrides — Zustand + localStorage, keyed by slug. The backend is presentation-agnostic.
 

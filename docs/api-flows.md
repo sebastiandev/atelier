@@ -314,13 +314,30 @@ Partial update: any field left as `None` in the request is preserved.
 ## `DELETE /api/works/{slug}`
 
 ```
-Browser ──► Router ──► WorkStore.soft_delete_work(slug)
-                            │
-                            ├─► repo.upsert_work(existing with status="deleted")
-                            └─► files.write_work_json(slug, …)    ← status flips on disk too
+Browser ──► Router (works.py) ──► commands.delete.execute(workstore, chatstore, supervisors, worktrees, req)
+                                       │
+                                       ├─► WorkStore.get_work(slug)             ← 404 WorkNotFound
+                                       ├─► WorkStore.list_agents_for_work(slug)
+                                       ├─► ChatStore.list_chats()
+                                       │     filter work-grounded/promoted chats
+                                       ├─► for each agent:
+                                       │     await supervisor.stop_agent(slug)
+                                       ├─► for each chat:
+                                       │     await chat_supervisor.stop_agent(slug)
+                                       ├─► for each agent:
+                                       │     worktree_manager.remove(work_slug, agent_slug)
+                                       ├─► for each chat:
+                                       │     ChatStore.delete_chat(chat_slug)
+                                       └─► WorkStore.delete_work(slug)
+                                              ├─► files.remove_work_dir(slug)
+                                              └─► repo.delete_work(slug)
+                                  204 No Content
 ```
 
-Soft delete: the row + folder stay, status flips to `deleted`. List endpoints filter them out.
+Permanent delete removes the Atelier work folder, SQL work row, cascading
+agents/artifacts/handoffs, associated work chats, and per-agent git worktrees.
+Legacy soft-deleted folders (`status="deleted"`) are still understood by
+reconcile/read paths, but the public DELETE endpoint is now destructive.
 
 ---
 

@@ -79,6 +79,14 @@ class WorkStore(Protocol):
         ...
 
     def soft_delete_work(self, work_slug: str) -> None: ...
+    def delete_work(self, work_slug: str) -> None:
+        """Remove a work end-to-end from WorkStore-owned persistence.
+
+        Caller is responsible for stopping live runtimes and removing
+        per-agent git worktrees first. This deletes the workspace work
+        directory plus the SQL row and cascading children.
+        """
+        ...
 
     def add_agent_to_work(self, req: AddAgentRequest) -> Agent: ...
 
@@ -293,6 +301,10 @@ class WorkspaceFiles(Protocol):
     """Atomic-replace filesystem metadata under the workspace root."""
 
     def ensure_work_dir(self, work_slug: str) -> None: ...
+    def remove_work_dir(self, work_slug: str) -> None:
+        """Recursively remove the whole work workspace dir. Idempotent."""
+        ...
+
     def ensure_agent_dir(self, work_slug: str, agent_slug: str) -> None: ...
     def remove_agent_dir(self, work_slug: str, agent_slug: str) -> None:
         """Recursively remove the agent's workspace dir (transcript, agent.json,

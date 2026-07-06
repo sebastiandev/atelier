@@ -42,10 +42,11 @@ class StubRepository:
         return work
 
     def delete_work(self, work_slug: str) -> None:
-        self.works.pop(work_slug, None)
+        work = self.works.pop(work_slug, None)
+        work_id = work.id if work is not None else None
         # Mimic FK ON DELETE CASCADE on agents.
         for agent_slug in [
-            s for s, a in self.agents.items() if _resolve_work_slug(self, a.work_id) == work_slug
+            s for s, a in self.agents.items() if work_id is not None and a.work_id == work_id
         ]:
             self.agents.pop(agent_slug, None)
 
@@ -202,6 +203,25 @@ class StubFiles:
         for key in list(self.context_files):
             if key[0] == work_slug and key[1] == agent_slug:
                 self.context_files.pop(key, None)
+
+    def remove_work_dir(self, work_slug: str) -> None:
+        self.work_dirs.discard(work_slug)
+        self.work_jsons.pop(work_slug, None)
+        self.briefs.pop(work_slug, None)
+        for key in list(self.agent_dirs):
+            if key[0] == work_slug:
+                self.agent_dirs.discard(key)
+        for store in (
+            self.agent_jsons,
+            self.handoff_docs,
+            self.compaction_docs,
+            self.context_files,
+            self.context_indexes,
+            self.work_chat_contexts,
+        ):
+            for key in list(store):
+                if key[0] == work_slug:
+                    store.pop(key, None)
 
     def write_work_json(self, work_slug: str, data: dict[str, Any]) -> None:
         self.work_jsons[work_slug] = data

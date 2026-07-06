@@ -32,15 +32,16 @@ from src.domain.agents.handoffs import (
     Summarizer,
     build_handoff,
 )
+from src.domain.chatstore import ChatStore
 from src.domain.commands.projects import get as projects_get
 from src.domain.commands.works import (
     complete,
     create,
+    delete,
     get,
     list_all,
     list_artifacts,
     move_to_project,
-    soft_delete,
     update,
 )
 from src.domain.commands.works.list_artifacts import ArtifactView
@@ -81,6 +82,14 @@ def get_supervisor(request: Request) -> AgentSupervisorService:
     return request.app.state.supervisor  # type: ignore[no-any-return]
 
 
+def get_chatstore(request: Request) -> ChatStore:
+    return request.app.state.chatstore  # type: ignore[no-any-return]
+
+
+def get_chat_supervisor(request: Request) -> AgentSupervisorService:
+    return request.app.state.chat_supervisor  # type: ignore[no-any-return]
+
+
 def get_worktree_manager(request: Request) -> WorktreeManager:
     return request.app.state.worktree_manager  # type: ignore[no-any-return]
 
@@ -101,6 +110,8 @@ WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
+ChatStoreDep = Annotated[ChatStore, Depends(get_chatstore)]
+ChatSupervisorDep = Annotated[AgentSupervisorService, Depends(get_chat_supervisor)]
 WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
 SummarizerDep = Annotated[Summarizer, Depends(get_summarizer)]
 TranscriptLogDep = Annotated[TranscriptLog, Depends(get_transcript_log)]
@@ -254,10 +265,24 @@ def patch_work_endpoint(
 
 
 @router.delete("/works/{work_slug}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_work_endpoint(work_slug: str, workstore: WorkStoreDep) -> None:
+async def delete_work_endpoint(
+    work_slug: str,
+    workstore: WorkStoreDep,
+    chatstore: ChatStoreDep,
+    supervisor: SupervisorDep,
+    chat_supervisor: ChatSupervisorDep,
+    worktree_manager: WorktreeDep,
+) -> None:
     try:
-        soft_delete.execute(workstore, work_slug)
-    except ValueError as e:
+        await delete.execute(
+            workstore,
+            chatstore,
+            supervisor,
+            chat_supervisor,
+            worktree_manager,
+            delete.DeleteWorkRequest(work_slug=work_slug),
+        )
+    except delete.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 

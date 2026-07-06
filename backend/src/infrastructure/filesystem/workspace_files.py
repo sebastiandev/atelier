@@ -25,6 +25,11 @@ class FsWorkspaceFiles:
     def ensure_work_dir(self, work_slug: str) -> None:
         self._paths.work_dir(work_slug).mkdir(parents=True, exist_ok=True)
 
+    def remove_work_dir(self, work_slug: str) -> None:
+        # Whole-work destructive delete. The path is still slug-derived
+        # through WorkspacePaths, so callers cannot escape the workspace root.
+        shutil.rmtree(self._paths.work_dir(work_slug), ignore_errors=True)
+
     def ensure_agent_dir(self, work_slug: str, agent_slug: str) -> None:
         self._paths.agent_dir(work_slug, agent_slug).mkdir(parents=True, exist_ok=True)
 

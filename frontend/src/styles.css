@@ -5717,10 +5717,10 @@ h5.md-h {
   background: var(--bg-2);
   color: var(--fg);
 }
-.btn.danger {
+.btn.ghost.danger {
   color: var(--danger);
 }
-.btn.danger:hover:not(:disabled) {
+.btn.ghost.danger:hover:not(:disabled) {
   background: oklch(0.65 0.20 25 / 0.10);
   border-color: oklch(0.65 0.20 25 / 0.30);
 }
@@ -7096,6 +7096,7 @@ h5.md-h {
 }
 .shell-v3.wide-left { grid-template-columns: 460px 1fr; }
 .shell-v3.narrow-left { grid-template-columns: 280px 1fr; }
+.shell-v3.work-v3.narrow-left { grid-template-columns: 320px 1fr; }
 .shell-v3.home-v3 { grid-template-columns: 500px 1fr; }
 
 .shell-left {
@@ -8189,7 +8190,7 @@ h5.md-h {
   display: flex;
   gap: 6px;
   margin-top: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: stretch;
 }
 .work-rail .work-hero .pills .btn {
@@ -8202,6 +8203,16 @@ h5.md-h {
   min-height: 0;
   align-self: stretch;
   position: relative;
+}
+.work-rail .work-hero .pills .btn.icon.sm.danger {
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--fg-3);
+}
+.work-rail .work-hero .pills .btn.icon.sm.danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--danger) 16%, var(--bg-elev));
+  border-color: color-mix(in oklch, var(--danger) 50%, var(--border));
+  color: var(--danger);
 }
 .work-rail .work-hero .pills .btn.icon.sm[data-tip]::after {
   content: attr(data-tip);
