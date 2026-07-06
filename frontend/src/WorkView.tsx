@@ -65,7 +65,6 @@ import {
 import {
   ChatIcon,
   CheckIcon,
-  DocIcon,
   FolderIcon,
   MoveIcon,
   SearchIcon,
@@ -216,12 +215,16 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }, [agents, agentOrderOverride]);
 
   const artifactSearchActive = artifactSearchQuery.trim().length > 0;
+  const prArtifacts = useMemo(
+    () => artifacts.filter((artifact) => artifact.type === "pr"),
+    [artifacts],
+  );
   const filteredArtifacts = useMemo(() => {
-    if (!artifactSearchActive) return artifacts;
-    return artifacts.filter((artifact) =>
+    if (!artifactSearchActive) return prArtifacts;
+    return prArtifacts.filter((artifact) =>
       artifactMatchesSearch(artifact, artifactSearchQuery),
     );
-  }, [artifacts, artifactSearchActive, artifactSearchQuery]);
+  }, [prArtifacts, artifactSearchActive, artifactSearchQuery]);
 
   useEffect(() => {
     if (!artifactSearchOpen) return;
@@ -631,7 +634,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     : undefined;
 
   const chatContextFolders = work.chat_context_folders ?? [];
-  const sharedFolderCount = chatContextFolders.length + shares.length;
   const selectedContextFolder =
     chatContextFolders.find((f) => f.name === contextDocFolder) ?? null;
 
@@ -787,16 +789,16 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
         <div
           className={`scrolly work-rail-sections${
-            artifacts.length > 0 ? " has-artifacts" : ""
+            prArtifacts.length > 0 ? " has-artifacts" : ""
           }`}
         >
-          {sharedFolderCount > 0 && (
+          {shares.length > 0 && (
             <section className="work-rail-section shared-folders-section">
               <div className="v3-shd">
                 <span>
                   Shared folders{" "}
                   <span className="num" style={{ marginLeft: 8 }}>
-                    {sharedFolderCount}
+                    {shares.length}
                   </span>
                 </span>
                 {project && work.project_slug && (
@@ -806,21 +808,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                 )}
               </div>
               <div className="work-rail-section-body themed-scrollbar">
-                {chatContextFolders.map((folder) => (
-                  <button
-                    key={folder.name}
-                    className="v3-agent-row folder-chat"
-                    onClick={() => setContextDocFolder(folder.name)}
-                    title="View context.md"
-                  >
-                    <span className="pip"><FolderIcon size={12} /></span>
-                    <span className="meta">
-                      <span className="name mono">{folder.name}</span>
-                      <span className="role">context.md · from {folder.chat_slug}</span>
-                    </span>
-                    <span className="status"><DocIcon size={11} /></span>
-                  </button>
-                ))}
                 {shares.map((s) => (
                   <V3RailShareRow
                     key={s.slug}
@@ -907,15 +894,15 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             </section>
           )}
 
-          {artifacts.length > 0 && (
+          {prArtifacts.length > 0 && (
             <section className="work-rail-section artifacts-section">
               <div className="v3-shd">
                 <span>
-                  Artifacts{" "}
+                  Pull requests{" "}
                   <span className="num" style={{ marginLeft: 8 }}>
                     {artifactSearchActive
-                      ? `${filteredArtifacts.length}/${artifacts.length}`
-                      : artifacts.length}
+                      ? `${filteredArtifacts.length}/${prArtifacts.length}`
+                      : prArtifacts.length}
                   </span>
                 </span>
                 <span className="right">
@@ -930,8 +917,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         setArtifactSearchOpen(true);
                       }
                     }}
-                    title={artifactSearchOpen ? "Close artifact search" : "Search artifacts"}
-                    aria-label={artifactSearchOpen ? "Close artifact search" : "Search artifacts"}
+                    title={artifactSearchOpen ? "Close PR search" : "Search pull requests"}
+                    aria-label={artifactSearchOpen ? "Close PR search" : "Search pull requests"}
                     aria-pressed={artifactSearchOpen}
                   >
                     <SearchIcon size={11} />
@@ -954,8 +941,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         setArtifactSearchOpen(false);
                       }
                     }}
-                    placeholder="Filter artifacts"
-                    aria-label="Filter artifacts"
+                    placeholder="Filter PRs"
+                    aria-label="Filter pull requests"
                   />
                   {artifactSearchQuery.trim() && (
                     <button
@@ -972,7 +959,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
               )}
               <div className="work-rail-section-body themed-scrollbar">
                 {filteredArtifacts.length === 0 && (
-                  <div className="v3-empty">no matching artifacts.</div>
+                  <div className="v3-empty">no matching pull requests.</div>
                 )}
                 {filteredArtifacts.map((a) => (
                   <V3RailArtifactRow key={a.slug} artifact={a} />
@@ -1183,6 +1170,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         chatSummary={chatSummary}
                         projects={allProjects ?? (project ? [project] : [])}
                         works={allWorks ?? [work]}
+                        contextFolder={
+                          chatContextFolders.find((f) => f.chat_slug === slug) ?? null
+                        }
+                        onOpenContext={(folder) => setContextDocFolder(folder.name)}
                         onClose={() => closeChat(slug)}
                         onStartAgent={(chat) => handleStartAgentFromChat(chat)}
                         onUpdated={patchChatSummary}

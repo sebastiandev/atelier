@@ -2,8 +2,8 @@ import { create } from "zustand";
 
 /**
  * Per-work revision counter that AgentTiles bump when their stream
- * surfaces an ``artifact_recorded`` event. The WorkView's Artifacts rail
- * section watches the counter for its work and refetches the list when
+ * surfaces an ``artifact_recorded`` event. The WorkView pull-request rail
+ * watches the counter for its work and refetches the artifact list when
  * it changes.
  *
  * Why a Zustand store rather than a context: rail and tiles are siblings

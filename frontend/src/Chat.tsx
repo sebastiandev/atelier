@@ -563,6 +563,8 @@ export function ChatTile({
   chatSummary,
   projects,
   works,
+  contextFolder,
+  onOpenContext,
   onClose,
   onStartAgent,
   onUpdated,
@@ -571,6 +573,8 @@ export function ChatTile({
   chatSummary?: ChatSummary;
   projects: ProjectSummary[];
   works: WorkSummary[];
+  contextFolder?: WorkChatContextFolder | null;
+  onOpenContext?: (folder: WorkChatContextFolder) => void;
   onClose: () => void;
   onStartAgent?: (chat: ChatDetail) => Promise<void> | void;
   onUpdated?: (chat: ChatSummary) => void;
@@ -938,6 +942,17 @@ export function ChatTile({
             {hint}
           </span>
           <div className="tile-controls">
+            {contextFolder && onOpenContext && (
+              <button
+                type="button"
+                className="tile-ctl"
+                aria-label="Open chat seed"
+                onClick={() => onOpenContext(contextFolder)}
+                {...hintHandlers("Open chat seed")}
+              >
+                <DocIcon />
+              </button>
+            )}
             {onStartAgent && (
               <button
                 type="button"

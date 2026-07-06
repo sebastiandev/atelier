@@ -280,7 +280,7 @@ export function AgentTile({
   });
 
   // Bump the work's rail revision when this agent's stream surfaces an
-  // ``artifact_recorded`` event so the Artifacts section refetches. We
+  // ``artifact_recorded`` event so the PR rail refetches. We
   // track the highest seq we've notified on so reopen-from-closed (which
   // replays from cursor 0) doesn't double-bump for events the rail has
   // already shown. Top-level rather than inside another effect because
