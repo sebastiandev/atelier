@@ -51,6 +51,14 @@ with a hairline divider — `border-bottom: 1px solid var(--line)` plus
 and the content below. Without that, busy header rows visually float above
 their cards. See `.latest-hd` for the canonical pattern.
 
+## Rail Crown
+
+The top of every left rail uses `ShellCrown.tsx`: the inline Atelier
+wordmark on the left and the search/settings/theme icon cluster on the
+right. Planning Mode should compose this same crown rather than drawing a
+mode-specific boxed app mark, so the app chrome stays visually stable while
+the content below changes by route.
+
 ## Chat surfaces
 
 Exploratory chat uses the design handoff's production variants only:

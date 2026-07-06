@@ -19,9 +19,10 @@ from src.domain.agents.handoffs import (
     SummaryContext,
     format_summary_prompt,
 )
+from src.domain.chats.runtime import build_chat_runtime_config
 from src.domain.chatstore import ChatRecord, ChatStore
-from src.domain.commands.chats.connect import build_chat_runtime_config
 from src.domain.models import Provider
+from src.domain.planning.ports import PlanningFiles
 from src.domain.projectstore.ports import ProjectStore
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import WorkStore
@@ -66,6 +67,7 @@ async def execute(
     supervisor: AgentSupervisorService,
     workstore: WorkStore,
     projectstore: ProjectStore,
+    planningfiles: PlanningFiles,
     settings: Settings,
     summarizer: Summarizer,
     session_client: CompactionSessionClient,
@@ -89,7 +91,7 @@ async def execute(
         )
 
     config, context, runtime = build_chat_runtime_config(
-        record, workstore, projectstore, settings
+        record, workstore, projectstore, planningfiles, settings
     )
     maintenance_context = dataclasses.replace(context, session_id=None)
 

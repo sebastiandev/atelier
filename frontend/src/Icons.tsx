@@ -148,6 +148,26 @@ export function CheckIcon({ size = 12, ...rest }: IconProps) {
   );
 }
 
+export function EditIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M3 11.5V13h1.5l7-7-1.5-1.5-7 7z" />
+      <path d="M9.5 5 11 3.5 12.5 5 11 6.5" />
+    </svg>
+  );
+}
+
 export function ChatIcon({ size = 14, ...rest }: IconProps) {
   return (
     <svg
@@ -184,6 +204,68 @@ export function MoveIcon({ size = 14, ...rest }: IconProps) {
       <path d="M2.5 8h7" />
       <path d="M7 5.5 9.5 8 7 10.5" />
       <path d="M10.5 3.5h2.5v9h-2.5" />
+    </svg>
+  );
+}
+
+export function BoltIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M9 1.8 3.8 8.5h3L6.8 14.2l5.4-7.4h-3L9 1.8z" />
+    </svg>
+  );
+}
+
+export function BranchIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <circle cx="4" cy="4" r="1.7" />
+      <circle cx="12" cy="4" r="1.7" />
+      <circle cx="8" cy="12" r="1.7" />
+      <path d="M5.4 5.2 8 10.3M10.6 5.2 8 10.3" />
+    </svg>
+  );
+}
+
+export function BugIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M5.2 6.2a2.8 2.8 0 0 1 5.6 0v3.2a2.8 2.8 0 0 1-5.6 0V6.2z" />
+      <path d="M6.2 3.2 5 2M9.8 3.2 11 2M3 7h2.2M10.8 7H13M3.5 11l1.8-1M10.7 10l1.8 1" />
+      <path d="M6.5 6.5h3" />
     </svg>
   );
 }
@@ -242,6 +324,67 @@ export function DocIcon({ size = 14, ...rest }: IconProps) {
     >
       <path d="M4 2.5h5l3 3v8H4z" />
       <path d="M9 2.5v3h3M6 8h6M6 10.5h6" />
+    </svg>
+  );
+}
+
+export function PaperclipIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M5.2 8.2 8.9 4.5a2.2 2.2 0 1 1 3.1 3.1l-5.1 5.1a3.4 3.4 0 0 1-4.8-4.8l5.2-5.2" />
+      <path d="M6.1 10.1 11 5.2" />
+    </svg>
+  );
+}
+
+export function AgentIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <circle cx="8" cy="5" r="2" />
+      <path d="M4.5 13a3.8 3.8 0 0 1 7 0" />
+      <path d="M3 8.5h1.5M11.5 8.5H13" />
+    </svg>
+  );
+}
+
+export function EyeIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <path d="M2 8s2.2-4 6-4 6 4 6 4-2.2 4-6 4-6-4-6-4z" />
+      <circle cx="8" cy="8" r="1.7" />
     </svg>
   );
 }

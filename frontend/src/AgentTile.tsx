@@ -38,13 +38,20 @@ import {
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { useDragHandle } from "./dragHandleContext";
-import { CheckIcon, SearchIcon } from "./Icons";
+import { PaperclipIcon } from "./Icons";
 import { MarkdownText } from "./MarkdownText";
 import { shortenPath } from "./pathFormat";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
 import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
-import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
+import { SessionModelPicker } from "./SessionModelPicker";
+import {
+  isSimpleContextType,
+  SIMPLE_CONTEXT_PICKER_TYPES,
+  SimpleContextRow,
+  type SimpleContextType,
+} from "./SimpleContextRow";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
+import { TileHeader } from "./TileHeader";
 import {
   type AgentEvent,
   type PermissionDecision,
@@ -57,22 +64,11 @@ const COMPACTION_RECOMMENDED_PCT = 75;
 const COMPACTION_URGENT_PCT = 86;
 const COMPACTION_BLOCKED_PCT = 100;
 
-const SIMPLE_PICKER_TYPES: { id: SimpleContextType; label: string }[] = [
-  { id: "text", label: "Text" },
-  { id: "url", label: "URL" },
-  { id: "file", label: "File" },
-];
-
-const SIMPLE_CONTEXT_TYPES: ReadonlySet<string> = new Set(["text", "url", "file"]);
 export const EFFORT_SESSION_CONFIG_IDS = [
   "thinking_effort",
   "reasoning_effort",
   "effort",
 ];
-
-function isSimpleType(type: string): type is SimpleContextType {
-  return SIMPLE_CONTEXT_TYPES.has(type);
-}
 
 type AgentTileProps = {
   agentSlug: string;
@@ -385,30 +381,10 @@ export function AgentTile({
     () => latestEventSeq(events, "session_config_options"),
     [events],
   );
-  const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  const [modelQuery, setModelQuery] = useState("");
-  const [modelActiveIndex, setModelActiveIndex] = useState(0);
-  const [modelRefreshing, setModelRefreshing] = useState(false);
-  const modelRefreshStartedSeqRef = useRef(0);
-  const modelPickerRef = useRef<HTMLDivElement>(null);
-  const modelSearchRef = useRef<HTMLInputElement>(null);
-  const modelResultsRef = useRef<HTMLDivElement>(null);
   const modelPickerId = useMemo(
     () => `composer-model-${agentSlug.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
     [agentSlug],
   );
-  const filteredSessionModelChoices = useMemo(() => {
-    if (sessionModelConfig === null) return [];
-    const query = normalizeModelQuery(modelQuery);
-    if (!query) return sessionModelConfig.choices;
-    const terms = query.split(" ").filter(Boolean);
-    return sessionModelConfig.choices.filter((choice) => {
-      const haystack = normalizeModelQuery(
-        `${choice.name ?? ""} ${String(choice.value)} ${choice.description ?? ""}`,
-      );
-      return terms.every((term) => haystack.includes(term));
-    });
-  }, [modelQuery, sessionModelConfig]);
   const { byName: providersByName } = useProviderDescriptors();
   const modelMeta = lookupModelMeta(providersByName, provider, displayModel);
   const latestCompactionSeq = useMemo(
@@ -658,7 +634,9 @@ export function AgentTile({
   const submittableContexts = useMemo(
     () =>
       pendingContexts.filter(
-        (c) => c.value.trim() !== "" && (c.conn_id !== null || isSimpleType(c.type)),
+        (c) =>
+          c.value.trim() !== "" &&
+          (c.conn_id !== null || isSimpleContextType(c.type)),
       ),
     [pendingContexts],
   );
@@ -779,23 +757,9 @@ export function AgentTile({
   // user never thinks a click landed.
   const composerDisabled = status !== "connected";
   const sendDisabled = composerDisabled || compacting;
-  const sessionModelValue = liveSessionModelValue;
-  const sessionModelLabel =
-    sessionModelConfig && sessionModelValue
-      ? labelForSessionConfigValue(sessionModelConfig, sessionModelValue)
-      : null;
-  const showSessionModelSelect =
-    sessionModelConfig !== null &&
-    sessionModelValue !== null &&
-    sessionModelConfig.choices.length > 0;
   const sessionModelDisabled =
     composerDisabled || isCurrentlyActive || compactionBlocked;
   const sessionEffortDisabled = sessionModelDisabled;
-  const sessionModelTitle = sessionModelLabel
-    ? isCurrentlyActive
-      ? `Wait for the current turn to finish before changing model (${sessionModelValue})`
-      : `Model: ${sessionModelLabel} (${sessionModelValue})`
-    : undefined;
   const sessionEffortLabel =
     sessionEffortConfig && liveSessionEffortValue
       ? labelForSessionConfigValue(sessionEffortConfig, liveSessionEffortValue)
@@ -809,115 +773,12 @@ export function AgentTile({
       ? `Wait for the current turn to finish before changing effort (${liveSessionEffortValue})`
       : `${sessionEffortConfig?.name ?? "Effort"}: ${sessionEffortLabel}`
     : undefined;
-  useEffect(() => {
-    if (!modelPickerOpen) return;
-    requestAnimationFrame(() => modelSearchRef.current?.focus());
-  }, [modelPickerOpen]);
-  useEffect(() => {
-    if (!modelPickerOpen) return;
-    setModelActiveIndex(0);
-  }, [filteredSessionModelChoices, modelPickerOpen]);
-  useEffect(() => {
-    if (!modelPickerOpen) return;
-    const active = modelResultsRef.current?.querySelector<HTMLElement>(
-      '[data-active="true"]',
-    );
-    active?.scrollIntoView({ block: "nearest" });
-  }, [modelActiveIndex, modelPickerOpen]);
-  useEffect(() => {
-    if (!modelPickerOpen) return;
-    const close = (event: Event) => {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        modelPickerRef.current?.contains(target)
-      ) {
-        return;
-      }
-      setModelPickerOpen(false);
-    };
-    window.addEventListener("mousedown", close);
-    window.addEventListener("scroll", close, true);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("scroll", close, true);
-    };
-  }, [modelPickerOpen]);
-  useEffect(() => {
-    if (!modelPickerOpen || showSessionModelSelect) return;
-    setModelPickerOpen(false);
-  }, [modelPickerOpen, showSessionModelSelect]);
-  useEffect(() => {
-    if (!modelRefreshing) return;
-    if (sessionConfigOptionsSeq > modelRefreshStartedSeqRef.current) {
-      setModelRefreshing(false);
-      return;
-    }
-    const handle = window.setTimeout(() => setModelRefreshing(false), 1500);
-    return () => window.clearTimeout(handle);
-  }, [modelRefreshing, sessionConfigOptionsSeq]);
-
-  function openSessionModelPicker() {
-    if (sessionModelDisabled || guardBlockedCompaction()) return;
-    const opening = !modelPickerOpen;
-    setModelPickerOpen(opening);
-    setModelQuery("");
-    setModelActiveIndex(0);
-    if (opening) {
-      modelRefreshStartedSeqRef.current = sessionConfigOptionsSeq;
-      setModelRefreshing(true);
-      sendSessionConfigRefresh("model");
-    }
-  }
-
-  function chooseSessionModel(choice: SessionConfigChoice) {
-    if (sessionModelDisabled || guardBlockedCompaction()) return;
-    sendSessionConfig("model", choice.value);
-    setModelPickerOpen(false);
-    setModelQuery("");
-  }
 
   function changeSessionEffort(value: string) {
     if (!sessionEffortConfig || sessionEffortDisabled || guardBlockedCompaction()) {
       return;
     }
     sendSessionConfig(sessionEffortConfig.id, value);
-  }
-
-  function handleModelSearchKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      setModelPickerOpen(false);
-      return;
-    }
-    const maxIndex = filteredSessionModelChoices.length - 1;
-    if (maxIndex < 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setModelActiveIndex((index) => Math.min(index + 1, maxIndex));
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setModelActiveIndex((index) => Math.max(index - 1, 0));
-      return;
-    }
-    if (e.key === "Home") {
-      e.preventDefault();
-      setModelActiveIndex(0);
-      return;
-    }
-    if (e.key === "End") {
-      e.preventDefault();
-      setModelActiveIndex(maxIndex);
-      return;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const choice =
-        filteredSessionModelChoices[Math.min(modelActiveIndex, maxIndex)];
-      if (choice) chooseSessionModel(choice);
-    }
   }
 
   const tileClass = `agent-tile mode-${mode}` + (maximized ? " maximized" : "");
@@ -939,222 +800,227 @@ export function AgentTile({
 
   return (
     <div className={tileClass} data-persona={persona}>
-      <header
+      <TileHeader
         className={dragHandle ? "tile-drag-header" : undefined}
         {...(dragHandle?.attributes ?? {})}
         {...(dragHandle?.listeners ?? {})}
-      >
-        <div className="tile-header-left">
-          {persona && <span className="persona-pip">{PERSONA_GLYPH[persona]}</span>}
-          <span className="status-dot" data-status={dotStatus} />
-          {editingName ? (
-            <input
-              ref={nameInputRef}
-              className="tile-name-input"
-              value={draftName}
-              onChange={(e) => setDraftName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  cancelRename();
-                } else if (e.key === "Enter") {
-                  e.preventDefault();
-                  void commitRename();
+        left={
+          <>
+            {persona && <span className="persona-pip">{PERSONA_GLYPH[persona]}</span>}
+            <span className="status-dot" data-status={dotStatus} />
+            {editingName ? (
+              <input
+                ref={nameInputRef}
+                className="tile-name-input"
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    cancelRename();
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    void commitRename();
+                  }
+                }}
+                onBlur={() => void commitRename()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                aria-label="Rename agent"
+              />
+            ) : (
+              <h2
+                onDoubleClick={
+                  onRename
+                    ? (e) => {
+                        if (guardBlockedCompactionEvent(e)) return;
+                        e.stopPropagation();
+                        startRename();
+                      }
+                    : undefined
                 }
-              }}
-              onBlur={() => void commitRename()}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              aria-label="Rename agent"
-            />
-          ) : (
-            <h2
-              onDoubleClick={
-                onRename
-                  ? (e) => {
-                      if (guardBlockedCompactionEvent(e)) return;
-                      e.stopPropagation();
-                      startRename();
-                    }
-                  : undefined
-              }
-              title={onRename ? "Double-click to rename" : undefined}
-              style={onRename ? { cursor: "text" } : undefined}
-            >
-              {title}
-            </h2>
-          )}
-          {renameError && !editingName && (
-            <span className="tile-rename-err">{renameError}</span>
-          )}
-        </div>
-        <div className="tile-header-meta">
-          {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}
-          {provider && displayModel && (
-            <span
-              className="provider-pill mono"
-              data-provider={shortProvider(provider)}
-              {...hintHandlers(`Provider: ${provider} · Model: ${displayModel}`)}
-            >
-              {providerPillLabel(provider)} · {shortModel(displayModel)}
-            </span>
-          )}
-          <span className="conn-status" data-conn-status={status}>{status}</span>
-          {worktreePath && (
-            <button
-              type="button"
-              className="folder-pill mono"
-              aria-label={`Reveal worktree — ${worktreePath}`}
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onRevealWorktree?.();
-              }}
-              onContextMenu={
-                onRevealAtelierDir
-                  ? (e) => {
-                      if (guardBlockedCompactionEvent(e)) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setFolderMenu({ x: e.clientX, y: e.clientY });
-                    }
-                  : undefined
-              }
-              disabled={!onRevealWorktree}
-              {...hintHandlers(
-                onRevealAtelierDir
-                  ? `Reveal in Finder · ${worktreePath} · right-click for more`
-                  : `Reveal in Finder · ${worktreePath}`,
-              )}
-            >
-              {shortenPath(worktreePath)}
-            </button>
-          )}
-          {folderMenu && (
-            <div
-              className="folder-pill-menu"
-              style={{ left: folderMenu.x, top: folderMenu.y }}
-              onClick={(e) => e.stopPropagation()}
-            >
+                title={onRename ? "Double-click to rename" : undefined}
+                style={onRename ? { cursor: "text" } : undefined}
+              >
+                {title}
+              </h2>
+            )}
+            {renameError && !editingName && (
+              <span className="tile-rename-err">{renameError}</span>
+            )}
+          </>
+        }
+        meta={
+          <>
+            {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}
+            {provider && displayModel && (
+              <span
+                className="provider-pill mono"
+                data-provider={shortProvider(provider)}
+                {...hintHandlers(`Provider: ${provider} · Model: ${displayModel}`)}
+              >
+                {providerPillLabel(provider)} · {shortModel(displayModel)}
+              </span>
+            )}
+            <span className="conn-status" data-conn-status={status}>{status}</span>
+            {worktreePath && (
               <button
                 type="button"
-                className="menu-item"
+                className="folder-pill mono"
+                aria-label={`Reveal worktree — ${worktreePath}`}
                 onClick={(e) => {
                   if (guardBlockedCompactionEvent(e)) return;
-                  setFolderMenu(null);
                   onRevealWorktree?.();
                 }}
+                onContextMenu={
+                  onRevealAtelierDir
+                    ? (e) => {
+                        if (guardBlockedCompactionEvent(e)) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setFolderMenu({ x: e.clientX, y: e.clientY });
+                      }
+                    : undefined
+                }
+                disabled={!onRevealWorktree}
+                {...hintHandlers(
+                  onRevealAtelierDir
+                    ? `Reveal in Finder · ${worktreePath} · right-click for more`
+                    : `Reveal in Finder · ${worktreePath}`,
+                )}
               >
-                Open worktree
+                {shortenPath(worktreePath)}
               </button>
+            )}
+            {folderMenu && (
+              <div
+                className="folder-pill-menu"
+                style={{ left: folderMenu.x, top: folderMenu.y }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    setFolderMenu(null);
+                    onRevealWorktree?.();
+                  }}
+                >
+                  Open worktree
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    setFolderMenu(null);
+                    onRevealAtelierDir?.();
+                  }}
+                >
+                  Open Atelier folder
+                </button>
+              </div>
+            )}
+          </>
+        }
+        right={
+          <>
+            <span
+              className={"tile-hint" + (hint ? " visible" : "")}
+              aria-hidden="true"
+            >
+              {hint}
+            </span>
+            <div className="tile-controls">
+              {onOpenInIde && (
+                <button
+                  type="button"
+                  className="tile-ctl"
+                  aria-label="Open worktree in editor"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    onOpenInIde();
+                  }}
+                  {...hintHandlers("Open in editor")}
+                >
+                  <OpenIdeIcon />
+                </button>
+              )}
+              {onOpenInConsole && (
+                <button
+                  type="button"
+                  className="tile-ctl"
+                  aria-label="Open worktree in console"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    onOpenInConsole();
+                  }}
+                  {...hintHandlers("Open in console")}
+                >
+                  <OpenConsoleIcon />
+                </button>
+              )}
+              {onHandoff && (
+                <button
+                  type="button"
+                  className="tile-ctl"
+                  aria-label="Handoff to agent"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    onHandoff();
+                  }}
+                  {...hintHandlers("Handoff to agent")}
+                >
+                  <HandoffIcon />
+                </button>
+              )}
               <button
                 type="button"
-                className="menu-item"
+                className="tile-ctl"
+                aria-label={maximized ? "Restore" : "Maximize"}
                 onClick={(e) => {
                   if (guardBlockedCompactionEvent(e)) return;
-                  setFolderMenu(null);
-                  onRevealAtelierDir?.();
+                  setMaximized((m) => !m);
                 }}
+                {...hintHandlers(maximized ? "Restore" : "Maximize")}
               >
-                Open Atelier folder
+                {maximized ? <RestoreIcon /> : <MaxIcon />}
+              </button>
+              {onDetach && (
+                <button
+                  type="button"
+                  className="tile-ctl"
+                  aria-label="Detach to terminal"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    onDetach();
+                  }}
+                  {...hintHandlers("Detach to CLI")}
+                >
+                  <DetachIcon />
+                </button>
+              )}
+              <button
+                type="button"
+                className="tile-ctl"
+                aria-label={onClose ? "Close" : "Close unavailable"}
+                onClick={(e) => {
+                  if (guardBlockedCompactionEvent(e)) return;
+                  onClose?.();
+                }}
+                disabled={!onClose}
+                {...hintHandlers(
+                  onClose ? "Close · pins to sidebar" : "Close unavailable",
+                )}
+              >
+                <CloseIcon />
               </button>
             </div>
-          )}
-        </div>
-        <div className="tile-header-right">
-          <span
-            className={"tile-hint" + (hint ? " visible" : "")}
-            aria-hidden="true"
-          >
-            {hint}
-          </span>
-          <div className="tile-controls">
-          {onOpenInIde && (
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Open worktree in editor"
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onOpenInIde();
-              }}
-              {...hintHandlers("Open in editor")}
-            >
-              <OpenIdeIcon />
-            </button>
-          )}
-          {onOpenInConsole && (
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Open worktree in console"
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onOpenInConsole();
-              }}
-              {...hintHandlers("Open in console")}
-            >
-              <OpenConsoleIcon />
-            </button>
-          )}
-          {onHandoff && (
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Handoff to agent"
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onHandoff();
-              }}
-              {...hintHandlers("Handoff to agent")}
-            >
-              <HandoffIcon />
-            </button>
-          )}
-          <button
-            type="button"
-            className="tile-ctl"
-            aria-label={maximized ? "Restore" : "Maximize"}
-            onClick={(e) => {
-              if (guardBlockedCompactionEvent(e)) return;
-              setMaximized((m) => !m);
-            }}
-            {...hintHandlers(maximized ? "Restore" : "Maximize")}
-          >
-            {maximized ? <RestoreIcon /> : <MaxIcon />}
-          </button>
-          {onDetach && (
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Detach to terminal"
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onDetach();
-              }}
-              {...hintHandlers("Detach to CLI")}
-            >
-              <DetachIcon />
-            </button>
-          )}
-          <button
-            type="button"
-            className="tile-ctl"
-            aria-label={onClose ? "Close" : "Close unavailable"}
-            onClick={(e) => {
-              if (guardBlockedCompactionEvent(e)) return;
-              onClose?.();
-            }}
-            disabled={!onClose}
-            {...hintHandlers(
-              onClose ? "Close · pins to sidebar" : "Close unavailable",
-            )}
-          >
-            <CloseIcon />
-          </button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
       <div
         className={
           "agent-tile-body" +
@@ -1249,7 +1115,7 @@ export function AgentTile({
           {pendingContexts.length > 0 && (
             <div className="composer-contexts">
               {pendingContexts.map((c, i) =>
-                isSimpleType(c.type) ? (
+                isSimpleContextType(c.type) ? (
                   <SimpleContextRow
                     key={i}
                     context={c}
@@ -1296,19 +1162,20 @@ export function AgentTile({
             <div className="composer-add-context">
               <button
                 type="button"
-                className="composer-tool"
+                className="composer-tool composer-tool-icon"
                 onClick={(e) => {
                   if (guardBlockedCompactionEvent(e)) return;
                   setPickerOpen((o) => !o);
                 }}
                 title="Attach context to your next message — appended to context.md when you Send"
+                aria-label="Attach context"
                 aria-expanded={pickerOpen}
               >
-                + Add context
+                <PaperclipIcon size={13} />
               </button>
               {pickerOpen && (
                 <div className="composer-context-picker">
-                  {SIMPLE_PICKER_TYPES.map((s) => (
+                  {SIMPLE_CONTEXT_PICKER_TYPES.map((s) => (
                     <button
                       key={s.id}
                       type="button"
@@ -1333,94 +1200,15 @@ export function AgentTile({
                 </div>
               )}
             </div>
-            {showSessionModelSelect && (
-              <div
-                className="composer-model-picker"
-                ref={modelPickerRef}
-                title={sessionModelTitle}
-              >
-                <button
-                  type="button"
-                  className="composer-model-trigger"
-                  disabled={sessionModelDisabled}
-                  onClick={openSessionModelPicker}
-                  aria-haspopup="listbox"
-                  aria-expanded={modelPickerOpen}
-                >
-                  <span className="composer-model-prefix">Model:</span>
-                  <span className="composer-model-current">
-                    {sessionModelLabel}
-                  </span>
-                  <span className="composer-model-caret" aria-hidden>
-                    ▾
-                  </span>
-                </button>
-                {modelPickerOpen && (
-                  <div className="composer-model-menu">
-                    <label className="composer-model-search">
-                      <SearchIcon size={12} />
-                      <input
-                        ref={modelSearchRef}
-                        value={modelQuery}
-                        onChange={(e) => setModelQuery(e.target.value)}
-                        onKeyDown={handleModelSearchKeyDown}
-                        placeholder="Search models"
-                        aria-controls={`${modelPickerId}-results`}
-                        aria-activedescendant={
-                          filteredSessionModelChoices[modelActiveIndex]
-                            ? `${modelPickerId}-option-${modelActiveIndex}`
-                            : undefined
-                        }
-                      />
-                    </label>
-                    <div
-                      ref={modelResultsRef}
-                      id={`${modelPickerId}-results`}
-                      className="composer-model-results"
-                      role="listbox"
-                    >
-                      {filteredSessionModelChoices.length === 0 ? (
-                        <div className="composer-model-empty">No models found</div>
-                      ) : (
-                        filteredSessionModelChoices.map((choice, index) => {
-                          const selected = choice.value === sessionModelValue;
-                          const active = index === modelActiveIndex;
-                          return (
-                            <button
-                              key={String(choice.value)}
-                              id={`${modelPickerId}-option-${index}`}
-                              type="button"
-                              className="composer-model-option"
-                              data-active={active ? "true" : undefined}
-                              data-selected={selected ? "true" : undefined}
-                              role="option"
-                              aria-selected={selected}
-                              onMouseEnter={() => setModelActiveIndex(index)}
-                              onClick={() => chooseSessionModel(choice)}
-                            >
-                              <span className="composer-model-option-check">
-                                {selected ? <CheckIcon size={11} /> : null}
-                              </span>
-                              <span className="composer-model-option-main">
-                                <span className="composer-model-option-name">
-                                  {choice.name ?? String(choice.value)}
-                                </span>
-                                <span className="composer-model-option-value">
-                                  {String(choice.value)}
-                                </span>
-                              </span>
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                    <div className="composer-model-foot">
-                      {modelRefreshing ? "Refreshing models..." : "Type to filter"}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+            <SessionModelPicker
+              disabled={sessionModelDisabled}
+              option={sessionModelConfig}
+              pickerId={modelPickerId}
+              refreshSeq={sessionConfigOptionsSeq}
+              onBeforeChange={() => !guardBlockedCompaction()}
+              onChange={(value) => sendSessionConfig("model", value)}
+              onRefresh={() => sendSessionConfigRefresh("model")}
+            />
             {showSessionEffortSelect && (
               <label
                 className="composer-effort-picker"
@@ -2080,10 +1868,6 @@ export function labelForSessionConfigValue(
 ): string {
   const choice = option.choices.find((item) => item.value === value);
   return choice?.name ?? String(value);
-}
-
-function normalizeModelQuery(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9./:_-]+/g, " ").trim();
 }
 
 export type TurnRollup = {

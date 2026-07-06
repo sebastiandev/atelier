@@ -15,7 +15,6 @@ import {
   listProjects,
   listWorks,
 } from "./api";
-import { BrandMark } from "./BrandMark";
 import {
   ChatComposer,
   ChatRow,
@@ -28,14 +27,12 @@ import {
   CheckIcon,
   FolderIcon,
   MoreIcon,
-  SearchIcon,
-  SlidersIcon,
 } from "./Icons";
 import { NewWorkDialog } from "./NewWorkDialog";
 import { SearchModal } from "./SearchModal";
 import { SharedFoldersSection } from "./SharedFoldersSection";
+import { ShellCrown } from "./ShellCrown";
 import { Switcher, type SwitcherItem } from "./Switcher";
-import { ThemeToggle } from "./ThemeToggle";
 
 type Tab = "active" | "completed";
 
@@ -203,33 +200,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
     >
       {/* LEFT — rail: crown, crumbs, hero, stats, defaults, shared folders, actions */}
       <aside className="shell-left proj-rail">
-        <div className="crown">
-          <a className="wordmark" href="/" title="Back to workspace">
-            <span className="wm-mark" aria-hidden>
-              <BrandMark />
-            </span>
-            <span className="wm-rest">telier</span>
-          </a>
-          <div className="crown-actions">
-            <button
-              className="btn-icon"
-              onClick={() => setSearchOpen(true)}
-              title="Search (⇧F)"
-              aria-label="Search"
-            >
-              <SearchIcon size={12} />
-            </button>
-            <a
-              className="btn-icon"
-              href="/settings"
-              title="Settings (⌘,)"
-              aria-label="Settings"
-            >
-              <SlidersIcon size={12} />
-            </a>
-            <ThemeToggle className="btn-icon" />
-          </div>
-        </div>
+        <ShellCrown onSearch={() => setSearchOpen(true)} />
 
         <div className="crumbs-v3">
           <a className="crumb" href="/">

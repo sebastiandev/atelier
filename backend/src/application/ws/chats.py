@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -19,6 +20,9 @@ from src.domain.agents import (
 )
 from src.domain.chatstore import ChatStore
 from src.domain.commands.chats import connect
+from src.domain.commands.chats import send_input as send_chat_input
+from src.domain.commands.planning import mark_ready as planning_mark_ready
+from src.domain.planning.ports import PlanningFiles
 from src.domain.supervisor import (
     AgentSubscription,
     AgentSupervisorService,
@@ -38,6 +42,7 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
     supervisor = websocket.app.state.chat_supervisor
     workstore = websocket.app.state.workstore
     projectstore = websocket.app.state.projectstore
+    planningfiles = websocket.app.state.planningfiles
     settings = websocket.app.state.settings
 
     cursor = _parse_cursor(websocket.query_params.get("cursor"))
@@ -48,13 +53,20 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
             supervisor,
             workstore,
             projectstore,
+            planningfiles,
             settings,
             connect.ConnectChatRequest(chat_slug=chat_slug, cursor=cursor),
         ) as sub:
             await websocket.accept()
-            send_task = asyncio.create_task(_drain(sub, websocket))
+            send_task = asyncio.create_task(_drain(sub, websocket, chatstore, chat_slug))
             recv_task = asyncio.create_task(
-                _receive_inputs(websocket, supervisor, chatstore, chat_slug)
+                _receive_inputs(
+                    websocket,
+                    supervisor,
+                    chatstore,
+                    planningfiles,
+                    chat_slug,
+                )
             )
             kick_task = asyncio.create_task(sub.kicked.wait())
             try:
@@ -85,15 +97,54 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
         pass
 
 
-async def _drain(sub: AgentSubscription, websocket: WebSocket) -> None:
+async def _drain(
+    sub: AgentSubscription,
+    websocket: WebSocket,
+    chatstore: ChatStore,
+    chat_slug: str,
+) -> None:
     async for event in sub.stream():
         await websocket.send_json(event)
+        readiness_event = _planning_readiness_event(chatstore, chat_slug, event)
+        if readiness_event is not None:
+            await websocket.send_json(readiness_event)
+
+
+def _planning_readiness_event(
+    chatstore: ChatStore,
+    chat_slug: str,
+    event: dict,
+) -> dict | None:
+    """Persist and render a Planning readiness event from a completed message."""
+    if event.get("type") != "message_complete":
+        return None
+    text = event.get("text")
+    if not isinstance(text, str):
+        return None
+    result = planning_mark_ready.execute(
+        chatstore,
+        planning_mark_ready.MarkPlanningChatReadyRequest(
+            chat_slug=chat_slug,
+            assistant_text=text,
+        ),
+    )
+    if result is None or not result.changed:
+        return None
+    payload = {
+        "type": "planning_readiness",
+        "ts": datetime.now(UTC).isoformat(),
+        "ready": result.readiness.ready,
+        "summary": result.readiness.summary,
+    }
+    seq = chatstore.append_transcript_event_with_seq(chat_slug, payload)
+    return {"seq": seq, **payload}
 
 
 async def _receive_inputs(
     websocket: WebSocket,
     supervisor: AgentSupervisorService,
     chatstore: ChatStore,
+    planningfiles: PlanningFiles,
     chat_slug: str,
 ) -> None:
     while True:
@@ -120,7 +171,15 @@ async def _receive_inputs(
                             }
                         )
                     else:
-                        await supervisor.send_input(chat_slug, text)
+                        await send_chat_input.execute(
+                            chatstore,
+                            supervisor,
+                            planningfiles,
+                            send_chat_input.SendChatInputRequest(
+                                chat_slug=chat_slug,
+                                text=text,
+                            ),
+                        )
                 case StopTurn():
                     await supervisor.stop_turn(chat_slug)
                 case ResolvePermission(request_id=request_id, decision=decision):

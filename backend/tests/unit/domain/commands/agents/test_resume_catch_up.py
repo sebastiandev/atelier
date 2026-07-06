@@ -1,4 +1,4 @@
-"""Unit tests for ``resume._catch_up_detached_agent``.
+"""Unit tests for ``resume_runtime._catch_up_detached_agent``.
 
 The function is private but encapsulates the parent-chain merge policy:
 cover the dedup branches here so the catch-up's intent is locked down
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from src.domain.commands.agents.resume import _catch_up_detached_agent
+from src.domain.agents.resume_runtime import _catch_up_detached_agent
 from src.domain.models import Agent, AgentStatus
 from src.domain.workstore import WorkStoreService
 from tests.unit.domain.workstore._stubs import (
@@ -73,11 +73,11 @@ def test_catch_up_without_parent_only_merges_current() -> None:
 
     with (
         patch(
-            "src.domain.commands.agents.resume.merge_cli_transcript",
+            "src.domain.agents.resume_runtime.merge_cli_transcript",
             return_value=[{"type": "user_input", "ts": "t", "text": "hi"}],
         ) as mock_merge,
         patch(
-            "src.domain.commands.agents.resume.sdk_cursor_at_detach",
+            "src.domain.agents.resume_runtime.sdk_cursor_at_detach",
             return_value={"provider": "codex", "line_count": 9},
         ),
     ):
@@ -111,11 +111,11 @@ def test_catch_up_uses_latest_reattach_cursor_on_next_merge() -> None:
 
     with (
         patch(
-            "src.domain.commands.agents.resume.merge_cli_transcript",
+            "src.domain.agents.resume_runtime.merge_cli_transcript",
             return_value=[],
         ) as mock_merge,
         patch(
-            "src.domain.commands.agents.resume.sdk_cursor_at_detach",
+            "src.domain.agents.resume_runtime.sdk_cursor_at_detach",
             return_value={"provider": "codex", "line_count": 20},
         ),
     ):
@@ -137,7 +137,7 @@ def test_idle_catch_up_without_new_events_does_not_append_marker() -> None:
     agent = _agent(parent_session_id=None, status=AgentStatus.IDLE)
 
     with patch(
-        "src.domain.commands.agents.resume.merge_cli_transcript",
+        "src.domain.agents.resume_runtime.merge_cli_transcript",
         return_value=[],
     ):
         _catch_up_detached_agent(
@@ -165,11 +165,11 @@ def test_idle_catch_up_with_new_events_advances_cursor() -> None:
 
     with (
         patch(
-            "src.domain.commands.agents.resume.merge_cli_transcript",
+            "src.domain.agents.resume_runtime.merge_cli_transcript",
             return_value=[{"type": "user_input", "ts": "t", "text": "late"}],
         ),
         patch(
-            "src.domain.commands.agents.resume.sdk_cursor_at_detach",
+            "src.domain.agents.resume_runtime.sdk_cursor_at_detach",
             return_value={"provider": "codex", "line_count": 25},
         ),
     ):
@@ -199,7 +199,7 @@ def test_catch_up_with_parent_full_exports_when_unseen() -> None:
         return [{"type": "user_input", "ts": "tc", "text": "new"}]
 
     with patch(
-        "src.domain.commands.agents.resume.merge_cli_transcript",
+        "src.domain.agents.resume_runtime.merge_cli_transcript",
         side_effect=fake_merge,
     ) as mock_merge:
         _catch_up_detached_agent(workstore, "WRK-001", "agt-1", agent, Path("/wd"))
@@ -236,7 +236,7 @@ def test_catch_up_skips_parent_when_session_established_already_in_ndjson() -> N
     agent = _agent(parent_session_id="sess-parent")
 
     with patch(
-        "src.domain.commands.agents.resume.merge_cli_transcript",
+        "src.domain.agents.resume_runtime.merge_cli_transcript",
         return_value=[],
     ) as mock_merge:
         _catch_up_detached_agent(workstore, "WRK-001", "agt-1", agent, Path("/wd"))
@@ -263,7 +263,7 @@ def test_catch_up_skips_parent_when_sdk_session_merged_marker_exists() -> None:
     agent = _agent(parent_session_id="sess-parent")
 
     with patch(
-        "src.domain.commands.agents.resume.merge_cli_transcript",
+        "src.domain.agents.resume_runtime.merge_cli_transcript",
         return_value=[],
     ) as mock_merge:
         _catch_up_detached_agent(workstore, "WRK-001", "agt-1", agent, Path("/wd"))
@@ -293,7 +293,7 @@ def test_catch_up_flips_status_to_idle() -> None:
     agent.session_id = "sess-current"
 
     with patch(
-        "src.domain.commands.agents.resume.merge_cli_transcript",
+        "src.domain.agents.resume_runtime.merge_cli_transcript",
         return_value=[],
     ):
         _catch_up_detached_agent(workstore, "WRK-001", "agt-1", agent, Path("/wd"))

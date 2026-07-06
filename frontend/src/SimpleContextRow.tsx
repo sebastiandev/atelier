@@ -5,6 +5,23 @@ import { FolderPickerDialog } from "./FolderPickerDialog";
 
 export type SimpleContextType = "text" | "url" | "file";
 
+export const SIMPLE_CONTEXT_PICKER_TYPES: ReadonlyArray<{
+  id: SimpleContextType;
+  label: string;
+}> = [
+  { id: "text", label: "Text" },
+  { id: "url", label: "URL" },
+  { id: "file", label: "File" },
+];
+
+const SIMPLE_CONTEXT_TYPES: ReadonlySet<string> = new Set(
+  SIMPLE_CONTEXT_PICKER_TYPES.map((type) => type.id),
+);
+
+export function isSimpleContextType(type: string): type is SimpleContextType {
+  return SIMPLE_CONTEXT_TYPES.has(type);
+}
+
 type Props = {
   context: ContextEntry;
   onChange: (next: ContextEntry) => void;

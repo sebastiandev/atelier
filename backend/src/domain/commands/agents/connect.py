@@ -6,17 +6,14 @@ exactly once, in order: disk-replay first, then live events.
 
 Flow:
   1. If the supervisor already tracks the agent, subscribe directly.
-  2. Otherwise, ``resume.execute`` rebuilds the adapter, runs the
+  2. Otherwise, the resume runtime rebuilds the adapter, runs the
      detach catch-up merge (if needed), and registers the agent.
      Truly unknown slugs surface as ``AgentNotFound``.
   3. ``supervisor.subscribe(slug, cursor)`` yields the Subscription;
      this command yields the same value to the caller.
 
-The WS handler shrinks to::
-
-    async with connect.execute(deps, request) as sub:
-        async for event in sub.stream():
-            await websocket.send_json(event)
+The WS handler opens this command as an async context manager, then streams
+subscription events to the socket.
 
 with a parallel task watching ``sub.kicked`` and processing inbound
 input frames.
@@ -29,7 +26,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.domain.commands.agents import resume
+from src.domain.agents import resume_runtime
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
@@ -68,18 +65,18 @@ async def execute(
         if history_work_slug is None:
             raise AgentNotFound(f"agent not found: {req.agent_slug}")
         try:
-            await resume.execute(
+            await resume_runtime.resume_agent(
                 workstore,
                 supervisor,
                 worktree_manager,
                 sharestore,
                 share_provisioner,
                 settings,
-                resume.ResumeAgentRequest(
+                resume_runtime.ResumeAgentRequest(
                     work_slug=history_work_slug, agent_slug=req.agent_slug
                 ),
             )
-        except resume.AgentNotFound as exc:
+        except resume_runtime.AgentNotFound as exc:
             raise AgentNotFound(str(exc)) from exc
     elif supervisor.is_lazy_registered(req.agent_slug):
         # A view-only reattach registers lazily. If the user keeps typing
@@ -89,13 +86,13 @@ async def execute(
         if history_work_slug is None:
             raise AgentNotFound(f"agent not found: {req.agent_slug}")
         try:
-            synced = await resume.catch_up_cli_events(
+            synced = await resume_runtime.catch_up_cli_events(
                 workstore,
                 worktree_manager,
                 work_slug=history_work_slug,
                 agent_slug=req.agent_slug,
             )
-        except resume.AgentNotFound as exc:
+        except resume_runtime.AgentNotFound as exc:
             raise AgentNotFound(str(exc)) from exc
         if synced:
             await supervisor.refresh_seq_from_disk(req.agent_slug)

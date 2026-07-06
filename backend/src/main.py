@@ -56,6 +56,7 @@ from src.infrastructure.database.user_settings_repository import (
 from src.infrastructure.filesystem import (
     FsChatFiles,
     FsChatTranscriptLog,
+    FsPlanningFiles,
     FsProjectFiles,
     FsTranscriptLog,
     FsWorkspaceFiles,
@@ -96,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         paths = WorkspacePaths(workspace_root=resolved.workspace_root)
         repo = SqlWorkRepository(session_factory)
         files = FsWorkspaceFiles(paths)
+        planning_files = FsPlanningFiles(paths)
         transcript_log = FsTranscriptLog(paths)
 
         # Projects reconcile FIRST: works carry a project_slug FK, and the
@@ -212,6 +214,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.workstore = workstore
+        app.state.planningfiles = planning_files
         app.state.projectstore = projectstore
         app.state.chatstore = chatstore
         app.state.supervisor = supervisor

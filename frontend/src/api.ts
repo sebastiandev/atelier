@@ -139,6 +139,11 @@ export type ChatMessage = {
   created_at: string;
 };
 
+export type PlanningChatReadiness = {
+  ready: boolean;
+  summary: string;
+};
+
 export type ChatSummary = {
   slug: string;
   title: string;
@@ -150,6 +155,7 @@ export type ChatSummary = {
   updated_at: string;
   promoted_to_work_slug: string | null;
   message_count: number;
+  planning_readiness?: PlanningChatReadiness | null;
 };
 
 export type ChatDetail = ChatSummary & {
@@ -316,6 +322,439 @@ export function moveWorkToProject(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ project_slug: projectSlug }),
   }).then((r) => jsonOrThrow<WorkDetail>(r));
+}
+
+// ─── Work planning ───────────────────────────────────────────────────────
+
+export type PlanningProfile =
+  | "feature"
+  | "refactor"
+  | "migration"
+  | "bugfix"
+  | "hotfix"
+  | "full_app"
+  | "custom";
+
+export type PlanningFramework = "bmad" | "spec" | "openspec" | "custom";
+export type PlanningDepth =
+  | "minimal"
+  | "lightweight"
+  | "standard"
+  | "deep"
+  | "custom";
+
+export type PlanArtifactKind =
+  | "brief"
+  | "architecture"
+  | "spec"
+  | "scenario"
+  | "acceptance"
+  | "story"
+  | "task"
+  | "spike"
+  | "bug"
+  | "hotfix"
+  | "note";
+
+export type PlanArtifactStatus = "draft" | "approved" | "changed" | "accepted";
+export type PlanReadiness = "ready" | "needs_detail";
+export type PlanningPhase = "conversing" | "planned";
+export type PlanRunStatus =
+  | "running"
+  | "needs_attention"
+  | "waiting_approval"
+  | "blocked"
+  | "completed_pending_review"
+  | "accepted";
+export type LoopStatus =
+  | "pending"
+  | "running"
+  | "waiting_report"
+  | "assessing"
+  | "needs_agent"
+  | "blocked_user"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type PlanProposalStatus = "pending" | "accepted" | "rejected";
+export type PlanTrackingKind = "jira" | "pr" | "blocker" | "bug";
+
+export type PlanOverview = {
+  total: number;
+  ready: number;
+  needs_detail: number;
+  approved: number;
+  changed: number;
+  accepted: number;
+  executable: number;
+  running: number;
+  review: number;
+  blocked: number;
+};
+
+export type PlanArtifactRun = {
+  agent_slug: string;
+  status: PlanRunStatus;
+  started_at: string;
+  completed_at: string | null;
+  cleanup_at: string | null;
+  report_path: string | null;
+  summary: string;
+  divergences: string;
+  skipped_scope: string;
+  blockers: string;
+  decisions: string;
+  changes: string;
+  validation_evidence: string;
+  loop_status: LoopStatus | null;
+  loop_status_reason: string;
+  loop_attempt: number;
+  loop_latest_assessment: string[];
+};
+
+export type PlanArtifactProposal = {
+  id: string;
+  artifact_id: string;
+  title: string;
+  path: string;
+  source_hash: string;
+  proposed_content: string;
+  status: PlanProposalStatus;
+  created_at: string;
+  resolved_at: string | null;
+};
+
+export type PlanTrackingLink = {
+  id: string;
+  kind: PlanTrackingKind;
+  title: string;
+  url: string;
+  status: string;
+  ref: string;
+  notes: string;
+  created_at: string;
+};
+
+export type PlanArtifact = {
+  id: string;
+  kind: PlanArtifactKind;
+  title: string;
+  path: string;
+  source_ref: string;
+  source_hash: string;
+  status: PlanArtifactStatus;
+  readiness: PlanReadiness;
+  executable: boolean;
+  launchable: boolean;
+  launch_blockers: string[];
+  dependencies: string[];
+  runs: PlanArtifactRun[];
+  proposals: PlanArtifactProposal[];
+  tracking: PlanTrackingLink[];
+  accepted_summary_path: string | null;
+};
+
+export type WorkPlan = {
+  work_slug: string;
+  framework: PlanningFramework;
+  profile: PlanningProfile;
+  phase: PlanningPhase;
+  depth: PlanningDepth;
+  root_path: string;
+  planning_path: string;
+  approved_at: string | null;
+  stale: boolean;
+  overview: PlanOverview;
+  artifacts: PlanArtifact[];
+};
+
+export type PlanningFrameworkStatus = {
+  framework: PlanningFramework;
+  label: string;
+  root_path: string;
+  ready: boolean;
+  markers: string[];
+  setup_command: string[];
+  setup_hint: string;
+};
+
+export type PlanMaterializationState =
+  | "idle"
+  | "running"
+  | "waiting_permission"
+  | "stalled"
+  | "complete"
+  | "failed";
+
+export type PlanMaterializationStatus = {
+  state: PlanMaterializationState;
+  chat_slug: string | null;
+  updated_at: string | null;
+  last_seq: number | null;
+  last_event_type: string | null;
+  last_event_summary: string;
+  message: string;
+  tool_name: string | null;
+};
+
+export type StartWorkPlanResult = {
+  plan: WorkPlan | null;
+  materialization_status: PlanMaterializationStatus;
+};
+
+export type PlanArtifactDetail = {
+  artifact: PlanArtifact;
+  content: string;
+};
+
+export function getWorkPlan(workSlug: string): Promise<WorkPlan> {
+  return fetch(`/api/works/${workSlug}/plan`).then((r) =>
+    jsonOrThrow<WorkPlan>(r),
+  );
+}
+
+export function getWorkPlanMaterializationStatus(
+  workSlug: string,
+  init?: RequestInit,
+): Promise<PlanMaterializationStatus> {
+  return fetch(
+    `/api/works/${workSlug}/plan/materialization-status`,
+    init,
+  ).then((r) => jsonOrThrow<PlanMaterializationStatus>(r));
+}
+
+export function startWorkPlan(
+  workSlug: string,
+  payload: {
+    root_path: string;
+    framework: PlanningFramework;
+    profile: PlanningProfile;
+    provider: string;
+    model: string;
+    options?: Record<string, string>;
+    planning_chat_slug?: string | null;
+  },
+): Promise<StartWorkPlanResult> {
+  return fetch(`/api/works/${workSlug}/plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<StartWorkPlanResult>(r));
+}
+
+export function checkPlanningFrameworkStatus(
+  workSlug: string,
+  payload: { root_path: string; framework: PlanningFramework },
+): Promise<PlanningFrameworkStatus> {
+  return fetch(`/api/works/${workSlug}/plan/framework-status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<PlanningFrameworkStatus>(r));
+}
+
+export function startPlanningChat(
+  workSlug: string,
+  payload: {
+    root_path: string;
+    idea: string;
+    framework: PlanningFramework;
+    profile: PlanningProfile;
+    provider: string;
+    model: string;
+    options?: Record<string, string>;
+  },
+): Promise<ChatDetail> {
+  return fetch(`/api/works/${workSlug}/planning-chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<ChatDetail>(r));
+}
+
+export function startPlanningSetupChat(
+  workSlug: string,
+  payload: {
+    root_path: string;
+    framework: PlanningFramework;
+    profile: PlanningProfile;
+    provider: string;
+    model: string;
+    options?: Record<string, string>;
+  },
+): Promise<ChatDetail> {
+  return fetch(`/api/works/${workSlug}/planning-setup-chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<ChatDetail>(r));
+}
+
+export function finishWorkPlan(workSlug: string): Promise<WorkPlan> {
+  return fetch(`/api/works/${workSlug}/plan/finish`, { method: "POST" }).then(
+    (r) => jsonOrThrow<WorkPlan>(r),
+  );
+}
+
+export function approveWorkPlan(workSlug: string): Promise<WorkPlan> {
+  return fetch(`/api/works/${workSlug}/plan/approve`, { method: "POST" }).then(
+    (r) => jsonOrThrow<WorkPlan>(r),
+  );
+}
+
+export function getPlanArtifact(
+  workSlug: string,
+  artifactId: string,
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}`).then((r) =>
+    jsonOrThrow<PlanArtifactDetail>(r),
+  );
+}
+
+export function updatePlanArtifact(
+  workSlug: string,
+  artifactId: string,
+  payload: { content: string; expected_hash: string },
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function acceptPlanArtifact(
+  workSlug: string,
+  artifactId: string,
+  payload: PlanArtifactReportPayload,
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export type PlanArtifactReportPayload = {
+  agent_slug?: string | null;
+  summary?: string;
+  divergences?: string;
+  skipped_scope?: string;
+  blockers?: string;
+  decisions?: string;
+  changes?: string;
+  validation_evidence?: string;
+};
+
+export function recordPlanArtifactRun(
+  workSlug: string,
+  artifactId: string,
+  agentSlug: string,
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent_slug: agentSlug }),
+  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function submitPlanArtifactReport(
+  workSlug: string,
+  artifactId: string,
+  payload: PlanArtifactReportPayload,
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/report`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function createPlanArtifactProposal(
+  workSlug: string,
+  artifactId: string,
+  payload: { title?: string; proposed_content: string },
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/proposals`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function acceptPlanArtifactProposal(
+  workSlug: string,
+  artifactId: string,
+  proposalId: string,
+): Promise<PlanArtifactDetail> {
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/proposals/${proposalId}/accept`,
+    { method: "POST" },
+  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function rejectPlanArtifactProposal(
+  workSlug: string,
+  artifactId: string,
+  proposalId: string,
+): Promise<PlanArtifactDetail> {
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/proposals/${proposalId}/reject`,
+    { method: "POST" },
+  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function linkPlanArtifactTracking(
+  workSlug: string,
+  artifactId: string,
+  payload: {
+    kind: PlanTrackingKind;
+    title?: string;
+    url?: string;
+    status?: string;
+    ref?: string;
+    notes?: string;
+  },
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/tracking`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function createPlanBug(
+  workSlug: string,
+  artifactId: string,
+  payload: { title: string; description?: string },
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/bugs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function ingestPlanArtifactReport(
+  workSlug: string,
+  artifactId: string,
+  agentSlug: string,
+): Promise<PlanArtifactDetail> {
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${agentSlug}/ingest-report`,
+    { method: "POST" },
+  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function markPlanRunCleaned(
+  workSlug: string,
+  artifactId: string,
+  agentSlug: string,
+): Promise<PlanArtifactDetail> {
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${agentSlug}/cleanup`,
+    { method: "POST" },
+  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
 export type Persona = "architect" | "developer" | "product" | "ux" | "writer";

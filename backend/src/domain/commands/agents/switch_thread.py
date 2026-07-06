@@ -18,7 +18,7 @@ Flow:
   4. Append a ``handoff_accepted`` marker to the transcript so the FE
      can clear the pending-handoff pill (and so the boundary is visible
      in the timeline).
-  5. Re-register via ``resume.execute`` with ``lazy=True``. The actual
+  5. Re-register via the resume runtime with ``lazy=True``. The actual
      CLI subprocess spawns on the next user input, when the supervisor
      calls ``send_input`` on the new adapter — same shape as a fresh
      resume after page reload.
@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from src.domain.commands.agents import resume
+from src.domain.agents import resume_runtime
 from src.domain.models import AgentStatus
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.ports import WorkStore
@@ -109,14 +109,14 @@ async def execute(
     # Re-register via the resume path so the adapter is rebuilt with
     # the row's now-updated session_id. ``lazy=True`` (resume's default)
     # means the CLI subprocess only spawns on the next user input.
-    await resume.execute(
+    await resume_runtime.resume_agent(
         workstore,
         supervisor,
         worktree_manager,
         sharestore,
         share_provisioner,
         settings,
-        resume.ResumeAgentRequest(
+        resume_runtime.ResumeAgentRequest(
             work_slug=work_slug,
             agent_slug=req.agent_slug,
         ),

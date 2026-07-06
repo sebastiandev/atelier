@@ -26,8 +26,8 @@ from src.domain.agents import (
     SetSessionConfigOption,
     StopTurn,
     UserAction,
+    context_updates,
 )
-from src.domain.commands.agents import add_contexts
 from src.domain.connections import ConnectionStore
 from src.domain.workstore.ports import WorkStore
 
@@ -54,12 +54,11 @@ async def execute(
                 # exception propagates to the WS handler, which will
                 # surface it as a transcript error event.
                 result = await asyncio.to_thread(
-                    add_contexts.execute,
+                    context_updates.append_contexts,
                     workstore,
                     connection_store,
-                    add_contexts.AddContextsRequest(
-                        agent_slug=agent_slug, contexts=contexts
-                    ),
+                    agent_slug=agent_slug,
+                    contexts=contexts,
                 )
                 prepended = _prepend_context_hint(
                     text, result.new_file_paths, result.index_path

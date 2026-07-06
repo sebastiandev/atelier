@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { type Connection, listConnections } from "./api";
-import { BrandMark } from "./BrandMark";
 import { Connections } from "./Connections";
 import { CheckIcon, SlidersIcon } from "./Icons";
+import { ShellCrown } from "./ShellCrown";
 import {
   type ToolOption,
   type Theme,
@@ -35,14 +35,7 @@ export function Settings({ section }: { section: SettingsSection }) {
   return (
     <div className="shell-v3 settings-v3">
       <aside className="shell-left settings-rail">
-        <div className="crown">
-          <a className="wordmark" href="/" title="Back to workspace">
-            <span className="wm-mark" aria-hidden>
-              <BrandMark />
-            </span>
-            <span className="wm-rest">telier</span>
-          </a>
-        </div>
+        <ShellCrown />
         <div className="crumbs-v3">
           <a className="crumb" href="/">
             ← workspace

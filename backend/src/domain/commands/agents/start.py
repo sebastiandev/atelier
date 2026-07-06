@@ -23,7 +23,6 @@ Steps:
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -35,11 +34,16 @@ from src.domain.agents import (
     detect_shared_envs,
     render_system_prompt,
 )
+from src.domain.agents.mounts import (
+    MountedProjectShares,
+    agent_writable_roots,
+    merge_mounted_shares,
+    mount_project_shares,
+    mount_work_chat_contexts,
+)
 from src.domain.connections import ConnectionStore
 from src.domain.models import Agent, Context, Persona, Provider
-from src.domain.sharedfolders.dtos import ShareSummary
 from src.domain.sharedfolders.ports import (
-    MountConflict,
     SharedFolderStore,
     ShareProvisioner,
 )
@@ -88,19 +92,6 @@ class StartAgentRequest:
     # checking out anything else. Ignored when ``fork_from_agent`` is
     # set — forks are always detached.
     branch_name: str | None = None
-
-
-@dataclass(frozen=True)
-class MountedProjectShares:
-    """Mounted project shares split by audience.
-
-    ``summaries`` are prompt-safe and only name the worktree mount path.
-    ``writable_roots`` are internal sandbox roots for providers that need
-    the resolved target path to write through the symlink.
-    """
-
-    summaries: tuple[ShareSummary, ...] = ()
-    writable_roots: tuple[Path, ...] = ()
 
 
 class WorkNotFound(ValueError):
@@ -237,25 +228,25 @@ async def execute(
         # Refuse + warn on conflict — the share's symlink is skipped for
         # this agent's worktree but other agents/shares continue to mount.
         # See ``_bmad-output/stories/STORY-032.md`` § "Design notes".
-        mounted_shares = _mount_project_shares(
+        mounted_shares = mount_project_shares(
             sharestore=sharestore,
             provisioner=share_provisioner,
             project_slug=record.work.project_slug,
             work_slug=req.work_slug,
             agent_slug=agent.slug,
         )
-        mounted_chat_contexts = _mount_work_chat_contexts(
+        mounted_chat_contexts = mount_work_chat_contexts(
             workdir=workdir,
             folders=record.chat_context_folders,
         )
-        mounted_shares = _merge_mounted_shares(
+        mounted_shares = merge_mounted_shares(
             mounted_chat_contexts,
             mounted_shares,
         )
 
         common = CommonAgentConfig(
             workdir=workdir,
-            writable_roots=_agent_writable_roots(
+            writable_roots=agent_writable_roots(
                 mounted_shares, worktree_manager, workdir
             ),
             system_prompt=render_system_prompt(
@@ -311,131 +302,6 @@ def _rollback_agent(
         workstore.delete_agent(agent_slug)
     except Exception:
         _log.warning("rollback: workstore.delete_agent failed for %s", agent_slug)
-
-
-def _mount_project_shares(
-    *,
-    sharestore: SharedFolderStore,
-    provisioner: ShareProvisioner,
-    project_slug: str | None,
-    work_slug: str,
-    agent_slug: str,
-) -> MountedProjectShares:
-    """Mount each project share into the agent's worktree as a symlink.
-
-    Idempotent — re-mounting an existing correctly-targeted symlink is
-    a no-op. Mount conflicts (existing dir/file at the path) are
-    logged and skipped; the share is omitted from the returned summary
-    and writable roots so the agent's system prompt and sandbox config
-    don't promise something the filesystem doesn't deliver.
-    """
-    if project_slug is None:
-        return MountedProjectShares()
-    summaries: list[ShareSummary] = []
-    writable_roots: list[Path] = []
-    for share in sharestore.list_for_project(project_slug):
-        if share.slug is None:
-            continue
-        target = provisioner.share_canonical_path(project_slug, share.slug)
-        try:
-            provisioner.mount_in_worktree(
-                work_slug, agent_slug, share.mount_path, target
-            )
-        except MountConflict as exc:
-            _log.warning(
-                "share %s not mounted for %s/%s: %s",
-                share.slug,
-                work_slug,
-                agent_slug,
-                exc,
-            )
-            continue
-        summaries.append(
-            ShareSummary(name=share.name, mount_path=share.mount_path)
-        )
-        writable_roots.append(target.resolve(strict=False))
-    return MountedProjectShares(
-        summaries=tuple(summaries),
-        writable_roots=tuple(dict.fromkeys(writable_roots)),
-    )
-
-
-def _agent_writable_roots(
-    mounted_shares: MountedProjectShares,
-    worktree_manager: WorktreeManager,
-    workdir: Path,
-) -> tuple[Path, ...]:
-    return tuple(
-        dict.fromkeys(
-            (
-                *mounted_shares.writable_roots,
-                *worktree_manager.sandbox_writable_roots(workdir),
-            )
-        )
-    )
-
-
-def _mount_work_chat_contexts(
-    *,
-    workdir: Path,
-    folders: Sequence[object],
-) -> MountedProjectShares:
-    summaries: list[ShareSummary] = []
-    writable_roots: list[Path] = []
-    for folder in folders:
-        name = getattr(folder, "name", None)
-        mount_path = getattr(folder, "mount_path", None)
-        target = getattr(folder, "absolute_path", None)
-        if not isinstance(name, str) or not isinstance(mount_path, str):
-            continue
-        if not isinstance(target, Path):
-            continue
-        link_path = workdir / mount_path
-        try:
-            link_path.parent.mkdir(parents=True, exist_ok=True)
-            if link_path.is_symlink():
-                if link_path.resolve(strict=False) == target.resolve(strict=False):
-                    pass
-                else:
-                    link_path.unlink()
-                    link_path.symlink_to(target, target_is_directory=True)
-            elif link_path.exists():
-                _log.warning(
-                    "chat context %s not mounted at %s: path already exists",
-                    name,
-                    link_path,
-                )
-                continue
-            else:
-                link_path.symlink_to(target, target_is_directory=True)
-        except OSError as exc:
-            _log.warning(
-                "chat context %s not mounted at %s: %s",
-                name,
-                link_path,
-                exc,
-            )
-            continue
-        summaries.append(ShareSummary(name=name, mount_path=mount_path))
-        writable_roots.append(target.resolve(strict=False))
-    return MountedProjectShares(
-        summaries=tuple(summaries),
-        writable_roots=tuple(dict.fromkeys(writable_roots)),
-    )
-
-
-def _merge_mounted_shares(
-    *groups: MountedProjectShares,
-) -> MountedProjectShares:
-    summaries: list[ShareSummary] = []
-    writable_roots: list[Path] = []
-    for group in groups:
-        summaries.extend(group.summaries)
-        writable_roots.extend(group.writable_roots)
-    return MountedProjectShares(
-        summaries=tuple(summaries),
-        writable_roots=tuple(dict.fromkeys(writable_roots)),
-    )
 
 
 __all__ = [

@@ -20,6 +20,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from src.domain.agents.mounts import (
+    MountedProjectShares,
+    agent_writable_roots,
+    mount_project_shares,
+)
 from src.domain.models import Agent, AgentStatus
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.ports import WorkStore
@@ -106,12 +111,6 @@ async def execute(
     # the marker we're about to append.
     await supervisor.stop_agent(req.agent_slug)
 
-    from src.domain.commands.agents.start import (
-        MountedProjectShares,
-        _agent_writable_roots,
-        _mount_project_shares,
-    )
-
     mounted_shares = MountedProjectShares()
     if sharestore is not None and share_provisioner is not None:
         record = workstore.get_work(work_slug)
@@ -120,14 +119,14 @@ async def execute(
         # Keep detach-to-CLI sandbox roots in sync with in-app Codex runs.
         # The helper is idempotent, so it also repairs missing share symlinks
         # before the CLI opens.
-        mounted_shares = _mount_project_shares(
+        mounted_shares = mount_project_shares(
             sharestore=sharestore,
             provisioner=share_provisioner,
             project_slug=project_slug,
             work_slug=work_slug,
             agent_slug=req.agent_slug,
         )
-    additional_directories = _agent_writable_roots(
+    additional_directories = agent_writable_roots(
         mounted_shares, worktree_manager, workdir
     )
 

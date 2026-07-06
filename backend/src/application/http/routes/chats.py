@@ -19,6 +19,7 @@ from src.application.http.schemas import (
     CompactChatResponse,
     NewChatRequest,
     PatchChatRequest,
+    PlanningChatReadinessResponse,
     PromoteChatRequest,
     SendChatMessageRequest,
     WorkChatContextFolderSummary,
@@ -40,6 +41,11 @@ from src.domain.commands.projects import get as projects_get
 from src.domain.commands.works import create as works_create
 from src.domain.models import Chat, ChatMessage
 from src.domain.projectstore.ports import ProjectStore
+from src.domain.planning.ports import PlanningFiles
+from src.domain.planning.readiness import (
+    PlanningChatReadiness,
+    planning_readiness_from_record,
+)
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.dtos import (
     CreateWorkChatContextFolder,
@@ -68,6 +74,10 @@ def get_projectstore(request: Request) -> ProjectStore:
     return request.app.state.projectstore  # type: ignore[no-any-return]
 
 
+def get_planningfiles(request: Request) -> PlanningFiles:
+    return request.app.state.planningfiles  # type: ignore[no-any-return]
+
+
 def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
 
@@ -87,6 +97,7 @@ def get_compaction_session_client(request: Request) -> CompactionSessionClient:
 ChatStoreDep = Annotated[ChatStore, Depends(get_chatstore)]
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
+PlanningFilesDep = Annotated[PlanningFiles, Depends(get_planningfiles)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 ChatSupervisorDep = Annotated[AgentSupervisorService, Depends(get_chat_supervisor)]
 SummarizerDep = Annotated[Summarizer, Depends(get_summarizer)]
@@ -201,6 +212,7 @@ async def compact_chat_endpoint(
     supervisor: ChatSupervisorDep,
     workstore: WorkStoreDep,
     projectstore: ProjectStoreDep,
+    planningfiles: PlanningFilesDep,
     settings: SettingsDep,
     summarizer: SummarizerDep,
     session_client: CompactionSessionClientDep,
@@ -211,6 +223,7 @@ async def compact_chat_endpoint(
             supervisor,
             workstore,
             projectstore,
+            planningfiles,
             settings,
             summarizer,
             session_client,
@@ -557,6 +570,9 @@ def _to_summary(record: ChatRecord) -> ChatSummary:
         updated_at=chat.updated_at,
         promoted_to_work_slug=chat.promoted_to_work_slug,
         message_count=len(record.transcript),
+        planning_readiness=_planning_readiness_to_schema(
+            planning_readiness_from_record(record)
+        ),
     )
 
 
@@ -590,6 +606,17 @@ def _message_to_schema(message: ChatMessage) -> ChatMessageSchema:
         role=message.role,
         body=message.body,
         created_at=message.created_at,
+    )
+
+
+def _planning_readiness_to_schema(
+    readiness: PlanningChatReadiness | None,
+) -> PlanningChatReadinessResponse | None:
+    if readiness is None:
+        return None
+    return PlanningChatReadinessResponse(
+        ready=readiness.ready,
+        summary=readiness.summary,
     )
 
 

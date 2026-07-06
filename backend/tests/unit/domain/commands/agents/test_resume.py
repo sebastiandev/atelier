@@ -126,13 +126,13 @@ async def test_resume_registration_race_refreshes_winner_seq(tmp_path: Path) -> 
     supervisor = RacingSupervisor()
     adapter = FakeAdapter()
     with (
-        patch("src.domain.commands.agents.resume.build_adapter", return_value=adapter),
+        patch("src.domain.agents.resume_runtime.build_adapter", return_value=adapter),
         patch(
-            "src.domain.commands.agents.resume.merge_cli_transcript",
+            "src.domain.agents.resume_runtime.merge_cli_transcript",
             return_value=[],
         ),
         patch(
-            "src.domain.commands.agents.resume.sdk_cursor_at_detach",
+            "src.domain.agents.resume_runtime.sdk_cursor_at_detach",
             return_value={"provider": "amp", "message_count": 5},
         ),
     ):

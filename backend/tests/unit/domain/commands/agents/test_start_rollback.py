@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from src.domain.agents import mounts
 from src.domain.commands.agents import start
 from src.domain.models import SharedFolder
 from src.domain.workstore import CreateWorkRequest, WorkStoreService
@@ -365,7 +366,7 @@ def test_mount_project_shares_returns_resolved_writable_roots(
 
     provisioner = Provisioner()
 
-    mounted = start._mount_project_shares(
+    mounted = mounts.mount_project_shares(
         sharestore=Sharestore(),
         provisioner=provisioner,
         project_slug="PRJ-001",
@@ -394,8 +395,8 @@ def test_agent_writable_roots_merges_shares_and_worktree_roots(
             assert received_workdir == workdir
             return (git_root, share_root)
 
-    roots = start._agent_writable_roots(
-        start.MountedProjectShares(writable_roots=(share_root,)),
+    roots = mounts.agent_writable_roots(
+        mounts.MountedProjectShares(writable_roots=(share_root,)),
         Worktrees(),  # type: ignore[arg-type]
         workdir,
     )

@@ -19,6 +19,7 @@ import {
   isAgentActive,
   latestEventSeq,
   labelForSessionConfigValue,
+  latestSessionConfigOption,
   latestSessionConfigOptionByIds,
   latestMetrics,
   sessionMetrics,
@@ -29,6 +30,7 @@ import {
   type ChatMessage,
   type ChatSummary,
   type CreateChatPayload,
+  type PlanArtifact,
   type ProjectSummary,
   type ProviderDescriptor,
   type WorkChatContextFolder,
@@ -46,7 +48,11 @@ import {
   patchChat,
   promoteChat,
 } from "./api";
-import { BrandMark } from "./BrandMark";
+import {
+  ChatTileComposer,
+  ChatTileFrame,
+  ChatTileTranscript,
+} from "./ChatTileSurface";
 import { useDragHandle } from "./dragHandleContext";
 import {
   anchoredMenuPosition,
@@ -56,9 +62,7 @@ import {
   ChatIcon,
   DocIcon,
   FolderIcon,
-  SearchIcon,
   SendIcon,
-  SlidersIcon,
   SparkIcon,
 } from "./Icons";
 import { FolderPickerDialog } from "./FolderPickerDialog";
@@ -76,7 +80,8 @@ import {
   useProviderDescriptors,
   withOpenCodeModelOptions,
 } from "./providerDescriptors";
-import { ThemeToggle } from "./ThemeToggle";
+import { SessionModelPicker } from "./SessionModelPicker";
+import { ShellCrown } from "./ShellCrown";
 import {
   type AgentEvent,
   useAgentStream,
@@ -101,6 +106,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     sendStop,
     sendPermission,
     sendSessionConfig,
+    sendSessionConfigRefresh,
     pendingPermissions,
   } = useAgentStream(chatSlug, { resource: "chats" });
 
@@ -135,12 +141,19 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     const transcript = chatMessagesFromEvents(events);
     setChat((current) =>
       current
-        ? { ...current, transcript, message_count: transcript.length }
+        ? {
+            ...current,
+            transcript,
+            message_count: transcript.length,
+            planning_readiness:
+              planningReadinessFromEvents(events) ?? current.planning_readiness,
+          }
         : current,
     );
   }, [events]);
 
-  const runtimeUnits = useMemo(() => groupEvents(events), [events]);
+  const displayEvents = useMemo(() => chatDisplayEvents(events), [events]);
+  const runtimeUnits = useMemo(() => groupEvents(displayEvents), [displayEvents]);
   const isActive = isAgentActive(events);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
@@ -148,8 +161,25 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     () => deriveActivityPhase(events, isActive),
     [events, isActive],
   );
+  const sessionModelConfig = useMemo(
+    () => latestSessionConfigOption(events, "model"),
+    [events],
+  );
+  const liveSessionModelValue =
+    typeof sessionModelConfig?.currentValue === "string"
+      ? sessionModelConfig.currentValue
+      : null;
+  const displayModel = liveSessionModelValue ?? chat?.model ?? "";
+  const sessionConfigOptionsSeq = useMemo(
+    () => latestEventSeq(events, "session_config_options"),
+    [events],
+  );
+  const modelPickerId = useMemo(
+    () => `chat-model-${chatSlug.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    [chatSlug],
+  );
   const modelMeta = chat
-    ? lookupModelMeta(providersByName, chat.provider, chat.model)
+    ? lookupModelMeta(providersByName, chat.provider, displayModel)
     : null;
   const latestCompactionSeq = useMemo(
     () =>
@@ -214,21 +244,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   return (
     <div className="shell-v3 narrow-left chat-v3">
       <aside className="shell-left chat-rail">
-        <div className="crown">
-          <a className="wordmark" href="/" title="Back to workspace">
-            <span className="wm-mark" aria-hidden><BrandMark /></span>
-            <span className="wm-rest">telier</span>
-          </a>
-          <div className="crown-actions">
-            <a className="btn-icon" href="/" title="Search">
-              <SearchIcon size={12} />
-            </a>
-            <a className="btn-icon" href="/settings" title="Settings">
-              <SlidersIcon size={12} />
-            </a>
-            <ThemeToggle className="btn-icon" />
-          </div>
-        </div>
+        <ShellCrown />
         <div className="crumbs-v3">
           <a className="crumb" href="/">← workspace</a>
           <span className="sep">/</span>
@@ -254,7 +270,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
           <div className="v3-shd"><span>Model</span></div>
           <div className="chat-model-static">
             <span className="cm-prov">{providerLabel}</span>
-            <span className="cm-model mono">{chat.model}</span>
+            <span className="cm-model mono">{displayModel}</span>
           </div>
           <div className="chat-rail-action">
             {chat.promoted_to_work_slug ? (
@@ -278,7 +294,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
         <div className="chat-stream" ref={streamRef}>
           <div className="chat-reading">
             <div className="chat-opening">
-              {chat.slug} · talking to {chat.model}
+              {chat.slug} · talking to {displayModel}
               {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
               {" · "}{streamStatus}
             </div>
@@ -332,17 +348,25 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
                   sendStop();
                 }
               }}
-              placeholder={`Message ${chat.model}...`}
+              placeholder={`Message ${displayModel}...`}
               disabled={composerDisabled}
             />
             <div className="row">
               <span className="hint mono">Enter send · Shift+Enter newline</span>
-              <span className="spacer" />
+              <SessionModelPicker
+                disabled={composerDisabled || isActive}
+                option={sessionModelConfig}
+                pickerId={modelPickerId}
+                refreshSeq={sessionConfigOptionsSeq}
+                onChange={(value) => sendSessionConfig("model", value)}
+                onRefresh={() => sendSessionConfigRefresh("model")}
+              />
               <LiveEffortSelect
                 events={events}
                 disabled={composerDisabled || isActive}
                 onChange={sendSessionConfig}
               />
+              <span className="spacer" />
               {!chat.promoted_to_work_slug && (
                 <button className="btn sm" onClick={() => setPromoteOpen(true)}>
                   <SparkIcon size={11} /> Start work
@@ -380,17 +404,31 @@ export function ChatTile({
   chatSummary,
   projects,
   works,
+  planReferences = [],
+  collapseHistoryByDefault = false,
   onClose,
   onStartAgent,
   onUpdated,
+  presentation = "canvas",
+  planningPlacement = "dock",
+  onOpenPlan,
+  openPlanLabel = "Open plan",
+  openPlanDisabled = false,
 }: {
   chatSlug: string;
   chatSummary?: ChatSummary;
   projects: ProjectSummary[];
   works: WorkSummary[];
-  onClose: () => void;
+  planReferences?: PlanArtifact[];
+  collapseHistoryByDefault?: boolean;
+  onClose?: () => void;
   onStartAgent?: (chat: ChatDetail) => Promise<void> | void;
   onUpdated?: (chat: ChatSummary) => void;
+  presentation?: "canvas" | "planning";
+  planningPlacement?: "center" | "dock";
+  onOpenPlan?: () => void;
+  openPlanLabel?: string;
+  openPlanDisabled?: boolean;
 }) {
   const [chat, setChat] = useState<ChatDetail | null>(null);
   const [draft, setDraft] = useState("");
@@ -402,7 +440,13 @@ export function ChatTile({
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [mention, setMention] = useState<PlanMentionState | null>(null);
+  const [mentionFilter, setMentionFilter] =
+    useState<PlanReferenceFilter>("all");
+  const [historyExpanded, setHistoryExpanded] = useState(!collapseHistoryByDefault);
   const streamRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mentionOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const lastSummarySeqRef = useRef(0);
   const dragHandle = useDragHandle();
@@ -414,6 +458,7 @@ export function ChatTile({
     sendStop,
     sendPermission,
     sendSessionConfig,
+    sendSessionConfigRefresh,
     pendingPermissions,
   } = useAgentStream(chatSlug, { resource: "chats" });
 
@@ -454,11 +499,15 @@ export function ChatTile({
     if (!chatSummary) return;
     setChat((current) => {
       if (!current || current.slug !== chatSummary.slug) return current;
+      const sameReadiness =
+        current.planning_readiness?.ready === chatSummary.planning_readiness?.ready &&
+        current.planning_readiness?.summary === chatSummary.planning_readiness?.summary;
       if (
         current.title === chatSummary.title &&
         current.updated_at === chatSummary.updated_at &&
         current.working_directory === chatSummary.working_directory &&
-        current.promoted_to_work_slug === chatSummary.promoted_to_work_slug
+        current.promoted_to_work_slug === chatSummary.promoted_to_work_slug &&
+        sameReadiness
       ) {
         return current;
       }
@@ -470,6 +519,7 @@ export function ChatTile({
         grounding: chatSummary.grounding,
         working_directory: chatSummary.working_directory,
         promoted_to_work_slug: chatSummary.promoted_to_work_slug,
+        planning_readiness: chatSummary.planning_readiness,
       };
     });
   }, [chatSummary]);
@@ -480,16 +530,19 @@ export function ChatTile({
     if (lastSeq <= lastSummarySeqRef.current) return;
     lastSummarySeqRef.current = lastSeq;
     const transcript = chatMessagesFromEvents(events);
+    const readiness = planningReadinessFromEvents(events) ?? chat.planning_readiness;
     onUpdated(
       chatSummaryFromDetail({
         ...chat,
         transcript,
         message_count: transcript.length,
+        planning_readiness: readiness,
       }),
     );
   }, [chat, events, onUpdated]);
 
-  const runtimeUnits = useMemo(() => groupEvents(events), [events]);
+  const displayEvents = useMemo(() => chatDisplayEvents(events), [events]);
+  const runtimeUnits = useMemo(() => groupEvents(displayEvents), [displayEvents]);
   const isActive = isAgentActive(events);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
@@ -497,8 +550,25 @@ export function ChatTile({
     () => deriveActivityPhase(events, isActive),
     [events, isActive],
   );
+  const sessionModelConfig = useMemo(
+    () => latestSessionConfigOption(events, "model"),
+    [events],
+  );
+  const liveSessionModelValue =
+    typeof sessionModelConfig?.currentValue === "string"
+      ? sessionModelConfig.currentValue
+      : null;
+  const displayModel = liveSessionModelValue ?? chat?.model ?? "";
+  const sessionConfigOptionsSeq = useMemo(
+    () => latestEventSeq(events, "session_config_options"),
+    [events],
+  );
+  const modelPickerId = useMemo(
+    () => `chat-tile-model-${chatSlug.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    [chatSlug],
+  );
   const modelMeta = chat
-    ? lookupModelMeta(providersByName, chat.provider, chat.model)
+    ? lookupModelMeta(providersByName, chat.provider, displayModel)
     : null;
   const latestCompactionSeq = useMemo(
     () =>
@@ -529,6 +599,59 @@ export function ChatTile({
         "--ctx-pct": `${Math.max(0, Math.min(100, contextSnapshot.pct))}%`,
       } as CSSProperties)
     : undefined;
+  const planningPresentation = presentation === "planning";
+  const collapsePlanningHistory =
+    planningPresentation && planningPlacement === "dock" && collapseHistoryByDefault;
+  useEffect(() => {
+    setHistoryExpanded(!collapsePlanningHistory);
+  }, [chatSlug, collapsePlanningHistory]);
+  const mentionSearchMatches = useMemo(
+    () =>
+      mention
+        ? filterPlanReferences(planReferences, mention.query)
+        : [],
+    [mention, planReferences],
+  );
+  const mentionFilterCounts = useMemo(
+    () =>
+      PLAN_REFERENCE_FILTERS.map((filter) => ({
+        ...filter,
+        count: mentionSearchMatches.filter((ref) =>
+          planReferenceMatchesFilter(ref, filter.id),
+        ).length,
+      })),
+    [mentionSearchMatches],
+  );
+  const visibleMentionFilters = mentionFilterCounts.filter(
+    (filter) => filter.id === "all" || filter.count > 0,
+  );
+  const activeMentionFilter = visibleMentionFilters.some(
+    (filter) => filter.id === mentionFilter,
+  )
+    ? mentionFilter
+    : "all";
+  const mentionMatches = useMemo(
+    () =>
+      mentionSearchMatches
+        .filter((ref) => planReferenceMatchesFilter(ref, activeMentionFilter))
+        .slice(0, 8),
+    [activeMentionFilter, mentionSearchMatches],
+  );
+  const selectedMentionIndex =
+    mention && mentionMatches.length > 0
+      ? Math.min(mention.index, mentionMatches.length - 1)
+      : -1;
+
+  useEffect(() => {
+    mentionOptionRefs.current.length = mentionMatches.length;
+  }, [mentionMatches.length]);
+
+  useEffect(() => {
+    if (!mention || selectedMentionIndex < 0) return;
+    mentionOptionRefs.current[selectedMentionIndex]?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [mention, mentionMatches.length, selectedMentionIndex]);
 
   const hintHandlers = (text: string) => ({
     onMouseEnter: () => setHint(text),
@@ -541,8 +664,49 @@ export function ChatTile({
     if (!chat) return;
     const body = draft.trim();
     if (!body) return;
+    setHistoryExpanded(true);
     sendInput(body);
     setDraft("");
+    setMention(null);
+  }
+
+  function syncMention(
+    text: string,
+    cursor: number | null | undefined,
+    options: { allowStart?: boolean } = {},
+  ) {
+    if (!planningPresentation || planReferences.length === 0) {
+      setMention(null);
+      return;
+    }
+    setMention((current) => {
+      if (current === null && options.allowStart !== true) return null;
+      const next = activePlanMention(text, cursor ?? text.length);
+      if (next === null) return null;
+      return {
+        ...next,
+        index:
+          current &&
+          current.start === next.start &&
+          current.query === next.query
+            ? current.index
+            : 0,
+      };
+    });
+  }
+
+  function insertPlanReference(ref: PlanArtifact) {
+    if (!mention) return;
+    const token = `@${ref.path}`;
+    const next =
+      draft.slice(0, mention.start) + token + " " + draft.slice(mention.end);
+    const cursor = mention.start + token.length + 1;
+    setDraft(next);
+    setMention(null);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(cursor, cursor);
+    });
   }
 
   async function startAgent() {
@@ -617,8 +781,18 @@ export function ChatTile({
       : streamStatus === "connected"
         ? "idle"
         : streamStatus;
-  const tileClass =
-    "agent-tile chat-tile mode-tile" + (maximized ? " maximized" : "");
+  const tileClass = [
+    maximized && !planningPresentation ? "maximized" : "",
+    planningPresentation ? "planning-chat-tile" : "",
+    planningPresentation ? `planning-chat-${planningPlacement}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ") || undefined;
+  const historyCount = chat?.message_count ?? runtimeUnits.length;
+  const showCollapsedHistory =
+    collapsePlanningHistory && !historyExpanded && historyCount > 0;
+  const showPlanningReadyEmpty =
+    collapsePlanningHistory && (!historyExpanded || runtimeUnits.length === 0);
 
   useEffect(() => {
     if (!maximized) return;
@@ -633,141 +807,235 @@ export function ChatTile({
   }, [maximized]);
 
   return (
-    <div className={tileClass} data-chat="true">
-      <header
-        className={dragHandle ? "tile-drag-header" : undefined}
-        {...(dragHandle?.attributes ?? {})}
-        {...(dragHandle?.listeners ?? {})}
-      >
-        <div className="tile-header-left">
-          <span className="persona-pip chat-pip">
-            <ChatIcon size={12} />
-          </span>
-          <span className="status-dot" data-status={dotStatus} />
-          {editingTitle ? (
-            <input
-              ref={titleInputRef}
-              className="tile-name-input"
-              value={draftTitle}
-              onChange={(e) => setDraftTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
+    <ChatTileFrame
+      className={tileClass}
+      data-chat="true"
+      headerProps={{
+        className: dragHandle && !planningPresentation ? "tile-drag-header" : undefined,
+        ...(!planningPresentation ? dragHandle?.attributes ?? {} : {}),
+        ...(!planningPresentation ? dragHandle?.listeners ?? {} : {}),
+      }}
+      headerLeft={
+        planningPresentation ? (
+          <>
+            <span className="persona-pip chat-pip">
+              <SparkIcon size={12} />
+            </span>
+            <div className="planning-chat-title">
+              <h2>Planning</h2>
+              <span>
+                {chat ? `${providerLabelFor(chat.provider)} · ${displayModel}` : "Loading"}
+              </span>
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="persona-pip chat-pip">
+              <ChatIcon size={12} />
+            </span>
+            <span className="status-dot" data-status={dotStatus} />
+            {editingTitle ? (
+              <input
+                ref={titleInputRef}
+                className="tile-name-input"
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    cancelRename();
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    void commitRename();
+                  }
+                }}
+                onBlur={() => void commitRename()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                aria-label="Rename chat"
+              />
+            ) : (
+              <h2
+                title="Double-click to rename"
+                style={{ cursor: chat ? "text" : undefined }}
+                onDoubleClick={(e) => {
                   e.stopPropagation();
-                  cancelRename();
-                } else if (e.key === "Enter") {
-                  e.preventDefault();
-                  void commitRename();
-                }
-              }}
-              onBlur={() => void commitRename()}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              aria-label="Rename chat"
-            />
-          ) : (
-            <h2
-              title="Double-click to rename"
-              style={{ cursor: chat ? "text" : undefined }}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                startRename();
-              }}
-            >
-              {chat?.title ?? chatSlug}
-            </h2>
-          )}
-          {renameError && !editingTitle && (
-            <span className="tile-rename-err">{renameError}</span>
-          )}
-        </div>
-        <div className="tile-header-meta">
-          <span className="agent-slug mono">{chat?.slug ?? chatSlug}</span>
-          {chat && (
-            <span
-              className="provider-pill mono"
-              data-provider={shortProvider(chat.provider)}
-              {...hintHandlers(`Provider: ${providerLabelFor(chat.provider)} · Model: ${chat.model}`)}
-            >
-              {shortProvider(chat.provider)} · {shortModel(chat.model)}
+                  startRename();
+                }}
+              >
+                {chat?.title ?? chatSlug}
+              </h2>
+            )}
+            {renameError && !editingTitle && (
+              <span className="tile-rename-err">{renameError}</span>
+            )}
+          </>
+        )
+      }
+      headerMeta={
+        planningPresentation ? null : (
+          <>
+            <span className="agent-slug mono">{chat?.slug ?? chatSlug}</span>
+            {chat && (
+              <span
+                className="provider-pill mono"
+                data-provider={shortProvider(chat.provider)}
+                {...hintHandlers(`Provider: ${providerLabelFor(chat.provider)} · Model: ${displayModel}`)}
+              >
+                {shortProvider(chat.provider)} · {shortModel(displayModel)}
+              </span>
+            )}
+            {showGrounding && (
+              <span
+                className="chat-grounding-pill mono"
+                {...hintHandlers(
+                  grounding.kind === "none"
+                    ? "Open exploration"
+                    : `Linked to ${grounding.label}`,
+                )}
+              >
+                {grounding.label}
+              </span>
+            )}
+            <span className="conn-status" data-conn-status={streamStatus}>
+              {streamStatus}
             </span>
-          )}
-          {showGrounding && (
-            <span
-              className="chat-grounding-pill mono"
-              {...hintHandlers(
-                grounding.kind === "none"
-                  ? "Open exploration"
-                  : `Linked to ${grounding.label}`,
-              )}
-            >
-              {grounding.label}
-            </span>
-          )}
-          <span className="conn-status" data-conn-status={streamStatus}>
-            {streamStatus}
-          </span>
-        </div>
-        <div className="tile-header-right">
-          <span
-            className={"tile-hint" + (hint ? " visible" : "")}
-            aria-hidden="true"
-          >
-            {hint}
-          </span>
+          </>
+        )
+      }
+      headerRight={
+        planningPresentation ? (
           <div className="tile-controls">
-            {onStartAgent && (
+            {onOpenPlan && (
+              <button
+                type="button"
+                className="btn primary sm"
+                onClick={onOpenPlan}
+                disabled={openPlanDisabled}
+              >
+                <SparkIcon size={12} /> {openPlanLabel}
+              </button>
+            )}
+            {onClose && (
               <button
                 type="button"
                 className="tile-ctl"
-                aria-label="Start agent from chat"
-                onClick={() => void startAgent()}
-                disabled={!chat || startingAgent}
-                {...hintHandlers("Start agent from chat")}
+                aria-label={
+                  planningPlacement === "dock" ? "Minimize Planning" : "Close Planning"
+                }
+                title={planningPlacement === "dock" ? "Minimize" : "Close"}
+                onClick={onClose}
               >
-                <SparkIcon />
+                <span aria-hidden="true">
+                  {planningPlacement === "dock" ? "−" : "×"}
+                </span>
               </button>
             )}
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label={maximized ? "Restore" : "Maximize"}
-              onClick={() => setMaximized((m) => !m)}
-              {...hintHandlers(maximized ? "Restore" : "Maximize")}
-            >
-              {maximized ? <RestoreIcon /> : <MaxIcon />}
-            </button>
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Close chat tile"
-              onClick={onClose}
-              {...hintHandlers("Close · stays in Chats")}
-            >
-              <CloseIcon />
-            </button>
           </div>
-        </div>
-      </header>
-      <div className="agent-tile-body chat-tile-body">
+        ) : (
+          <>
+            <span
+              className={"tile-hint" + (hint ? " visible" : "")}
+              aria-hidden="true"
+            >
+              {hint}
+            </span>
+            <div className="tile-controls">
+              {onStartAgent && (
+                <button
+                  type="button"
+                  className="tile-ctl"
+                  aria-label="Start agent from chat"
+                  onClick={() => void startAgent()}
+                  disabled={!chat || startingAgent}
+                  {...hintHandlers("Start agent from chat")}
+                >
+                  <SparkIcon />
+                </button>
+              )}
+              <button
+                type="button"
+                className="tile-ctl"
+                aria-label={maximized ? "Restore" : "Maximize"}
+                onClick={() => setMaximized((m) => !m)}
+                {...hintHandlers(maximized ? "Restore" : "Maximize")}
+              >
+                {maximized ? <RestoreIcon /> : <MaxIcon />}
+              </button>
+              {onClose && (
+                <button
+                  type="button"
+                  className="tile-ctl"
+                  aria-label="Close chat tile"
+                  onClick={onClose}
+                  {...hintHandlers("Close · stays in Chats")}
+                >
+                  <CloseIcon />
+                </button>
+              )}
+            </div>
+          </>
+        )
+      }
+    >
         {error && <div className="tile-banner">{error}</div>}
-        <div className="transcript chat-tile-transcript" ref={streamRef}>
+        <ChatTileTranscript
+          ref={streamRef}
+          className={planningPresentation ? "planning-chat-transcript" : undefined}
+        >
           {chat ? (
             <>
-              <div className="chat-opening">
-                {chat.slug} · talking to {chat.model}
-                {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
-              </div>
-              <TranscriptUnits
-                units={runtimeUnits}
-                agentSlug={chat.slug}
-                compactionSummaryLoader={getChatCompactionSummary}
-              />
+              {!showCollapsedHistory && (
+                <div className="chat-opening">
+                  {planningPresentation ? (
+                    <>
+                      Planning · talking to {displayModel}
+                      {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
+                    </>
+                  ) : (
+                    <>
+                      {chat.slug} · talking to {displayModel}
+                      {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
+                    </>
+                  )}
+                </div>
+              )}
+              {showCollapsedHistory ? (
+                <>
+                  <button
+                    type="button"
+                    className="planning-chat-history-toggle"
+                    onClick={() => setHistoryExpanded(true)}
+                  >
+                    <span>Previous planning conversation</span>
+                    <strong>{historyCount} messages</strong>
+                  </button>
+                  <div className="planning-chat-ready-empty">
+                    <strong>Ready to revise the generated plan</strong>
+                    <span>Ask for edits, or use @ to reference a plan document.</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <TranscriptUnits
+                    units={runtimeUnits}
+                    agentSlug={chat.slug}
+                    compactionSummaryLoader={getChatCompactionSummary}
+                  />
+                  {showPlanningReadyEmpty && (
+                    <div className="planning-chat-ready-empty">
+                      <strong>Ready to revise the generated plan</strong>
+                      <span>Ask for edits, or use @ to reference a plan document.</span>
+                    </div>
+                  )}
+                </>
+              )}
             </>
           ) : (
             <div className="chat-opening">Loading {chatSlug}...</div>
           )}
-        </div>
+        </ChatTileTranscript>
         {(lastMetrics || isActive) && (
           <TurnMetricsBar
             metrics={lastMetrics}
@@ -786,8 +1054,8 @@ export function ChatTile({
             onDecide={sendPermission}
           />
         )}
-        <form
-          className={`composer chat-tile-composer${activityPhase ? " is-working" : ""}`}
+        <ChatTileComposer
+          className={activityPhase ? "is-working" : undefined}
           data-ctx-tone={composerTone}
           style={composerStyle}
           onSubmit={(e) => {
@@ -804,10 +1072,66 @@ export function ChatTile({
             {activityPhase && <span />}
           </div>
           <textarea
+            ref={textareaRef}
             rows={1}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              const cursor = e.target.selectionStart;
+              const typedAt =
+                next.length === draft.length + 1 &&
+                cursor > 0 &&
+                next[cursor - 1] === "@";
+              setDraft(next);
+              syncMention(next, cursor, { allowStart: typedAt });
+            }}
+            onClick={(e) => {
+              syncMention(e.currentTarget.value, e.currentTarget.selectionStart);
+            }}
+            onSelect={(e) => {
+              syncMention(e.currentTarget.value, e.currentTarget.selectionStart);
+            }}
             onKeyDown={(e) => {
+              if (mention) {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMention(null);
+                  return;
+                }
+                if (mentionMatches.length > 0) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setMention((current) =>
+                      current
+                        ? {
+                            ...current,
+                            index: (current.index + 1) % mentionMatches.length,
+                          }
+                        : current,
+                    );
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setMention((current) =>
+                      current
+                        ? {
+                            ...current,
+                            index:
+                              (current.index - 1 + mentionMatches.length) %
+                              mentionMatches.length,
+                          }
+                        : current,
+                    );
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    insertPlanReference(mentionMatches[selectedMentionIndex]);
+                    return;
+                  }
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 send();
@@ -820,13 +1144,91 @@ export function ChatTile({
             placeholder={
               chat
                 ? streamStatus === "connected"
-                  ? "Message this chat - Enter sends, Shift+Enter newline"
+                  ? collapsePlanningHistory
+                    ? "Ask Planning to revise the plan - use @ for plan files"
+                    : "Message this chat - Enter sends, Shift+Enter newline"
                   : "Connecting to chat..."
                 : "Loading chat..."
             }
             disabled={composerDisabled}
           />
+          {mention && (
+            <div className="composer-plan-mentions">
+              <div className="composer-plan-mentions-head">
+                <div>
+                  <span className="composer-plan-mentions-title">
+                    Plan references
+                  </span>
+                  <span className="composer-plan-mentions-sub mono">
+                    {mentionSearchMatches.length} matches
+                  </span>
+                </div>
+                <div className="composer-plan-mention-filters">
+                  {visibleMentionFilters.map((filter) => (
+                    <button
+                      key={filter.id}
+                      type="button"
+                      className={filter.id === activeMentionFilter ? "active" : undefined}
+                      aria-pressed={filter.id === activeMentionFilter}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setMentionFilter(filter.id);
+                        setMention((current) =>
+                          current ? { ...current, index: 0 } : current,
+                        );
+                      }}
+                    >
+                      <span>{filter.label}</span>
+                      <span>{filter.count}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div
+                className="composer-plan-mentions-list"
+                role="listbox"
+                aria-label="Plan documents"
+              >
+                {mentionMatches.length > 0 ? (
+                  mentionMatches.map((ref, index) => (
+                    <button
+                      key={ref.id}
+                      ref={(node) => {
+                        mentionOptionRefs.current[index] = node;
+                      }}
+                      type="button"
+                      role="option"
+                      aria-selected={index === selectedMentionIndex}
+                      className={index === selectedMentionIndex ? "active" : undefined}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        insertPlanReference(ref);
+                      }}
+                    >
+                      <span className="pm-ref-kind">{planReferenceLabel(ref)}</span>
+                      <span className="pm-ref-main">
+                        <strong>{ref.title}</strong>
+                        <small>{ref.path}</small>
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="composer-plan-mentions-empty">
+                    No matching plan documents
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div className="composer-actions">
+            <SessionModelPicker
+              disabled={composerDisabled || isActive}
+              option={sessionModelConfig}
+              pickerId={modelPickerId}
+              refreshSeq={sessionConfigOptionsSeq}
+              onChange={(value) => sendSessionConfig("model", value)}
+              onRefresh={() => sendSessionConfigRefresh("model")}
+            />
             <LiveEffortSelect
               events={events}
               disabled={composerDisabled || isActive}
@@ -841,9 +1243,8 @@ export function ChatTile({
               Send
             </button>
           </div>
-        </form>
-      </div>
-    </div>
+        </ChatTileComposer>
+    </ChatTileFrame>
   );
 }
 
@@ -1893,18 +2294,19 @@ function chatItemsFromEvents(events: AgentEvent[]): ChatRuntimeItem[] {
       const text = stringField(ev, "text");
       if (pendingAssistant) {
         pendingAssistant.body += text;
+        pendingAssistant.body = stripPlanningReadinessMarkers(pendingAssistant.body);
       } else {
         pendingAssistant = {
           kind: "message",
           key: seq,
           role: "assistant",
-          body: text,
+          body: stripPlanningReadinessMarkers(text),
           complete: false,
         };
         out.push(pendingAssistant);
       }
     } else if (ev.type === "message_complete") {
-      const text = stringField(ev, "text");
+      const text = stripPlanningReadinessMarkers(stringField(ev, "text"));
       if (pendingAssistant) {
         pendingAssistant.body = text;
         pendingAssistant.complete = true;
@@ -1974,6 +2376,21 @@ function chatItemsFromEvents(events: AgentEvent[]): ChatRuntimeItem[] {
   return out;
 }
 
+function chatDisplayEvents(events: AgentEvent[]): AgentEvent[] {
+  return events
+    .map((event) => {
+      if (event.type !== "message_delta" && event.type !== "message_complete") {
+        return event;
+      }
+      const text = stringField(event, "text");
+      const stripped = stripPlanningReadinessMarkers(text);
+      if (stripped === text) return event;
+      if (!stripped.trim()) return { ...event, type: "planning_readiness_hidden" };
+      return { ...event, text: stripped };
+    })
+    .filter((event) => event.type !== "planning_readiness_hidden");
+}
+
 function chatMessagesFromEvents(events: AgentEvent[]): ChatMessage[] {
   const now = new Date().toISOString();
   return chatItemsFromEvents(events)
@@ -1985,6 +2402,41 @@ function chatMessagesFromEvents(events: AgentEvent[]): ChatMessage[] {
       body: item.body,
       created_at: eventTimestamp(events, item.key) ?? now,
     }));
+}
+
+function planningReadinessFromEvents(
+  events: AgentEvent[],
+): ChatSummary["planning_readiness"] {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event.type !== "planning_readiness" || event.ready !== true) continue;
+    return {
+      ready: true,
+      summary: typeof event.summary === "string" ? event.summary : "",
+    };
+  }
+  return null;
+}
+
+function stripPlanningReadinessMarkers(text: string): string {
+  const lines = text.split(/\r?\n/);
+  return lines
+    .filter((line) => !isPlanningReadinessMarkerLine(line))
+    .join("\n")
+    .trimEnd();
+}
+
+function isPlanningReadinessMarkerLine(line: string): boolean {
+  const text = line.trim();
+  if (!text.startsWith('{"atelier_planning_ready"')) return false;
+  try {
+    const payload = JSON.parse(text) as {
+      atelier_planning_ready?: { ready?: unknown };
+    };
+    return payload.atelier_planning_ready?.ready === true;
+  } catch {
+    return false;
+  }
 }
 
 function eventSeq(event: AgentEvent): number {
@@ -2034,6 +2486,75 @@ function inheritedProjectSlug(chat: ChatDetail, works: WorkSummary[]): string | 
     return works.find((w) => w.slug === chat.grounding?.ref)?.project_slug ?? null;
   }
   return null;
+}
+
+type PlanMentionState = {
+  start: number;
+  end: number;
+  query: string;
+  index: number;
+};
+
+type PlanReferenceFilter = "all" | "docs" | "stories" | "spikes" | "bugs";
+
+const PLAN_REFERENCE_FILTERS: Array<{
+  id: PlanReferenceFilter;
+  label: string;
+}> = [
+  { id: "all", label: "All" },
+  { id: "docs", label: "Docs" },
+  { id: "stories", label: "Stories" },
+  { id: "spikes", label: "Spikes" },
+  { id: "bugs", label: "Bugs" },
+];
+
+function activePlanMention(text: string, cursor: number): PlanMentionState | null {
+  const before = text.slice(0, cursor);
+  const start = before.lastIndexOf("@");
+  if (start < 0) return null;
+  if (start > 0 && /\S/.test(before[start - 1])) return null;
+  const query = before.slice(start + 1);
+  if (/\s/.test(query)) return null;
+  return { start, end: cursor, query, index: 0 };
+}
+
+function filterPlanReferences(
+  references: PlanArtifact[],
+  query: string,
+): PlanArtifact[] {
+  const terms = query
+    .trim()
+    .toLowerCase()
+    .split(/[\/\s-]+/)
+    .filter(Boolean);
+  if (terms.length === 0) return references;
+  return references.filter((ref) => {
+    const haystack = `${ref.path} ${ref.title} ${ref.id} ${ref.kind}`.toLowerCase();
+    return terms.every((term) => haystack.includes(term));
+  });
+}
+
+function planReferenceMatchesFilter(
+  ref: PlanArtifact,
+  filter: PlanReferenceFilter,
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "spikes") return ref.kind === "spike";
+  if (filter === "bugs") return ref.kind === "bug";
+  if (filter === "stories") {
+    return ref.executable && ref.kind !== "spike" && ref.kind !== "bug";
+  }
+  return !ref.executable || ref.kind === "note";
+}
+
+function planReferenceLabel(ref: PlanArtifact): string {
+  if (ref.kind === "architecture") return "ARCH";
+  if (ref.kind === "acceptance") return "AC";
+  if (ref.kind === "brief") return "BR";
+  if (ref.kind === "spike") return "SP";
+  if (ref.kind === "bug") return "BUG";
+  if (ref.kind === "hotfix") return "HOT";
+  return ref.executable ? "ST" : ref.kind.slice(0, 3).toUpperCase();
 }
 
 function providerLabelFor(provider: string): string {

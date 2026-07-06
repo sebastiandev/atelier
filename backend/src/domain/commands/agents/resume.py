@@ -1,60 +1,29 @@
-"""Re-register an existing agent with the supervisor.
-
-Idempotent: if the supervisor already tracks the agent, this is a no-op
-that returns the row. Otherwise it rebuilds the adapter (with the row's
-persisted persona/role/provider/model/session_id), runs the detach
-catch-up merge if the agent is in ``DETACHED`` state, and registers the
-agent with the supervisor.
-
-Race-tolerant: a concurrent caller (e.g. React StrictMode WS double-mount)
-can win the registration race; ``register_agent`` raises ``RuntimeError``
-in that case. We drop our adapter copy to avoid leaking an SDK process,
-verify the agent IS now registered, and return — the caller subscribes
-to the existing state.
-
-Lazy spawn: registers the agent with ``lazy=True`` so the supervisor
-does NOT start the events pump. The SDK process spawns lazily on the
-first ``send_input`` instead, so a re-attach that's only there to
-refresh the transcript view doesn't fork a new provider session.
-"""
+"""Re-register an existing agent with the supervisor."""
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.domain.agents import (
-    SPECS,
-    AgentStartContext,
-    CommonAgentConfig,
-    detect_shared_envs,
-    render_system_prompt,
-)
-from src.domain.models import Agent, AgentStatus
+from src.domain.agents import resume_runtime
+from src.domain.models import Agent
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
-from src.domain.workstore.dtos import WorkRecord
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
-from src.infrastructure.agents import build_adapter
-from src.infrastructure.cli_transcript import merge_cli_transcript, sdk_cursor_at_detach
 from src.settings import Settings
 
 if TYPE_CHECKING:
     from src.domain.supervisor import AgentSupervisorService
 
+AgentNotFound = resume_runtime.AgentNotFound
+
 
 @dataclass(frozen=True)
 class ResumeAgentRequest:
+    """Inputs for re-registering a stored agent runtime."""
+
     work_slug: str
     agent_slug: str
-
-
-class AgentNotFound(ValueError):
-    """The (work_slug, agent_slug) pair doesn't resolve to a stored agent."""
 
 
 async def execute(
@@ -66,118 +35,24 @@ async def execute(
     settings: Settings,
     req: ResumeAgentRequest,
 ) -> Agent:
-    record: WorkRecord | None = workstore.get_work(req.work_slug)
-    if record is None:
-        raise AgentNotFound(f"work not found: {req.work_slug}")
+    """Re-register an existing agent with the supervisor.
 
-    agent = next(
-        (
-            a
-            for a in workstore.list_agents_for_work(req.work_slug)
-            if a.slug == req.agent_slug
-        ),
-        None,
-    )
-    if agent is None:
-        raise AgentNotFound(f"agent not found: {req.agent_slug}")
-
-    # Idempotent: already registered. Caller (typically connect) just
-    # subscribes to the existing state.
-    if supervisor.is_registered(req.agent_slug):
-        return agent
-
-    workdir = worktree_manager.ensure(
-        work_slug=req.work_slug,
-        agent_slug=req.agent_slug,
-        source=agent.folder,
-    )
-
-    # Re-mount shared folders in case the user added shares since the
-    # agent's last start. Idempotent — existing correctly-targeted
-    # symlinks are left alone; conflicts are logged + skipped.
-    from src.domain.commands.agents.start import (
-        _agent_writable_roots,
-        _mount_project_shares,
-    )
-
-    mounted_shares = _mount_project_shares(
-        sharestore=sharestore,
-        provisioner=share_provisioner,
-        project_slug=record.work.project_slug,
-        work_slug=req.work_slug,
-        agent_slug=req.agent_slug,
-    )
-
-    common = CommonAgentConfig(
-        workdir=workdir,
-        writable_roots=_agent_writable_roots(
-            mounted_shares, worktree_manager, workdir
-        ),
-        system_prompt=render_system_prompt(
-            agent.persona,
-            agent.role,
-            workdir=workdir,
-            shares=mounted_shares.summaries,
-            is_detached_worktree=worktree_manager.is_detached(workdir),
-            shared_envs=detect_shared_envs(workdir),
+    Preconditions: ``req`` identifies a stored agent row.
+    Postconditions: the supervisor has a lazy runtime for the agent and any
+    detached CLI transcript events have been merged.
+    """
+    return await resume_runtime.resume_agent(
+        workstore,
+        supervisor,
+        worktree_manager,
+        sharestore,
+        share_provisioner,
+        settings,
+        resume_runtime.ResumeAgentRequest(
+            work_slug=req.work_slug,
+            agent_slug=req.agent_slug,
         ),
     )
-    # ``agent.options`` is the dict the Spec.build validated at create
-    # time; passing it here rebuilds the same typed AgentConfig the
-    # supervisor used originally (permission_mode, thinking_effort,
-    # custom_allowed_tools, …). Empty dict on legacy rows that predate
-    # the ``options`` column — in that case the Spec applies defaults,
-    # matching pre-persistence behaviour.
-    config = SPECS[agent.provider].build(common, agent.model, dict(agent.options or {}))
-    adapter = build_adapter(config, settings)
-    context = AgentStartContext(
-        workdir=common.workdir,
-        model=agent.model,
-        system_prompt=common.system_prompt,
-        session_id=agent.session_id,
-    )
-
-    # Detach catch-up runs BEFORE registration so any new CLI events go
-    # through ``append_transcript_event_with_seq`` (which seeds the seq
-    # safely while the supervisor isn't tracking the agent).
-    if agent.status == AgentStatus.DETACHED:
-        await asyncio.to_thread(
-            _catch_up_detached_agent,
-            workstore,
-            req.work_slug,
-            req.agent_slug,
-            agent,
-            workdir,
-        )
-    elif workstore.find_last_detach_cursor(req.work_slug, req.agent_slug) is not None:
-        await asyncio.to_thread(
-            _catch_up_detached_agent,
-            workstore,
-            req.work_slug,
-            req.agent_slug,
-            agent,
-            workdir,
-            emit_reattached_marker=False,
-        )
-
-    try:
-        await supervisor.register_agent(
-            req.work_slug, req.agent_slug, adapter, context, lazy=True
-        )
-    except RuntimeError:
-        # A concurrent caller registered first (StrictMode double-mount,
-        # rapid clicks, two tabs). Drop our adapter copy to avoid leaking
-        # an SDK process, then advance the winner's seq from disk. This
-        # losing resume attempt may have appended CLI catch-up markers
-        # before it hit the registration race; without the refresh, the
-        # next supervisor-published input can reuse an already-written seq.
-        with suppress(Exception):
-            await adapter.close()
-        if not supervisor.is_registered(req.agent_slug):
-            raise
-        await supervisor.refresh_seq_from_disk(req.agent_slug)
-
-    return agent
 
 
 async def catch_up_cli_events(
@@ -187,106 +62,18 @@ async def catch_up_cli_events(
     work_slug: str,
     agent_slug: str,
 ) -> bool:
-    """Merge any provider CLI transcript entries since the last CLI cursor.
-
-    This is used for lazy-registered agents too: a user can reopen an
-    agent once, continue typing in the external CLI, then reopen again.
-    The row is already ``idle`` by then, so the detached-only path won't
-    run, but the provider transcript may still have new lines.
-    """
-    agent = next(
-        (a for a in workstore.list_agents_for_work(work_slug) if a.slug == agent_slug),
-        None,
-    )
-    if agent is None:
-        raise AgentNotFound(f"agent not found: {agent_slug}")
-    if agent.session_id is None:
-        return False
-    if workstore.find_last_detach_cursor(work_slug, agent_slug) is None:
-        return False
-    workdir = worktree_manager.ensure(
+    """Merge provider CLI transcript entries since the last CLI cursor."""
+    return await resume_runtime.catch_up_cli_events(
+        workstore,
+        worktree_manager,
         work_slug=work_slug,
         agent_slug=agent_slug,
-        source=agent.folder,
     )
-    await asyncio.to_thread(
-        _catch_up_detached_agent,
-        workstore,
-        work_slug,
-        agent_slug,
-        agent,
-        workdir,
-        emit_reattached_marker=False,
-    )
-    return True
-
-
-def _catch_up_detached_agent(
-    workstore: WorkStore,
-    work_slug: str,
-    agent_slug: str,
-    agent: Agent,
-    workdir: Path,
-    *,
-    emit_reattached_marker: bool = True,
-) -> None:
-    """Read the SDK's transcript file(s), append new events to our NDJSON,
-    then flip status back to IDLE.
-
-    Walks ``parent_session_id`` (depth-1 — that's all the agent row stores)
-    so an ancestor session that's never been ingested gets exported in
-    full. Common case: a manual ``parent_session_id`` backfill on an
-    agent whose original conversation lived in a now-orphaned thread.
-    Steady-state re-attaches see the parent's ``session_established``
-    already in NDJSON and skip the parent merge.
-    """
-    if agent.session_id is None:
-        workstore.set_agent_status(agent_slug, AgentStatus.IDLE)
-        return
-
-    if agent.parent_session_id and not workstore.is_session_ingested(
-        work_slug, agent_slug, agent.parent_session_id
-    ):
-        parent_events = merge_cli_transcript(
-            agent.provider, agent.parent_session_id, workdir, None
-        )
-        for event in parent_events:
-            workstore.append_transcript_event_with_seq(work_slug, agent_slug, event)
-        workstore.append_transcript_event_with_seq(
-            work_slug,
-            agent_slug,
-            {
-                "type": "sdk_session_merged",
-                "ts": datetime.now(UTC).isoformat(),
-                "session_id": agent.parent_session_id,
-                "events_merged": len(parent_events),
-            },
-        )
-
-    cursor = workstore.find_last_detach_cursor(work_slug, agent_slug)
-    new_events = merge_cli_transcript(
-        agent.provider, agent.session_id, workdir, cursor
-    )
-    for event in new_events:
-        workstore.append_transcript_event_with_seq(work_slug, agent_slug, event)
-    if emit_reattached_marker or new_events:
-        workstore.append_transcript_event_with_seq(
-            work_slug,
-            agent_slug,
-            {
-                "type": "user_reattached",
-                "ts": datetime.now(UTC).isoformat(),
-                "events_merged": len(new_events),
-                "sdk_cursor": sdk_cursor_at_detach(
-                    agent.provider, agent.session_id, workdir
-                ),
-            },
-        )
-    workstore.set_agent_status(agent_slug, AgentStatus.IDLE)
 
 
 __all__ = [
     "AgentNotFound",
     "ResumeAgentRequest",
+    "catch_up_cli_events",
     "execute",
 ]

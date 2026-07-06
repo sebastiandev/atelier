@@ -42,6 +42,10 @@ class WorkspacePaths:
     def chats_dir(self) -> Path:
         return self.workspace_root / "chats"
 
+    def planning_pointer(self, work_slug: str) -> Path:
+        _validate_slug(work_slug)
+        return self.work_dir(work_slug) / "planning.json"
+
     def chat_dir(self, chat_slug: str) -> Path:
         _validate_slug(chat_slug)
         return self.chats_dir() / chat_slug

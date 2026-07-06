@@ -21,6 +21,7 @@ This rule is what lets `domain/` be tested without a database, without HTTP, and
 Infrastructure boundaries are `Protocol` classes in `domain/`. They're *callable* signatures or thin services. Examples:
 
 - `WorkStore` (`backend/src/domain/workstore/ports.py`) — the public persistence boundary. Composed of three narrow ports under the hood: `WorkRepository`, `WorkspaceFiles`, `TranscriptLog`.
+- `PlanningFiles` (`backend/src/domain/planning/ports.py`) — source-backed Work planning storage. Commands own planning use cases and use this port for root binding, manifest reads/writes, Markdown reads/writes, and path resolution. `domain/planning/service.py` remains the Plan View projector over source Markdown.
 - `AgentAdapter` (`backend/src/domain/agents/ports.py`) — the contract every provider (Claude, Amp, Codex, …) implements.
 
 Tests pass stubs satisfying the Protocol; production wires real implementations in `application/lifespan` (or the equivalent FastAPI startup hook).
@@ -71,6 +72,8 @@ These are non-obvious and load-bearing — break them at your peril.
 
 **FS-canonical persistence.** The filesystem at `~/Atelier/works/<slug>/` and `~/Atelier/projects/<slug>/` is the source of truth for work, agent, and project metadata; SQLite is a queryable cache. `WorkStoreService` and `ProjectStoreService` each write DB first then FS; a crash between the two leaves an orphan DB row, and startup reconcile repairs the divergence by deleting orphans and restoring rows from disk. FS wins on conflict. Reconcile order across stores matters — at lifespan, `reconcile_projects` runs **before** `reconcile_works` because `works.project_slug` FK requires projects rows to exist before the work upsert can succeed. Same rule will apply to any future cross-store reference.
 
+**Planning docs are source-backed Markdown.** Work planning lives under the user-selected working folder or repo root at `.atelier/planning/<work-slug>/`, not under Atelier's metadata folder. Atelier stores only a small pointer under its own workspace so `GET /plan` can find the source docs later. Framework readiness is repo-local: BMAD, Spec-kit, and OpenSpec must be initialized in the selected folder before Planning starts; optional setup uses a normal backend-prompted setup chat, not a hidden command runner. Planning prompts are backend-owned through `domain/prompts/build.py`; the read-oriented `Planning` chat handles discovery. Public `POST /plan` owns source-plan materialization end to end: it creates or reuses an internal write-capable `Planning materializer` chat, lets the selected framework write files, loops until an `atelier_plan_materialization` metadata report is present, and then indexes the files through an internal metadata-only manifest submission command. The public request never carries artifact metadata or Markdown content. The manifest records framework/profile/depth, root path, artifact metadata, source hashes, artifact runs, review proposals, and lightweight tracking links; the Plan View is a projection built by `domain/planning/service.py`, not a persisted table.
+
 **Migration steps don't `.create()` brand-new tables.** `metadata.create_all` runs at the top of `initialize_database`; a per-version migration step that calls `<new_table>.create(conn)` for a brand-new table will fail on the second startup with "table already exists". New tables are picked up by `create_all`; the per-version step only does the work `create_all` can't do on existing databases (`ALTER TABLE` for new columns, data backfills, drops/renames). See `infrastructure/database/migrations.py` (v6→v7 added `works.project_slug`).
 
 **Soft-delete via the WorkStatus literal**, not a `deleted_at` column. Status `"deleted"` filters out from `_require_work` and the FS dir is preserved. No schema migration needed; reconciliation persists the deleted state across restarts.
@@ -88,6 +91,7 @@ These are the contracts the layers and process boundaries agree on. Changing one
 | AgentEvent union | 7+ frozen dataclass variants with `Literal` discriminators | `backend/src/domain/agents/events.py` |
 | Provider descriptors | `GET /api/providers` shape — drives the `NewAgentDialog` | `backend/src/domain/agents/specs.py`, `frontend/src/api.ts` |
 | Workspace layout | `~/Atelier/works/<slug>/work.json`, `agents/<slug>/agent.json`, `transcript.ndjson` | `infrastructure/filesystem/` |
+| Work planning | `<working-root>/.atelier/planning/<work-slug>/manifest.json` plus framework-specific source Markdown: BMAD (`intent.md`, `design-guide.md`, `stories/`), Spec-kit (`spec.md`, `scenarios.md`, `acceptance.md`, `tasks/`), OpenSpec (`proposal.md`, `specs/change.md`, `tasks/`); legacy `design-guidance.md` still reads | `backend/src/domain/commands/planning/`, `backend/src/domain/planning/`, `backend/src/infrastructure/filesystem/planning_files.py`, `frontend/src/WorkView.tsx` |
 
 Anything else is internal.
 

@@ -118,7 +118,7 @@ Browser ──► Router (chats.py)
                 returns list[ChatSummary]
 ```
 
-Unscoped listing powers Home and only returns chats not assigned to a project or work (`grounding` unset/folder and not promoted). Project scope returns chats linked at that project level (`grounding.kind == "project"`) that have not been promoted into a work. Work scope returns chats linked to the work plus chats promoted into that work. `working_directory` is independent and does not affect list scope.
+Unscoped listing powers Home and only returns chats not assigned to a project or work (`grounding` unset/folder and not promoted). Project scope returns chats linked at that project level (`grounding.kind == "project"`) that have not been promoted into a work. Work scope returns chats linked to the work plus chats promoted into that work. `working_directory` is independent and does not affect list scope. Reserved work Planning chats include optional `planning_readiness` once the backend sees the structured readiness marker in the transcript or chat metadata.
 
 ---
 
@@ -184,7 +184,7 @@ Browser ──► WS Router (application/ws/chats.py)
                                 └─► live provider events
 ```
 
-Inbound frames mirror the agent stream for the chat-safe subset: `input` writes a `user_input` line and forwards to the adapter, `stop` writes `user_stop` and calls `adapter.stop_turn()`, and `permission` resolves any pending provider permission. Context attachment frames are rejected with a `client_error` frame because chats do not own agent context folders. The separate `chat_supervisor` writes to `~/Atelier/chats/<CHT>/transcript.ndjson` through `FsChatTranscriptLog` and persists provider session ids to `chats.session_id`. If `working_directory` is set it is used as cwd/writable root; otherwise Work/Project links use their Atelier metadata folders, while legacy folder-grounded chats use that folder as cwd.
+Inbound frames mirror the agent stream for the chat-safe subset: `input` writes a `user_input` line and forwards to the adapter, `stop` writes `user_stop` and calls `adapter.stop_turn()`, and `permission` resolves any pending provider permission. Context attachment frames are rejected with a `client_error` frame because chats do not own agent context folders. The separate `chat_supervisor` writes to `~/Atelier/chats/<CHT>/transcript.ndjson` through `FsChatTranscriptLog` and persists provider session ids to `chats.session_id`. If `working_directory` is set it is used as cwd/writable root; otherwise Work/Project links use their Atelier metadata folders, while legacy folder-grounded chats use that folder as cwd. For the reserved Planning chat, completed assistant messages are also scanned by `commands.planning.mark_ready`; the first exact `atelier_planning_ready` marker persists `chat.options.planning_readiness` and appends a `planning_readiness` stream event.
 
 ---
 
@@ -278,6 +278,65 @@ Browser ──► Router ──► WorkStore.get_work(slug)
 ```
 
 Returns 404 when the work is missing or soft-deleted.
+
+---
+
+## Work Planning
+
+```
+Browser ──► POST /plan/framework-status
+          └─► planning.frameworks.check_framework_status(root, framework)
+                    └─► ready? marker folder exists in selected root
+
+Browser ──► POST /planning-setup-chat   (only when status is not ready + user agrees)
+          └─► commands.planning.setup_chat.execute(workstore, chatstore, …)
+                    ├─► verify framework is still missing
+                    ├─► prompts.build_prompt(PlanningFrameworkSetupPrompt)
+                    └─► ChatStore.create_chat(title="Planning setup: …", cwd=root)
+
+Browser ──► POST /planning-chat
+          └─► commands.planning.start_chat.execute(workstore, chatstore, …)
+                    ├─► verify framework ready
+                    ├─► prompts.build_prompt(PlanningChatInitialPrompt)
+                    └─► ChatStore.create_chat(title="Planning", grounding=work)
+
+Browser ──► POST /plan
+          └─► commands.planning.materialize.execute(...)
+                    ├─► verify framework ready
+                    ├─► create/reuse internal Planning materializer chat
+                    ├─► prompts.build_prompt(PlanningMaterializationPrompt)
+                    ├─► run the materializer with repo write access
+                    ├─► auto-deny network/install permission prompts
+                    ├─► follow up if the report is missing after a turn
+                    ├─► parse atelier_plan_materialization metadata
+                    └─► submit_materialization.execute(...) stores manifest hashes
+
+Browser ──► GET /plan/materialization-status
+          └─► commands.planning.materialization_status.execute(...)
+                    ├─► check whether PlanningService can index a source plan
+                    └─► inspect the internal materializer chat transcript
+
+Browser ──► GET /plan
+          └─► commands.planning.get.execute(... PlanningFiles)
+                    └─► re-index source Markdown into WorkPlanView
+```
+
+Planning source docs live in the user-selected working folder/repo. The selected framework must be initialized in that folder before Planning starts; missing setup returns 409 with the recommended command. The frontend asks before setup; No stops the flow, Yes creates a normal visible setup chat that runs in the selected folder and streams tool output/permissions through the existing chat runtime. Prompt construction is backend-owned through `domain/prompts/build.py`. The Planning chat is read/discovery-oriented before materialization and must emit `{"atelier_planning_ready":{"ready":true,"summary":"..."}}` before the UI enables source-plan creation. Creating the source plan is a single `POST /plan` call: the backend starts or reuses an internal write-capable `Planning materializer` chat, schedules the materializer in the background, and returns the current materialization status immediately. The background materializer lets the selected framework write files under `.atelier/planning/<WRK>/`, nudges it if it finishes a turn without a report, and parses the final single-line `atelier_plan_materialization` metadata report. `GET /plan/materialization-status` returns `idle`, `running`, `waiting_permission`, `stalled`, `failed`, or `complete` from persisted files/transcript state plus the latest transcript event type/summary so the UI can show whether the materializer is still working, paused, silent, or ready to resume. Materialization asks the framework for a complete reviewable set now: framework-level grouping docs plus all known executable stories, tasks, spikes, bugs, hotfixes, or follow-up items, not placeholders that require another scoping pass before implementation. The public request/manifest never carries Markdown `content`; artifacts are tracked by `path`, `title`, `artifact_kind`, `executable`, and path-based `dependencies`. Materialization runs with repo write access while the backend denies permission prompts that look like HTTP/browser access, package installs, or remote fetches; Codex workspace-write also disables network access in its sandbox configuration. After materialization, the same right-dock `Planning` chat reconnects in revision mode against the source-backed planning folder; runtime config upgrades read-only discovery options to provider write-capable revision options while keeping cwd/writable roots on `.atelier/planning/<WRK>/`. The backend seeds that runtime prompt with a manifest-derived document index so `@relative/path.md` mentions refer to plan files. `GET` re-indexes the latest source files and prefers manifest artifact metadata, with legacy/path scanning for older plans and out-of-band Markdown files. No SQLite shape changes. Missing planning root maps to 404 until the user creates the source plan.
+
+Artifact endpoints:
+
+- `GET /api/works/{slug}/plan/artifacts/{id}` returns the indexed artifact plus Markdown content.
+- `PUT /api/works/{slug}/plan/artifacts/{id}` writes reviewer-approved Markdown when `expected_hash` matches the current source hash; stale hashes return 409. If the plan already has an approved baseline, this also updates that file's approved hash so a user-authored save does not require a second plan approval click.
+- `POST /api/works/{slug}/plan/finish` remains for legacy conversing manifests; the current materialization path returns `planned`.
+- `POST /api/works/{slug}/plan/approve` stores the current source hashes as the approved plan state; approved non-executable source docs satisfy dependencies, while executable artifacts still require a completed/accepted run before dependent work can launch.
+- `POST /api/works/{slug}/plan/artifacts/{id}/runs` records the launched agent slug against the artifact.
+- `POST /api/works/{slug}/plan/artifacts/{id}/runs/{agent}/ingest-report` extracts the latest `message_complete` transcript report into structured review fields and runs the same backend loop assessment as manual report submission.
+- `POST /api/works/{slug}/plan/artifacts/{id}/runs/{agent}/cleanup` marks transient run cleanup after the existing agent delete path removes the workspace.
+- `POST /api/works/{slug}/plan/artifacts/{id}/report` stores structured report fields, validates them against the Planning Artifact Execution loop schema, and returns `loop_status`/`loop_status_reason`. Complete reports become `completed_pending_review`; incomplete reports become `needs_attention`; reported blockers become `blocked`.
+- `POST /api/works/{slug}/plan/artifacts/{id}/accept` writes `summaries/{id}.md` for executable artifacts and marks the run accepted when present.
+- `POST /api/works/{slug}/plan/artifacts/{id}/proposals` stores a full-document proposed source update; `/proposals/{proposal}/accept|reject` applies or rejects it with source-hash protection.
+- `POST /api/works/{slug}/plan/artifacts/{id}/tracking` attaches Jira/PR/blocker metadata to the artifact. Blocker links participate in launch gating.
+- `POST /api/works/{slug}/plan/artifacts/{id}/bugs` creates a source-backed `bugs/bug-NNN.md` from a review finding and links it back to the source artifact.
 
 ---
 

@@ -7,6 +7,7 @@ import {
 } from "react";
 
 import { FolderPickerDialog } from "./FolderPickerDialog";
+import { PaperclipIcon } from "./Icons";
 import { ModelPicker } from "./ModelPicker";
 
 import {
@@ -33,7 +34,12 @@ import {
   providerDefaults,
   withOpenCodeModelOptions,
 } from "./providerDescriptors";
-import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
+import {
+  isSimpleContextType,
+  SIMPLE_CONTEXT_PICKER_TYPES,
+  SimpleContextRow,
+  type SimpleContextType,
+} from "./SimpleContextRow";
 import {
   NO_FOLDERS,
   deriveFolderCandidates,
@@ -60,12 +66,6 @@ type Props = {
    *  context pipeline. */
   initialContexts?: ContextEntry[];
 };
-
-const SIMPLE_TYPES: { id: SimpleContextType; label: string }[] = [
-  { id: "text", label: "Text" },
-  { id: "url", label: "URL" },
-  { id: "file", label: "File" },
-];
 
 const CUSTOM_PERSONA_PLACEHOLDER: Persona = "developer";
 
@@ -684,7 +684,7 @@ export function NewAgentDialog({
               get full content in a later sprint.
             </span>
             {contexts.map((c, i) =>
-              SIMPLE_TYPES.some((s) => s.id === c.type) ? (
+              isSimpleContextType(c.type) ? (
                 <SimpleContextRow
                   key={i}
                   context={c}
@@ -703,8 +703,10 @@ export function NewAgentDialog({
               ),
             )}
             <div className="add-context-row">
-              <span className="hint">+ Add context</span>
-              {SIMPLE_TYPES.map((s) => (
+              <span className="add-context-icon" aria-label="Add context" title="Add context">
+                <PaperclipIcon size={13} />
+              </span>
+              {SIMPLE_CONTEXT_PICKER_TYPES.map((s) => (
                 <button
                   key={s.id}
                   type="button"

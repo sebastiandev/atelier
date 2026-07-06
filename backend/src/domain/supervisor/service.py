@@ -167,7 +167,17 @@ class AgentSubscription:
         for event in self.replay:
             yield event
         while True:
-            yield await self.queue.get()
+            event_task = asyncio.create_task(self.queue.get())
+            kicked_task = asyncio.create_task(self.kicked.wait())
+            done, pending = await asyncio.wait(
+                {event_task, kicked_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            if kicked_task in done:
+                return
+            yield event_task.result()
 
 
 @dataclasses.dataclass
@@ -299,7 +309,12 @@ class AgentSupervisorService:
             raise
 
     async def send_input(
-        self, agent_slug: str, text: str, *, record_user_input: bool = True
+        self,
+        agent_slug: str,
+        text: str,
+        *,
+        record_user_input: bool = True,
+        transcript_text: str | None = None,
     ) -> None:
         state = self._require_state(agent_slug)
         await self._await_ready(state)
@@ -320,7 +335,7 @@ class AgentSupervisorService:
                 {
                     "type": "user_input",
                     "ts": datetime.now(UTC).isoformat(),
-                    "text": text,
+                    "text": transcript_text if transcript_text is not None else text,
                 },
             )
         try:

@@ -10,6 +10,7 @@ import {
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
+import { PaperclipIcon } from "./Icons";
 
 type Props = {
   onClose: () => void;
@@ -246,7 +247,9 @@ export function NewWorkDialog({
               />
             ))}
             <div className="add-context-row">
-              <span className="hint">+ Add context</span>
+              <span className="add-context-icon" aria-label="Add context" title="Add context">
+                <PaperclipIcon size={13} />
+              </span>
               {fetchableTypes.map((d) => (
                 <button
                   key={d.type}

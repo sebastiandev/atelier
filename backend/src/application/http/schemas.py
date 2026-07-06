@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from src.domain.loop.dtos import LoopStatus
 from src.domain.models import (
     AgentStatus,
     ArtifactType,
@@ -20,6 +21,18 @@ from src.domain.models import (
     Persona,
     Provider,
     WorkStatus,
+)
+from src.domain.planning.dtos import (
+    PlanArtifactKind,
+    PlanArtifactStatus,
+    PlanningDepth,
+    PlanningFramework,
+    PlanningPhase,
+    PlanningProfile,
+    PlanProposalStatus,
+    PlanReadiness,
+    PlanRunStatus,
+    PlanTrackingKind,
 )
 
 
@@ -404,6 +417,11 @@ class ChatMessageSchema(BaseModel):
     created_at: datetime
 
 
+class PlanningChatReadinessResponse(BaseModel):
+    ready: bool
+    summary: str
+
+
 class ChatSummary(BaseModel):
     slug: str
     title: str
@@ -415,6 +433,7 @@ class ChatSummary(BaseModel):
     updated_at: datetime
     promoted_to_work_slug: str | None = None
     message_count: int
+    planning_readiness: PlanningChatReadinessResponse | None = None
 
 
 class ChatDetail(ChatSummary):
@@ -452,7 +471,228 @@ class WorkChatContextDocResponse(BaseModel):
     content: str
 
 
+# ---------------------------------------------------------------------------
+# Work planning
+# ---------------------------------------------------------------------------
+
+
+class PlanningFrameworkStatusRequest(BaseModel):
+    root_path: str = Field(min_length=1)
+    framework: PlanningFramework
+
+
+class PlanningFrameworkStatusResponse(BaseModel):
+    framework: PlanningFramework
+    label: str
+    root_path: str
+    ready: bool
+    markers: list[str]
+    setup_command: list[str]
+    setup_hint: str
+
+
+class StartPlanningChatRequest(BaseModel):
+    root_path: str = Field(min_length=1)
+    idea: str = ""
+    framework: PlanningFramework
+    profile: PlanningProfile
+    provider: Provider
+    model: str = Field(min_length=1)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class StartPlanningSetupChatRequest(BaseModel):
+    root_path: str = Field(min_length=1)
+    framework: PlanningFramework
+    profile: PlanningProfile
+    provider: Provider
+    model: str = Field(min_length=1)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class StartWorkPlanRequest(BaseModel):
+    root_path: str = Field(min_length=1)
+    framework: PlanningFramework
+    profile: PlanningProfile
+    provider: Provider
+    model: str = Field(min_length=1)
+    options: dict[str, Any] = Field(default_factory=dict)
+    planning_chat_slug: str | None = None
+
+
+class PlanMaterializationStatusResponse(BaseModel):
+    state: Literal[
+        "idle",
+        "running",
+        "waiting_permission",
+        "stalled",
+        "complete",
+        "failed",
+    ]
+    chat_slug: str | None = None
+    updated_at: str | None = None
+    last_seq: int | None = None
+    last_event_type: str | None = None
+    last_event_summary: str = ""
+    message: str = ""
+    tool_name: str | None = None
+
+
+class PlanOverviewResponse(BaseModel):
+    total: int
+    ready: int
+    needs_detail: int
+    approved: int
+    changed: int
+    accepted: int
+    executable: int
+    running: int
+    review: int
+    blocked: int
+
+
+class PlanArtifactRunResponse(BaseModel):
+    agent_slug: str
+    status: PlanRunStatus
+    started_at: str
+    completed_at: str | None = None
+    cleanup_at: str | None = None
+    report_path: str | None = None
+    summary: str = ""
+    divergences: str = ""
+    skipped_scope: str = ""
+    blockers: str = ""
+    decisions: str = ""
+    changes: str = ""
+    validation_evidence: str = ""
+    loop_status: LoopStatus | None = None
+    loop_status_reason: str = ""
+    loop_attempt: int = 1
+    loop_latest_assessment: list[str] = Field(default_factory=list)
+
+
+class PlanArtifactProposalResponse(BaseModel):
+    id: str
+    artifact_id: str
+    title: str
+    path: str
+    source_hash: str
+    proposed_content: str
+    status: PlanProposalStatus
+    created_at: str
+    resolved_at: str | None = None
+
+
+class PlanTrackingLinkResponse(BaseModel):
+    id: str
+    kind: PlanTrackingKind
+    title: str
+    url: str = ""
+    status: str = ""
+    ref: str = ""
+    notes: str = ""
+    created_at: str
+
+
+class PlanArtifactResponse(BaseModel):
+    id: str
+    kind: PlanArtifactKind
+    title: str
+    path: str
+    source_ref: str
+    source_hash: str
+    status: PlanArtifactStatus
+    readiness: PlanReadiness
+    executable: bool
+    launchable: bool
+    launch_blockers: list[str] = Field(default_factory=list)
+    dependencies: list[str] = Field(default_factory=list)
+    runs: list[PlanArtifactRunResponse] = Field(default_factory=list)
+    proposals: list[PlanArtifactProposalResponse] = Field(default_factory=list)
+    tracking: list[PlanTrackingLinkResponse] = Field(default_factory=list)
+    accepted_summary_path: str | None = None
+
+
+class WorkPlanResponse(BaseModel):
+    work_slug: str
+    framework: PlanningFramework
+    profile: PlanningProfile
+    phase: PlanningPhase
+    depth: PlanningDepth
+    root_path: str
+    planning_path: str
+    approved_at: str | None = None
+    stale: bool
+    overview: PlanOverviewResponse
+    artifacts: list[PlanArtifactResponse]
+
+
+class StartWorkPlanResponse(BaseModel):
+    plan: WorkPlanResponse | None = None
+    materialization_status: PlanMaterializationStatusResponse
+
+
+class PlanArtifactDetailResponse(BaseModel):
+    artifact: PlanArtifactResponse
+    content: str
+
+
+class UpdatePlanArtifactRequest(BaseModel):
+    content: str = Field(min_length=1)
+    expected_hash: str = Field(min_length=1)
+
+
+class AcceptPlanArtifactRequest(BaseModel):
+    summary: str = ""
+    agent_slug: str | None = None
+    divergences: str = ""
+    skipped_scope: str = ""
+    blockers: str = ""
+    decisions: str = ""
+    changes: str = ""
+    validation_evidence: str = ""
+
+
+class RecordPlanArtifactRunRequest(BaseModel):
+    agent_slug: str = Field(min_length=1)
+
+
+class SubmitPlanArtifactReportRequest(BaseModel):
+    agent_slug: str | None = None
+    summary: str = ""
+    divergences: str = ""
+    skipped_scope: str = ""
+    blockers: str = ""
+    decisions: str = ""
+    changes: str = ""
+    validation_evidence: str = ""
+
+
+class CreatePlanArtifactProposalRequest(BaseModel):
+    title: str = ""
+    proposed_content: str = Field(min_length=1)
+
+
+class LinkPlanArtifactTrackingRequest(BaseModel):
+    kind: PlanTrackingKind
+    title: str = ""
+    url: str = ""
+    status: str = ""
+    ref: str = ""
+    notes: str = ""
+
+
+class CreatePlanBugRequest(BaseModel):
+    title: str = Field(min_length=1)
+    description: str = ""
+
+
+class MarkPlanRunCleanedRequest(BaseModel):
+    agent_slug: str = Field(min_length=1)
+
+
 __all__ = [
+    "AcceptPlanArtifactRequest",
     "AgentSummary",
     "ArtifactSummary",
     "ChatCompactionSummaryResponse",
@@ -464,8 +704,12 @@ __all__ = [
     "CompactChatResponse",
     "ConnectionRead",
     "ContextSchema",
+    "CreatePlanArtifactProposalRequest",
+    "CreatePlanBugRequest",
     "DetachResponse",
     "HandoffSummary",
+    "LinkPlanArtifactTrackingRequest",
+    "MarkPlanRunCleanedRequest",
     "NewAgentRequest",
     "NewChatRequest",
     "NewConnectionRequest",
@@ -476,15 +720,32 @@ __all__ = [
     "PatchConnectionRequest",
     "PatchProjectRequest",
     "PatchWorkRequest",
+    "PlanArtifactDetailResponse",
+    "PlanArtifactProposalResponse",
+    "PlanArtifactResponse",
+    "PlanArtifactRunResponse",
+    "PlanMaterializationStatusResponse",
+    "PlanOverviewResponse",
+    "PlanTrackingLinkResponse",
+    "PlanningFrameworkStatusRequest",
+    "PlanningFrameworkStatusResponse",
     "ProjectDetail",
     "ProjectSummary",
     "PromoteChatRequest",
+    "RecordPlanArtifactRunRequest",
+    "StartWorkPlanResponse",
     "SendChatMessageRequest",
+    "StartPlanningChatRequest",
+    "StartPlanningSetupChatRequest",
+    "StartWorkPlanRequest",
+    "SubmitPlanArtifactReportRequest",
     "SwitchThreadRequest",
+    "UpdatePlanArtifactRequest",
     "VerifyResponse",
     "WorkChatContextDocResponse",
     "WorkChatContextFolderSummary",
     "WorkChatRef",
     "WorkDetail",
+    "WorkPlanResponse",
     "WorkSummary",
 ]
