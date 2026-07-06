@@ -8168,10 +8168,26 @@ h5.md-h {
 }
 .work-rail .work-hero { padding: 12px 18px 16px; }
 .work-rail .work-hero .id-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-4);
   letter-spacing: 0.04em;
+}
+.work-rail .work-hero .id-line > span {
+  min-width: 0;
+}
+.work-rail .work-hero .work-hero-folder {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  color: var(--fg-4);
+}
+.work-rail .work-hero .work-hero-folder:hover {
+  color: var(--fg-2);
 }
 .work-rail .work-hero .name {
   font-size: 16px;

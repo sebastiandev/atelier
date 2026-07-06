@@ -742,7 +742,19 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
         <div className="work-hero">
           <div className="id-line">
-            {work.slug} · {formatAge(work.created_at)}
+            <span>{work.slug} · {formatAge(work.created_at)}</span>
+            <button
+              className="btn-icon work-hero-folder"
+              title={`Open ${work.atelier_path} in the file browser`}
+              onClick={() => {
+                revealWork(work.slug).catch(() => {
+                  navigator.clipboard?.writeText(work.atelier_path).catch(() => {});
+                });
+              }}
+              aria-label="Reveal work folder"
+            >
+              <FolderIcon size={12} />
+            </button>
           </div>
           <div className="name">{work.name}</div>
           {work.description && <div className="desc">{work.description}</div>}
@@ -995,28 +1007,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           )}
         </div>
 
-        <div className="v3-footstrip">
-          <span className="seg">
-            <span className="dot live" />
-            {orderedAgents.filter((a) => a.status === "live").length} live
-          </span>
-          <span className="seg">
-            {orderedAgents.filter((a) => a.status === "thinking").length} working
-          </span>
-          <span style={{ flex: 1 }} />
-          <button
-            className="btn-icon"
-            title={`Open ${work.atelier_path} in the file browser`}
-            onClick={() => {
-              revealWork(work.slug).catch(() => {
-                navigator.clipboard?.writeText(work.atelier_path).catch(() => {});
-              });
-            }}
-            aria-label="Reveal work folder"
-          >
-            <FolderIcon size={12} />
-          </button>
-        </div>
       </aside>
 
       <main className="shell-right work-right">
