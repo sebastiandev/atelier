@@ -146,6 +146,7 @@ class AcpAdapter:
         self._session_config_options: tuple[dict[str, Any], ...] = ()
         self._advertised_config_values: dict[str, set[str | bool]] = {}
         self._replaying = False
+        self._suppress_restored_updates_until_prompt = False
         self._user_inputs: asyncio.Queue[str | object] = asyncio.Queue()
         self._outgoing: asyncio.Queue[AgentEvent | object] = asyncio.Queue()
         self._pump_task: asyncio.Task[None] | None = None
@@ -332,6 +333,12 @@ class AcpAdapter:
             # session/load replays history as ordinary updates before its
             # response resolves; Atelier's own transcript already holds
             # those turns, so re-emitting would duplicate them.
+            return
+        if self._suppress_restored_updates_until_prompt and _is_replay_update(update):
+            # Some ACP agents emit restored-history updates just after
+            # load/resume resolves. Normal live output starts after
+            # prompt(); suppress only content-shaped updates during this
+            # restored-but-not-prompting phase.
             return
         if isinstance(update, ConfigOptionUpdate):
             if self._record_config_options_response(update):
@@ -528,6 +535,7 @@ class AcpAdapter:
                     self._replaying = False
                 self._session_id = session_id
                 self._restored_session_id = session_id
+                self._suppress_restored_updates_until_prompt = True
                 return response
             if (
                 session_caps is not None
@@ -538,6 +546,7 @@ class AcpAdapter:
                 )
                 self._session_id = session_id
                 self._restored_session_id = session_id
+                self._suppress_restored_updates_until_prompt = True
                 return response
             self._pending_warning = (
                 "Agent does not support session restore; started a fresh session."
@@ -683,6 +692,7 @@ class AcpAdapter:
                     blocks = self._prompt_blocks(prompt_text)
                     assert self._conn is not None
                     try:
+                        self._suppress_restored_updates_until_prompt = False
                         response = await self._conn.prompt(
                             prompt=blocks, session_id=self._session_id or ""
                         )
@@ -809,6 +819,18 @@ class AcpAdapter:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _is_replay_update(update: Any) -> bool:
+    return getattr(update, "session_update", None) in {
+        "agent_message_chunk",
+        "agent_thought_chunk",
+        "tool_call",
+        "tool_call_update",
+        "plan",
+        "current_mode_update",
+        "usage_update",
+    }
 
 
 async def _terminate_process_tree(proc: asyncio.subprocess.Process) -> None:

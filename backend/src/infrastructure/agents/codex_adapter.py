@@ -91,7 +91,13 @@ _log = logging.getLogger(__name__)
 
 _SHUTDOWN = object()  # sentinel pushed onto the queue by close()
 _APP_SERVER_REQUEST_TIMEOUT_SECONDS = 60.0
+_APP_SERVER_TURN_SILENCE_TIMEOUT_SECONDS = 15 * 60.0
 _APP_SERVER_STDIO_LIMIT_BYTES = 16 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class _AppServerExited:
+    detail: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +428,15 @@ class CodexAdapter:
                         context_window=context_window,
                     ):
                         await self._outgoing.put(ev)
+            except ConnectionError as exc:
+                await self._outgoing.put(
+                    Error(ts=datetime.now(UTC), message=str(exc))
+                )
+                await self._outgoing.put(
+                    StatusChange(ts=datetime.now(UTC), status="idle")
+                )
+                await self._outgoing.put(_SHUTDOWN)
+                return
             except Exception as exc:
                 await self._outgoing.put(
                     Error(ts=datetime.now(UTC), message=str(exc))
@@ -817,8 +832,8 @@ class _CodexAppServerClient:
 
     async def _send(self, message: dict[str, Any]) -> None:
         proc = self._proc
-        if proc is None or proc.stdin is None:
-            raise RuntimeError("Codex app-server is not running")
+        if proc is None or proc.stdin is None or proc.returncode is not None:
+            raise ConnectionError("Codex app-server is not running")
         wire = dict(message)
         wire.setdefault("jsonrpc", "2.0")
         proc.stdin.write((json.dumps(wire) + "\n").encode("utf-8"))
@@ -848,7 +863,10 @@ class _CodexAppServerClient:
             for fut in self._pending.values():
                 if not fut.done():
                     detail = f": {err_text}" if err_text else ""
-                    fut.set_exception(RuntimeError(f"Codex app-server exited{detail}"))
+                    fut.set_exception(ConnectionError(f"Codex app-server exited{detail}"))
+            if not self._closed:
+                for queue in self._thread_queues.values():
+                    await queue.put(_AppServerExited(err_text))
 
     async def _handle_message(self, message: dict[str, Any]) -> None:
         msg_id = message.get("id")
@@ -936,9 +954,23 @@ class _CodexAppServerTurnHandle:
 
     async def stream(self) -> AsyncIterator[_SdkNotification]:
         while True:
-            item = await self._queue.get()
+            try:
+                item = await asyncio.wait_for(
+                    self._queue.get(),
+                    timeout=_APP_SERVER_TURN_SILENCE_TIMEOUT_SECONDS,
+                )
+            except TimeoutError as exc:
+                with suppress(Exception):
+                    await self._client._interrupt_turn(self._thread_id, self._turn_id)
+                raise TimeoutError(
+                    "Codex app-server produced no turn events for "
+                    f"{_APP_SERVER_TURN_SILENCE_TIMEOUT_SECONDS:g}s"
+                ) from exc
             if item is _SHUTDOWN:
                 return
+            if isinstance(item, _AppServerExited):
+                detail = f": {item.detail}" if item.detail else ""
+                raise ConnectionError(f"Codex app-server exited{detail}")
             assert isinstance(item, _SdkNotification)
             turn_id = _turn_id_from_app_server_params(item.params)
             if turn_id and self._turn_id and turn_id != self._turn_id:

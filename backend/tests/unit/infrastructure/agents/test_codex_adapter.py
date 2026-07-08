@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+import src.infrastructure.agents.codex_adapter as codex_adapter
 from src.domain.agents import (
     AgentEvent,
     AgentStartContext,
@@ -1404,6 +1405,93 @@ def test_app_server_interrupt_synthesizes_terminal_turn() -> None:
     assert event.params["turnId"] == "turn-1"
 
 
+def test_app_server_exit_wakes_turn_stream() -> None:
+    """If the app-server subprocess exits while a turn stream is parked,
+    the stream must wake so the supervisor can evict and reconnect."""
+
+    class FakeAppServerClient:
+        async def _interrupt_turn(self, thread_id: str, turn_id: str) -> None:
+            raise AssertionError("transport exits should not interrupt")
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    handle = codex_adapter._CodexAppServerTurnHandle(  # type: ignore[arg-type]
+        FakeAppServerClient(), "thread-1", "turn-1", queue
+    )
+
+    async def session() -> None:
+        await queue.put(codex_adapter._AppServerExited("stderr details"))
+        with pytest.raises(ConnectionError, match="stderr details"):
+            async for _event in handle.stream():
+                pass
+
+    asyncio.run(session())
+
+
+def test_app_server_turn_silence_timeout_interrupts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A live app-server can accept a turn and then never produce stream
+    frames. Bound that state so the UI returns to idle instead of hanging."""
+
+    class FakeAppServerClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def _interrupt_turn(self, thread_id: str, turn_id: str) -> None:
+            self.calls.append((thread_id, turn_id))
+
+    monkeypatch.setattr(
+        codex_adapter, "_APP_SERVER_TURN_SILENCE_TIMEOUT_SECONDS", 0.01
+    )
+    client = FakeAppServerClient()
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    handle = codex_adapter._CodexAppServerTurnHandle(  # type: ignore[arg-type]
+        client, "thread-1", "turn-1", queue
+    )
+
+    async def session() -> None:
+        with pytest.raises(TimeoutError, match="produced no turn events"):
+            async for _event in handle.stream():
+                pass
+
+    asyncio.run(session())
+    assert client.calls == [("thread-1", "turn-1")]
+
+
+def test_codex_transport_close_emits_error_idle_and_ends_stream() -> None:
+    class ClosingTurn:
+        async def stream(self) -> AsyncIterator[FakeNotification]:
+            yield FakeNotification("turn/started", {})
+            raise ConnectionError("Codex app-server exited")
+
+        async def interrupt(self) -> None:
+            pass
+
+    thread = FakeThread("thread-1", [ClosingTurn()])  # type: ignore[list-item]
+    client = FakeClient(thread)
+    adapter = CodexAdapter(_config(), client_factory=lambda: client)
+
+    async def session() -> list[AgentEvent]:
+        await adapter.start(_start_context())
+        events_task = asyncio.create_task(_drain_all(adapter))
+        await adapter.send_input("do work")
+        events = await asyncio.wait_for(events_task, timeout=1.0)
+        await adapter.close()
+        return events
+
+    events = asyncio.run(session())
+    event_types = [type(event) for event in events]
+    assert StatusChange in event_types
+    assert Error in event_types
+    assert event_types[-1] is StatusChange
+    assert isinstance(events[-1], StatusChange)
+    assert events[-1].status == "idle"
+    assert any(
+        isinstance(event, Error) and "Codex app-server exited" in event.message
+        for event in events
+    )
+
+
 def test_app_server_stdio_limit_handles_large_resume_payloads() -> None:
     """thread/resume responses include historical turns and can exceed
     asyncio's default 64 KiB readline limit for long Codex sessions."""
@@ -1440,4 +1528,11 @@ async def _drain_until_idle(adapter: CodexAdapter) -> list[AgentEvent]:
         out.append(ev)
         if isinstance(ev, StatusChange) and ev.status == "idle":
             return out
+    return out
+
+
+async def _drain_all(adapter: CodexAdapter) -> list[AgentEvent]:
+    out: list[AgentEvent] = []
+    async for ev in adapter.events():
+        out.append(ev)
     return out

@@ -8290,12 +8290,6 @@ h5.md-h {
 .work-rail-section.agents-section .work-rail-section-body {
   max-height: min(34vh, 292px);
 }
-.work-rail .work-rail-sections:not(.has-artifacts) .agents-section {
-  flex: 1 1 160px;
-}
-.work-rail .work-rail-sections:not(.has-artifacts) .agents-section .work-rail-section-body {
-  max-height: none;
-}
 .work-rail-section.chats-section {
   max-height: min(22vh, 176px);
 }

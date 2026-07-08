@@ -874,6 +874,46 @@ def test_restore_uses_load_session_and_suppresses_replay() -> None:
 
     asyncio.run(scenario())
 
+
+def test_restore_suppresses_late_replay_until_first_prompt() -> None:
+    async def scenario() -> None:
+        async def live_prompt(fake: FakeConnection, session_id: str) -> Any:
+            await fake.adapter.session_update(
+                session_id,
+                AgentMessageChunk(
+                    session_update="agent_message_chunk",
+                    content=TextContentBlock(type="text", text="live answer"),
+                    message_id="live",
+                ),
+            )
+            return _Obj(stop_reason="end_turn", usage=None)
+
+        adapter, _fake = _build(
+            caps=_caps(load_session=True),
+            prompt_script=[live_prompt],
+        )
+        await adapter.start(
+            AgentStartContext(
+                workdir=WORKDIR, model="m", system_prompt="s", session_id="sess_old"
+            )
+        )
+        await adapter.session_update(
+            "sess_old",
+            AgentMessageChunk(
+                session_update="agent_message_chunk",
+                content=TextContentBlock(type="text", text="stale replay"),
+                message_id="old-after-restore",
+            ),
+        )
+
+        events = await _collect_turn(adapter, "continue")
+        completions = [e.text for e in events if isinstance(e, MessageComplete)]
+        assert completions == ["live answer"]
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
 def test_restore_falls_back_to_fresh_session_with_warning() -> None:
     async def scenario() -> None:
         adapter, fake = _build(caps=_caps(load_session=True), load_should_fail=True)
