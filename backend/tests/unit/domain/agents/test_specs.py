@@ -254,11 +254,17 @@ def test_codex_describe_lists_models_and_options() -> None:
     assert desc.name == "codex"
     assert desc.primary_field.label == "Model"
     assert desc.primary_field.values == [
+        CodexModel.GPT_5_6_TERRA.value,
+        CodexModel.GPT_5_6_LUNA.value,
+        CodexModel.GPT_5_6_SOL.value,
         CodexModel.GPT_5_5.value,
         CodexModel.GPT_5_5_PRO.value,
         CodexModel.GPT_5_4.value,
         CodexModel.GPT_5_4_PRO.value,
     ]
+    assert CodexModel.GPT_5_6_TERRA.value in desc.primary_field.values
+    assert CodexModel.GPT_5_6_LUNA.value in desc.primary_field.values
+    assert CodexModel.GPT_5_6_SOL.value in desc.primary_field.values
     assert CodexModel.GPT_5_4.value in desc.primary_field.values
     assert CodexModel.GPT_5_5.value in desc.primary_field.values
     assert CodexModel.GPT_5_5_PRO.value in desc.primary_field.values
@@ -270,6 +276,9 @@ def test_codex_describe_lists_models_and_options() -> None:
         CodexReasoningEffort.LOW.value,
         CodexReasoningEffort.MEDIUM.value,
         CodexReasoningEffort.HIGH.value,
+        CodexReasoningEffort.XHIGH.value,
+        CodexReasoningEffort.EXTRA.value,
+        CodexReasoningEffort.ULTRA.value,
     ]
     assert "sandbox" in desc.options
     assert "approval_mode" in desc.options
@@ -284,6 +293,9 @@ def test_codex_describe_lists_models_and_options() -> None:
 
 def test_codex_describe_exposes_model_meta() -> None:
     desc = CodexSpec().describe()
+    assert desc.model_meta[CodexModel.GPT_5_6_TERRA.value].input_per_mtok is None
+    assert desc.model_meta[CodexModel.GPT_5_6_LUNA.value].input_per_mtok is None
+    assert desc.model_meta[CodexModel.GPT_5_6_SOL.value].input_per_mtok is None
     assert desc.model_meta[CodexModel.GPT_5_5.value].context_window == 400_000
     assert desc.model_meta[CodexModel.GPT_5_5.value].input_per_mtok == 5.0
     assert desc.model_meta[CodexModel.GPT_5_5.value].output_per_mtok == 30.0
@@ -318,15 +330,21 @@ def test_codex_build_with_full_options() -> None:
         _common(),
         CodexModel.GPT_5_5_PRO.value,
         options={
-            "reasoning_effort": "minimal",
+            "reasoning_effort": "ultra",
             "sandbox": "read-only",
             "approval_mode": "untrusted",
         },
     )
     assert config.model is CodexModel.GPT_5_5_PRO
-    assert config.reasoning_effort is CodexReasoningEffort.MINIMAL
+    assert config.reasoning_effort is CodexReasoningEffort.ULTRA
     assert config.sandbox is CodexSandbox.READ_ONLY
     assert config.approval_mode is CodexApprovalMode.UNTRUSTED
+
+
+def test_codex_build_accepts_terra_aliases() -> None:
+    for model in ("5.6 terra", "gpt.5.6-terra"):
+        config = CodexSpec().build(_common(), model, options={})
+        assert config.model is CodexModel.GPT_5_6_TERRA
 
 
 def test_codex_build_rejects_unknown_option() -> None:

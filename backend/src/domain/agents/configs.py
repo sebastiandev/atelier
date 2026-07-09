@@ -184,6 +184,9 @@ class CodexModel(str, Enum):
     keeps the new-agent dialog deterministic.
     """
 
+    GPT_5_6_TERRA = "gpt-5.6-terra"
+    GPT_5_6_LUNA = "gpt-5.6-luna"
+    GPT_5_6_SOL = "gpt-5.6-sol"
     GPT_5_5 = "gpt-5.5"
     GPT_5_5_PRO = "gpt-5.5-pro"
     GPT_5_4 = "gpt-5.4"
@@ -201,6 +204,9 @@ class CodexReasoningEffort(str, Enum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+    XHIGH = "xhigh"
+    EXTRA = "extra"
+    ULTRA = "ultra"
 
 
 class CodexSandbox(str, Enum):
@@ -358,23 +364,30 @@ class ClaudeAcpAgentConfig(AcpAgentConfig):
 
 
 class CodexAcpModel(str, Enum):
-    """Model values exposed by Zed's codex-acp wrapper (0.16.0, captured
-    live 2026-06-11). No Pro tiers — the wrapper surfaces the standard
-    Codex runtime models only."""
+    """Model values exposed by Zed's codex-acp wrapper / Codex runtime.
 
+    The 5.6 variants are ChatGPT-login Codex aliases; their public
+    pricing/window metadata is not published, so specs keep blank meta
+    until the runtime reports usage or official docs catch up.
+    """
+
+    GPT_5_6_TERRA = "gpt-5.6-terra"
+    GPT_5_6_LUNA = "gpt-5.6-luna"
+    GPT_5_6_SOL = "gpt-5.6-sol"
     GPT_5_5 = "gpt-5.5"
     GPT_5_4 = "gpt-5.4"
     GPT_5_4_MINI = "gpt-5.4-mini"
 
 
 class CodexAcpEffort(str, Enum):
-    """codex-acp ``reasoning_effort`` ladder — one tier above the bespoke
-    adapter's (``xhigh`` is ACP-only today)."""
+    """codex-acp ``reasoning_effort`` ladder."""
 
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
+    EXTRA = "extra"
+    ULTRA = "ultra"
 
 
 class CodexAcpMode(str, Enum):

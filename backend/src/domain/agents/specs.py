@@ -239,6 +239,11 @@ _CODEX_MODEL_META: dict[str, ModelMeta] = {
     # are only filled when OpenAI has documented the Codex-side limit or
     # the default non-experimental window for Codex specifically; API
     # windows can be larger than what Codex uses in practice.
+    # 5.6 ChatGPT-login Codex aliases do not have published stable
+    # pricing/window metadata yet, so keep their entries blank.
+    CodexModel.GPT_5_6_TERRA.value: ModelMeta(),
+    CodexModel.GPT_5_6_LUNA.value: ModelMeta(),
+    CodexModel.GPT_5_6_SOL.value: ModelMeta(),
     CodexModel.GPT_5_5.value: ModelMeta(
         context_window=400_000,
         input_per_mtok=5.0,
@@ -266,6 +271,23 @@ _CODEX_MODEL_META: dict[str, ModelMeta] = {
         cache_write_per_mtok=30.0,
     ),
 }
+
+
+_CODEX_MODEL_ALIASES = {
+    "5.6 terra": CodexModel.GPT_5_6_TERRA.value,
+    "gpt 5.6 terra": CodexModel.GPT_5_6_TERRA.value,
+    "gpt.5.6-terra": CodexModel.GPT_5_6_TERRA.value,
+    "gpt-5.6 terra": CodexModel.GPT_5_6_TERRA.value,
+    "5.6 luna": CodexModel.GPT_5_6_LUNA.value,
+    "gpt 5.6 luna": CodexModel.GPT_5_6_LUNA.value,
+    "5.6 sol": CodexModel.GPT_5_6_SOL.value,
+    "gpt 5.6 sol": CodexModel.GPT_5_6_SOL.value,
+}
+
+
+def _normalize_codex_model(model: str) -> str:
+    normalized = model.strip().lower()
+    return _CODEX_MODEL_ALIASES.get(normalized, normalized)
 
 
 class ClaudeSpec:
@@ -483,7 +505,7 @@ class CodexSpec:
         _reject_unknown(self.name, options, self._allowed_options)
         return CodexAgentConfig(
             common=common,
-            model=CodexModel(model),
+            model=CodexModel(_normalize_codex_model(model)),
             reasoning_effort=CodexReasoningEffort(
                 options.get(
                     "reasoning_effort", CodexReasoningEffort.MEDIUM.value
@@ -626,9 +648,13 @@ class ClaudeAcpSpec:
 
 
 _CODEX_ACP_MODEL_META: dict[str, ModelMeta] = {
-    # gpt-5.5 / gpt-5.4 mirror the bespoke Codex meta; gpt-5.4-mini has
-    # no published Codex-side pricing/window, so its meta stays blank
-    # (the FE shows "—" and relies on usage_update for real numbers).
+    # gpt-5.5 / gpt-5.4 mirror the bespoke Codex meta; gpt-5.4-mini and
+    # 5.6 ChatGPT-login aliases have no published Codex-side
+    # pricing/window, so their meta stays blank (the FE shows "—" and
+    # relies on usage_update for real numbers).
+    CodexAcpModel.GPT_5_6_TERRA.value: ModelMeta(),
+    CodexAcpModel.GPT_5_6_LUNA.value: ModelMeta(),
+    CodexAcpModel.GPT_5_6_SOL.value: ModelMeta(),
     CodexAcpModel.GPT_5_5.value: ModelMeta(
         context_window=400_000,
         input_per_mtok=5.0,
@@ -705,7 +731,7 @@ class CodexAcpSpec:
         _reject_unknown(self.name, options, self._allowed_options)
         return CodexAcpAgentConfig(
             common=common,
-            model=CodexAcpModel(model),
+            model=CodexAcpModel(_normalize_codex_model(model)),
             reasoning_effort=CodexAcpEffort(
                 options.get("reasoning_effort", CodexAcpEffort.MEDIUM.value)
             ),
