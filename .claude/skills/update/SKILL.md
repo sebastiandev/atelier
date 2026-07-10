@@ -40,10 +40,11 @@ If `git pull` fails (diverged branch), fall back to `git pull --rebase origin ma
 Diff the pull range (empty when `PRE_HEAD == POST_HEAD`):
 
 ```bash
-git diff --name-only "$PRE_HEAD" "$POST_HEAD" -- backend/uv.lock backend/pyproject.toml frontend/package-lock.json frontend/package.json
+git diff --name-only "$PRE_HEAD" "$POST_HEAD" -- backend/uv.lock backend/pyproject.toml backend/acp-runtime/package-lock.json backend/acp-runtime/package.json frontend/package-lock.json frontend/package.json
 ```
 
 - If `backend/uv.lock` or `backend/pyproject.toml` changed → `cd backend && uv sync` (use `uv sync` rather than activating a venv; it's faster and skips the activation dance).
+- If `backend/acp-runtime/package-lock.json` or `backend/acp-runtime/package.json` changed → `npm install --prefix backend/acp-runtime`.
 - If `frontend/package-lock.json` or `frontend/package.json` changed → `cd frontend && npm install`.
 
 Skip silently when nothing changed — this is the common case and shouldn't add 10 seconds of "nothing to do" output.
@@ -59,6 +60,7 @@ DB schema migrations auto-apply on backend boot, so we don't run them here. **FS
 Use the pulled range (`$PRE_HEAD..$POST_HEAD`) — empty on a no-op pull:
 
 - If backend dependencies changed OR commits in the pulled range touch `backend/src/infrastructure/database/migrations.py` → the backend needs a restart so DB migrations apply. Surface this; don't restart yourself.
+- If ACP runtime dependencies changed → newly-started ACP sessions will use the new wrappers; already-running ACP provider subprocesses need their agent/chat session stopped and restarted to pick them up.
 - If frontend dependencies changed OR commits in the pulled range touch `frontend/src/`, `frontend/index.html`, or `frontend/vite.config.ts` → recommend a Vite refresh / restart. Same caveat — surface, don't act.
 
 **No-op pull (`PRE_HEAD == POST_HEAD`) extra step:** the user may already have pulled commits manually that haven't been consumed by a backend restart. We can't tell from git state alone whether they've restarted since their last pull. Add a one-line, non-alarming reminder: *"If you pulled commits since the last backend start, restart the backend now so DB migrations apply."* — then stop.

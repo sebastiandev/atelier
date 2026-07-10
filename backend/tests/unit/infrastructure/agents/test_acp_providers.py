@@ -33,6 +33,10 @@ from src.domain.agents.specs import (
     OpenCodeSpec,
 )
 from src.infrastructure.agents import AcpAdapter, build_adapter
+from src.infrastructure.agents.acp.providers import (
+    CLAUDE_ACP_ARGV,
+    CODEX_ACP_ARGV,
+)
 from src.infrastructure.agents.compaction_sessions import _summary_config
 from src.infrastructure.cli_launcher import build_resume_command
 from src.settings import Settings
@@ -178,6 +182,18 @@ def test_factory_builds_acp_adapter_for_all_acp_providers() -> None:
     ):
         adapter = build_adapter(config, Settings())
         assert isinstance(adapter, AcpAdapter)
+
+
+def test_acp_wrappers_spawn_from_locked_backend_runtime() -> None:
+    runtime_bin = (
+        Path(__file__).resolve().parents[4]
+        / "acp-runtime"
+        / "node_modules"
+        / ".bin"
+    )
+    assert CLAUDE_ACP_ARGV == (str(runtime_bin / "claude-agent-acp"),)
+    assert CODEX_ACP_ARGV == (str(runtime_bin / "codex-acp"),)
+    assert "npx" not in {*CLAUDE_ACP_ARGV, *CODEX_ACP_ARGV}
 
 
 # -- compaction summary configs ----------------------------------------------

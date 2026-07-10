@@ -672,7 +672,7 @@ _CODEX_ACP_MODEL_META: dict[str, ModelMeta] = {
 
 
 class CodexAcpSpec:
-    """Codex through Zed's codex-acp wrapper (ACP runtime).
+    """Codex through the Agent Client Protocol codex-acp wrapper (ACP runtime).
 
     Coexists with ``CodexSpec`` (openai-codex-sdk app-server adapter)
     while the ACP path is validated. Unlike the bespoke adapter's

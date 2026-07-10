@@ -266,7 +266,7 @@ class ClaudeAcpModel(str, Enum):
     """Model choices exposed by the official ``claude-agent-acp`` wrapper.
 
     These are the wrapper's session-config-option *values* (captured live
-    2026-06-11, wrapper 0.44.0) — aliases resolved by the Claude Code
+    2026-06-11, wrapper 0.58.1) — aliases resolved by the Claude Code
     runtime, not API model ids. ``DEFAULT`` defers to the user's Claude
     CLI configuration (currently resolves to Opus 4.8 with 1M context).
     """
@@ -364,7 +364,7 @@ class ClaudeAcpAgentConfig(AcpAgentConfig):
 
 
 class CodexAcpModel(str, Enum):
-    """Model values exposed by Zed's codex-acp wrapper / Codex runtime.
+    """Model values exposed by the Agent Client Protocol codex-acp wrapper / Codex runtime.
 
     The 5.6 variants are ChatGPT-login Codex aliases; their public
     pricing/window metadata is not published, so specs keep blank meta
@@ -409,7 +409,7 @@ class CodexAcpMode(str, Enum):
 
 @dataclass(frozen=True, kw_only=True)
 class CodexAcpAgentConfig(AcpAgentConfig):
-    """Codex via Zed's codex-acp wrapper. All knobs travel as ACP
+    """Codex via the Agent Client Protocol codex-acp wrapper. All knobs travel as ACP
     session config options; sent explicitly so Atelier agents don't
     inherit per-machine Codex config."""
 

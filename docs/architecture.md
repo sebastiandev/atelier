@@ -92,3 +92,5 @@ These are the contracts the layers and process boundaries agree on. Changing one
 Anything else is internal.
 
 **Preferred provider seam (STORY-033, 2026-06-12):** new agent runtimes integrate through the Agent Client Protocol — one `AcpAdapter` behind the existing `AgentAdapter` port instead of a bespoke SDK adapter per provider. The domain `AgentEvent` union stays canonical (extended additively); ACP types never leave `infrastructure/agents/acp/`. See `docs/backend.md` → "ACP runtimes".
+
+**ACP npm wrappers are backend runtime dependencies.** Claude/Codex ACP wrappers are pinned under `backend/acp-runtime/package-lock.json`, installed with `npm install --prefix backend/acp-runtime`, and spawned from `backend/acp-runtime/node_modules/.bin`. They should not be fetched dynamically from provider code with `npx`; update the lockfile and `/update` flow when bumping wrapper versions.

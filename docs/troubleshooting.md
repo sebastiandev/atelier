@@ -20,7 +20,7 @@ Use this when an agent or chat shows `thinking`, `reconnecting`, or accepts inpu
    - `agent.json` can be stale for runtime fields; SQLite and `session_established` transcript events are the source of truth for the active provider session id.
 
 4. Check live provider/backend processes.
-   - `ps -axo pid,command | rg -i 'uvicorn|atelier|codex-acp|claude|opencode|npm exec'`
+   - `ps -axo pid,command | rg -i 'uvicorn|atelier|codex-acp|claude|opencode|node'`
    - A live provider subprocess plus an unchanged transcript usually means a stuck registered backend state or provider transport, not a pure frontend render bug.
 
 5. Check the websocket recovery path.
@@ -45,7 +45,7 @@ Use this when an agent or chat shows `thinking`, `reconnecting`, or accepts inpu
 - Read the transcript tail first. Durable events are the arbiter: if there are no new rows, do not start by debugging React rendering.
 - Compare `agent.json`, SQLite, and the latest `session_established` transcript row. Runtime fields may be mirrored, but SQLite is what resume uses.
 - Determine whether the supervisor has live state. `connect.execute` only calls `resume.execute` when `supervisor.is_registered(slug)` is false. A stale registered state can make every browser reconnect attach to the same bad adapter.
-- Check whether the provider process tree is still running. ACP providers often involve `npm exec`, `node`, the provider binary, and the Atelier MCP server.
+- Check whether the provider process tree is still running. ACP providers often involve `node`, the provider binary, and the Atelier MCP server.
 - Check backend logs for `LimitOverrunError` / `chunk exceed the limit`. That points to the subprocess stdout reader limit, not session restore or frontend state.
 - Check whether the WS route sends `client_error` and closes with `4409` on `AgentTerminated`. If it only sends an advisory frame without closing, the frontend may never enter the rebuild path.
 - If fixing provider restore, verify the transcript gains a new `session_established` row and SQLite `agents.session_id` changes. Without that, the fix works once at most.

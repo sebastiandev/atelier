@@ -7,6 +7,8 @@ bump deliberately, re-capturing the config-option fixtures in
 ``tests/fixtures/acp/`` when you do.
 """
 
+from pathlib import Path
+
 from src.domain.agents import (
     AgentAdapter,
     ClaudeAcpAgentConfig,
@@ -17,16 +19,19 @@ from src.infrastructure.agents.acp.adapter import AcpAdapter
 from src.infrastructure.agents.factory import build_adapter
 from src.settings import Settings
 
+_ACP_RUNTIME_BIN = (
+    Path(__file__).resolve().parents[4]
+    / "acp-runtime"
+    / "node_modules"
+    / ".bin"
+)
+
 CLAUDE_ACP_ARGV: tuple[str, ...] = (
-    "npx",
-    "-y",
-    "@agentclientprotocol/claude-agent-acp@0.44.0",
+    str(_ACP_RUNTIME_BIN / "claude-agent-acp"),
 )
 
 CODEX_ACP_ARGV: tuple[str, ...] = (
-    "npx",
-    "-y",
-    "@zed-industries/codex-acp@0.16.0",
+    str(_ACP_RUNTIME_BIN / "codex-acp"),
 )
 
 # OpenCode ships its own ACP server; the local binary is the install.
