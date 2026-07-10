@@ -12,6 +12,7 @@ import {
   TranscriptUnits,
   TurnMetricsBar,
   EFFORT_SESSION_CONFIG_IDS,
+  FAST_MODE_SESSION_CONFIG_ID,
   type ContextSnapshot,
   contextSnapshotFor,
   contextToneFor,
@@ -20,8 +21,12 @@ import {
   isAgentActive,
   latestEventSeq,
   labelForSessionConfigValue,
+  latestSessionConfigOption,
   latestSessionConfigOptionByIds,
   latestMetrics,
+  selectValueForSessionConfigValue,
+  sessionConfigChoiceForSelectValue,
+  sessionConfigChoicesForSelect,
   sessionMetrics,
 } from "./AgentTile";
 import {
@@ -522,6 +527,11 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               <span className="hint mono">Enter send · Shift+Enter newline</span>
               <span className="spacer" />
               <LiveEffortSelect
+                events={events}
+                disabled={composerDisabled || streamActive}
+                onChange={sendSessionConfig}
+              />
+              <LiveFastModeSelect
                 events={events}
                 disabled={composerDisabled || streamActive}
                 onChange={sendSessionConfig}
@@ -1088,6 +1098,11 @@ export function ChatTile({
           />
           <div className="composer-actions">
             <LiveEffortSelect
+              events={events}
+              disabled={composerDisabled || streamActive}
+              onChange={sendSessionConfig}
+            />
+            <LiveFastModeSelect
               events={events}
               disabled={composerDisabled || streamActive}
               onChange={sendSessionConfig}
@@ -2122,7 +2137,7 @@ function LiveEffortSelect({
 }: {
   events: AgentEvent[];
   disabled: boolean;
-  onChange: (configId: string, value: string) => void;
+  onChange: (configId: string, value: string | boolean) => void;
 }) {
   const config = useMemo(
     () => latestSessionConfigOptionByIds(events, EFFORT_SESSION_CONFIG_IDS),
@@ -2142,6 +2157,54 @@ function LiveEffortSelect({
       >
         {config.choices.map((choice) => (
           <option key={String(choice.value)} value={String(choice.value)}>
+            {choice.name ?? String(choice.value)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function LiveFastModeSelect({
+  events,
+  disabled,
+  onChange,
+}: {
+  events: AgentEvent[];
+  disabled: boolean;
+  onChange: (configId: string, value: string | boolean) => void;
+}) {
+  const config = useMemo(
+    () => latestSessionConfigOption(events, FAST_MODE_SESSION_CONFIG_ID),
+    [events],
+  );
+  const choices = useMemo(
+    () => (config ? sessionConfigChoicesForSelect(config) : []),
+    [config],
+  );
+  const value = config?.currentValue ?? null;
+  if (!config || value === null || choices.length === 0) return null;
+  const label = labelForSessionConfigValue(config, value);
+  return (
+    <label className="composer-effort-picker" title={`${config.name}: ${label}`}>
+      <span className="composer-effort-prefix">Fast:</span>
+      <select
+        className="composer-effort-select"
+        value={selectValueForSessionConfigValue(value)}
+        disabled={disabled}
+        onChange={(e) => {
+          const choice = sessionConfigChoiceForSelectValue(
+            choices,
+            e.target.value,
+          );
+          if (choice) onChange(config.id, choice.value);
+        }}
+      >
+        {choices.map((choice) => (
+          <option
+            key={selectValueForSessionConfigValue(choice.value)}
+            value={selectValueForSessionConfigValue(choice.value)}
+          >
             {choice.name ?? String(choice.value)}
           </option>
         ))}

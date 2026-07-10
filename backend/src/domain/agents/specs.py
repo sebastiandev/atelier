@@ -42,6 +42,7 @@ from src.domain.agents.configs import (
     ClaudePermissionMode,
     CodexAcpAgentConfig,
     CodexAcpEffort,
+    CodexAcpFastMode,
     CodexAcpMode,
     CodexAcpModel,
     CodexAgentConfig,
@@ -288,6 +289,12 @@ _CODEX_MODEL_ALIASES = {
 def _normalize_codex_model(model: str) -> str:
     normalized = model.strip().lower()
     return _CODEX_MODEL_ALIASES.get(normalized, normalized)
+
+
+def _normalize_codex_acp_fast_mode(value: Any) -> str:
+    if isinstance(value, bool):
+        return CodexAcpFastMode.ON.value if value else CodexAcpFastMode.OFF.value
+    return value
 
 
 class ClaudeSpec:
@@ -685,7 +692,7 @@ class CodexAcpSpec:
     name: ClassVar[Provider] = "codex-acp"
     label: ClassVar[str] = "Codex (OpenAI)"
 
-    _allowed_options: ClassVar[set[str]] = {"reasoning_effort", "mode"}
+    _allowed_options: ClassVar[set[str]] = {"reasoning_effort", "mode", "fast-mode"}
 
     _ADVANCED_INTRO: ClassVar[str] = (
         "Runs Codex through the Agent Client Protocol. Mode is Codex's "
@@ -720,6 +727,15 @@ class CodexAcpSpec:
                         "Full access (risky)",
                     ],
                 ),
+                "fast-mode": EnumOption(
+                    label="Fast mode",
+                    values=_enum_values(CodexAcpFastMode),
+                    default=CodexAcpFastMode.OFF.value,
+                    value_labels=[
+                        "Off",
+                        "On - 1.5x speed, increased usage",
+                    ],
+                ),
             },
             advanced_intro=self._ADVANCED_INTRO,
             model_meta=dict(_CODEX_ACP_MODEL_META),
@@ -736,6 +752,11 @@ class CodexAcpSpec:
                 options.get("reasoning_effort", CodexAcpEffort.MEDIUM.value)
             ),
             mode=CodexAcpMode(options.get("mode", CodexAcpMode.AUTO.value)),
+            fast_mode=CodexAcpFastMode(
+                _normalize_codex_acp_fast_mode(
+                    options.get("fast-mode", CodexAcpFastMode.OFF.value)
+                )
+            ),
         )
 
 

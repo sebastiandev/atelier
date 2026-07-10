@@ -129,7 +129,7 @@ async def _receive_inputs(
                     )
                 case SetSessionConfigOption(config_id=config_id, value=value):
                     await supervisor.set_config_option(chat_slug, config_id, value)
-                    if isinstance(value, str):
+                    if isinstance(value, (str, bool)):
                         key = _stored_chat_option_key(chatstore, chat_slug, config_id)
                         if key is not None:
                             chatstore.set_chat_option(chat_slug, key, value)

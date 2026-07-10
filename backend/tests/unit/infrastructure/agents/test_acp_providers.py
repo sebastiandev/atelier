@@ -21,6 +21,7 @@ from src.domain.agents.configs import (
     ClaudeAcpPermissionMode,
     CodexAcpAgentConfig,
     CodexAcpEffort,
+    CodexAcpFastMode,
     CodexAcpMode,
     CodexAcpModel,
     OpenCodeAgentConfig,
@@ -86,12 +87,21 @@ def test_claude_acp_spec_rejects_unknown_model() -> None:
 
 def test_codex_acp_spec_builds_typed_config() -> None:
     config = CodexAcpSpec().build(
-        _common(), "gpt-5.6-terra", {"reasoning_effort": "ultra", "mode": "read-only"}
+        _common(),
+        "gpt-5.6-terra",
+        {"reasoning_effort": "ultra", "mode": "read-only", "fast-mode": "on"},
     )
     assert isinstance(config, CodexAcpAgentConfig)
     assert config.model is CodexAcpModel.GPT_5_6_TERRA
     assert config.reasoning_effort is CodexAcpEffort.ULTRA
     assert config.mode is CodexAcpMode.READ_ONLY
+    assert config.fast_mode is CodexAcpFastMode.ON
+
+
+def test_codex_acp_spec_accepts_boolean_fast_mode() -> None:
+    config = CodexAcpSpec().build(_common(), "gpt-5.5", {"fast-mode": True})
+
+    assert config.fast_mode is CodexAcpFastMode.ON
 
 
 def test_codex_acp_spec_accepts_terra_aliases() -> None:
@@ -162,12 +172,13 @@ def test_claude_acp_config_values_cover_all_three_options() -> None:
     assert config.acp_mode_id() is None
 
 
-def test_codex_acp_config_values_cover_all_three_options() -> None:
+def test_codex_acp_config_values_cover_all_options() -> None:
     config = CodexAcpAgentConfig(common=_common())
     assert config.acp_config_values() == (
         ("model", "gpt-5.5"),
         ("reasoning_effort", "medium"),
         ("mode", "auto"),
+        ("fast-mode", "off"),
     )
 
 

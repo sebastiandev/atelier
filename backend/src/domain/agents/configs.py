@@ -390,6 +390,13 @@ class CodexAcpEffort(str, Enum):
     ULTRA = "ultra"
 
 
+class CodexAcpFastMode(str, Enum):
+    """codex-acp ``fast-mode`` service-tier toggle."""
+
+    OFF = "off"
+    ON = "on"
+
+
 class CodexAcpMode(str, Enum):
     """codex-acp session modes (also mirrored as the ``mode`` config
     option). Collapses the bespoke adapter's independent sandbox +
@@ -416,12 +423,14 @@ class CodexAcpAgentConfig(AcpAgentConfig):
     model: CodexAcpModel = CodexAcpModel.GPT_5_5
     reasoning_effort: CodexAcpEffort = CodexAcpEffort.MEDIUM
     mode: CodexAcpMode = CodexAcpMode.AUTO
+    fast_mode: CodexAcpFastMode = CodexAcpFastMode.OFF
 
     def acp_config_values(self) -> tuple[tuple[str, str], ...]:
         return (
             ("model", self.model.value),
             ("reasoning_effort", self.reasoning_effort.value),
             ("mode", self.mode.value),
+            ("fast-mode", self.fast_mode.value),
         )
 
 
@@ -482,6 +491,7 @@ __all__ = [
     "ClaudePermissionMode",
     "CodexAcpAgentConfig",
     "CodexAcpEffort",
+    "CodexAcpFastMode",
     "CodexAcpMode",
     "CodexAcpModel",
     "CodexAgentConfig",

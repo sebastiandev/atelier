@@ -75,7 +75,7 @@ async def execute(
             await supervisor.set_config_option(agent_slug, config_id, value)
             if config_id == "model" and isinstance(value, str):
                 await asyncio.to_thread(workstore.set_agent_model, agent_slug, value)
-            elif isinstance(value, str):
+            elif isinstance(value, (str, bool)):
                 key = _stored_option_key(workstore, agent_slug, config_id)
                 if key is not None:
                     await asyncio.to_thread(

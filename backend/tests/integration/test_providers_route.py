@@ -24,6 +24,7 @@ def test_acp_descriptors_are_wire_complete(app_client: TestClient) -> None:
     assert codex_acp["label"] == "Codex (OpenAI)"
     assert "mode" in codex_acp["options"]
     assert "reasoning_effort" in codex_acp["options"]
+    assert "fast-mode" in codex_acp["options"]
     opencode = by_name["opencode"]
     assert opencode["label"] == "OpenCode"
     assert opencode["primary_field"]["values"] == ["configured-default"]
@@ -125,6 +126,8 @@ def test_codex_descriptor_has_acp_mode_and_reasoning(app_client: TestClient) -> 
     ]
     assert codex["options"]["reasoning_effort"]["default"] == "medium"
     assert codex["options"]["mode"]["default"] == "auto"
+    assert codex["options"]["fast-mode"]["values"] == ["off", "on"]
+    assert codex["options"]["fast-mode"]["default"] == "off"
     assert "Mode" in codex["advanced_intro"]
     assert codex["model_meta"]["gpt-5.6-terra"]["input_per_mtok"] is None
     assert codex["model_meta"]["gpt-5.6-luna"]["input_per_mtok"] is None

@@ -117,7 +117,7 @@ The standalone worktree-icon button (formerly between conn-status and tile-contr
 
 When the active provider advertises a mutable `model` session config option, `AgentTile` renders a compact `Model: <current>` selector in the composer action row next to `+ Add context`. Opening it sends `session_config_refresh` and shows a searchable popover because OpenCode model lists can be large; `session_config_options` seeds/refines the choices and current value, `session_config_changed` updates after a successful switch, and replay rebuilds the same state after reconnect. The selector is disabled while a turn is active so changes apply cleanly to future prompts. Providers without an advertised model option keep the existing static model display and do not show the composer control.
 
-Agent and chat composers also render a compact effort selector when the provider advertises `thinking_effort`, `reasoning_effort`, or ACP's generic `effort` config option. It uses the advertised choices/current value rather than hard-coded frontend enums, is disabled while a turn is active, and persists accepted changes so future resume/detach paths keep the user's selection.
+Agent and chat composers also render compact live option selectors when the provider advertises supported config ids: `thinking_effort`, `reasoning_effort`, or ACP's generic `effort` become **Effort**, and Codex ACP's `fast-mode` becomes **Fast**. These controls use the advertised choices/current value rather than hard-coded frontend enums, are disabled while a turn is active, and persist accepted changes so future resume/detach paths keep the user's selection.
 
 ### Composer Image Paste
 

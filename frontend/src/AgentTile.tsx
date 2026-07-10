@@ -80,6 +80,7 @@ export const EFFORT_SESSION_CONFIG_IDS = [
   "reasoning_effort",
   "effort",
 ];
+export const FAST_MODE_SESSION_CONFIG_ID = "fast-mode";
 
 function isSimpleType(type: string): type is SimpleContextType {
   return SIMPLE_CONTEXT_TYPES.has(type);
@@ -387,6 +388,17 @@ export function AgentTile({
     () => latestSessionConfigOptionByIds(events, EFFORT_SESSION_CONFIG_IDS),
     [events],
   );
+  const sessionFastModeConfig = useMemo(
+    () => latestSessionConfigOption(events, FAST_MODE_SESSION_CONFIG_ID),
+    [events],
+  );
+  const sessionFastModeChoices = useMemo(
+    () =>
+      sessionFastModeConfig
+        ? sessionConfigChoicesForSelect(sessionFastModeConfig)
+        : [],
+    [sessionFastModeConfig],
+  );
   const liveSessionModelValue =
     typeof sessionModelConfig?.currentValue === "string"
       ? sessionModelConfig.currentValue
@@ -395,6 +407,7 @@ export function AgentTile({
     typeof sessionEffortConfig?.currentValue === "string"
       ? sessionEffortConfig.currentValue
       : null;
+  const liveSessionFastModeValue = sessionFastModeConfig?.currentValue ?? null;
   const displayModel = liveSessionModelValue ?? model;
   const sessionConfigOptionsSeq = useMemo(
     () => latestEventSeq(events, "session_config_options"),
@@ -898,6 +911,7 @@ export function AgentTile({
   const sessionModelDisabled =
     composerDisabled || isCurrentlyActive || compactionBlocked;
   const sessionEffortDisabled = sessionModelDisabled;
+  const sessionFastModeDisabled = sessionModelDisabled;
   const sessionModelTitle = sessionModelLabel
     ? isCurrentlyActive
       ? `Wait for the current turn to finish before changing model (${sessionModelValue})`
@@ -915,6 +929,21 @@ export function AgentTile({
     ? isCurrentlyActive
       ? `Wait for the current turn to finish before changing effort (${liveSessionEffortValue})`
       : `${sessionEffortConfig?.name ?? "Effort"}: ${sessionEffortLabel}`
+    : undefined;
+  const sessionFastModeLabel =
+    sessionFastModeConfig && liveSessionFastModeValue !== null
+      ? labelForSessionConfigValue(sessionFastModeConfig, liveSessionFastModeValue)
+      : null;
+  const showSessionFastModeSelect =
+    sessionFastModeConfig !== null &&
+    liveSessionFastModeValue !== null &&
+    sessionFastModeChoices.length > 0;
+  const sessionFastModeTitle = sessionFastModeLabel
+    ? isCurrentlyActive
+      ? `Wait for the current turn to finish before changing fast mode (${String(
+          liveSessionFastModeValue,
+        )})`
+      : `${sessionFastModeConfig?.name ?? "Fast mode"}: ${sessionFastModeLabel}`
     : undefined;
   useEffect(() => {
     if (!modelPickerOpen) return;
@@ -989,6 +1018,18 @@ export function AgentTile({
       return;
     }
     sendSessionConfig(sessionEffortConfig.id, value);
+  }
+
+  function changeSessionFastMode(rawValue: string) {
+    if (!sessionFastModeConfig || sessionFastModeDisabled || guardBlockedCompaction()) {
+      return;
+    }
+    const choice = sessionConfigChoiceForSelectValue(
+      sessionFastModeChoices,
+      rawValue,
+    );
+    if (!choice) return;
+    sendSessionConfig(sessionFastModeConfig.id, choice.value);
   }
 
   function handleModelSearchKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
@@ -1551,6 +1592,29 @@ export function AgentTile({
                 >
                   {sessionEffortConfig.choices.map((choice) => (
                     <option key={String(choice.value)} value={String(choice.value)}>
+                      {choice.name ?? String(choice.value)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {showSessionFastModeSelect && (
+              <label
+                className="composer-effort-picker"
+                title={sessionFastModeTitle}
+              >
+                <span className="composer-effort-prefix">Fast:</span>
+                <select
+                  className="composer-effort-select"
+                  value={selectValueForSessionConfigValue(liveSessionFastModeValue)}
+                  disabled={sessionFastModeDisabled}
+                  onChange={(e) => changeSessionFastMode(e.target.value)}
+                >
+                  {sessionFastModeChoices.map((choice) => (
+                    <option
+                      key={selectValueForSessionConfigValue(choice.value)}
+                      value={selectValueForSessionConfigValue(choice.value)}
+                    >
                       {choice.name ?? String(choice.value)}
                     </option>
                   ))}
@@ -2162,6 +2226,36 @@ export function latestSessionConfigOptionByIds(
     if (option !== null) return option;
   }
   return null;
+}
+
+export function sessionConfigChoicesForSelect(
+  option: SessionConfigOption,
+): SessionConfigChoice[] {
+  if (option.choices.length > 0) return option.choices;
+  if (typeof option.currentValue === "boolean") {
+    return [
+      { value: false, name: "Off" },
+      { value: true, name: "On" },
+    ];
+  }
+  return [];
+}
+
+export function selectValueForSessionConfigValue(
+  value: SessionConfigValue,
+): string {
+  return typeof value === "boolean" ? String(value) : value;
+}
+
+export function sessionConfigChoiceForSelectValue(
+  choices: SessionConfigChoice[],
+  rawValue: string,
+): SessionConfigChoice | null {
+  return (
+    choices.find(
+      (choice) => selectValueForSessionConfigValue(choice.value) === rawValue,
+    ) ?? null
+  );
 }
 
 function parseSessionConfigOption(raw: unknown): SessionConfigOption | null {
