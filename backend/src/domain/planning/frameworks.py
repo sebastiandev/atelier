@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from src.domain.planning.dtos import (
     PlanningDepth,
@@ -33,6 +33,7 @@ class PlanningFrameworkDefinition:
     setup_hint: str
     discovery_focus: str
     revision_focus: str
+    artifact_root_template: str
     roles: tuple[PlanningRole, ...]
 
 
@@ -41,7 +42,7 @@ _FRAMEWORKS: dict[PlanningFramework, PlanningFrameworkDefinition] = {
         id="bmad",
         label="BMAD",
         description="Role-led brief, design, architecture, and story planning.",
-        marker_paths=(".bmad-core", ".bmad", "_bmad"),
+        marker_paths=(".bmad-core", ".bmad", "_bmad", "bmad"),
         setup_command=("npx", "bmad-method", "install"),
         setup_hint="Initialize BMAD in this working folder with `npx bmad-method install`.",
         discovery_focus=(
@@ -52,6 +53,7 @@ _FRAMEWORKS: dict[PlanningFramework, PlanningFrameworkDefinition] = {
             "Use BMAD roles to refine the source-backed brief, design guide, "
             "architecture notes, and executable stories."
         ),
+        artifact_root_template="_bmad-output/{work_slug}",
         roles=(
             PlanningRole("Analyst", "Clarifies problem framing, goals, and constraints."),
             PlanningRole("Product Manager", "Shapes outcomes, scope, and acceptance."),
@@ -80,6 +82,7 @@ _FRAMEWORKS: dict[PlanningFramework, PlanningFrameworkDefinition] = {
         revision_focus=(
             "Keep the living spec, scenarios, acceptance criteria, and tasks aligned."
         ),
+        artifact_root_template="specs/{work_slug}",
         roles=(
             PlanningRole("Spec Steward", "Keeps behavior and non-goals precise."),
             PlanningRole("Scenario Writer", "Expands examples, edge cases, and flows."),
@@ -101,6 +104,7 @@ _FRAMEWORKS: dict[PlanningFramework, PlanningFrameworkDefinition] = {
         revision_focus=(
             "Keep OpenSpec proposal, spec deltas, tasks, and validation coherent."
         ),
+        artifact_root_template=".openspec/changes/{work_slug}",
         roles=(
             PlanningRole("Proposal Author", "Frames the change and rationale."),
             PlanningRole("Spec Editor", "Maintains source-of-truth behavior."),
@@ -120,6 +124,7 @@ _FRAMEWORKS: dict[PlanningFramework, PlanningFrameworkDefinition] = {
             "before committing to a plan shape."
         ),
         revision_focus="Refine the user-selected source-backed planning artifacts.",
+        artifact_root_template="planning/{work_slug}",
         roles=(
             PlanningRole("Artifact Elicitor", "Asks which docs and gates are needed."),
             PlanningRole("Scope Reviewer", "Checks that the chosen structure is enough."),
@@ -134,6 +139,20 @@ def framework_definition(
 ) -> PlanningFrameworkDefinition:
     """Return the framework definition, defaulting to BMAD."""
     return _FRAMEWORKS.get(framework or "bmad", _FRAMEWORKS["bmad"])
+
+
+def artifact_root_rel_path(
+    framework: PlanningFramework | None, work_slug: str
+) -> str:
+    """Return where framework-generated planning files should live.
+
+    Preconditions: ``work_slug`` is the canonical Work slug.
+    Postconditions: returns a safe POSIX path relative to the selected work root.
+    """
+    definition = framework_definition(framework)
+    return _safe_rel_path(
+        definition.artifact_root_template.format(work_slug=_safe_segment(work_slug))
+    )
 
 
 def check_framework_status(
@@ -183,9 +202,36 @@ def depth_for_profile(profile: PlanningProfile) -> PlanningDepth:
     return "lightweight"
 
 
+def _safe_segment(value: str) -> str:
+    segment = value.strip()
+    rel = PurePosixPath(segment)
+    if (
+        not segment
+        or rel.is_absolute()
+        or len(rel.parts) != 1
+        or rel.parts[0] in {"", ".", ".."}
+        or "\x00" in segment
+    ):
+        raise ValueError(f"invalid framework path segment: {value!r}")
+    return segment
+
+
+def _safe_rel_path(value: str) -> str:
+    rel = PurePosixPath(value)
+    if (
+        not value
+        or rel.is_absolute()
+        or any(part in {"", ".", ".."} for part in rel.parts)
+        or "\x00" in value
+    ):
+        raise ValueError(f"invalid framework output path: {value!r}")
+    return rel.as_posix()
+
+
 __all__ = [
     "PlanningFrameworkDefinition",
     "PlanningRole",
+    "artifact_root_rel_path",
     "check_framework_status",
     "depth_for_profile",
     "framework_definition",

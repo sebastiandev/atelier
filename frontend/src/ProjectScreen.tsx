@@ -28,7 +28,8 @@ import {
   FolderIcon,
   MoreIcon,
 } from "./Icons";
-import { NewWorkDialog } from "./NewWorkDialog";
+import { NewWorkDialog, type NewWorkIntent } from "./NewWorkDialog";
+import { planningStartStorageKey } from "./planningSetup";
 import { SearchModal } from "./SearchModal";
 import { SharedFoldersSection } from "./SharedFoldersSection";
 import { ShellCrown } from "./ShellCrown";
@@ -123,11 +124,20 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
     searchOpen,
   ]);
 
-  async function handleCreateWork(payload: CreateWorkPayload) {
+  async function handleCreateWork(payload: CreateWorkPayload, intent: NewWorkIntent) {
     // Re-assert project_slug here so a stale dialog prop can't leak through.
-    await createWork({ ...payload, project_slug: projectSlug });
-    await refresh();
+    const created = await createWork({ ...payload, project_slug: projectSlug });
     setWorkDialogOpen(false);
+    if (intent.mode === "planning") {
+      sessionStorage.setItem(
+        planningStartStorageKey(created.slug),
+        JSON.stringify(intent.seed),
+      );
+      window.location.assign(`/works/${created.slug}?start=planning`);
+      return created;
+    }
+    window.location.assign(`/works/${created.slug}?mode=manual`);
+    return created;
   }
 
   const activeCount = works.filter((w) => w.status === "active").length;

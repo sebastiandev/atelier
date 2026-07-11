@@ -20,6 +20,9 @@ def test_initialize_creates_all_expected_tables(isolated_engine: Engine) -> None
         "artifacts",
         "handoffs",
         "connections",
+        "loop_runs",
+        "loop_step_runs",
+        "planning_sessions",
         "transcript_cursor",
         "schema_version",
     }
@@ -40,6 +43,19 @@ def test_initialize_is_idempotent(isolated_engine: Engine) -> None:
         rows = conn.execute(select(schema_version_table.c.version)).all()
     assert len(rows) == 1
     assert rows[0].version == CURRENT_SCHEMA_VERSION
+
+
+def test_v17_upgrade_adds_loop_run_tables(isolated_engine: Engine) -> None:
+    with isolated_engine.begin() as conn:
+        conn.execute(schema_version_table.update().values(version=17))
+
+    initialize_database(isolated_engine)
+
+    inspector = inspect(isolated_engine)
+    assert {"loop_runs", "loop_step_runs"} <= set(inspector.get_table_names())
+    with isolated_engine.connect() as conn:
+        version = conn.execute(select(schema_version_table.c.version)).scalar_one()
+    assert version == CURRENT_SCHEMA_VERSION
 
 
 def test_initialize_rejects_unknown_schema_version(isolated_engine: Engine) -> None:

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
+from src.domain.chatstore.dtos import ChatRecord
 from src.domain.chatstore.ports import ChatStore
 from src.domain.planning.ports import PlanningFiles
 from src.domain.planning.service import PlanningService
@@ -108,7 +109,10 @@ def execute(
     )
 
 
-def _materializer_record(chatstore: ChatStore, work_slug: str):
+def _materializer_record(
+    chatstore: ChatStore,
+    work_slug: str,
+) -> ChatRecord | None:
     rows = [
         record
         for record in chatstore.list_chats()

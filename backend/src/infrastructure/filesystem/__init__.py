@@ -13,6 +13,7 @@ from src.infrastructure.filesystem.atomic import (
 )
 from src.infrastructure.filesystem.chat_files import FsChatFiles
 from src.infrastructure.filesystem.chat_transcript_log import FsChatTranscriptLog
+from src.infrastructure.filesystem.loop_definitions import FsLoopDefinitionRepository
 from src.infrastructure.filesystem.ndjson import append_event, read_from_cursor
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.planning_files import FsPlanningFiles
@@ -23,6 +24,7 @@ from src.infrastructure.filesystem.workspace_files import FsWorkspaceFiles
 __all__ = [
     "FsChatFiles",
     "FsChatTranscriptLog",
+    "FsLoopDefinitionRepository",
     "FsPlanningFiles",
     "FsProjectFiles",
     "FsTranscriptLog",

@@ -149,6 +149,7 @@ export type ChatSummary = {
   title: string;
   provider: string;
   model: string;
+  options?: Record<string, unknown> | null;
   grounding: ChatGrounding | null;
   working_directory: string | null;
   created_at: string;
@@ -374,8 +375,97 @@ export type LoopStatus =
   | "needs_agent"
   | "blocked_user"
   | "completed"
+  | "awaiting_approval"
+  | "accepted"
+  | "cleaned"
   | "failed"
   | "cancelled";
+
+export type LoopStepStatus =
+  | "pending"
+  | "running"
+  | "blocked_user"
+  | "passed"
+  | "changes_requested"
+  | "failed"
+  | "cancelled";
+
+export type LoopDefinitionScope = "builtin" | "repo";
+export type LoopStepKind =
+  | "agent_task"
+  | "agent_review"
+  | "deterministic_check"
+  | "user_approval";
+export type LoopPermission = "read" | "write";
+export type LoopSessionPolicy = "reuse" | "fresh";
+export type LoopContextKind =
+  | "target"
+  | "plan_index"
+  | "artifact_dependencies"
+  | "workspace_diff"
+  | "changed_files"
+  | "previous_report"
+  | "files"
+  | "folder"
+  | "shared_context";
+export type LoopOutcome =
+  | "pass"
+  | "changes_requested"
+  | "blocked_user"
+  | "failed";
+
+export type LoopContextReference = {
+  kind: LoopContextKind;
+  required: boolean;
+  paths: string[];
+  step: string | null;
+  ref: string | null;
+};
+
+export type LoopAgentPolicy = {
+  session: LoopSessionPolicy;
+  permissions: LoopPermission;
+  provider: string | null;
+  model: string | null;
+  effort: string | null;
+};
+
+export type LoopRetryPolicy = {
+  max_attempts: number;
+  timeout_minutes: number;
+};
+
+export type LoopStepDefinition = {
+  id: string;
+  name: string;
+  kind: LoopStepKind;
+  instructions: string;
+  context: LoopContextReference[];
+  agent: LoopAgentPolicy | null;
+  report_contract: string;
+  retry: LoopRetryPolicy;
+  transitions: Partial<Record<LoopOutcome, string | null>>;
+  check_adapter: string | null;
+  check_command: string[];
+};
+
+export type LoopDefinition = {
+  id: string;
+  name: string;
+  description: string;
+  scope: LoopDefinitionScope;
+  revision: string;
+  valid: boolean;
+  errors: string[];
+  is_default: boolean;
+  forked_from: string | null;
+  stages: LoopStepDefinition[];
+};
+
+export type SaveLoopDefinitionPayload = Pick<
+  LoopDefinition,
+  "id" | "name" | "description" | "forked_from" | "stages"
+> & { expected_revision?: string | null };
 export type PlanProposalStatus = "pending" | "accepted" | "rejected";
 export type PlanTrackingKind = "jira" | "pr" | "blocker" | "bug";
 
@@ -392,7 +482,37 @@ export type PlanOverview = {
   blocked: number;
 };
 
+export type PlanLoopStageRun = {
+  id: string;
+  name: string;
+  kind: LoopStepKind;
+  status: LoopStepStatus;
+  attempt: number;
+  max_attempts: number;
+  agent_slug: string | null;
+  permissions: LoopPermission | null;
+  session: LoopSessionPolicy | null;
+  summary: string;
+  findings: string[];
+  changes: string;
+  validation_evidence: string;
+  divergences: string;
+  skipped_scope: string;
+  blocker: string;
+  artifact_refs: string[];
+  finding_details: Array<{
+    text: string;
+    severity: "high" | "medium" | "low" | "resolved";
+    location: string;
+  }>;
+  criteria_coverage: Array<{ text: string; met: boolean; note: string }>;
+  changed_files: Array<{ path: string; additions: number; deletions: number }>;
+  resolved_context: string[];
+  context_warnings: string[];
+};
+
 export type PlanArtifactRun = {
+  id: string;
   agent_slug: string;
   status: PlanRunStatus;
   started_at: string;
@@ -410,6 +530,11 @@ export type PlanArtifactRun = {
   loop_status_reason: string;
   loop_attempt: number;
   loop_latest_assessment: string[];
+  loop_definition_id: string;
+  loop_definition_name: string;
+  loop_definition_revision: string;
+  loop_current_stage_id: string;
+  loop_stages: PlanLoopStageRun[];
 };
 
 export type PlanArtifactProposal = {
@@ -462,6 +587,7 @@ export type WorkPlan = {
   depth: PlanningDepth;
   root_path: string;
   planning_path: string;
+  artifact_root_path: string;
   approved_at: string | null;
   stale: boolean;
   overview: PlanOverview;
@@ -526,11 +652,12 @@ export function getWorkPlanMaterializationStatus(
 export function startWorkPlan(
   workSlug: string,
   payload: {
-    root_path: string;
-    framework: PlanningFramework;
-    profile: PlanningProfile;
-    provider: string;
-    model: string;
+    root_path?: string | null;
+    artifact_root_path?: string | null;
+    framework?: PlanningFramework | null;
+    profile?: PlanningProfile | null;
+    provider?: string | null;
+    model?: string | null;
     options?: Record<string, string>;
     planning_chat_slug?: string | null;
   },
@@ -558,6 +685,7 @@ export function startPlanningChat(
   payload: {
     root_path: string;
     idea: string;
+    artifact_root_path?: string | null;
     framework: PlanningFramework;
     profile: PlanningProfile;
     provider: string;
@@ -623,19 +751,39 @@ export function updatePlanArtifact(
   }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
-export function acceptPlanArtifact(
+export function acceptPlanArtifactRun(
   workSlug: string,
   artifactId: string,
-  payload: PlanArtifactReportPayload,
+  runId: string,
+  payload: AcceptPlanArtifactRunPayload,
 ): Promise<PlanArtifactDetail> {
-  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/accept`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/accept`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
-export type PlanArtifactReportPayload = {
+export function requestPlanArtifactRunChanges(
+  workSlug: string,
+  artifactId: string,
+  runId: string,
+  note: string,
+): Promise<PlanArtifactDetail> {
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/request-changes`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note }),
+    },
+  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export type AcceptPlanArtifactRunPayload = {
   agent_slug?: string | null;
   summary?: string;
   divergences?: string;
@@ -646,27 +794,20 @@ export type PlanArtifactReportPayload = {
   validation_evidence?: string;
 };
 
-export function recordPlanArtifactRun(
+export function startPlanArtifactRun(
   workSlug: string,
   artifactId: string,
-  agentSlug: string,
+  agentSlug: string | null,
+  definition?: Pick<LoopDefinition, "id" | "revision">,
 ): Promise<PlanArtifactDetail> {
   return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/runs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agent_slug: agentSlug }),
-  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
-}
-
-export function submitPlanArtifactReport(
-  workSlug: string,
-  artifactId: string,
-  payload: PlanArtifactReportPayload,
-): Promise<PlanArtifactDetail> {
-  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/report`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      agent_slug: agentSlug ?? undefined,
+      loop_definition_id: definition?.id,
+      loop_revision: definition?.revision,
+    }),
   }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
@@ -735,26 +876,96 @@ export function createPlanBug(
   }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
-export function ingestPlanArtifactReport(
+export function resumePlanArtifactRun(
   workSlug: string,
   artifactId: string,
-  agentSlug: string,
+  runId: string,
+  payload: { resolution_note?: string } = {},
 ): Promise<PlanArtifactDetail> {
   return fetch(
-    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${agentSlug}/ingest-report`,
-    { method: "POST" },
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/resume`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
   ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
 export function markPlanRunCleaned(
   workSlug: string,
   artifactId: string,
-  agentSlug: string,
+  runId: string,
 ): Promise<PlanArtifactDetail> {
   return fetch(
-    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${agentSlug}/cleanup`,
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/cleanup`,
     { method: "POST" },
   ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function listLoopDefinitions(workSlug: string): Promise<LoopDefinition[]> {
+  return fetch(`/api/works/${workSlug}/loop-definitions`).then((response) =>
+    jsonOrThrow<LoopDefinition[]>(response),
+  );
+}
+
+export function getLoopDefinition(
+  workSlug: string,
+  definitionId: string,
+): Promise<LoopDefinition> {
+  return fetch(`/api/works/${workSlug}/loop-definitions/${definitionId}`).then(
+    (response) => jsonOrThrow<LoopDefinition>(response),
+  );
+}
+
+export function saveLoopDefinition(
+  workSlug: string,
+  payload: SaveLoopDefinitionPayload,
+): Promise<LoopDefinition> {
+  const updating = Boolean(payload.expected_revision);
+  const url = updating
+    ? `/api/works/${workSlug}/loop-definitions/${payload.id}`
+    : `/api/works/${workSlug}/loop-definitions`;
+  return fetch(url, {
+    method: updating ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<LoopDefinition>(response));
+}
+
+export function forkLoopDefinition(
+  workSlug: string,
+  sourceId: string,
+  payload: { id: string; name: string },
+): Promise<LoopDefinition> {
+  return fetch(`/api/works/${workSlug}/loop-definitions/${sourceId}/fork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<LoopDefinition>(response));
+}
+
+export function deleteLoopDefinition(
+  workSlug: string,
+  definitionId: string,
+): Promise<void> {
+  return fetch(`/api/works/${workSlug}/loop-definitions/${definitionId}`, {
+    method: "DELETE",
+  }).then((response) => {
+    if (!response.ok) return jsonOrThrow<never>(response);
+  });
+}
+
+export function revealLoopDefinition(
+  workSlug: string,
+  definitionId: string,
+): Promise<void> {
+  return fetch(
+    `/api/works/${workSlug}/loop-definitions/${definitionId}/reveal`,
+    { method: "POST" },
+  ).then((response) => {
+    if (!response.ok) return jsonOrThrow<never>(response);
+  });
 }
 
 export type Persona = "architect" | "developer" | "product" | "ux" | "writer";

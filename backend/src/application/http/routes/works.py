@@ -35,17 +35,18 @@ from src.application.http.schemas import (
     PlanArtifactResponse,
     PlanArtifactRunResponse,
     PlanMaterializationStatusResponse,
-    PlanOverviewResponse,
-    PlanTrackingLinkResponse,
     PlanningChatReadinessResponse,
     PlanningFrameworkStatusRequest,
     PlanningFrameworkStatusResponse,
-    RecordPlanArtifactRunRequest,
+    PlanOverviewResponse,
+    PlanTrackingLinkResponse,
+    RequestPlanRunChangesRequest,
+    ResumePlanArtifactRunRequest,
+    StartPlanArtifactRunRequest,
     StartPlanningChatRequest,
     StartPlanningSetupChatRequest,
     StartWorkPlanRequest,
     StartWorkPlanResponse,
-    SubmitPlanArtifactReportRequest,
     UpdatePlanArtifactRequest,
     WorkChatContextDocResponse,
     WorkChatContextFolderSummary,
@@ -59,8 +60,10 @@ from src.domain.agents.handoffs import (
     Summarizer,
     build_handoff,
 )
+from src.domain.agents.ports import AgentAdapterFactory
+from src.domain.chatstore import ChatRecord, ChatStore
 from src.domain.commands.planning import (
-    accept_artifact as planning_accept_artifact,
+    accept_run as planning_accept_run,
 )
 from src.domain.commands.planning import (
     approve as planning_approve,
@@ -69,19 +72,19 @@ from src.domain.commands.planning import (
     create_bug as planning_create_bug,
 )
 from src.domain.commands.planning import (
-    materialize as planning_materialize,
-)
-from src.domain.commands.planning import (
     finish as planning_finish,
 )
 from src.domain.commands.planning import (
     get as planning_get,
 )
 from src.domain.commands.planning import (
-    ingest_report as planning_ingest_report,
+    get_run as planning_get_run,
 )
 from src.domain.commands.planning import (
     link_tracking as planning_link_tracking,
+)
+from src.domain.commands.planning import (
+    list_runs as planning_list_runs,
 )
 from src.domain.commands.planning import (
     mark_run_cleaned as planning_mark_run_cleaned,
@@ -93,13 +96,22 @@ from src.domain.commands.planning import (
     materialization_status as planning_materialization_status,
 )
 from src.domain.commands.planning import (
+    materialize as planning_materialize,
+)
+from src.domain.commands.planning import (
     propose_update as planning_propose_update,
 )
 from src.domain.commands.planning import (
-    record_run as planning_record_run,
+    request_run_changes as planning_request_run_changes,
 )
 from src.domain.commands.planning import (
     resolve_proposal as planning_resolve_proposal,
+)
+from src.domain.commands.planning import (
+    resume_run as planning_resume_run,
+)
+from src.domain.commands.planning import (
+    run_monitor as planning_run_monitor,
 )
 from src.domain.commands.planning import (
     setup_chat as planning_setup_chat,
@@ -108,10 +120,10 @@ from src.domain.commands.planning import (
     start_chat as planning_start_chat,
 )
 from src.domain.commands.planning import (
-    submit_materialization as planning_submit_materialization,
+    start_run as planning_start_run,
 )
 from src.domain.commands.planning import (
-    submit_report as planning_submit_report,
+    submit_materialization as planning_submit_materialization,
 )
 from src.domain.commands.planning import (
     update_artifact as planning_update_artifact,
@@ -128,27 +140,33 @@ from src.domain.commands.works import (
     update,
 )
 from src.domain.commands.works.list_artifacts import ArtifactView
-from src.domain.chatstore import ChatRecord, ChatStore
+from src.domain.connections import ConnectionStore
+from src.domain.loop.ports import (
+    LoopCheckRunner,
+    LoopContextResolver,
+    LoopDefinitionRepository,
+    LoopRunRepository,
+)
 from src.domain.models import Chat, ChatMessage, Context, Handoff, Work
 from src.domain.planning.dtos import (
     PlanArtifactDetail,
     PlanArtifactProposal,
     PlanArtifactRun,
     PlanArtifactSummary,
-    PlanOverview,
     PlanningFrameworkStatus,
+    PlanOverview,
     PlanTrackingLink,
     WorkPlanView,
 )
 from src.domain.planning.frameworks import check_framework_status
-from src.domain.planning.ports import PlanningFiles
+from src.domain.planning.ports import PlanningFiles, PlanningSessionRepository
 from src.domain.planning.readiness import (
     PlanningChatReadiness,
     planning_readiness_from_record,
 )
 from src.domain.projectstore.ports import ProjectStore
-from src.domain.sharedfolders.ports import SharedFolderStore
-from src.domain.supervisor import AgentSupervisorService
+from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
+from src.domain.supervisor import AgentSupervisorService, AgentTerminated
 from src.domain.workstore.dtos import (
     CreateWorkChatContextFolder,
     CreateWorkRequest,
@@ -177,6 +195,34 @@ def get_projectstore(request: Request) -> ProjectStore:
 
 def get_planningfiles(request: Request) -> PlanningFiles:
     return request.app.state.planningfiles  # type: ignore[no-any-return]
+
+
+def get_planning_sessions(request: Request) -> PlanningSessionRepository:
+    return request.app.state.planning_sessions  # type: ignore[no-any-return]
+
+
+def get_loop_definitions(request: Request) -> LoopDefinitionRepository:
+    return request.app.state.loop_definitions  # type: ignore[no-any-return]
+
+
+def get_connection_store(request: Request) -> ConnectionStore:
+    return request.app.state.connection_store  # type: ignore[no-any-return]
+
+
+def get_agent_adapter_factory(request: Request) -> AgentAdapterFactory:
+    return request.app.state.agent_adapter_factory  # type: ignore[no-any-return]
+
+
+def get_loop_check_runner(request: Request) -> LoopCheckRunner:
+    return request.app.state.loop_check_runner  # type: ignore[no-any-return]
+
+
+def get_loop_run_repository(request: Request) -> LoopRunRepository:
+    return request.app.state.loop_runs  # type: ignore[no-any-return]
+
+
+def get_loop_context_resolver(request: Request) -> LoopContextResolver:
+    return request.app.state.loop_context_resolver  # type: ignore[no-any-return]
 
 
 def get_chatstore(request: Request) -> ChatStore:
@@ -211,9 +257,28 @@ def get_sharestore(request: Request) -> SharedFolderStore:
     return request.app.state.sharestore  # type: ignore[no-any-return]
 
 
+def get_share_provisioner(request: Request) -> ShareProvisioner:
+    return request.app.state.share_provisioner  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
 PlanningFilesDep = Annotated[PlanningFiles, Depends(get_planningfiles)]
+PlanningSessionsDep = Annotated[
+    PlanningSessionRepository, Depends(get_planning_sessions)
+]
+LoopDefinitionsDep = Annotated[
+    LoopDefinitionRepository, Depends(get_loop_definitions)
+]
+ConnectionStoreDep = Annotated[ConnectionStore, Depends(get_connection_store)]
+AgentAdapterFactoryDep = Annotated[
+    AgentAdapterFactory, Depends(get_agent_adapter_factory)
+]
+LoopCheckRunnerDep = Annotated[LoopCheckRunner, Depends(get_loop_check_runner)]
+LoopRunRepositoryDep = Annotated[LoopRunRepository, Depends(get_loop_run_repository)]
+LoopContextResolverDep = Annotated[
+    LoopContextResolver, Depends(get_loop_context_resolver)
+]
 ChatStoreDep = Annotated[ChatStore, Depends(get_chatstore)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
@@ -222,6 +287,7 @@ WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
 SummarizerDep = Annotated[Summarizer, Depends(get_summarizer)]
 TranscriptLogDep = Annotated[TranscriptLog, Depends(get_transcript_log)]
 ShareStoreDep = Annotated[SharedFolderStore, Depends(get_sharestore)]
+ShareProvisionerDep = Annotated[ShareProvisioner, Depends(get_share_provisioner)]
 
 
 @router.get("/works", response_model=list[WorkSummary])
@@ -286,11 +352,13 @@ def start_planning_chat_endpoint(
     payload: StartPlanningChatRequest,
     workstore: WorkStoreDep,
     chatstore: ChatStoreDep,
+    planning_sessions: PlanningSessionsDep,
 ) -> ChatDetail:
     req = planning_start_chat.StartPlanningChatRequest(
         work_slug=work_slug,
         root_path=payload.root_path,
         idea=payload.idea,
+        artifact_root_path=payload.artifact_root_path,
         framework=payload.framework,
         profile=payload.profile,
         provider=payload.provider,
@@ -300,7 +368,7 @@ def start_planning_chat_endpoint(
     try:
         planning_start_chat.validate_provider_config(req)
         record, _framework_status = planning_start_chat.execute(
-            workstore, chatstore, req
+            workstore, chatstore, planning_sessions, req
         )
     except planning_start_chat.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
@@ -354,12 +422,14 @@ async def start_work_plan_endpoint(
     chatstore: ChatStoreDep,
     projectstore: ProjectStoreDep,
     planningfiles: PlanningFilesDep,
+    planning_sessions: PlanningSessionsDep,
     chat_supervisor: ChatSupervisorDep,
     settings: SettingsDep,
 ) -> StartWorkPlanResponse:
     req = planning_materialize.MaterializePlanRequest(
         work_slug=work_slug,
         root_path=payload.root_path,
+        artifact_root_path=payload.artifact_root_path,
         framework=payload.framework,
         profile=payload.profile,
         provider=payload.provider,
@@ -367,15 +437,33 @@ async def start_work_plan_endpoint(
         options=payload.options,
         planning_chat_slug=payload.planning_chat_slug,
     )
+    try:
+        req = planning_materialize.resolve_from_planning_session(
+            planning_sessions, req
+        )
+    except planning_materialize.PlanningSessionNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    if (
+        req.root_path is None
+        or req.framework is None
+        or req.profile is None
+        or req.provider is None
+        or req.model is None
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="planning session is incomplete",
+        )
     chat_req = planning_materialization_chat.StartPlanningMaterializationChatRequest(
         work_slug=work_slug,
-        root_path=payload.root_path,
-        framework=payload.framework,
-        profile=payload.profile,
-        provider=payload.provider,
-        model=payload.model,
-        options=payload.options,
-        planning_chat_slug=payload.planning_chat_slug,
+        root_path=req.root_path,
+        artifact_root_path=req.artifact_root_path,
+        framework=req.framework,
+        profile=req.profile,
+        provider=req.provider,
+        model=req.model,
+        options=req.options,
+        planning_chat_slug=req.planning_chat_slug,
     )
     try:
         planning_materialization_chat.validate_provider_config(chat_req)
@@ -407,6 +495,7 @@ async def start_work_plan_endpoint(
             chatstore,
             projectstore,
             planningfiles,
+            planning_sessions,
             chat_supervisor,
             settings,
             req,
@@ -439,6 +528,7 @@ def _ensure_plan_materialization_task(
     chatstore: ChatStore,
     projectstore: ProjectStore,
     planningfiles: PlanningFiles,
+    planning_sessions: PlanningSessionRepository,
     chat_supervisor: AgentSupervisorService,
     settings: Settings,
     req: planning_materialize.MaterializePlanRequest,
@@ -457,6 +547,7 @@ def _ensure_plan_materialization_task(
             chatstore,
             projectstore,
             planningfiles,
+            planning_sessions,
             chat_supervisor,
             settings,
             req,
@@ -479,6 +570,65 @@ def _ensure_plan_materialization_task(
             )
         except Exception:
             _log.exception("planning materialization failed for %s", req.work_slug)
+
+    task.add_done_callback(_clear)
+
+
+def _ensure_plan_run_monitor_task(
+    request: Request,
+    workstore: WorkStore,
+    planningfiles: PlanningFiles,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    loop_runs: LoopRunRepository,
+    settings: Settings,
+    req: planning_run_monitor.MonitorArtifactRunRequest,
+) -> None:
+    key = f"{req.work_slug}:{req.artifact_id}:{req.run_id}"
+    tasks = getattr(request.app.state, "planning_run_monitor_tasks", None)
+    if tasks is None:
+        tasks = {}
+        request.app.state.planning_run_monitor_tasks = tasks
+    existing = tasks.get(key)
+    if existing is not None and not existing.done():
+        return
+    task = asyncio.create_task(
+        planning_run_monitor.execute(
+            workstore,
+            planningfiles,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            check_runner,
+            loop_runs,
+            settings,
+            req,
+        ),
+        name=f"planning-run-{req.work_slug}-{req.artifact_id}-{req.run_id}",
+    )
+    tasks[key] = task
+
+    def _clear(done: asyncio.Task[PlanArtifactDetail]) -> None:
+        tasks.pop(key, None)
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            _log.exception(
+                "planning run monitor failed for %s %s %s",
+                req.work_slug,
+                req.artifact_id,
+                req.run_id,
+            )
 
     task.add_done_callback(_clear)
 
@@ -723,124 +873,326 @@ def reject_work_plan_artifact_proposal_endpoint(
     "/works/{work_slug}/plan/artifacts/{artifact_id}/runs",
     response_model=PlanArtifactDetailResponse,
 )
-def record_work_plan_artifact_run_endpoint(
+async def start_work_plan_artifact_run_endpoint(
+    request: Request,
     work_slug: str,
     artifact_id: str,
-    payload: RecordPlanArtifactRunRequest,
+    payload: StartPlanArtifactRunRequest,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    planning_sessions: PlanningSessionsDep,
+    loop_definitions: LoopDefinitionsDep,
+    loop_runs: LoopRunRepositoryDep,
+    context_resolver: LoopContextResolverDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
 ) -> PlanArtifactDetailResponse:
     try:
-        detail = planning_record_run.execute(
+        detail = await planning_start_run.execute(
             workstore,
             planningfiles,
-            planning_record_run.RecordArtifactRunRequest(
+            planning_sessions,
+            loop_definitions,
+            loop_runs,
+            context_resolver,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            settings,
+            planning_start_run.StartArtifactRunRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
                 agent_slug=payload.agent_slug,
+                loop_definition_id=payload.loop_definition_id,
+                loop_revision=payload.loop_revision,
             ),
         )
     except (
-        planning_record_run.WorkNotFound,
-        planning_record_run.PlanningNotStarted,
-        planning_record_run.PlanArtifactNotFound,
+        planning_start_run.WorkNotFound,
+        planning_start_run.AgentNotFound,
+        planning_start_run.PlanningNotStarted,
+        planning_start_run.PlanArtifactNotFound,
     ) as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    except planning_record_run.PlanArtifactNotExecutable as e:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-        ) from e
-    return _to_plan_detail_response(detail)
-
-
-@router.post(
-    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{agent_slug}/ingest-report",
-    response_model=PlanArtifactDetailResponse,
-)
-def ingest_work_plan_artifact_report_endpoint(
-    work_slug: str,
-    artifact_id: str,
-    agent_slug: str,
-    workstore: WorkStoreDep,
-    planningfiles: PlanningFilesDep,
-) -> PlanArtifactDetailResponse:
-    try:
-        detail = planning_ingest_report.execute(
-            workstore,
-            planningfiles,
-            planning_ingest_report.IngestArtifactReportRequest(
-                work_slug=work_slug,
-                artifact_id=artifact_id,
-                agent_slug=agent_slug,
-            ),
-        )
-    except (
-        planning_ingest_report.WorkNotFound,
-        planning_ingest_report.AgentNotFound,
-        planning_ingest_report.PlanningNotStarted,
-        planning_ingest_report.PlanArtifactNotFound,
-    ) as e:
+    except planning_start_run.LoopDefinitionNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except (
-        planning_ingest_report.PlanArtifactNotExecutable,
-        planning_ingest_report.TranscriptReportNotFound,
+        planning_start_run.PlanArtifactNotExecutable,
+        planning_start_run.LoopDefinitionConflict,
+        planning_start_run.LoopDefinitionInvalid,
+        planning_start_run.LoopContextMissing,
+        planning_start_run.AgentFolderMissing,
+        planning_start_run.InvalidProviderConfig,
     ) as e:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
         ) from e
+    except AgentTerminated as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    run = detail.artifact.runs[-1]
+    _ensure_plan_run_monitor_task(
+        request,
+        workstore,
+        planningfiles,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        planning_run_monitor.MonitorArtifactRunRequest(
+            work_slug=work_slug,
+            artifact_id=artifact_id,
+            run_id=run.id,
+        ),
+    )
     return _to_plan_detail_response(detail)
 
 
-@router.post(
-    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{agent_slug}/cleanup",
-    response_model=PlanArtifactDetailResponse,
+@router.get(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs",
+    response_model=list[PlanArtifactRunResponse],
 )
-def mark_work_plan_run_cleaned_endpoint(
+def list_work_plan_artifact_runs_endpoint(
     work_slug: str,
     artifact_id: str,
-    agent_slug: str,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
-) -> PlanArtifactDetailResponse:
+) -> list[PlanArtifactRunResponse]:
     try:
-        detail = planning_mark_run_cleaned.execute(
+        runs = planning_list_runs.execute(
             workstore,
             planningfiles,
-            planning_mark_run_cleaned.MarkArtifactRunCleanedRequest(
+            planning_list_runs.ListArtifactRunsRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
-                agent_slug=agent_slug,
             ),
         )
     except (
-        planning_mark_run_cleaned.WorkNotFound,
-        planning_mark_run_cleaned.PlanningNotStarted,
-        planning_mark_run_cleaned.PlanArtifactNotFound,
-        planning_mark_run_cleaned.PlanArtifactRunNotFound,
+        planning_list_runs.WorkNotFound,
+        planning_list_runs.PlanningNotStarted,
+        planning_list_runs.PlanArtifactNotFound,
     ) as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return [_to_plan_run(run) for run in runs]
+
+
+@router.get(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}",
+    response_model=PlanArtifactRunResponse,
+)
+def get_work_plan_artifact_run_endpoint(
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+) -> PlanArtifactRunResponse:
+    try:
+        run = planning_get_run.execute(
+            workstore,
+            planningfiles,
+            planning_get_run.GetArtifactRunRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+            ),
+        )
+    except (
+        planning_get_run.WorkNotFound,
+        planning_get_run.PlanningNotStarted,
+        planning_get_run.PlanArtifactNotFound,
+        planning_get_run.PlanArtifactRunNotFound,
+    ) as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return _to_plan_run(run)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/resume",
+    response_model=PlanArtifactDetailResponse,
+)
+async def resume_work_plan_artifact_run_endpoint(
+    request: Request,
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    payload: ResumePlanArtifactRunRequest,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    loop_runs: LoopRunRepositoryDep,
+    settings: SettingsDep,
+) -> PlanArtifactDetailResponse:
+    try:
+        detail = await planning_resume_run.execute(
+            workstore,
+            planningfiles,
+            loop_runs,
+            supervisor,
+            worktree_manager,
+            sharestore,
+            share_provisioner,
+            settings,
+            planning_resume_run.ResumeArtifactRunRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                resolution_note=payload.resolution_note,
+            ),
+        )
+    except (
+        planning_resume_run.WorkNotFound,
+        planning_resume_run.AgentNotFound,
+        planning_resume_run.PlanningNotStarted,
+        planning_resume_run.PlanArtifactNotFound,
+        planning_resume_run.PlanArtifactRunNotFound,
+    ) as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except (
+        planning_resume_run.PlanArtifactNotExecutable,
+        planning_resume_run.PlanArtifactRunNotResumable,
+    ) as e:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        ) from e
+    except AgentTerminated as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    _ensure_plan_run_monitor_task(
+        request,
+        workstore,
+        planningfiles,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        planning_run_monitor.MonitorArtifactRunRequest(
+            work_slug=work_slug,
+            artifact_id=artifact_id,
+            run_id=run_id,
+        ),
+    )
     return _to_plan_detail_response(detail)
 
 
 @router.post(
-    "/works/{work_slug}/plan/artifacts/{artifact_id}/report",
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/request-changes",
     response_model=PlanArtifactDetailResponse,
 )
-def submit_work_plan_artifact_report_endpoint(
+async def request_work_plan_run_changes_endpoint(
+    request: Request,
     work_slug: str,
     artifact_id: str,
-    payload: SubmitPlanArtifactReportRequest,
+    run_id: str,
+    payload: RequestPlanRunChangesRequest,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    loop_runs: LoopRunRepositoryDep,
+    settings: SettingsDep,
 ) -> PlanArtifactDetailResponse:
     try:
-        detail = planning_submit_report.execute(
+        detail = await planning_request_run_changes.execute(
             workstore,
             planningfiles,
-            planning_submit_report.SubmitArtifactReportRequest(
+            loop_runs,
+            supervisor,
+            worktree_manager,
+            sharestore,
+            share_provisioner,
+            settings,
+            planning_request_run_changes.RequestRunChangesRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
-                agent_slug=payload.agent_slug,
+                run_id=run_id,
+                note=payload.note,
+            ),
+        )
+    except (
+        planning_request_run_changes.WorkNotFound,
+        planning_request_run_changes.AgentNotFound,
+        planning_request_run_changes.PlanningNotStarted,
+        planning_request_run_changes.PlanArtifactNotFound,
+        planning_request_run_changes.PlanArtifactRunNotFound,
+    ) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except planning_request_run_changes.PlanArtifactRunNotChangeable as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    _ensure_plan_run_monitor_task(
+        request,
+        workstore,
+        planningfiles,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        planning_run_monitor.MonitorArtifactRunRequest(
+            work_slug=work_slug,
+            artifact_id=artifact_id,
+            run_id=run_id,
+        ),
+    )
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/accept",
+    response_model=PlanArtifactDetailResponse,
+)
+def accept_work_plan_artifact_run_endpoint(
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    payload: AcceptPlanArtifactRequest,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
+) -> PlanArtifactDetailResponse:
+    try:
+        detail = planning_accept_run.execute(
+            workstore,
+            planningfiles,
+            loop_runs,
+            planning_accept_run.AcceptArtifactRunRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
                 summary=payload.summary,
                 divergences=payload.divergences,
                 skipped_scope=payload.skipped_scope,
@@ -851,14 +1203,60 @@ def submit_work_plan_artifact_report_endpoint(
             ),
         )
     except (
-        planning_submit_report.WorkNotFound,
-        planning_submit_report.PlanningNotStarted,
-        planning_submit_report.PlanArtifactNotFound,
+        planning_accept_run.WorkNotFound,
+        planning_accept_run.PlanningNotStarted,
+        planning_accept_run.PlanArtifactNotFound,
+        planning_accept_run.PlanArtifactRunNotFound,
     ) as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    except planning_submit_report.PlanArtifactNotExecutable as e:
+    except (
+        planning_accept_run.PlanArtifactNotExecutable,
+        planning_accept_run.PlanArtifactRunNotAcceptable,
+    ) as e:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        ) from e
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/cleanup",
+    response_model=PlanArtifactDetailResponse,
+)
+async def mark_work_plan_run_cleaned_endpoint(
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+) -> PlanArtifactDetailResponse:
+    try:
+        detail = await planning_mark_run_cleaned.execute(
+            workstore,
+            planningfiles,
+            loop_runs,
+            supervisor,
+            worktree_manager,
+            planning_mark_run_cleaned.MarkArtifactRunCleanedRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+            ),
+        )
+    except (
+        planning_mark_run_cleaned.WorkNotFound,
+        planning_mark_run_cleaned.PlanningNotStarted,
+        planning_mark_run_cleaned.PlanArtifactNotFound,
+        planning_mark_run_cleaned.PlanArtifactRunNotFound,
+    ) as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except planning_mark_run_cleaned.PlanArtifactRunNotCleanable as e:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
         ) from e
     return _to_plan_detail_response(detail)
 
@@ -926,47 +1324,6 @@ def create_work_plan_bug_endpoint(
         planning_create_bug.PlanArtifactNotFound,
     ) as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    return _to_plan_detail_response(detail)
-
-
-@router.post(
-    "/works/{work_slug}/plan/artifacts/{artifact_id}/accept",
-    response_model=PlanArtifactDetailResponse,
-)
-def accept_work_plan_artifact_endpoint(
-    work_slug: str,
-    artifact_id: str,
-    payload: AcceptPlanArtifactRequest,
-    workstore: WorkStoreDep,
-    planningfiles: PlanningFilesDep,
-) -> PlanArtifactDetailResponse:
-    try:
-        detail = planning_accept_artifact.execute(
-            workstore,
-            planningfiles,
-            planning_accept_artifact.AcceptArtifactRequest(
-                work_slug=work_slug,
-                artifact_id=artifact_id,
-                summary=payload.summary,
-                agent_slug=payload.agent_slug,
-                divergences=payload.divergences,
-                skipped_scope=payload.skipped_scope,
-                blockers=payload.blockers,
-                decisions=payload.decisions,
-                changes=payload.changes,
-                validation_evidence=payload.validation_evidence,
-            ),
-        )
-    except (
-        planning_accept_artifact.WorkNotFound,
-        planning_accept_artifact.PlanningNotStarted,
-        planning_accept_artifact.PlanArtifactNotFound,
-    ) as e:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    except planning_accept_artifact.PlanArtifactNotExecutable as e:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-        ) from e
     return _to_plan_detail_response(detail)
 
 
@@ -1328,6 +1685,7 @@ def _to_chat_detail(record: ChatRecord) -> ChatDetail:
         "title": chat.title,
         "provider": chat.provider,
         "model": chat.model,
+        "options": chat.options or {},
         "grounding": (
             ChatGroundingSchema(kind=chat.grounding_kind, ref=chat.grounding_ref)
             if chat.grounding_kind is not None and chat.grounding_ref is not None
@@ -1410,6 +1768,7 @@ def _to_plan_response(view: WorkPlanView) -> WorkPlanResponse:
         depth=view.depth,
         root_path=view.root_path,
         planning_path=view.planning_path,
+        artifact_root_path=view.artifact_root_path,
         approved_at=view.approved_at,
         stale=view.stale,
         overview=_to_plan_overview(view.overview),
@@ -1479,6 +1838,7 @@ def _to_plan_artifact(artifact: PlanArtifactSummary) -> PlanArtifactResponse:
 
 def _to_plan_run(run: PlanArtifactRun) -> PlanArtifactRunResponse:
     return PlanArtifactRunResponse(
+        id=run.id,
         agent_slug=run.agent_slug,
         status=run.status,
         started_at=run.started_at,
@@ -1496,6 +1856,58 @@ def _to_plan_run(run: PlanArtifactRun) -> PlanArtifactRunResponse:
         loop_status_reason=run.loop_status_reason,
         loop_attempt=run.loop_attempt,
         loop_latest_assessment=run.loop_latest_assessment,
+        loop_definition_id=run.loop_definition_id,
+        loop_definition_name=run.loop_definition_name,
+        loop_definition_revision=run.loop_definition_revision,
+        loop_current_stage_id=run.loop_current_stage_id,
+        loop_stages=[
+            {
+                "id": stage.id,
+                "name": stage.name,
+                "kind": stage.kind,
+                "status": stage.status,
+                "attempt": stage.attempt,
+                "max_attempts": stage.max_attempts,
+                "agent_slug": stage.agent_slug,
+                "permissions": stage.permissions,
+                "session": stage.session,
+                "summary": stage.summary,
+                "findings": stage.findings,
+                "changes": stage.changes,
+                "validation_evidence": stage.validation_evidence,
+                "divergences": stage.divergences,
+                "skipped_scope": stage.skipped_scope,
+                "blocker": stage.blocker,
+                "artifact_refs": stage.artifact_refs,
+                "finding_details": [
+                    {
+                        "text": finding.text,
+                        "severity": finding.severity,
+                        "location": finding.location,
+                    }
+                    for finding in stage.finding_details
+                ],
+                "criteria_coverage": [
+                    {
+                        "text": criterion.text,
+                        "met": criterion.met,
+                        "note": criterion.note,
+                    }
+                    for criterion in stage.criteria_coverage
+                ],
+                "changed_files": [
+                    {
+                        "path": changed.path,
+                        "additions": changed.additions,
+                        "deletions": changed.deletions,
+                    }
+                    for changed in stage.changed_files
+                ],
+                "resolved_context": stage.resolved_context,
+                "context_warnings": stage.context_warnings,
+            }
+            for stage in run.loop_stages
+        ],
     )
 
 

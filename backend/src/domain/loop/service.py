@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import re
 
-from src.domain.loop.dtos import LoopAssessment, LoopReport, LoopReportSchema
+from src.domain.loop.dtos import (
+    LoopAssessment,
+    LoopAssessmentStatus,
+    LoopReport,
+    LoopReportSchema,
+)
 
 _NONE_VALUES = {
     "none",
@@ -43,7 +48,7 @@ def assess_report(
         return LoopAssessment(
             assessment_id=assessment_id,
             loop_run_id=report.loop_run_id,
-            status="needs_agent",
+            status=LoopAssessmentStatus.NEEDS_AGENT,
             findings=[f"Missing required report field: {field}." for field in missing],
             next_prompt=_continue_prompt(missing),
             created_at=created_at,
@@ -54,7 +59,7 @@ def assess_report(
         return LoopAssessment(
             assessment_id=assessment_id,
             loop_run_id=report.loop_run_id,
-            status="blocked_user",
+            status=LoopAssessmentStatus.BLOCKED_USER,
             findings=[f"Blocker reported: {blockers}"],
             created_at=created_at,
         )
@@ -62,7 +67,7 @@ def assess_report(
     return LoopAssessment(
         assessment_id=assessment_id,
         loop_run_id=report.loop_run_id,
-        status="pass",
+        status=LoopAssessmentStatus.PASS,
         created_at=created_at,
     )
 

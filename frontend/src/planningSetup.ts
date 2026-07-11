@@ -8,6 +8,19 @@ export type PlanningAgentConfig = {
   options: Record<string, string>;
 };
 
+export type PlanningStartSeed = {
+  idea: string;
+  framework: PlanningFrameworkId;
+  profile: PlanningProfile;
+  folder: string;
+  planDir: string | null;
+  agentConfig: PlanningAgentConfig | null;
+};
+
+export function planningStartStorageKey(workSlug: string): string {
+  return `atelier:planning-start:${workSlug}`;
+}
+
 export type PlanningProfileDepth =
   | "minimal"
   | "lightweight"
@@ -167,6 +180,23 @@ export function planningFrameworkDefinition(
     PLANNING_FRAMEWORKS.find((item) => item.id === framework) ??
     PLANNING_FRAMEWORKS[0]
   );
+}
+
+export function defaultPlanningArtifactRoot(
+  framework: PlanningFrameworkId,
+  workSlug: string,
+): string {
+  switch (framework) {
+    case "spec":
+      return `specs/${workSlug}`;
+    case "openspec":
+      return `.openspec/changes/${workSlug}`;
+    case "custom":
+      return `planning/${workSlug}`;
+    case "bmad":
+    default:
+      return `_bmad-output/${workSlug}`;
+  }
 }
 
 export function planningProfileDefinition(

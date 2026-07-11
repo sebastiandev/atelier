@@ -1,5 +1,7 @@
 import {
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -95,6 +97,8 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   const [error, setError] = useState<string | null>(null);
   const [compactError, setCompactError] = useState<string | null>(null);
   const [compacting, setCompacting] = useState(false);
+  const [compactDialog, setCompactDialog] =
+    useState<ChatCompactionDialogState | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
   const lastRuntimeSeqRef = useRef(0);
@@ -206,6 +210,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   );
 
   function send() {
+    if (compacting) return;
     const body = draft.trim();
     if (!body || !chat) return;
     sendInput(body);
@@ -215,12 +220,26 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   async function compactCurrentChat() {
     if (!chat || compacting || isActive) return;
     setCompacting(true);
+    setCompactDialog((current) =>
+      current
+        ? { ...current, phase: "compacting", error: null }
+        : { phase: "compacting", context: contextSnapshot, error: null },
+    );
     try {
       await compactChat(chat.slug);
       setCompactError(null);
+      setCompactDialog((current) =>
+        current ? { ...current, phase: "success", error: null } : current,
+      );
       await refresh();
     } catch (err) {
-      setCompactError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setCompactError(message);
+      setCompactDialog((current) =>
+        current
+          ? { ...current, phase: "error", error: message }
+          : { phase: "error", context: contextSnapshot, error: message },
+      );
     } finally {
       setCompacting(false);
     }
@@ -239,7 +258,8 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   const grounding = resolveGrounding(chat.grounding, projects, works);
   const workingFolder = resolveWorkingFolder(chat);
   const providerLabel = providerLabelFor(chat.provider);
-  const composerDisabled = streamStatus !== "connected";
+  const composerDisabled =
+    streamStatus !== "connected" || compacting || compactDialog !== null;
 
   return (
     <div className="shell-v3 narrow-left chat-v3">
@@ -321,7 +341,13 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             activityPhase={activityPhase}
             context={contextSnapshot}
             compacting={compacting}
-            onCompact={() => void compactCurrentChat()}
+            onCompact={() =>
+              setCompactDialog({
+                phase: "confirm",
+                context: contextSnapshot,
+                error: null,
+              })
+            }
             compactTitle="Compact this chat context"
           />
         )}
@@ -395,6 +421,13 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
           }}
         />
       )}
+      {compactDialog && (
+        <ChatCompactionModal
+          dialog={compactDialog}
+          onClose={() => setCompactDialog(null)}
+          onCompact={() => void compactCurrentChat()}
+        />
+      )}
     </div>
   );
 }
@@ -437,6 +470,8 @@ export function ChatTile({
   const [hint, setHint] = useState<string | null>(null);
   const [startingAgent, setStartingAgent] = useState(false);
   const [compacting, setCompacting] = useState(false);
+  const [compactDialog, setCompactDialog] =
+    useState<ChatCompactionDialogState | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -661,6 +696,7 @@ export function ChatTile({
   });
 
   function send() {
+    if (compacting) return;
     if (!chat) return;
     const body = draft.trim();
     if (!body) return;
@@ -725,11 +761,25 @@ export function ChatTile({
   async function compactCurrentChat() {
     if (!chat || compacting || isActive) return;
     setCompacting(true);
+    setCompactDialog((current) =>
+      current
+        ? { ...current, phase: "compacting", error: null }
+        : { phase: "compacting", context: contextSnapshot, error: null },
+    );
     try {
       await compactChat(chat.slug);
       setError(null);
+      setCompactDialog((current) =>
+        current ? { ...current, phase: "success", error: null } : current,
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      setCompactDialog((current) =>
+        current
+          ? { ...current, phase: "error", error: message }
+          : { phase: "error", context: contextSnapshot, error: message },
+      );
     } finally {
       setCompacting(false);
     }
@@ -773,7 +823,8 @@ export function ChatTile({
     ? resolveGrounding(chat.grounding, projects, works)
     : { kind: "none" as const, label: "Loading", sub: "" };
   const showGrounding = grounding.kind !== "work";
-  const composerDisabled = !chat || streamStatus !== "connected";
+  const composerDisabled =
+    !chat || streamStatus !== "connected" || compacting || compactDialog !== null;
   const dotStatus = error
     ? "error"
     : isActive
@@ -793,6 +844,23 @@ export function ChatTile({
     collapsePlanningHistory && !historyExpanded && historyCount > 0;
   const showPlanningReadyEmpty =
     collapsePlanningHistory && (!historyExpanded || runtimeUnits.length === 0);
+  const planningReadiness =
+    planningPresentation
+      ? planningReadinessFromEvents(events) ?? chat?.planning_readiness ?? null
+      : null;
+  const showPlanningMaterializeCta =
+    Boolean(onOpenPlan) && planningReadiness?.ready === true;
+  const planningReadinessSeq = showPlanningMaterializeCta
+    ? firstPlanningReadinessSeq(events)
+    : null;
+  const runtimeUnitsBeforeReady =
+    planningReadinessSeq === null
+      ? runtimeUnits
+      : runtimeUnits.filter((unit) => unit.key <= planningReadinessSeq);
+  const runtimeUnitsAfterReady =
+    planningReadinessSeq === null
+      ? []
+      : runtimeUnits.filter((unit) => unit.key > planningReadinessSeq);
 
   useEffect(() => {
     if (!maximized) return;
@@ -907,16 +975,6 @@ export function ChatTile({
       headerRight={
         planningPresentation ? (
           <div className="tile-controls">
-            {onOpenPlan && (
-              <button
-                type="button"
-                className="btn primary sm"
-                onClick={onOpenPlan}
-                disabled={openPlanDisabled}
-              >
-                <SparkIcon size={12} /> {openPlanLabel}
-              </button>
-            )}
             {onClose && (
               <button
                 type="button"
@@ -1019,10 +1077,24 @@ export function ChatTile({
               ) : (
                 <>
                   <TranscriptUnits
-                    units={runtimeUnits}
+                    units={runtimeUnitsBeforeReady}
                     agentSlug={chat.slug}
                     compactionSummaryLoader={getChatCompactionSummary}
                   />
+                  {showPlanningMaterializeCta && (
+                    <PlanningMaterializeReadyCard
+                      disabled={openPlanDisabled}
+                      label={openPlanLabel}
+                      onCreate={onOpenPlan!}
+                    />
+                  )}
+                  {runtimeUnitsAfterReady.length > 0 && (
+                    <TranscriptUnits
+                      units={runtimeUnitsAfterReady}
+                      agentSlug={chat.slug}
+                      compactionSummaryLoader={getChatCompactionSummary}
+                    />
+                  )}
                   {showPlanningReadyEmpty && (
                     <div className="planning-chat-ready-empty">
                       <strong>Ready to revise the generated plan</strong>
@@ -1044,7 +1116,13 @@ export function ChatTile({
             activityPhase={activityPhase}
             context={contextSnapshot}
             compacting={compacting}
-            onCompact={() => void compactCurrentChat()}
+            onCompact={() =>
+              setCompactDialog({
+                phase: "confirm",
+                context: contextSnapshot,
+                error: null,
+              })
+            }
             compactTitle="Compact this chat context"
           />
         )}
@@ -1063,6 +1141,22 @@ export function ChatTile({
             send();
           }}
         >
+          {showPlanningMaterializeCta && !openPlanDisabled && (
+            <div className="planning-materialize-pill">
+              <span className="planning-materialize-dot" aria-hidden />
+              <span className="planning-materialize-pill-label">
+                Ready to materialize
+              </span>
+              <button
+                type="button"
+                className="planning-materialize-pill-btn"
+                onClick={onOpenPlan}
+                title="Build the source plan from this conversation"
+              >
+                <SparkIcon size={11} /> Create source plan
+              </button>
+            </div>
+          )}
           {contextSnapshot && (
             <div className="composer-context-gauge" aria-hidden="true">
               <span />
@@ -1244,7 +1338,53 @@ export function ChatTile({
             </button>
           </div>
         </ChatTileComposer>
-    </ChatTileFrame>
+        {compactDialog && (
+          <ChatCompactionModal
+            dialog={compactDialog}
+            onClose={() => setCompactDialog(null)}
+            onCompact={() => void compactCurrentChat()}
+          />
+        )}
+      </ChatTileFrame>
+  );
+}
+
+function PlanningMaterializeReadyCard({
+  disabled,
+  label,
+  onCreate,
+}: {
+  disabled: boolean;
+  label: string;
+  onCreate: () => void;
+}) {
+  return (
+    <div className="planning-ready-card">
+      <div className="planning-ready-card-icon">
+        <SparkIcon size={15} />
+      </div>
+      <div className="planning-ready-card-body">
+        <div className="planning-ready-card-title">
+          I have enough to build the plan
+        </div>
+        <div className="planning-ready-card-text">
+          The source docs above capture the intent, approach, and architecture.
+          I can turn them into an executable plan now - or we can keep shaping
+          the details first.
+        </div>
+        <div className="planning-ready-card-actions">
+          <button
+            type="button"
+            className="btn primary"
+            disabled={disabled}
+            onClick={onCreate}
+          >
+            <SparkIcon size={12} /> {label}
+          </button>
+          <span>or keep refining below - nothing's locked in</span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2250,6 +2390,201 @@ function ChatContextGauge({ context }: { context: ContextSnapshot | null }) {
   );
 }
 
+type ChatCompactionDialogPhase = "confirm" | "compacting" | "success" | "error";
+
+type ChatCompactionDialogState = {
+  phase: ChatCompactionDialogPhase;
+  context: ContextSnapshot | null;
+  error: string | null;
+};
+
+function ChatCompactionModal({
+  dialog,
+  onClose,
+  onCompact,
+}: {
+  dialog: ChatCompactionDialogState;
+  onClose: () => void;
+  onCompact: () => void;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  const { context, error, phase } = dialog;
+  const tone = contextToneFor(context?.pct ?? null);
+  const pct = context ? clampContextPct(context.pct) : 0;
+  const readout = context
+    ? `ctx ${context.pct.toFixed(0)}% · ${formatCompactTokens(
+        context.promptTokens,
+      )} tokens`
+    : "context size unavailable";
+  const canClose = phase !== "compacting";
+  const title =
+    phase === "compacting"
+      ? "Compacting chat..."
+      : phase === "success"
+        ? "Compacted"
+        : phase === "error"
+          ? "Couldn't compact"
+          : "Compact context";
+  const body =
+    phase === "compacting"
+      ? "Summarizing the current provider session and starting a fresh one from that summary."
+      : phase === "success"
+        ? "New session started from summary. You can continue the conversation."
+        : phase === "error"
+          ? "The summary call failed. Try again or send a shorter next message."
+          : "The chat will summarize older turns and reset provider context. The visible transcript stays in place.";
+
+  useEffect(() => {
+    if (phase === "confirm" || phase === "error") {
+      primaryRef.current?.focus();
+    }
+  }, [phase]);
+
+  function handleLayerMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
+    if (e.target === e.currentTarget && canClose) onClose();
+  }
+
+  function handleKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Escape" && canClose) {
+      e.preventDefault();
+      onClose();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const buttons = Array.from(
+      cardRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ??
+        [],
+    );
+    if (buttons.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = buttons[0];
+    const last = buttons[buttons.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  return (
+    <div
+      className="compaction-modal-layer"
+      role="presentation"
+      data-tone={tone}
+      data-phase={phase}
+      onMouseDown={handleLayerMouseDown}
+    >
+      <div
+        ref={cardRef}
+        className="compaction-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onKeyDown={handleKeyDown}
+      >
+        <div className="compaction-modal-hd">
+          <div>
+            <h3>{title}</h3>
+            <p>{body}</p>
+          </div>
+          {canClose && (
+            <button
+              type="button"
+              className="compaction-modal-close"
+              aria-label="Close compaction dialog"
+              onClick={onClose}
+            >
+              x
+            </button>
+          )}
+        </div>
+        <div className="compaction-modal-facts">
+          <div className="compaction-modal-fact">
+            <span className="compaction-modal-dot is-good" aria-hidden />
+            <span>Keeps recent turns, decisions, and pinned files</span>
+          </div>
+          <div className="compaction-modal-fact">
+            <span className="compaction-modal-dot is-good" aria-hidden />
+            <span>Drops verbose tool output and exploration</span>
+          </div>
+          <div className="compaction-modal-fact">
+            <span className="compaction-modal-dot" aria-hidden />
+            <span>Can take a couple minutes on large sessions</span>
+          </div>
+        </div>
+        <div className="compaction-modal-progress">
+          <div className="compaction-modal-meter" aria-hidden>
+            <span style={{ width: `${phase === "success" ? 100 : pct}%` }} />
+          </div>
+          <span className="compaction-modal-readout mono">{readout}</span>
+        </div>
+        {phase === "compacting" && (
+          <div className="compaction-modal-phase" aria-live="polite">
+            <span className="compaction-modal-phase-label">
+              Summarizing transcript
+            </span>
+          </div>
+        )}
+        {phase === "error" && error && (
+          <div className="compaction-modal-error">{error}</div>
+        )}
+        <div className="compaction-modal-actions">
+          {phase === "success" ? (
+            <button
+              ref={primaryRef}
+              type="button"
+              className="compaction-modal-primary"
+              onClick={onClose}
+            >
+              Done
+            </button>
+          ) : phase === "compacting" ? (
+            <span className="compaction-modal-spinner" aria-live="polite">
+              Summarizing...
+            </span>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="compaction-modal-secondary"
+                onClick={onClose}
+              >
+                Cancel
+              </button>
+              <button
+                ref={primaryRef}
+                type="button"
+                className="compaction-modal-primary"
+                onClick={onCompact}
+              >
+                {phase === "error" ? "Try again" : "Compact now"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function clampContextPct(pct: number): number {
+  if (!Number.isFinite(pct)) return 0;
+  return Math.max(0, Math.min(100, pct));
+}
+
+function formatCompactTokens(n: number): string {
+  if (n < 1000) return `${n}`;
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 type ChatRuntimeItem =
   | {
       kind: "message";
@@ -2414,6 +2749,15 @@ function planningReadinessFromEvents(
       ready: true,
       summary: typeof event.summary === "string" ? event.summary : "",
     };
+  }
+  return null;
+}
+
+function firstPlanningReadinessSeq(events: AgentEvent[]): number | null {
+  for (const event of events) {
+    if (event.type === "planning_readiness" && event.ready === true) {
+      return eventSeq(event);
+    }
   }
   return null;
 }

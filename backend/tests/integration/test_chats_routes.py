@@ -7,6 +7,7 @@ work-scoped context files.
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -32,6 +33,7 @@ from src.domain.commands.planning import (
     submit_materialization,
 )
 from src.domain.planning.dtos import PlanArtifactEntry
+from src.domain.planning.frameworks import artifact_root_rel_path
 from src.settings import Settings
 
 
@@ -63,6 +65,10 @@ def _new_codex_acp_chat(
 
 def _new_project(name: str = "Atelier", glyph: str = "AT") -> dict[str, object]:
     return {"name": name, "description": "", "glyph": glyph, "color": 250}
+
+
+def _artifact_root(root: Path, work_slug: str) -> Path:
+    return root / artifact_root_rel_path("bmad", work_slug)
 
 
 class _FakeCompactionSessionClient:
@@ -239,10 +245,10 @@ def test_planning_chat_revision_prompt_lists_source_documents(
     ).json()
     working_dir = test_settings.workspace_root / "scratch"
     (working_dir / ".bmad-core").mkdir(parents=True)
-    planning_dir = working_dir / ".atelier" / "planning" / work["slug"]
-    stories_dir = planning_dir / "stories"
+    artifact_dir = _artifact_root(working_dir, work["slug"])
+    stories_dir = artifact_dir / "stories"
     stories_dir.mkdir(parents=True)
-    (planning_dir / "intent.md").write_text("# Intent\n")
+    (artifact_dir / "intent.md").write_text("# Intent\n")
     (stories_dir / "story-001.md").write_text("# First Story\n")
     response = app_client.post(
         "/api/chats",
@@ -295,8 +301,8 @@ def test_planning_chat_revision_prompt_lists_source_documents(
     assert "Revision phase:" in context.system_prompt
     assert "@intent.md" in context.system_prompt
     assert "@stories/story-001.md" in context.system_prompt
-    assert runtime.agent_workdir == planning_dir
-    assert runtime.writable_roots == (planning_dir,)
+    assert runtime.agent_workdir == artifact_dir
+    assert runtime.writable_roots == (artifact_dir,)
     assert isinstance(config, CodexAcpAgentConfig)
     assert config.reasoning_effort is CodexAcpEffort.XHIGH
     assert config.mode is CodexAcpMode.AUTO
@@ -311,10 +317,10 @@ def test_planning_chat_input_sends_hidden_current_document_index(
     ).json()
     working_dir = test_settings.workspace_root / "scratch"
     (working_dir / ".bmad-core").mkdir(parents=True)
-    planning_dir = working_dir / ".atelier" / "planning" / work["slug"]
-    stories_dir = planning_dir / "stories"
+    artifact_dir = _artifact_root(working_dir, work["slug"])
+    stories_dir = artifact_dir / "stories"
     stories_dir.mkdir(parents=True)
-    (planning_dir / "intent.md").write_text("# Intent\n")
+    (artifact_dir / "intent.md").write_text("# Intent\n")
     (stories_dir / "story-001.md").write_text("# First Story\n")
     response = app_client.post(
         "/api/chats",
@@ -371,7 +377,7 @@ def test_planning_chat_input_sends_hidden_current_document_index(
     assert chat_slug == response.json()["slug"]
     assert transcript_text == "What should we change next?"
     assert "<atelier_planning_context>" in provider_text
-    assert f"Source-backed planning folder: {planning_dir}" in provider_text
+    assert f"Source-backed planning folder: {artifact_dir}" in provider_text
     assert "@intent.md" in provider_text
     assert "@stories/story-001.md" in provider_text
     assert "<user_message>\nWhat should we change next?\n</user_message>" in provider_text

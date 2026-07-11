@@ -21,6 +21,7 @@ from src.domain.planning.prompts import (
     PlanningDocumentRef,
 )
 from src.domain.planning.readiness import PLANNING_READINESS_OPTION
+from src.domain.planning.session_config import PLANNING_CONFIG_OPTION
 from src.domain.projectstore.ports import ProjectStore
 from src.domain.prompts import build_prompt
 from src.domain.supervisor import AgentSubscription, AgentSupervisorService
@@ -176,10 +177,10 @@ def _planning_turn_context(
     manifest = planningfiles.read_manifest(chat.grounding_ref)
     if manifest is None or manifest.get("phase") != "planned":
         return None
-    planning_path = planningfiles.planning_path(chat.grounding_ref)
+    source_path = planningfiles.artifact_root_path(chat.grounding_ref)
     return build_prompt(
         PlanningChatTurnContextPrompt(
-            planning_path=planning_path,
+            source_path=source_path,
             documents=_planning_documents(manifest),
         )
     )
@@ -197,7 +198,7 @@ class ChatRuntimeContext:
     link_label: str
     link_details: str
     planning_phase: str = "discovery"
-    planning_path: str | None = None
+    planning_source_path: str | None = None
     planning_framework: PlanningFramework = "bmad"
     planning_profile: PlanningProfile = "feature"
     planning_documents: tuple[PlanningDocumentRef, ...] = ()
@@ -376,7 +377,7 @@ def _prompt_input_for_chat(
             working_details=runtime.working_details,
             link_label=runtime.link_label,
             link_details=runtime.link_details,
-            planning_path=runtime.planning_path,
+            source_path=runtime.planning_source_path,
             documents=runtime.planning_documents,
         )
     return RegularChatRuntimePrompt(
@@ -399,6 +400,7 @@ def _provider_options(chat: Chat, runtime: ChatRuntimeContext) -> dict[str, Any]
     """Return provider-facing options with Atelier chat metadata removed."""
     clean = dict(chat.options or {})
     clean.pop(PLANNING_READINESS_OPTION, None)
+    clean.pop(PLANNING_CONFIG_OPTION, None)
     if _is_planning_chat(chat) and runtime.planning_phase == "revision":
         return _planning_revision_options(chat.provider, clean)
     return clean
@@ -439,8 +441,8 @@ def _with_planning_runtime(
     framework = _planning_framework(manifest.get("framework"))
     profile = _planning_profile(manifest.get("profile"))
     documents = _planning_documents(manifest)
-    planning_path = planningfiles.planning_path(chat.grounding_ref)
-    planning_workdir = Path(planning_path)
+    source_path = planningfiles.artifact_root_path(chat.grounding_ref)
+    planning_workdir = Path(source_path)
     if manifest.get("phase") == "planned" and planning_workdir.exists():
         return ChatRuntimeContext(
             workdir=runtime.workdir,
@@ -451,7 +453,7 @@ def _with_planning_runtime(
             link_label=runtime.link_label,
             link_details=runtime.link_details,
             planning_phase="revision",
-            planning_path=planning_path,
+            planning_source_path=source_path,
             planning_framework=framework,
             planning_profile=profile,
             planning_documents=documents,
@@ -465,14 +467,16 @@ def _with_planning_runtime(
         link_label=runtime.link_label,
         link_details=runtime.link_details,
         planning_phase="discovery",
-        planning_path=planning_path,
+        planning_source_path=source_path,
         planning_framework=framework,
         planning_profile=profile,
         planning_documents=documents,
     )
 
 
-def _planning_documents(manifest: dict) -> tuple[PlanningDocumentRef, ...]:
+def _planning_documents(
+    manifest: dict[str, Any],
+) -> tuple[PlanningDocumentRef, ...]:
     """Return the materialized plan document refs stored in the manifest."""
     raw = manifest.get("artifacts")
     if not isinstance(raw, list):

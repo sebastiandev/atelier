@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +16,14 @@ from src.domain.planning.dtos import (
     PlanningFrameworkStatus,
     PlanningProfile,
 )
-from src.domain.planning.frameworks import check_framework_status
+from src.domain.planning.frameworks import artifact_root_rel_path, check_framework_status
+from src.domain.planning.models import PlanningSession
+from src.domain.planning.ports import PlanningSessionRepository
 from src.domain.planning.prompts import PlanningChatInitialPrompt
+from src.domain.planning.session_config import (
+    PLANNING_CONFIG_OPTION,
+    planning_config_option,
+)
 from src.domain.prompts import build_prompt
 from src.domain.workstore.ports import WorkStore
 
@@ -40,12 +47,14 @@ class StartPlanningChatRequest:
     profile: PlanningProfile
     provider: Provider
     model: str
+    artifact_root_path: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
 
 
 def execute(
     workstore: WorkStore,
     chatstore: ChatStore,
+    planning_sessions: PlanningSessionRepository,
     req: StartPlanningChatRequest,
 ) -> tuple[ChatRecord, PlanningFrameworkStatus]:
     """Create or return the Work's reserved Planning chat.
@@ -67,9 +76,13 @@ def execute(
 
     existing = _existing_planning_chat(chatstore, req.work_slug)
     if existing is not None:
+        _upsert_planning_session(planning_sessions, req, existing.chat.slug)
         return existing, status
 
     work = record.work
+    session = _planning_session(req, None)
+    chat_options = _discovery_options(req.provider, req.options)
+    chat_options[PLANNING_CONFIG_OPTION] = planning_config_option(session)
     first_message = build_prompt(
         PlanningChatInitialPrompt(
             work_slug=req.work_slug,
@@ -80,20 +93,19 @@ def execute(
             profile=req.profile,
         )
     )
-    return (
-        chatstore.create_chat(
-            CreateChatRequest(
-                provider=req.provider,
-                model=req.model,
-                first_message=first_message,
-                title="Planning",
-                grounding=ChatGrounding(kind="work", ref=req.work_slug),
-                working_directory=req.root_path,
-                options=_discovery_options(req.provider, req.options),
-            )
-        ),
-        status,
+    created = chatstore.create_chat(
+        CreateChatRequest(
+            provider=req.provider,
+            model=req.model,
+            first_message=first_message,
+            title="Planning",
+            grounding=ChatGrounding(kind="work", ref=req.work_slug),
+            working_directory=req.root_path,
+            options=chat_options,
+        )
     )
+    _upsert_planning_session(planning_sessions, req, created.chat.slug)
+    return created, status
 
 
 def validate_provider_config(req: StartPlanningChatRequest) -> None:
@@ -109,7 +121,10 @@ def validate_provider_config(req: StartPlanningChatRequest) -> None:
     )
 
 
-def _existing_planning_chat(chatstore: ChatStore, work_slug: str):
+def _existing_planning_chat(
+    chatstore: ChatStore,
+    work_slug: str,
+) -> ChatRecord | None:
     for record in chatstore.list_chats():
         chat = record.chat
         if (
@@ -133,6 +148,35 @@ def _discovery_options(provider: Provider, options: dict[str, Any]) -> dict[str,
     elif provider == "claude-acp":
         next_options["permission_mode"] = "plan"
     return next_options
+
+
+def _upsert_planning_session(
+    planning_sessions: PlanningSessionRepository,
+    req: StartPlanningChatRequest,
+    planning_chat_slug: str | None,
+) -> PlanningSession:
+    session = _planning_session(req, planning_chat_slug)
+    return planning_sessions.upsert_session(session)
+
+
+def _planning_session(
+    req: StartPlanningChatRequest, planning_chat_slug: str | None
+) -> PlanningSession:
+    now = datetime.now(UTC)
+    return PlanningSession(
+        work_slug=req.work_slug,
+        planning_chat_slug=planning_chat_slug,
+        root_path=req.root_path,
+        artifact_root_path=req.artifact_root_path
+        or artifact_root_rel_path(req.framework, req.work_slug),
+        framework=req.framework,
+        profile=req.profile,
+        provider=req.provider,
+        model=req.model,
+        options=dict(req.options),
+        created_at=now,
+        updated_at=now,
+    )
 
 
 __all__ = [

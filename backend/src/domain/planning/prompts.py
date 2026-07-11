@@ -55,7 +55,7 @@ class PlanningChatRuntimePrompt:
     working_details: str
     link_label: str
     link_details: str
-    planning_path: str | None = None
+    source_path: str | None = None
     documents: tuple[PlanningDocumentRef, ...] = field(default_factory=tuple)
 
 
@@ -63,7 +63,7 @@ class PlanningChatRuntimePrompt:
 class PlanningChatTurnContextPrompt:
     """Hidden per-turn Planning context prepended before a visible user input."""
 
-    planning_path: str
+    source_path: str
     documents: tuple[PlanningDocumentRef, ...] = field(default_factory=tuple)
 
 
@@ -85,6 +85,8 @@ class PlanningMaterializationPrompt:
     work_slug: str
     work_name: str
     root_path: str
+    atelier_planning_path: str
+    artifact_root: str
     framework: PlanningFramework
     profile: PlanningProfile
     planning_chat_slug: str | None
@@ -93,42 +95,17 @@ class PlanningMaterializationPrompt:
 
 @build_prompt.register
 def _(req: PlanningChatInitialPrompt) -> str:
-    """Render the backend-owned initial prompt for a Planning chat."""
+    """Render the first visible user message for a Planning chat."""
     fw = framework_definition(req.framework)
     profile = req.profile
     clean_idea = req.idea.strip() or req.work_name
-    roles = "\n".join(
-        f"- {role.name}: {role.description}" for role in fw.roles
-    )
     return (
-        "Initialize an Atelier Planning session.\n\n"
-        "Work context:\n"
-        f"- Work: {req.work_slug} - {req.work_name}\n"
-        f"- Project: {req.project_name or 'Loose work'}\n"
-        f"- User idea: {clean_idea}\n\n"
-        "Selected planning setup:\n"
-        f"- Framework: {fw.label}\n"
-        f"- Profile: {profile}\n"
-        f"- Depth: {depth_for_profile(profile)}\n\n"
-        "Framework roles available during this chat:\n"
-        f"{roles}\n\n"
-        "Conversation contract:\n"
-        "- Use the selected framework's roles/lenses when the user invokes them.\n"
-        "- Start by checking whether the idea is clear enough to plan.\n"
-        "- If critical information is missing, ask at most three focused questions.\n"
-        "- If the idea is clear enough, state assumptions and propose an outline.\n"
-        "- Identify source areas to inspect, risks, dependencies, validation, "
-        "and first executable items.\n"
-        "- Do not create planning files or claim source artifacts exist yet.\n"
-        "- When ready, end with a compact 'Ready to create source plan' summary "
-        "followed by this exact single-line JSON marker on its own line:\n"
-        f"{_READY_MARKER_EXAMPLE}\n"
-        "- In that summary, describe artifacts as metadata only: relative path, "
-        "title, kind, executable flag, and dependencies. Do not paste full "
-        "document contents.\n"
-        "- Treat source-plan creation as a complete handoff target: propose the "
-        "full set of framework-level docs and executable work items the user "
-        "should be able to review, revise, and assign to agents."
+        f"Start planning {req.work_slug} - {req.work_name} with {fw.label} "
+        f"using the {profile} profile ({depth_for_profile(profile)} depth).\n\n"
+        f"Goal: {clean_idea}\n\n"
+        "Introduce how you will approach this planning session, state the "
+        "initial assumptions you can make, and ask the most important focused "
+        "questions needed to produce a reviewable source plan."
     )
 
 
@@ -136,7 +113,6 @@ def _(req: PlanningChatInitialPrompt) -> str:
 def _(req: PlanningMaterializationPrompt) -> str:
     """Render the backend-owned prompt for a Planning materializer run."""
     fw = framework_definition(req.framework)
-    planning_rel = f".atelier/planning/{req.work_slug}"
     artifact_kinds = ", ".join(get_args(PlanArtifactKind))
     lines = [
         "Materialize an Atelier source-backed plan.",
@@ -148,7 +124,8 @@ def _(req: PlanningMaterializationPrompt) -> str:
         f"- Framework: {fw.label}",
         f"- Profile: {req.profile}",
         f"- Working folder: {req.root_path}",
-        f"- Planning output folder: {planning_rel}",
+        f"- Atelier state folder: {req.atelier_planning_path}",
+        f"- Framework output folder: {req.artifact_root}",
         "",
         "Use the selected planning framework's local roles, skills, templates, "
         "and conventions when they are available in this repo.",
@@ -157,7 +134,10 @@ def _(req: PlanningMaterializationPrompt) -> str:
         "artifact kinds.",
         "",
         "Requirements:",
-        f"- Write every planning source file under `{planning_rel}/`.",
+        "- Write every framework-generated planning source file under "
+        f"`{req.artifact_root}/`.",
+        "- Do not write framework artifacts under the Atelier state folder; "
+        "Atelier uses that folder for manifest and index metadata.",
         "- Generate the complete plan now: include all framework-level grouping "
         "documents and all executable stories, tasks, spikes, bugs, hotfixes, "
         "or follow-up work items that are currently known or implied.",
@@ -174,7 +154,7 @@ def _(req: PlanningMaterializationPrompt) -> str:
         "- If a local framework command would require network access or package "
         "installation, skip it and write the planning files directly from the "
         "available local templates/context.",
-        "- Keep paths in the final report relative to that planning folder.",
+        "- Keep paths in the final report relative to the framework output folder.",
         "- Do not include Markdown file content in the final report.",
         "- Use dependencies as relative artifact paths from the same final report.",
         "- Mark executable items such as implementation stories, tasks, spikes, "
@@ -226,11 +206,17 @@ def _(req: PlanningChatRuntimePrompt) -> str:
         f"{req.working_details}\n\n"
         f"Linked to: {req.link_label}\n"
         f"{req.link_details}\n\n"
+        "Start the first assistant turn with a brief user-facing introduction "
+        "that names the goal, selected framework, and planning approach.\n"
+        "Use the selected framework's roles/lenses when the user invokes them.\n"
         "Ask at most three focused clarifying questions when critical "
         "information is missing. If the idea is already clear enough, state "
         "assumptions and propose the first plan outline. Identify source "
         "areas to inspect, risks, dependencies, validation strategy, and "
-        "first reasonable stories, specs, tasks, spikes, or bugs."
+        "first reasonable stories, specs, tasks, spikes, or bugs. Treat "
+        "source-plan creation as a complete handoff target: propose the full "
+        "set of framework-level docs and executable work items the user should "
+        "be able to review, revise, and assign to agents."
     )
 
 
@@ -239,14 +225,14 @@ def _(req: PlanningChatTurnContextPrompt) -> str:
     """Render hidden per-turn Planning context for provider input."""
     return (
         "<atelier_planning_context>\n"
-        f"Source-backed planning folder: {req.planning_path}\n"
+        f"Source-backed planning folder: {req.source_path}\n"
         "The current Planning document index is:\n"
         f"{_document_index_lines(req.documents)}\n"
         "Use this refreshed index as implicit context for the user's message. "
         "The user does not need to mention a document explicitly for you to "
         "know these planning files exist. When editing or reading files, treat "
-        "paths as relative to the planning folder unless the user provides an "
-        "absolute path.\n"
+        "paths as relative to the source-backed planning folder unless the user "
+        "provides an absolute path.\n"
         "</atelier_planning_context>"
     )
 
@@ -285,16 +271,17 @@ def _focus_for_phase(req: PlanningChatRuntimePrompt) -> str:
 
 def _phase_block(req: PlanningChatRuntimePrompt) -> str:
     if req.phase == "revision":
-        planning_path = req.planning_path or "the source-backed planning folder"
+        source_path = req.source_path or "the source-backed planning folder"
         documents = _document_index_block(req.documents)
         return (
             "Revision phase:\n"
-            f"- Source-backed planning files already exist at {planning_path}.\n"
+            f"- Source-backed planning files already exist at {source_path}.\n"
             f"{documents}"
             "- Users may reference plan documents with `@relative/path.md`; "
-            "treat those mentions as references to files under the planning folder.\n"
+            "treat those mentions as references to files under the "
+            "source-backed planning folder.\n"
             "- You may help the user revise those planning Markdown files.\n"
-            "- Keep edits scoped to the planning folder unless Atelier launches "
+            "- Keep edits scoped to the source-backed planning folder unless Atelier launches "
             "a separate implementation agent.\n"
             "- When asked to change the plan, update the relevant planning "
             "documents and summarize what changed."

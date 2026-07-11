@@ -24,7 +24,7 @@ class SubmitPlanMaterializationRequest:
     """Metadata-only package for files a framework already wrote.
 
     Preconditions: all ``artifacts`` paths are relative Markdown files under
-    the planning folder and already exist on disk.
+    the framework artifact root and already exist on disk.
     Postconditions: manifest metadata and source hashes reflect those files.
     """
 
@@ -33,6 +33,7 @@ class SubmitPlanMaterializationRequest:
     framework: PlanningFramework
     profile: PlanningProfile
     artifacts: tuple[PlanArtifactEntry, ...]
+    artifact_root_path: str | None = None
 
 
 def execute(
@@ -43,7 +44,7 @@ def execute(
     """Persist metadata for framework-generated planning files.
 
     Preconditions: Work exists, framework is ready in ``root_path``, and every
-    artifact path exists under ``.atelier/planning/<work_slug>/``.
+    artifact path exists under the framework artifact root.
     Postconditions: no Markdown source content is changed; manifest metadata
     and source hashes are updated.
     """
@@ -52,6 +53,7 @@ def execute(
         files,
         work_slug=req.work_slug,
         root_path=req.root_path,
+        artifact_root_path=req.artifact_root_path,
         framework=req.framework,
         profile=req.profile,
         artifacts=req.artifacts,

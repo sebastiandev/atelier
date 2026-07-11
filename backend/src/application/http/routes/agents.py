@@ -28,6 +28,7 @@ from src.application.http.schemas import (
 )
 from src.domain.agents.compactions import CompactionSessionClient
 from src.domain.agents.handoffs import Summarizer
+from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.commands.agents import (
     compact,
     delete,
@@ -68,6 +69,10 @@ def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
 
 
+def get_agent_adapter_factory(request: Request) -> AgentAdapterFactory:
+    return request.app.state.agent_adapter_factory  # type: ignore[no-any-return]
+
+
 def get_connection_store(request: Request) -> ConnectionStore:
     return request.app.state.connection_store  # type: ignore[no-any-return]
 
@@ -92,6 +97,9 @@ WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
 WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
+AgentAdapterFactoryDep = Annotated[
+    AgentAdapterFactory, Depends(get_agent_adapter_factory)
+]
 ConnectionStoreDep = Annotated[ConnectionStore, Depends(get_connection_store)]
 ShareStoreDep = Annotated[SharedFolderStore, Depends(get_sharestore)]
 ShareProvisionerDep = Annotated[ShareProvisioner, Depends(get_share_provisioner)]
@@ -127,6 +135,7 @@ async def create_agent(
     connection_store: ConnectionStoreDep,
     sharestore: ShareStoreDep,
     share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
     settings: SettingsDep,
 ) -> AgentSummary:
     req = start.StartAgentRequest(
@@ -156,7 +165,7 @@ async def create_agent(
             connection_store,
             sharestore,
             share_provisioner,
-            settings,
+            adapter_factory,
             req,
         )
     except start.WorkNotFound as e:

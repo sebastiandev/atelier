@@ -22,6 +22,7 @@ import {
   type ContextEntry,
   type CreateAgentPayload,
   type HandoffSummary,
+  type LoopDefinition,
   type PlanArtifact,
   type PlanArtifactDetail,
   type PlanMaterializationStatus,
@@ -33,11 +34,11 @@ import {
   type WorkDetail,
   type WorkSummary,
   PERSONA_GLYPH,
+  acceptPlanArtifactRun,
   approveWorkPlan,
   checkPlanningFrameworkStatus,
   createAgent,
   createPlanBug,
-  deleteAgent,
   detachAgent,
   ensureWorkChatContext,
   finishWorkPlan,
@@ -53,7 +54,6 @@ import {
   listProjectShares,
   listProjects,
   listWorks,
-  ingestPlanArtifactReport,
   markPlanRunCleaned,
   openAgentInConsole,
   patchWork,
@@ -61,9 +61,11 @@ import {
   revealAgent,
   revealArtifact,
   revealWork,
-  recordPlanArtifactRun,
+  resumePlanArtifactRun,
+  requestPlanArtifactRunChanges,
   startPlanningChat,
   startPlanningSetupChat,
+  startPlanArtifactRun,
   startWorkPlan,
   updatePlanArtifact,
 } from "./api";
@@ -94,6 +96,7 @@ import {
 } from "./Icons";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
+import { LoopSelectorDialog } from "./LoopUI";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import {
   PlanningMode,
@@ -101,8 +104,11 @@ import {
   type PlanningView,
 } from "./PlanningMode";
 import {
+  defaultPlanningArtifactRoot,
   type PlanningAgentConfig,
   type PlanningFrameworkId,
+  type PlanningStartSeed,
+  planningStartStorageKey,
 } from "./planningSetup";
 import {
   coerceProviderOptionsForModel,
@@ -140,6 +146,14 @@ type PlanningSetupPrompt = {
   message: string;
 };
 
+type PlanningStartOverrides = {
+  prompt?: string;
+  framework?: PlanningFrameworkId;
+  profile?: PlanningProfile;
+  artifactRootPath?: string | null;
+  agentConfig?: PlanningAgentConfig | null;
+};
+
 export function WorkView({ workSlug }: { workSlug: string }) {
   const [work, setWork] = useState<WorkDetail | null>(null);
   const [project, setProject] = useState<ProjectSummary | null>(null);
@@ -156,6 +170,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [planPromptDraft, setPlanPromptDraft] = useState<string | null>(null);
   const [planProfile, setPlanProfile] = useState<PlanningProfile>("feature");
   const [planFramework, setPlanFramework] = useState<PlanningFrameworkId>("bmad");
+  const [planArtifactRootDraft, setPlanArtifactRootDraft] = useState<string | null>(
+    null,
+  );
   const [planAgentConfig, setPlanAgentConfig] =
     useState<PlanningAgentConfig | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
@@ -167,6 +184,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [planRootPickerOpen, setPlanRootPickerOpen] = useState(false);
   const [planRootPickerStartAfterPick, setPlanRootPickerStartAfterPick] =
     useState(false);
+  const planningStartConsumedRef = useRef(false);
   const [planningSetupPrompt, setPlanningSetupPrompt] =
     useState<PlanningSetupPrompt | null>(null);
   const [workMode, setWorkMode] = useState<"manual" | "planning">("planning");
@@ -179,8 +197,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
   const [openChatSlugs, setOpenChatSlugs] = useState<string[]>([]);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
-  const [pendingLaunchArtifactId, setPendingLaunchArtifactId] =
-    useState<string | null>(null);
+  const [pendingLoopTarget, setPendingLoopTarget] =
+    useState<PlanArtifactDetail | null>(null);
   // When the new-agent dialog is opened from the handoff/chat flow, we
   // pre-fill it with either the source agent handoff doc or chat context
   // file. Null in the regular flow.
@@ -313,8 +331,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }, [workSlug]);
 
   useEffect(() => {
-    setWorkMode("planning");
-    setWorkModeExplicit(false);
+    const params = new URLSearchParams(window.location.search);
+    const manual = params.get("mode") === "manual";
+    const seededPlanning = params.get("start") === "planning";
+    setWorkMode(manual ? "manual" : "planning");
+    setWorkModeExplicit(manual || seededPlanning);
     setPlanningView({ kind: "overview" });
     setPlanOverviewTab("summary");
     setPlanPromptDraft(null);
@@ -325,8 +346,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     setPlanRootCleared(false);
     setPlanRootPickerOpen(false);
     setPlanRootPickerStartAfterPick(false);
+    planningStartConsumedRef.current = false;
     setPlanChatOpen(true);
-    setPendingLaunchArtifactId(null);
+    setPendingLoopTarget(null);
   }, [workSlug]);
 
   useEffect(() => {
@@ -341,6 +363,42 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
     setWorkMode("planning");
   }, [agents.length, chats.length, plan, workModeExplicit, workSlug]);
+
+  useEffect(() => {
+    if (!work || planningStartConsumedRef.current) return;
+    const key = planningStartStorageKey(workSlug);
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return;
+    let seed: PlanningStartSeed;
+    try {
+      seed = JSON.parse(raw) as PlanningStartSeed;
+    } catch {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    if (!seed.folder.trim()) {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    planningStartConsumedRef.current = true;
+    sessionStorage.removeItem(key);
+    setWorkMode("planning");
+    setWorkModeExplicit(true);
+    setPlanSelectedRoot(seed.folder);
+    setPlanRootCleared(false);
+    setPlanArtifactRootDraft(seed.planDir);
+    setPlanFramework(seed.framework);
+    setPlanProfile(seed.profile);
+    setPlanPromptDraft(seed.idea || work.description || work.name);
+    setPlanAgentConfig(seed.agentConfig);
+    void handleStartPlanningChat(seed.folder, {
+      prompt: seed.idea || work.description || work.name,
+      framework: seed.framework,
+      profile: seed.profile,
+      artifactRootPath: seed.planDir,
+      agentConfig: seed.agentConfig,
+    });
+  }, [work, workSlug]);
 
   // Open the project switcher and lazy-fetch the project list if we
   // don't have it yet. The switcher renders gracefully against an empty
@@ -396,7 +454,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
   function openPlanningView(next: PlanningView) {
     setPlanningView(next);
-    if (next.kind === "artifact" || next.kind === "source") {
+    if (next.kind === "artifact" || next.kind === "source" || next.kind === "run") {
       setSelectedPlanArtifactId(next.id);
       setFocusedSlug(`plan:${next.id}`);
     } else {
@@ -543,8 +601,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }, [workSlug]);
 
   useEffect(() => {
-    const planningChat = planningChatFrom(chats, workSlug);
-    if (workMode !== "planning" || plan !== null || !planningChat) {
+    if (workMode !== "planning" || plan !== null) {
       setPlanMaterializationStatus(null);
       return;
     }
@@ -591,7 +648,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       controller?.abort();
       window.clearInterval(timer);
     };
-  }, [workSlug, workMode, plan, chats]);
+  }, [workSlug, workMode, plan]);
 
   useEffect(() => {
     if (!selectedPlanArtifactId) {
@@ -616,6 +673,49 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       cancelled = true;
     };
   }, [workSlug, selectedPlanArtifactId]);
+
+  useEffect(() => {
+    if (workMode !== "planning" || !plan || plan.overview.running === 0) return;
+    let cancelled = false;
+    let inFlight = false;
+
+    async function pollPlanRuns() {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const next = await getWorkPlan(workSlug);
+        if (cancelled) return;
+        setPlan(next);
+        if (selectedPlanArtifactId) {
+          const detail = await getPlanArtifact(workSlug, selectedPlanArtifactId);
+          if (cancelled) return;
+          setPlanArtifactDetail(detail);
+          setPlanDraft((currentDraft) => {
+            if (!planArtifactDetail || currentDraft === planArtifactDetail.content) {
+              return detail.content;
+            }
+            return currentDraft;
+          });
+        }
+      } catch {
+        // Polling is opportunistic; explicit user actions still surface errors.
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    const timer = window.setInterval(() => void pollPlanRuns(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    workMode,
+    workSlug,
+    plan?.overview.running,
+    selectedPlanArtifactId,
+    planArtifactDetail,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -793,9 +893,20 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
   }
 
-  async function handleStartPlanningChat(rootPath: string) {
+  async function handleStartPlanningChat(
+    rootPath: string,
+    overrides: PlanningStartOverrides = {},
+  ) {
     if (!work) return;
-    const prompt = (planPromptDraft ?? work.description ?? work.name).trim();
+    const prompt =
+      (overrides.prompt ?? planPromptDraft ?? work.description ?? work.name).trim();
+    const framework = overrides.framework ?? planFramework;
+    const profile = overrides.profile ?? planProfile;
+    const agentConfig = overrides.agentConfig ?? planAgentConfig;
+    const artifactRootPath =
+      overrides.artifactRootPath !== undefined
+        ? overrides.artifactRootPath
+        : planArtifactRootDraft ?? defaultPlanningArtifactRoot(framework, work.slug);
     setPlanSelectedRoot(rootPath);
     setPlanRootCleared(false);
     setPlanLoading(true);
@@ -808,7 +919,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       }
       const status = await checkPlanningFrameworkStatus(work.slug, {
         root_path: rootPath,
-        framework: planFramework,
+        framework,
       });
       if (!status.ready) {
         const command = status.setup_command.join(" ");
@@ -816,12 +927,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         setPlanningSetupPrompt({ rootPath, message });
         return;
       }
-      const agent = await resolvePlanningAgentConfig(planAgentConfig);
+      const agent = await resolvePlanningAgentConfig(agentConfig);
       const created = await startPlanningChat(work.slug, {
         root_path: rootPath,
         idea: prompt || work.name,
-        framework: planFramework,
-        profile: planProfile,
+        artifact_root_path: artifactRootPath?.trim() || null,
+        framework,
+        profile,
         provider: agent.provider.name,
         model: agent.model,
         options: providerOptionsPayload(agent.provider, agent.model, agent.options),
@@ -841,6 +953,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
   async function handleCreateSourcePlanFromPlanningChat() {
     if (!work) return;
+    const resumeFromWaiting =
+      planMaterializationStatus?.state === "waiting_permission";
     const planningChat = planningChatFrom(chats, work.slug);
     if (!planningChat) {
       setPlanError("Planning chat not found. Start planning again.");
@@ -875,19 +989,18 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       tool_name: null,
     });
     try {
-      const agent = await resolvePlanningAgentConfig(planAgentConfig);
       const payload = {
-        root_path: rootPath,
-        framework: planFramework,
-        profile: planProfile,
-        provider: agent.provider.name,
-        model: agent.model,
-        options: providerOptionsPayload(agent.provider, agent.model, agent.options),
         planning_chat_slug: planningChat.slug,
       };
       void startWorkPlan(work.slug, payload)
         .then((result) => {
-          setPlanMaterializationStatus(result.materialization_status);
+          setPlanMaterializationStatus((current) =>
+            resumeFromWaiting &&
+            current?.state === "running" &&
+            result.materialization_status.state === "waiting_permission"
+              ? current
+              : result.materialization_status,
+          );
           if (!result.plan) return;
           setPlan(result.plan);
           setPlanOverviewTab(defaultPlanTab(result.plan));
@@ -997,14 +1110,19 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
   }
 
-  async function handleIngestPlanReport(artifact: PlanArtifact, agentSlug: string) {
+  async function handleResolvePlanLoopBlocker(
+    artifact: PlanArtifact,
+    runId: string,
+    agentSlug: string,
+  ) {
     setPlanSaving(true);
     setPlanError(null);
     try {
-      const saved = await ingestPlanArtifactReport(workSlug, artifact.id, agentSlug);
+      const saved = await resumePlanArtifactRun(workSlug, artifact.id, runId);
       setPlanArtifactDetail(saved);
       setPlanDraft(saved.content);
       await refreshPlan(saved.artifact.id);
+      setFocusedSlug(agentSlug);
     } catch (err) {
       setPlanError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1012,19 +1130,63 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
   }
 
-  async function handleCleanupPlanRun(artifact: PlanArtifact, agentSlug: string) {
+  async function handleCleanupPlanRun(
+    artifact: PlanArtifact,
+    runId: string,
+  ) {
     setPlanSaving(true);
     setPlanError(null);
     try {
-      await deleteAgent(agentSlug);
-      if (focusedSlug === agentSlug) setFocusedSlug(null);
-      const saved = await markPlanRunCleaned(workSlug, artifact.id, agentSlug);
+      const saved = await markPlanRunCleaned(workSlug, artifact.id, runId);
       setPlanArtifactDetail(saved);
       setPlanDraft(saved.content);
       await Promise.all([refreshAgents(), refreshPlan(saved.artifact.id)]);
-      showToast(`Cleaned up ${agentSlug}.`);
+      showToast("Run agents cleaned up.");
     } catch (err) {
       setPlanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
+  async function handleApprovePlanRun(artifact: PlanArtifact, runId: string) {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const saved = await acceptPlanArtifactRun(workSlug, artifact.id, runId, {});
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      await refreshPlan(saved.artifact.id);
+      showToast("Result approved.");
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
+  async function handleRequestPlanRunChanges(
+    artifact: PlanArtifact,
+    runId: string,
+    note: string,
+  ) {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const saved = await requestPlanArtifactRunChanges(
+        workSlug,
+        artifact.id,
+        runId,
+        note,
+      );
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      await refreshPlan(saved.artifact.id);
+      showToast("Changes requested. Implementation resumed.");
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+      throw err;
     } finally {
       setPlanSaving(false);
     }
@@ -1069,20 +1231,34 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       setPlanError(detail.artifact.launch_blockers[0] ?? "Artifact is not launchable yet.");
       return;
     }
-    setPendingLaunchArtifactId(detail.artifact.id);
-    setAgentDialogPrefill({
-      initialGoal: [
-        `Implement ${detail.artifact.title}.`,
-        "",
-        `Source artifact: ${detail.artifact.source_ref}`,
-        "",
-        "Stay within this artifact's scope. Report divergences, skipped scope, blockers, decisions, changes, and validation before marking the work complete.",
-      ].join("\n"),
-      initialContexts: [
-        { type: "file", value: detail.artifact.source_ref, conn_id: null },
-      ],
-    });
-    setAgentDialogOpen(true);
+    setPendingLoopTarget(detail);
+  }
+
+  async function handleLoopSelected(
+    detail: PlanArtifactDetail,
+    definition: LoopDefinition,
+  ): Promise<void> {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const linked = await startPlanArtifactRun(
+        workSlug,
+        detail.artifact.id,
+        null,
+        definition,
+      );
+      setPendingLoopTarget(null);
+      setPlanArtifactDetail(linked);
+      setPlanDraft(linked.content);
+      await Promise.all([refreshAgents(), refreshPlan(linked.artifact.id)]);
+      openPlanningView({ kind: "run", id: linked.artifact.id });
+      showToast(`Started ${definition.name}.`);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setPlanSaving(false);
+    }
   }
 
   async function handleCreateAgent(payload: CreateAgentPayload) {
@@ -1098,19 +1274,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         .getState()
         .insertAfter(workSlug, payload.fork_from_agent, created.slug, currentOrder);
     }
-    if (pendingLaunchArtifactId) {
-      const linked = await recordPlanArtifactRun(
-        workSlug,
-        pendingLaunchArtifactId,
-        created.slug,
-      );
-      setPlanArtifactDetail(linked);
-      setPlanDraft(linked.content);
-      await refreshPlan(linked.artifact.id);
-    }
     setAgentDialogOpen(false);
     setAgentDialogPrefill(null);
-    setPendingLaunchArtifactId(null);
     setFocusedSlug(created.slug);
     requestAnimationFrame(() => {
       const el = tileRefs.current.get(created.slug);
@@ -1240,6 +1405,68 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const planningRoot = planRootCleared
     ? null
     : planSelectedRoot ?? plan?.root_path ?? planInitialRoot;
+  const planningArtifactRoot =
+    planArtifactRootDraft ?? defaultPlanningArtifactRoot(planFramework, work.slug);
+  const planningSetupDialog = planningSetupPrompt ? (
+    <div
+      className="scrim"
+      onClick={() => {
+        setPlanError(planningSetupPrompt.message);
+        setPlanningSetupPrompt(null);
+      }}
+    >
+      <div
+        className="modal modal-sm"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="planning-setup-title"
+      >
+        <div className="modal-hd">
+          <div>
+            <h3 id="planning-setup-title">Set up planning framework</h3>
+            <div className="sub">
+              This work folder needs its selected planning framework initialized.
+            </div>
+          </div>
+          <button
+            className="btn-icon"
+            onClick={() => {
+              setPlanError(planningSetupPrompt.message);
+              setPlanningSetupPrompt(null);
+            }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="modal-bd">
+          <div className="form-error">{planningSetupPrompt.message}</div>
+        </div>
+        <div className="modal-ft">
+          <button
+            className="btn"
+            disabled={planLoading}
+            onClick={() => {
+              setPlanError(planningSetupPrompt.message);
+              setPlanningSetupPrompt(null);
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            className="btn primary"
+            disabled={planLoading}
+            onClick={() => {
+              void createPlanningSetupChat(planningSetupPrompt.rootPath);
+            }}
+          >
+            {planLoading ? "Creating…" : "Create setup chat"}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   if (planningModeActive) {
     return (
@@ -1262,6 +1489,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           overviewTab={planOverviewTab}
           chatOpen={planChatOpen}
           initialRoot={planningRoot}
+          artifactRootPath={planningArtifactRoot}
           prompt={planPromptDraft ?? work.description}
           profile={planProfile}
           framework={planFramework}
@@ -1269,6 +1497,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           onPromptChange={setPlanPromptDraft}
           onProfileChange={setPlanProfile}
           onFrameworkChange={setPlanFramework}
+          onArtifactRootPathChange={setPlanArtifactRootDraft}
           onAgentConfigChange={setPlanAgentConfig}
           onOverviewTab={setPlanOverviewTab}
           onView={openPlanningView}
@@ -1295,15 +1524,31 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           onApprovePlan={handleApprovePlan}
           onCreateBug={handleCreatePlanBug}
           onLaunch={handleLaunchPlanArtifact}
-          onIngestReport={(artifact, agentSlug) =>
-            void handleIngestPlanReport(artifact, agentSlug)
+          onResolveLoopBlocker={(artifact, runId, agentSlug) =>
+            void handleResolvePlanLoopBlocker(artifact, runId, agentSlug)
           }
-          onCleanupRun={(artifact, agentSlug) =>
-            void handleCleanupPlanRun(artifact, agentSlug)
+          onCleanupRun={(artifact, runId) =>
+            void handleCleanupPlanRun(artifact, runId)
+          }
+          onApproveRun={(artifact, runId) =>
+            handleApprovePlanRun(artifact, runId)
+          }
+          onRequestRunChanges={(artifact, runId, note) =>
+            handleRequestPlanRunChanges(artifact, runId, note)
           }
           onChatOpen={setPlanChatOpen}
           onPlanningChatUpdated={patchChatSummary}
         />
+        {pendingLoopTarget && (
+          <LoopSelectorDialog
+            workSlug={work.slug}
+            target={pendingLoopTarget}
+            onClose={() => setPendingLoopTarget(null)}
+            onStart={(definition) =>
+              handleLoopSelected(pendingLoopTarget, definition)
+            }
+          />
+        )}
         {agentDialogOpen && (
           <NewAgentDialog
             workSlug={work.slug}
@@ -1311,7 +1556,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             onClose={() => {
               setAgentDialogOpen(false);
               setAgentDialogPrefill(null);
-              setPendingLaunchArtifactId(null);
             }}
             onCreate={async (payload) => {
               await handleCreateAgent(payload);
@@ -1340,6 +1584,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             }}
           />
         )}
+        {planningSetupDialog}
         {toast && (
           <div className="toast" role="status" aria-live="polite">
             {toast}
@@ -2009,66 +2254,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           }}
         />
       )}
-      {planningSetupPrompt && (
-        <div
-          className="scrim"
-          onClick={() => {
-            setPlanError(planningSetupPrompt.message);
-            setPlanningSetupPrompt(null);
-          }}
-        >
-          <div
-            className="modal modal-sm"
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="planning-setup-title"
-          >
-            <div className="modal-hd">
-              <div>
-                <h3 id="planning-setup-title">Set up planning framework</h3>
-                <div className="sub">
-                  This work folder needs its selected planning framework initialized.
-                </div>
-              </div>
-              <button
-                className="btn-icon"
-                onClick={() => {
-                  setPlanError(planningSetupPrompt.message);
-                  setPlanningSetupPrompt(null);
-                }}
-                aria-label="Close"
-              >
-                ×
-              </button>
-            </div>
-            <div className="modal-bd">
-              <div className="form-error">{planningSetupPrompt.message}</div>
-            </div>
-            <div className="modal-ft">
-              <button
-                className="btn"
-                disabled={planLoading}
-                onClick={() => {
-                  setPlanError(planningSetupPrompt.message);
-                  setPlanningSetupPrompt(null);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="btn primary"
-                disabled={planLoading}
-                onClick={() => {
-                  void createPlanningSetupChat(planningSetupPrompt.rootPath);
-                }}
-              >
-                {planLoading ? "Creating…" : "Create setup chat"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {planningSetupDialog}
       {handoffSource && (
         <HandoffDialog
           workSlug={workSlug}

@@ -36,6 +36,7 @@ class StartPlanningMaterializationChatRequest:
     profile: PlanningProfile
     provider: Provider
     model: str
+    artifact_root_path: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
     planning_chat_slug: str | None = None
 
@@ -56,6 +57,7 @@ def execute(
         chatstore,
         work_slug=req.work_slug,
         root_path=req.root_path,
+        artifact_root_path=req.artifact_root_path,
         framework=req.framework,
         profile=req.profile,
         provider=req.provider,

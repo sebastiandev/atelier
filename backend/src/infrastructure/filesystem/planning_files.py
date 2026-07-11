@@ -11,7 +11,7 @@ from src.infrastructure.filesystem.paths import WorkspacePaths
 
 
 class FsPlanningFiles:
-    """Read/write planning source files in the Work's bound working root."""
+    """Read/write planning state and framework source files."""
 
     def __init__(self, paths: WorkspacePaths) -> None:
         self._paths = paths
@@ -35,6 +35,9 @@ class FsPlanningFiles:
     def planning_path(self, work_slug: str) -> str:
         return str(self._planning_dir(work_slug))
 
+    def artifact_root_path(self, work_slug: str) -> str:
+        return str(self._artifact_root_dir(work_slug))
+
     def ensure_plan_dir(self, work_slug: str) -> None:
         self._planning_dir(work_slug).mkdir(parents=True, exist_ok=True)
 
@@ -50,6 +53,12 @@ class FsPlanningFiles:
     def read_text(self, work_slug: str, rel_path: str) -> str | None:
         try:
             return self._resolve(work_slug, rel_path).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+
+    def read_text_at(self, root_path: str, rel_path: str) -> str | None:
+        try:
+            return _resolve_under_root(root_path, rel_path).read_text(encoding="utf-8")
         except FileNotFoundError:
             return None
 
@@ -72,18 +81,41 @@ class FsPlanningFiles:
         return str(self._resolve(work_slug, rel_path))
 
     def _resolve(self, work_slug: str, rel_path: str) -> Path:
-        rel = Path(rel_path)
-        if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
-            raise ValueError(f"invalid planning path: {rel_path!r}")
-        if "\x00" in rel_path:
-            raise ValueError(f"invalid planning path: {rel_path!r}")
-        return self._planning_dir(work_slug) / rel
+        return _resolve_under_root(str(self._artifact_root_dir(work_slug)), rel_path)
 
     def _planning_dir(self, work_slug: str) -> Path:
         root = self.working_root(work_slug)
         if root is None:
             raise ValueError(f"planning root is not bound: {work_slug}")
         return _planning_dir_from_root(root, work_slug)
+
+    def _artifact_root_dir(self, work_slug: str) -> Path:
+        root = self.working_root(work_slug)
+        if root is None:
+            raise ValueError(f"planning root is not bound: {work_slug}")
+        manifest = self.read_manifest(work_slug)
+        artifact_root = _str_or_none((manifest or {}).get("artifact_root"))
+        artifact_root_path = _str_or_none((manifest or {}).get("artifact_root_path"))
+        if artifact_root_path:
+            path = Path(artifact_root_path).expanduser()
+            return path if path.is_absolute() else Path(root).expanduser().resolve() / path
+        if artifact_root:
+            return _resolve_under_root(root, artifact_root)
+        return _planning_dir_from_root(root, work_slug)
+
+
+def _resolve_under_root(root_path: str, rel_path: str) -> Path:
+    root = Path(root_path).expanduser().resolve()
+    rel = Path(rel_path)
+    if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
+        raise ValueError(f"invalid planning path: {rel_path!r}")
+    if "\x00" in rel_path:
+        raise ValueError(f"invalid planning path: {rel_path!r}")
+    return root / rel
+
+
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _planning_dir_from_root(root_path: str, work_slug: str) -> Path:

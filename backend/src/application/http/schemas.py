@@ -11,7 +11,17 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from src.domain.loop.dtos import LoopStatus
+from src.domain.loop.dtos import (
+    LoopContextKind,
+    LoopDefinitionScope,
+    LoopFindingSeverity,
+    LoopOutcome,
+    LoopPermission,
+    LoopSessionPolicy,
+    LoopStatus,
+    LoopStepKind,
+    LoopStepStatus,
+)
 from src.domain.models import (
     AgentStatus,
     ArtifactType,
@@ -427,6 +437,7 @@ class ChatSummary(BaseModel):
     title: str
     provider: Provider
     model: str
+    options: dict[str, Any] = Field(default_factory=dict)
     grounding: ChatGroundingSchema | None = None
     working_directory: str | None = None
     created_at: datetime
@@ -494,6 +505,7 @@ class PlanningFrameworkStatusResponse(BaseModel):
 class StartPlanningChatRequest(BaseModel):
     root_path: str = Field(min_length=1)
     idea: str = ""
+    artifact_root_path: str | None = None
     framework: PlanningFramework
     profile: PlanningProfile
     provider: Provider
@@ -511,11 +523,12 @@ class StartPlanningSetupChatRequest(BaseModel):
 
 
 class StartWorkPlanRequest(BaseModel):
-    root_path: str = Field(min_length=1)
-    framework: PlanningFramework
-    profile: PlanningProfile
-    provider: Provider
-    model: str = Field(min_length=1)
+    root_path: str | None = None
+    artifact_root_path: str | None = None
+    framework: PlanningFramework | None = None
+    profile: PlanningProfile | None = None
+    provider: Provider | None = None
+    model: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)
     planning_chat_slug: str | None = None
 
@@ -551,7 +564,51 @@ class PlanOverviewResponse(BaseModel):
     blocked: int
 
 
+class PlanLoopFindingResponse(BaseModel):
+    text: str
+    severity: LoopFindingSeverity
+    location: str = ""
+
+
+class PlanLoopCriterionResponse(BaseModel):
+    text: str
+    met: bool
+    note: str = ""
+
+
+class PlanLoopChangedFileResponse(BaseModel):
+    path: str
+    additions: int = 0
+    deletions: int = 0
+
+
+class PlanLoopStageRunResponse(BaseModel):
+    id: str
+    name: str
+    kind: LoopStepKind
+    status: LoopStepStatus
+    attempt: int = 0
+    max_attempts: int = 1
+    agent_slug: str | None = None
+    permissions: LoopPermission | None = None
+    session: LoopSessionPolicy | None = None
+    summary: str = ""
+    findings: list[str] = Field(default_factory=list)
+    changes: str = ""
+    validation_evidence: str = ""
+    divergences: str = ""
+    skipped_scope: str = ""
+    blocker: str = ""
+    artifact_refs: list[str] = Field(default_factory=list)
+    finding_details: list[PlanLoopFindingResponse] = Field(default_factory=list)
+    criteria_coverage: list[PlanLoopCriterionResponse] = Field(default_factory=list)
+    changed_files: list[PlanLoopChangedFileResponse] = Field(default_factory=list)
+    resolved_context: list[str] = Field(default_factory=list)
+    context_warnings: list[str] = Field(default_factory=list)
+
+
 class PlanArtifactRunResponse(BaseModel):
+    id: str
     agent_slug: str
     status: PlanRunStatus
     started_at: str
@@ -569,6 +626,11 @@ class PlanArtifactRunResponse(BaseModel):
     loop_status_reason: str = ""
     loop_attempt: int = 1
     loop_latest_assessment: list[str] = Field(default_factory=list)
+    loop_definition_id: str = ""
+    loop_definition_name: str = ""
+    loop_definition_revision: str = ""
+    loop_current_stage_id: str = ""
+    loop_stages: list[PlanLoopStageRunResponse] = Field(default_factory=list)
 
 
 class PlanArtifactProposalResponse(BaseModel):
@@ -621,6 +683,7 @@ class WorkPlanResponse(BaseModel):
     depth: PlanningDepth
     root_path: str
     planning_path: str
+    artifact_root_path: str
     approved_at: str | None = None
     stale: bool
     overview: PlanOverviewResponse
@@ -653,19 +716,18 @@ class AcceptPlanArtifactRequest(BaseModel):
     validation_evidence: str = ""
 
 
-class RecordPlanArtifactRunRequest(BaseModel):
-    agent_slug: str = Field(min_length=1)
+class StartPlanArtifactRunRequest(BaseModel):
+    agent_slug: str | None = Field(default=None, min_length=1)
+    loop_definition_id: str | None = None
+    loop_revision: str | None = None
 
 
-class SubmitPlanArtifactReportRequest(BaseModel):
-    agent_slug: str | None = None
-    summary: str = ""
-    divergences: str = ""
-    skipped_scope: str = ""
-    blockers: str = ""
-    decisions: str = ""
-    changes: str = ""
-    validation_evidence: str = ""
+class ResumePlanArtifactRunRequest(BaseModel):
+    resolution_note: str = ""
+
+
+class RequestPlanRunChangesRequest(BaseModel):
+    note: str = Field(min_length=1)
 
 
 class CreatePlanArtifactProposalRequest(BaseModel):
@@ -685,6 +747,73 @@ class LinkPlanArtifactTrackingRequest(BaseModel):
 class CreatePlanBugRequest(BaseModel):
     title: str = Field(min_length=1)
     description: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Reusable loops
+# ---------------------------------------------------------------------------
+
+
+class LoopContextReferenceSchema(BaseModel):
+    kind: LoopContextKind
+    required: bool = False
+    paths: list[str] = Field(default_factory=list)
+    step: str | None = None
+    ref: str | None = None
+
+
+class LoopAgentPolicySchema(BaseModel):
+    session: LoopSessionPolicy = LoopSessionPolicy.FRESH
+    permissions: LoopPermission = LoopPermission.READ
+    provider: str | None = None
+    model: str | None = None
+    effort: str | None = None
+
+
+class LoopRetryPolicySchema(BaseModel):
+    max_attempts: int = Field(default=2, ge=1, le=20)
+    timeout_minutes: int = Field(default=20, ge=1, le=1440)
+
+
+class LoopStepDefinitionSchema(BaseModel):
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    kind: LoopStepKind
+    instructions: str = ""
+    context: list[LoopContextReferenceSchema] = Field(default_factory=list)
+    agent: LoopAgentPolicySchema | None = None
+    report_contract: str = "generic"
+    retry: LoopRetryPolicySchema = Field(default_factory=LoopRetryPolicySchema)
+    transitions: dict[LoopOutcome, str | None] = Field(default_factory=dict)
+    check_adapter: str | None = None
+    check_command: list[str] = Field(default_factory=list)
+
+
+class LoopDefinitionResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    scope: LoopDefinitionScope
+    revision: str
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    is_default: bool = False
+    forked_from: str | None = None
+    stages: list[LoopStepDefinitionSchema] = Field(default_factory=list)
+
+
+class SaveLoopDefinitionRequest(BaseModel):
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = ""
+    expected_revision: str | None = None
+    forked_from: str | None = None
+    stages: list[LoopStepDefinitionSchema] = Field(default_factory=list)
+
+
+class ForkLoopDefinitionRequest(BaseModel):
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
 
 
 class MarkPlanRunCleanedRequest(BaseModel):
@@ -707,8 +836,14 @@ __all__ = [
     "CreatePlanArtifactProposalRequest",
     "CreatePlanBugRequest",
     "DetachResponse",
+    "ForkLoopDefinitionRequest",
     "HandoffSummary",
     "LinkPlanArtifactTrackingRequest",
+    "LoopAgentPolicySchema",
+    "LoopContextReferenceSchema",
+    "LoopDefinitionResponse",
+    "LoopRetryPolicySchema",
+    "LoopStepDefinitionSchema",
     "MarkPlanRunCleanedRequest",
     "NewAgentRequest",
     "NewChatRequest",
@@ -724,6 +859,7 @@ __all__ = [
     "PlanArtifactProposalResponse",
     "PlanArtifactResponse",
     "PlanArtifactRunResponse",
+    "PlanLoopStageRunResponse",
     "PlanMaterializationStatusResponse",
     "PlanOverviewResponse",
     "PlanTrackingLinkResponse",
@@ -732,13 +868,15 @@ __all__ = [
     "ProjectDetail",
     "ProjectSummary",
     "PromoteChatRequest",
-    "RecordPlanArtifactRunRequest",
-    "StartWorkPlanResponse",
+    "RequestPlanRunChangesRequest",
+    "ResumePlanArtifactRunRequest",
+    "SaveLoopDefinitionRequest",
     "SendChatMessageRequest",
+    "StartPlanArtifactRunRequest",
     "StartPlanningChatRequest",
     "StartPlanningSetupChatRequest",
     "StartWorkPlanRequest",
-    "SubmitPlanArtifactReportRequest",
+    "StartWorkPlanResponse",
     "SwitchThreadRequest",
     "UpdatePlanArtifactRequest",
     "VerifyResponse",

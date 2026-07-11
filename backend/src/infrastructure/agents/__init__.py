@@ -12,7 +12,7 @@ from src.infrastructure.agents.claude_code_adapter import (
     ClaudeCodeAdapter,
 )
 from src.infrastructure.agents.codex_adapter import CodexAdapter
-from src.infrastructure.agents.factory import build_adapter
+from src.infrastructure.agents.factory import ConfiguredAgentAdapterFactory, build_adapter
 from src.infrastructure.agents.stub_adapter import StubAgentAdapter
 
 __all__ = [
@@ -20,6 +20,7 @@ __all__ = [
     "AmpAdapter",
     "ClaudeCodeAdapter",
     "CodexAdapter",
+    "ConfiguredAgentAdapterFactory",
     "StubAgentAdapter",
     "build_adapter",
 ]

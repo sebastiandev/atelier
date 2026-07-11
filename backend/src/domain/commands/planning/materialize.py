@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from src.domain.agents import PermissionDecisionValue
@@ -18,7 +18,7 @@ from src.domain.planning.dtos import (
     PlanningProfile,
     WorkPlanView,
 )
-from src.domain.planning.ports import PlanningFiles
+from src.domain.planning.ports import PlanningFiles, PlanningSessionRepository
 from src.domain.projectstore.ports import ProjectStore
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import WorkStore
@@ -45,6 +45,10 @@ class MaterializationIncomplete(ValueError):
     """The materializer did not produce a usable report before timing out."""
 
 
+class PlanningSessionNotFound(ValueError):
+    """No persisted PlanningSession exists for the Work."""
+
+
 @dataclass(frozen=True)
 class MaterializePlanRequest:
     """Inputs for creating a source-backed plan.
@@ -57,11 +61,12 @@ class MaterializePlanRequest:
     """
 
     work_slug: str
-    root_path: str
-    framework: PlanningFramework
-    profile: PlanningProfile
+    root_path: str | None = None
+    framework: PlanningFramework | None = None
+    profile: PlanningProfile | None = None
     provider: Provider | None = None
     model: str | None = None
+    artifact_root_path: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
     planning_chat_slug: str | None = None
     artifacts: tuple[PlanArtifactEntry, ...] = ()
@@ -72,6 +77,7 @@ async def execute(
     chatstore: ChatStore,
     projectstore: ProjectStore,
     files: PlanningFiles,
+    planning_sessions: PlanningSessionRepository,
     chat_supervisor: AgentSupervisorService,
     settings: Any,
     req: MaterializePlanRequest,
@@ -82,19 +88,29 @@ async def execute(
     provider/model pair for the write-capable materializer.
     Postconditions: a ``WorkPlanView`` exists for the Work.
     """
+    req = resolve_from_planning_session(planning_sessions, req)
     if req.artifacts:
+        if req.root_path is None or req.framework is None or req.profile is None:
+            raise ValueError("root_path, framework, and profile are required")
         plan = materialization.submit_plan_materialization(
             workstore,
             files,
             work_slug=req.work_slug,
             root_path=req.root_path,
+            artifact_root_path=req.artifact_root_path,
             framework=req.framework,
             profile=req.profile,
             artifacts=req.artifacts,
         )
         await _restart_planning_chat(chat_supervisor, req)
         return plan
-    if req.provider is None or req.model is None:
+    if (
+        req.root_path is None
+        or req.framework is None
+        or req.profile is None
+        or req.provider is None
+        or req.model is None
+    ):
         raise ValueError("provider and model are required when artifacts are omitted")
 
     materialization.validate_materialization_provider_config(
@@ -108,6 +124,7 @@ async def execute(
         chatstore,
         work_slug=req.work_slug,
         root_path=req.root_path,
+        artifact_root_path=req.artifact_root_path,
         framework=req.framework,
         profile=req.profile,
         provider=req.provider,
@@ -119,10 +136,11 @@ async def execute(
     if chat_slug is None:
         raise RuntimeError("materialization chat has no slug")
 
-    plan = _try_finalize(workstore, chatstore, files, req, chat_slug)
-    if plan is not None:
+    await _resolve_pending_materializer_permission(chatstore, chat_supervisor, chat_slug)
+    finalized = _try_finalize(workstore, chatstore, files, req, chat_slug)
+    if finalized is not None:
         await _restart_planning_chat(chat_supervisor, req)
-        return plan
+        return finalized
 
     cursor = _last_transcript_seq(chatstore, chat_slug)
     nudge_first = _has_materializer_activity(chatstore, chat_slug)
@@ -140,10 +158,10 @@ async def execute(
             if nudge_first or attempt > 0:
                 await chat_supervisor.send_input(
                     chat_slug,
-                    _follow_up_prompt(req.work_slug),
+                    _follow_up_prompt(req),
                 )
                 nudge_first = False
-            plan = await _wait_for_report_or_turn_end(
+            iteration_result = await _wait_for_report_or_turn_end(
                 stream,
                 workstore,
                 chatstore,
@@ -152,14 +170,14 @@ async def execute(
                 req,
                 chat_slug,
             )
-            if plan is not None:
+            if iteration_result is not None:
                 await _restart_planning_chat(chat_supervisor, req)
-                return plan
+                return iteration_result
 
-    plan = _try_finalize(workstore, chatstore, files, req, chat_slug)
-    if plan is not None:
+    final_result = _try_finalize(workstore, chatstore, files, req, chat_slug)
+    if final_result is not None:
         await _restart_planning_chat(chat_supervisor, req)
-        return plan
+        return final_result
     raise MaterializationIncomplete(
         "planning materializer did not emit atelier_plan_materialization"
     )
@@ -182,6 +200,8 @@ async def _wait_for_report_or_turn_end(
             return None
         try:
             event = await asyncio.wait_for(anext(stream), timeout=remaining)
+        except StopAsyncIteration:
+            return _try_finalize(workstore, chatstore, files, req, chat_slug)
         except TimeoutError:
             return None
         event_type = event.get("type")
@@ -210,6 +230,8 @@ def _try_finalize(
     chat_slug: str,
 ) -> WorkPlanView | None:
     """Return a finalized plan when the materializer report is present."""
+    if req.framework is None or req.profile is None:
+        raise ValueError("framework and profile are required for finalization")
     try:
         return materialization.finalize_materialization_report(
             workstore,
@@ -219,6 +241,7 @@ def _try_finalize(
             chat_slug=chat_slug,
             framework=req.framework,
             profile=req.profile,
+            artifact_root_path=req.artifact_root_path,
         )
     except materialization.MaterializationReportNotFound:
         return None
@@ -269,7 +292,47 @@ async def try_finalize_existing(
     plan = _try_finalize(workstore, chatstore, files, req, chat_slug)
     if plan is not None:
         await _restart_planning_chat(chat_supervisor, req)
+    else:
+        await _resolve_pending_materializer_permission(
+            chatstore, chat_supervisor, chat_slug
+        )
     return plan
+
+
+def resolve_from_planning_session(
+    planning_sessions: PlanningSessionRepository,
+    req: MaterializePlanRequest,
+) -> MaterializePlanRequest:
+    """Return a request whose planning setup comes from PlanningSession.
+
+    Preconditions: metadata-only submissions carry explicit artifact metadata;
+    materializer submissions have a persisted PlanningSession for the Work.
+    Postconditions: materializer fields are backend-owned, not frontend-owned.
+    """
+    if req.artifacts:
+        return req
+    session = (
+        planning_sessions.get_by_chat_slug(req.planning_chat_slug)
+        if req.planning_chat_slug
+        else planning_sessions.get_by_work_slug(req.work_slug)
+    )
+    if session is None:
+        session = planning_sessions.get_by_work_slug(req.work_slug)
+    if session is None:
+        raise PlanningSessionNotFound(
+            f"planning session not found for work: {req.work_slug}"
+        )
+    return replace(
+        req,
+        root_path=session.root_path,
+        artifact_root_path=session.artifact_root_path,
+        framework=session.framework,
+        profile=session.profile,
+        provider=session.provider,
+        model=session.model,
+        options=dict(session.options or {}),
+        planning_chat_slug=session.planning_chat_slug,
+    )
 
 
 async def _restart_planning_chat(
@@ -290,6 +353,42 @@ async def _resolve_materializer_permission(
     await chat_supervisor.resolve_permission(
         chat_slug, request_id, _materializer_permission_decision(event)
     )
+
+
+async def _resolve_pending_materializer_permission(
+    chatstore: ChatStore,
+    chat_supervisor: AgentSupervisorService,
+    chat_slug: str,
+) -> None:
+    """Answer the latest still-pending materializer permission, if any."""
+    pending = _pending_permission(list(chatstore.read_transcript_from_cursor(chat_slug, 0)))
+    if pending is not None:
+        await _resolve_materializer_permission(chat_supervisor, chat_slug, pending)
+
+
+def _pending_permission(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    decided: set[str] = set()
+    completed_tools: set[str] = set()
+    requests: list[dict[str, Any]] = []
+    for event in events:
+        event_type = event.get("type")
+        request_id = event.get("request_id")
+        tool_id = event.get("tool_id")
+        if event_type == "permission_decision" and isinstance(request_id, str):
+            decided.add(request_id)
+        elif event_type == "tool_result" and isinstance(tool_id, str):
+            completed_tools.add(tool_id)
+        elif event_type == "permission_request":
+            requests.append(event)
+    for event in reversed(requests):
+        request_id = event.get("request_id")
+        tool_id = event.get("tool_id")
+        if isinstance(request_id, str) and request_id in decided:
+            continue
+        if isinstance(tool_id, str) and tool_id in completed_tools:
+            continue
+        return event
+    return None
 
 
 def _materializer_permission_decision(event: dict[str, Any]) -> PermissionDecisionValue:
@@ -320,25 +419,32 @@ def _shell_command(tool_input: Any) -> str:
     return ""
 
 
-def _follow_up_prompt(work_slug: str) -> str:
+def _follow_up_prompt(req: MaterializePlanRequest) -> str:
     """Build the nudge sent when the materializer omits its report."""
+    if req.root_path is None or req.framework is None:
+        raise ValueError("root_path and framework are required for materialization")
+    artifact_root, _absolute_artifact_root = materialization.resolve_artifact_root(
+        req.root_path, req.framework, req.work_slug, req.artifact_root_path
+    )
     return (
         "Continue the Planning materialization. If any planning files are "
-        f"missing, finish writing them under `.atelier/planning/{work_slug}/`. "
+        f"missing, finish writing them under `{artifact_root}/`. "
         "Generate the complete reviewable set now: framework-level docs plus "
         "all known executable stories, tasks, spikes, bugs, hotfixes, or "
         "follow-up work items. Do not leave placeholders that require another "
         "agent to scope the executable item before implementation. "
         "Then emit exactly one single-line atelier_plan_materialization JSON "
         "report with path, title, artifact_kind, executable, and dependencies "
-        "for every created Markdown artifact. Do not include Markdown content "
-        "in the report."
+        "for every created Markdown artifact. Paths must be relative to that "
+        "framework output folder. Do not include Markdown content in the report."
     )
 
 
 __all__ = [
     "MaterializationIncomplete",
     "MaterializePlanRequest",
+    "PlanningSessionNotFound",
     "execute",
+    "resolve_from_planning_session",
     "try_finalize_existing",
 ]

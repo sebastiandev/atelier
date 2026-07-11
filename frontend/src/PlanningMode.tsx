@@ -32,11 +32,13 @@ import {
   DocIcon,
   EyeIcon,
   FolderIcon,
+  LoopIcon,
   MoveIcon,
   SlidersIcon,
   SparkIcon,
 } from "./Icons";
 import { PaneResizeHandle } from "./PaneResizeHandle";
+import { LoopRunView } from "./LoopRunView";
 import {
   coerceProviderOptionsForModel,
   modelPickerOptions,
@@ -68,6 +70,7 @@ export type PlanningView =
   | { kind: "overview" }
   | { kind: "epic"; id: string }
   | { kind: "artifact"; id: string }
+  | { kind: "run"; id: string }
   | { kind: "source"; id: string }
   | { kind: "accept" };
 
@@ -91,6 +94,7 @@ type PlanningModeProps = {
   overviewTab: PlanOverviewTab;
   chatOpen: boolean;
   initialRoot: string | null;
+  artifactRootPath: string;
   prompt: string;
   profile: PlanningProfile;
   framework: PlanningFrameworkId;
@@ -98,6 +102,7 @@ type PlanningModeProps = {
   onPromptChange: (value: string) => void;
   onProfileChange: (value: PlanningProfile) => void;
   onFrameworkChange: (value: PlanningFrameworkId) => void;
+  onArtifactRootPathChange: (value: string) => void;
   onAgentConfigChange: (value: PlanningAgentConfig) => void;
   onOverviewTab: (tab: PlanOverviewTab) => void;
   onView: (view: PlanningView) => void;
@@ -113,8 +118,18 @@ type PlanningModeProps = {
   onApprovePlan: () => void;
   onCreateBug: (artifactId: string, title: string, description: string) => Promise<void>;
   onLaunch: (detail: PlanArtifactDetail) => void;
-  onIngestReport: (artifact: PlanArtifact, agentSlug: string) => void;
-  onCleanupRun: (artifact: PlanArtifact, agentSlug: string) => void;
+  onResolveLoopBlocker: (
+    artifact: PlanArtifact,
+    runId: string,
+    agentSlug: string,
+  ) => void;
+  onCleanupRun: (artifact: PlanArtifact, runId: string) => void;
+  onApproveRun: (artifact: PlanArtifact, runId: string) => Promise<void>;
+  onRequestRunChanges: (
+    artifact: PlanArtifact,
+    runId: string,
+    note: string,
+  ) => Promise<void>;
   onChatOpen: (open: boolean) => void;
   onPlanningChatUpdated: (chat: ChatSummary) => void;
 };
@@ -185,6 +200,7 @@ export function PlanningMode({
   overviewTab,
   chatOpen,
   initialRoot,
+  artifactRootPath,
   prompt,
   profile,
   framework,
@@ -192,6 +208,7 @@ export function PlanningMode({
   onPromptChange,
   onProfileChange,
   onFrameworkChange,
+  onArtifactRootPathChange,
   onAgentConfigChange,
   onOverviewTab,
   onView,
@@ -207,8 +224,10 @@ export function PlanningMode({
   onApprovePlan,
   onCreateBug,
   onLaunch,
-  onIngestReport,
+  onResolveLoopBlocker,
   onCleanupRun,
+  onApproveRun,
+  onRequestRunChanges,
   onChatOpen,
   onPlanningChatUpdated,
 }: PlanningModeProps) {
@@ -216,7 +235,10 @@ export function PlanningMode({
   const counts = useMemo(() => planCounts(tree.executable), [tree.executable]);
   const activeId = "id" in view ? view.id : null;
   const source = view.kind === "source" ? findArtifact(plan, view.id) : null;
-  const artifact = view.kind === "artifact" ? findArtifact(plan, view.id) : null;
+  const artifact =
+    view.kind === "artifact" || view.kind === "run"
+      ? findArtifact(plan, view.id)
+      : null;
   const epic = plan ? buildPlanEpic(work, plan, tree, counts) : null;
   const planningRailWidth = useLayoutStore((s) => s.planningRailWidth);
   const planningDockWidth = useLayoutStore((s) => s.planningDockWidth);
@@ -231,13 +253,18 @@ export function PlanningMode({
   const planningReady = Boolean(planningChatSummary?.planning_readiness?.ready);
   const planReferences = plan?.artifacts ?? [];
   const materializerActive = materializationStatus?.state === "running";
+  const materializerVisible =
+    materializationStatus?.state === "running" ||
+    materializationStatus?.state === "waiting_permission" ||
+    materializationStatus?.state === "stalled" ||
+    materializationStatus?.state === "failed";
   const materializerRetryable =
     materializationStatus?.state === "waiting_permission" ||
     materializationStatus?.state === "stalled" ||
     materializationStatus?.state === "failed";
   const sourcePlanBusy = saving || materializerActive;
   const showSourcePlanAction =
-    planningReady || sourcePlanBusy || materializerRetryable;
+    !sourcePlanBusy && (planningReady || materializerRetryable);
   const sourcePlanLabel = sourcePlanActionLabel({
     loading: sourcePlanBusy,
     status: materializationStatus,
@@ -256,17 +283,27 @@ export function PlanningMode({
         />
         <main className="pm-main pm-conversation-main">
           {error && <div className="pm-error">{error}</div>}
-          <PlanningChatCanvas
-            chatSlug={planningChatSlug}
-            chatSummary={planningChatSummary}
-            projects={planningChatProjects}
-            works={planningChatWorks}
-            planReferences={planReferences}
-            onOpenPlan={showSourcePlanAction ? onCreateSourcePlan : undefined}
-            openPlanLabel={sourcePlanLabel}
-            openPlanDisabled={sourcePlanBusy}
-            onChatUpdated={onPlanningChatUpdated}
-          />
+          {materializerVisible && materializationStatus ? (
+            <PlanningMaterializationStage
+              framework={planningFrameworkDefinition(framework).name}
+              status={materializationStatus}
+              actionDisabled={sourcePlanBusy}
+              actionLabel={sourcePlanLabel}
+              onAction={onCreateSourcePlan}
+            />
+          ) : (
+            <PlanningChatCanvas
+              chatSlug={planningChatSlug}
+              chatSummary={planningChatSummary}
+              projects={planningChatProjects}
+              works={planningChatWorks}
+              planReferences={planReferences}
+              onOpenPlan={showSourcePlanAction ? onCreateSourcePlan : undefined}
+              openPlanLabel={sourcePlanLabel}
+              openPlanDisabled={sourcePlanBusy}
+              onChatUpdated={onPlanningChatUpdated}
+            />
+          )}
         </main>
       </div>
     );
@@ -309,6 +346,7 @@ export function PlanningMode({
           loading={loading}
           error={error}
           initialRoot={initialRoot}
+          artifactRootPath={artifactRootPath}
           prompt={prompt}
           profile={profile}
           framework={framework}
@@ -316,6 +354,7 @@ export function PlanningMode({
           onPromptChange={onPromptChange}
           onProfileChange={onProfileChange}
           onFrameworkChange={onFrameworkChange}
+          onArtifactRootPathChange={onArtifactRootPathChange}
           onAgentConfigChange={onAgentConfigChange}
           onChooseRoot={onChooseRoot}
           onClearRoot={onClearRoot}
@@ -343,14 +382,16 @@ export function PlanningMode({
         onCreateBug={() => setBugDialogOpen(true)}
       />
       <main className="pm-main">
-        <PlanHeader
-          work={work}
-          plan={plan}
-          view={view}
-          activeArtifact={artifact ?? source}
-          activeEpic={epic}
-          onBack={() => onView({ kind: "overview" })}
-        />
+        {view.kind !== "run" && (
+          <PlanHeader
+            work={work}
+            plan={plan}
+            view={view}
+            activeArtifact={artifact ?? source}
+            activeEpic={epic}
+            onBack={() => onView({ kind: "overview" })}
+          />
+        )}
         {error && <div className="pm-error">{error}</div>}
         {view.kind === "overview" && (
           <PlanOverview
@@ -384,11 +425,50 @@ export function PlanningMode({
             onSave={onSave}
             onReset={onReset}
             onLaunch={onLaunch}
-            onIngestReport={onIngestReport}
+            onResolveLoopBlocker={onResolveLoopBlocker}
             onCleanupRun={onCleanupRun}
+            onOpenRun={() => {
+              if (artifact) onView({ kind: "run", id: artifact.id });
+            }}
             onEpic={() => onView({ kind: "epic", id: PRIMARY_EPIC_ID })}
             onApprovePlan={onApprovePlan}
           />
+        )}
+        {view.kind === "run" && artifact && selectedDetail && (
+          selectedDetail.artifact.runs.at(-1) ? (
+            <LoopRunView
+              artifact={selectedDetail.artifact}
+              run={selectedDetail.artifact.runs.at(-1)!}
+              saving={saving}
+              onBack={() => onView({ kind: "artifact", id: artifact.id })}
+              onResolveBlocker={(agentSlug) =>
+                onResolveLoopBlocker(
+                  selectedDetail.artifact,
+                  selectedDetail.artifact.runs.at(-1)!.id,
+                  agentSlug,
+                )
+              }
+              onRequestChanges={(note) =>
+                onRequestRunChanges(
+                  selectedDetail.artifact,
+                  selectedDetail.artifact.runs.at(-1)!.id,
+                  note,
+                )
+              }
+              onApprove={() =>
+                onApproveRun(
+                  selectedDetail.artifact,
+                  selectedDetail.artifact.runs.at(-1)!.id,
+                )
+              }
+              onCleanup={() =>
+                onCleanupRun(
+                  selectedDetail.artifact,
+                  selectedDetail.artifact.runs.at(-1)!.id,
+                )
+              }
+            />
+          ) : <div className="pm-loading">No loop run recorded yet.</div>
         )}
         {view.kind === "source" && (
           <SourceDoc
@@ -456,6 +536,7 @@ function PlanEmpty({
   loading,
   error,
   initialRoot,
+  artifactRootPath,
   prompt,
   profile,
   framework,
@@ -463,6 +544,7 @@ function PlanEmpty({
   onPromptChange,
   onProfileChange,
   onFrameworkChange,
+  onArtifactRootPathChange,
   onAgentConfigChange,
   onChooseRoot,
   onClearRoot,
@@ -473,6 +555,7 @@ function PlanEmpty({
   loading: boolean;
   error: string | null;
   initialRoot: string | null;
+  artifactRootPath: string;
   prompt: string;
   profile: PlanningProfile;
   framework: PlanningFrameworkId;
@@ -480,6 +563,7 @@ function PlanEmpty({
   onPromptChange: (value: string) => void;
   onProfileChange: (value: PlanningProfile) => void;
   onFrameworkChange: (value: PlanningFrameworkId) => void;
+  onArtifactRootPathChange: (value: string) => void;
   onAgentConfigChange: (value: PlanningAgentConfig) => void;
   onChooseRoot: () => void;
   onClearRoot: () => void;
@@ -599,6 +683,21 @@ function PlanEmpty({
               </button>
             </div>
 
+            <div className="pm-root-row pm-artifact-root-row">
+              <span className="pm-root-icon">
+                <FolderIcon size={15} />
+              </span>
+              <span className="pm-root-label">Plan files</span>
+              <input
+                className="pm-root-input"
+                value={artifactRootPath}
+                onChange={(event) => onArtifactRootPathChange(event.target.value)}
+                disabled={loading}
+                aria-label="Plan files folder"
+                title="Folder for framework source files, relative to the work folder"
+              />
+            </div>
+
             <div className="pm-empty-divider" />
 
             <div className="pm-agent-cfg">
@@ -662,7 +761,7 @@ function PlanEmpty({
   );
 }
 
-function PlanningAgentControls({
+export function PlanningAgentControls({
   value,
   onChange,
 }: {
@@ -1035,7 +1134,6 @@ function PlanSetupSummary({
   return (
     <div className="plan-setup">
       <PlanningProgressTimeline stages={stages} />
-      <MaterializationStatusNote status={materializationStatus} />
     </div>
   );
 }
@@ -1047,7 +1145,7 @@ function sourcePlanActionLabel({
   loading: boolean;
   status: PlanMaterializationStatus | null;
 }) {
-  if (status?.state === "waiting_permission") return "Resume source plan";
+  if (status?.state === "waiting_permission") return "Approve write access";
   if (loading || status?.state === "running") return "Creating plan...";
   if (status?.state === "failed" || status?.state === "stalled") {
     return "Retry source plan";
@@ -1055,76 +1153,124 @@ function sourcePlanActionLabel({
   return "Create source plan";
 }
 
-function MaterializationStatusNote({
+function PlanningMaterializationStage({
+  framework,
   status,
+  actionDisabled,
+  actionLabel,
+  onAction,
 }: {
-  status: PlanMaterializationStatus | null;
+  framework: string;
+  status: PlanMaterializationStatus;
+  actionDisabled: boolean;
+  actionLabel: string;
+  onAction: () => void;
 }) {
-  if (!status || status.state === "idle" || status.state === "complete") {
-    return null;
-  }
-  const copy = materializationStatusCopy(status);
+  const [elapsed, setElapsed] = useState(0);
+  const slow = elapsed >= 15;
+  const waitingPermission = status.state === "waiting_permission";
+  const blocked = status.state === "stalled" || status.state === "failed";
   const activity = materializationActivityCopy(status);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setElapsed((current) => current + 1);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   return (
-    <div className={`pm-materialization-note ${status.state}`}>
-      <span className="pm-materialization-icon">{copy.icon}</span>
-      <div>
-        <strong>{copy.title}</strong>
-        <span>{copy.message}</span>
-        {activity ? <span>{activity}</span> : null}
+    <div className="pm-materialize-stage themed-scrollbar">
+      <div className={`pm-matz ${status.state}`}>
+        <div className="pm-matz-head">
+          <div className="pm-matz-htext">
+            <div className="pm-matz-title">Materializing source plan</div>
+            <div className="pm-matz-sub">
+              {framework} is turning your discovery into source docs and an
+              executable plan.
+            </div>
+          </div>
+          <div className="pm-matz-clock">
+            <span className="pm-matz-dot running" aria-hidden />
+            {formatElapsed(elapsed)}
+          </div>
+        </div>
+
+        <div className="pm-matz-bar" aria-hidden>
+          <span />
+        </div>
+
+        {activity && (
+          <div className="pm-matz-activity">
+            <span className="pm-matz-mini" aria-hidden />
+            <span className="pm-matz-act-text">
+              {activity}
+              <span className="pm-matz-ell">...</span>
+            </span>
+          </div>
+        )}
+
+        {waitingPermission && (
+          <div className="pm-matz-callout">
+            <strong>Waiting for write approval</strong>
+            <span>
+              {status.tool_name ? `${status.tool_name}: ` : ""}
+              {status.message || "The materializer paused for permission."}
+            </span>
+            <button
+              type="button"
+              className="btn primary sm"
+              disabled={actionDisabled}
+              onClick={onAction}
+            >
+              <SlidersIcon size={12} /> {actionLabel}
+            </button>
+          </div>
+        )}
+
+        {blocked && (
+          <div className="pm-matz-callout">
+            <strong>
+              {status.state === "failed" ? "Materializer failed" : "Materializer stopped"}
+            </strong>
+            <span>{status.message || "No source-plan report was found yet."}</span>
+            <button
+              type="button"
+              className="btn primary sm"
+              disabled={actionDisabled}
+              onClick={onAction}
+            >
+              <SparkIcon size={12} /> {actionLabel}
+            </button>
+          </div>
+        )}
+
+        <div className={`pm-matz-foot${slow ? " slow" : ""}`}>
+          {slow
+            ? "This can take a minute for larger scopes - still working. You can keep chatting; the plan opens automatically when it's ready."
+            : "Working on it. You can keep chatting; the plan opens automatically when it's ready."}
+        </div>
       </div>
     </div>
   );
 }
 
-function materializationStatusCopy(status: PlanMaterializationStatus): {
-  icon: ReactNode;
-  title: string;
-  message: string;
-} {
-  const detail = status.tool_name
-    ? `${status.tool_name}: ${status.message}`
-    : status.message;
-  if (status.state === "waiting_permission") {
-    return {
-      icon: <SlidersIcon size={13} />,
-      title: "Waiting for permission",
-      message: detail || "The materializer paused for an approval.",
-    };
-  }
-  if (status.state === "stalled") {
-    return {
-      icon: <BoltIcon size={13} />,
-      title: "Materializer stopped",
-      message: detail || "No source-plan report was found yet.",
-    };
-  }
-  if (status.state === "failed") {
-    return {
-      icon: <BugIcon size={13} />,
-      title: "Materializer failed",
-      message: detail || "The materializer returned an error.",
-    };
-  }
-  return {
-    icon: <SparkIcon size={13} />,
-    title: "Materializer running",
-    message: detail || "Writing source-plan files.",
-  };
+function materializationActivityCopy(status: PlanMaterializationStatus): string {
+  if (status.last_event_summary) return status.last_event_summary;
+  if (status.message && status.state === "running") return status.message;
+  return "";
 }
 
-function materializationActivityCopy(status: PlanMaterializationStatus): string {
-  if (!status.last_event_type) return "";
-  const summary = status.last_event_summary
-    ? ` · ${status.last_event_summary}`
-    : "";
-  return `Last transcript event: ${status.last_event_type}${summary}`;
+function formatElapsed(seconds: number): string {
+  const minutes = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const remainder = String(seconds % 60).padStart(2, "0");
+  return `${minutes}:${remainder}`;
 }
 
 function PlanningProgressTimeline({ stages }: { stages: PlanningTimelineStage[] }) {
   return (
     <div className="plt">
-      <div className="plt-hd mono-lbl">Planning progress</div>
+      <div className="plt-hd mono-lbl">Planning</div>
       <ol className="plt-track">
         {stages.map((stage) => (
           <li key={stage.id} className={`plt-step ${stage.status}`}>
@@ -1817,8 +1963,9 @@ function ArtifactDetail({
   onSave,
   onReset,
   onLaunch,
-  onIngestReport,
+  onResolveLoopBlocker,
   onCleanupRun,
+  onOpenRun,
   onEpic,
   onApprovePlan,
 }: {
@@ -1830,8 +1977,13 @@ function ArtifactDetail({
   onSave: () => void;
   onReset: () => void;
   onLaunch: (detail: PlanArtifactDetail) => void;
-  onIngestReport: (artifact: PlanArtifact, agentSlug: string) => void;
-  onCleanupRun: (artifact: PlanArtifact, agentSlug: string) => void;
+  onResolveLoopBlocker: (
+    artifact: PlanArtifact,
+    runId: string,
+    agentSlug: string,
+  ) => void;
+  onCleanupRun: (artifact: PlanArtifact, runId: string) => void;
+  onOpenRun: () => void;
   onEpic: () => void;
   onApprovePlan: () => void;
 }) {
@@ -1911,13 +2063,16 @@ function ArtifactDetail({
               <FolderIcon size={12} /> Agent worktrees launch from the selected source repo.
             </div>
             <button className="btn sm" disabled={!launchable} onClick={() => onLaunch(detail)}>
-              <SparkIcon size={12} /> Launch agent from {detail.artifact.id}
+              <LoopIcon size={12} /> Work on {detail.artifact.id}
             </button>
             {!launchable && <div className="pm-panel-note">{detail.artifact.launch_blockers[0] ?? "Resolve readiness before launch."}</div>}
           </InspectorPanel>
           <InspectorPanel title="Run state">
             {latestRun ? (
               <>
+                <button className="btn primary sm pm-open-run" onClick={onOpenRun}>
+                  <LoopIcon size={12} /> Open staged run
+                </button>
                 <Kv label="Agent" value={latestRun.agent_slug} />
                 <Kv
                   label="Loop"
@@ -1938,13 +2093,21 @@ function ArtifactDetail({
                   <Kv label="Cleanup" value="pending" />
                 )}
                 <div className="pm-inline-actions">
-                  <button
-                    className="btn sm"
-                    disabled={saving}
-                    onClick={() => onIngestReport(detail.artifact, latestRun.agent_slug)}
-                  >
-                    {collectReportLabel(latestLoopStatus)}
-                  </button>
+                  {latestLoopStatus === "blocked_user" && (
+                    <button
+                      className="btn primary sm"
+                      disabled={saving}
+                      onClick={() =>
+                        onResolveLoopBlocker(
+                          detail.artifact,
+                          latestRun.id,
+                          latestRun.agent_slug,
+                        )
+                      }
+                    >
+                      Mark resolved
+                    </button>
+                  )}
                   <button
                     className="btn sm"
                     disabled={
@@ -1952,7 +2115,9 @@ function ArtifactDetail({
                       latestRun.status !== "accepted" ||
                       latestRun.cleanup_at !== null
                     }
-                    onClick={() => onCleanupRun(detail.artifact, latestRun.agent_slug)}
+                    onClick={() =>
+                      onCleanupRun(detail.artifact, latestRun.id)
+                    }
                   >
                     Clean up
                   </button>
@@ -2173,17 +2338,11 @@ function loopStatusLabel(status: LoopStatus | null): string {
 }
 
 function loopStatusTone(status: LoopStatus | null): "good" | "warn" | "danger" {
-  if (status === "completed") return "good";
+  if (status === "completed" || status === "accepted" || status === "cleaned") return "good";
   if (status === "blocked_user" || status === "failed" || status === "cancelled") {
     return "danger";
   }
   return "warn";
-}
-
-function collectReportLabel(status: LoopStatus | null): string {
-  if (status === "needs_agent") return "Collect updated report";
-  if (status === "completed") return "Refresh report";
-  return "Collect report";
 }
 
 function TreeStatus({ status }: { status: PlanUiStatus }) {

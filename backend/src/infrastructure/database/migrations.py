@@ -25,7 +25,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 18
 
 
 class SchemaMismatchError(RuntimeError):
@@ -216,6 +216,14 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
             if not _has_column(conn, "chats", "options"):
                 conn.execute(text("ALTER TABLE chats ADD COLUMN options TEXT"))
             existing = 16
+        if existing == 16:
+            # v16 → v17: introduce one persisted PlanningSession per Work.
+            # Pure-add: metadata.create_all above creates the table.
+            existing = 17
+        if existing == 17:
+            # v17 → v18: persist generic loop runs and stage snapshots.
+            # Both tables are pure-add and are created by metadata.create_all.
+            existing = 18
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

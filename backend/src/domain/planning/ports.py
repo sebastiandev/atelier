@@ -4,6 +4,24 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from src.domain.planning.models import PlanningSession
+
+
+class PlanningSessionRepository(Protocol):
+    """SQL-side storage for one Work's planning setup."""
+
+    def upsert_session(self, session: PlanningSession) -> PlanningSession:
+        """Create or replace the planning session for ``session.work_slug``."""
+        ...
+
+    def get_by_work_slug(self, work_slug: str) -> PlanningSession | None:
+        """Return the persisted planning session for a Work, if any."""
+        ...
+
+    def get_by_chat_slug(self, chat_slug: str) -> PlanningSession | None:
+        """Return the persisted planning session for a Planning chat, if any."""
+        ...
+
 
 class PlanningFiles(Protocol):
     """Filesystem side of source-backed planning."""
@@ -20,6 +38,10 @@ class PlanningFiles(Protocol):
         """Absolute path to the work's planning folder."""
         ...
 
+    def artifact_root_path(self, work_slug: str) -> str:
+        """Absolute path to framework-generated planning artifacts."""
+        ...
+
     def ensure_plan_dir(self, work_slug: str) -> None:
         """Create the planning folder if it does not exist."""
         ...
@@ -33,20 +55,24 @@ class PlanningFiles(Protocol):
         ...
 
     def read_text(self, work_slug: str, rel_path: str) -> str | None:
-        """Read a UTF-8 source file by plan-relative path."""
+        """Read a UTF-8 source file by artifact-root-relative path."""
         ...
 
     def write_text(self, work_slug: str, rel_path: str, content: str) -> None:
-        """Atomically write a UTF-8 source file by plan-relative path."""
+        """Atomically write a UTF-8 source file by artifact-root-relative path."""
         ...
 
     def list_markdown(self, work_slug: str, rel_dir: str) -> list[str]:
-        """List immediate Markdown files below a plan-relative directory."""
+        """List immediate Markdown files below an artifact-root-relative directory."""
         ...
 
     def absolute_path(self, work_slug: str, rel_path: str) -> str:
-        """Resolve a plan-relative path to an absolute display path."""
+        """Resolve an artifact-root-relative path to an absolute display path."""
+        ...
+
+    def read_text_at(self, root_path: str, rel_path: str) -> str | None:
+        """Read a UTF-8 source file by explicit root-relative path."""
         ...
 
 
-__all__ = ["PlanningFiles"]
+__all__ = ["PlanningFiles", "PlanningSessionRepository"]

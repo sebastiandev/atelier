@@ -52,7 +52,7 @@ from src.domain.agents.events import (
     ToolResult,
     TurnMetrics,
 )
-from src.domain.agents.ports import AgentAdapter, AgentStartContext
+from src.domain.agents.ports import AgentAdapter, AgentAdapterFactory, AgentStartContext
 from src.domain.agents.specs import (
     NEW_SESSION_PROVIDERS,
     SPECS,
@@ -82,6 +82,7 @@ __all__ = [
     "SPECS",
     "AcpAgentConfig",
     "AgentAdapter",
+    "AgentAdapterFactory",
     "AgentConfig",
     "AgentEvent",
     "AgentStartContext",

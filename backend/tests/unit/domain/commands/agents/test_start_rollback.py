@@ -26,7 +26,6 @@ from src.domain.commands.agents import start
 from src.domain.models import SharedFolder
 from src.domain.workstore import CreateWorkRequest, WorkStoreService
 from src.domain.worktrees import WorktreeProvisionFailed
-from src.settings import Settings
 from tests.unit.domain.workstore._stubs import (
     StubFiles,
     StubRepository,
@@ -167,6 +166,11 @@ class _StubProvisioner:
         pass
 
 
+class _StubAdapterFactory:
+    def build(self, config: Any) -> object:
+        return object()
+
+
 def _make_workstore() -> tuple[WorkStoreService, StubFiles, StubRepository]:
     repo = StubRepository()
     files = StubFiles()
@@ -195,7 +199,6 @@ def test_start_rolls_back_agent_when_worktree_provisioning_fails(
     supervisor = _StubSupervisor()
     worktrees = _ExplodingWorktreeManager()
     work_slug = _seed_work(workstore)
-    settings = Settings(workspace_root=tmp_path / "ws")
 
     req = start.StartAgentRequest(
         work_slug=work_slug,
@@ -218,7 +221,7 @@ def test_start_rolls_back_agent_when_worktree_provisioning_fails(
                 _StubConnectionStore(),
                 _StubSharestore(),
                 _StubProvisioner(),
-                settings,
+                _StubAdapterFactory(),
                 req,
             )
         )
@@ -235,17 +238,13 @@ def test_start_rolls_back_agent_when_worktree_provisioning_fails(
     assert supervisor.registered == []
 
 
-def test_fresh_start_provisions_worktree_from_master(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_fresh_start_provisions_worktree_from_master(tmp_path: Path) -> None:
     workstore, _files, _repo = _make_workstore()
     supervisor = _StubSupervisor()
     workdir = tmp_path / "worktree"
     worktrees = _RecordingWorktreeManager(workdir)
     work_slug = _seed_work(workstore)
     source = tmp_path / "source"
-    settings = Settings(workspace_root=tmp_path / "ws")
-    monkeypatch.setattr(start, "build_adapter", lambda _config, _settings: object())
 
     req = start.StartAgentRequest(
         work_slug=work_slug,
@@ -267,7 +266,7 @@ def test_fresh_start_provisions_worktree_from_master(
             _StubConnectionStore(),
             _StubSharestore(),
             _StubProvisioner(),
-            settings,
+            _StubAdapterFactory(),
             req,
         )
     )
@@ -281,7 +280,7 @@ def test_fresh_start_provisions_worktree_from_master(
 
 
 def test_handoff_start_forks_source_agent_state_instead_of_master(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     workstore, _files, _repo = _make_workstore()
     supervisor = _StubSupervisor()
@@ -289,8 +288,6 @@ def test_handoff_start_forks_source_agent_state_instead_of_master(
     worktrees = _RecordingWorktreeManager(workdir)
     work_slug = _seed_work(workstore)
     source = tmp_path / "source"
-    settings = Settings(workspace_root=tmp_path / "ws")
-    monkeypatch.setattr(start, "build_adapter", lambda _config, _settings: object())
 
     req = start.StartAgentRequest(
         work_slug=work_slug,
@@ -314,7 +311,7 @@ def test_handoff_start_forks_source_agent_state_instead_of_master(
             _StubConnectionStore(),
             _StubSharestore(),
             _StubProvisioner(),
-            settings,
+            _StubAdapterFactory(),
             req,
         )
     )

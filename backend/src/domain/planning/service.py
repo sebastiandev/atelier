@@ -8,7 +8,17 @@ from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
-from src.domain.loop.dtos import LoopStatus
+from src.domain.loop.dtos import (
+    LoopChangedFile,
+    LoopCriterionCoverage,
+    LoopFinding,
+    LoopFindingSeverity,
+    LoopPermission,
+    LoopSessionPolicy,
+    LoopStatus,
+    LoopStepKind,
+    LoopStepStatus,
+)
 from src.domain.planning.dtos import (
     PlanArtifactDetail,
     PlanArtifactKind,
@@ -16,6 +26,7 @@ from src.domain.planning.dtos import (
     PlanArtifactRun,
     PlanArtifactStatus,
     PlanArtifactSummary,
+    PlanLoopStageRun,
     PlanningDepth,
     PlanningFramework,
     PlanningProfile,
@@ -67,24 +78,27 @@ _PROFILES: set[str] = {
     "full_app",
     "custom",
 }
-_RUN_STATUSES: set[str] = {
-    "running",
-    "needs_attention",
-    "waiting_approval",
-    "blocked",
-    "completed_pending_review",
-    "accepted",
+_RUN_STATUSES: set[PlanRunStatus] = {
+    PlanRunStatus.RUNNING,
+    PlanRunStatus.NEEDS_ATTENTION,
+    PlanRunStatus.WAITING_APPROVAL,
+    PlanRunStatus.BLOCKED,
+    PlanRunStatus.COMPLETED_PENDING_REVIEW,
+    PlanRunStatus.ACCEPTED,
 }
-_LOOP_STATUSES: set[str] = {
-    "pending",
-    "running",
-    "waiting_report",
-    "assessing",
-    "needs_agent",
-    "blocked_user",
-    "completed",
-    "failed",
-    "cancelled",
+_LOOP_STATUSES: set[LoopStatus] = {
+    LoopStatus.PENDING,
+    LoopStatus.RUNNING,
+    LoopStatus.WAITING_REPORT,
+    LoopStatus.ASSESSING,
+    LoopStatus.NEEDS_AGENT,
+    LoopStatus.BLOCKED_USER,
+    LoopStatus.COMPLETED,
+    LoopStatus.AWAITING_APPROVAL,
+    LoopStatus.ACCEPTED,
+    LoopStatus.CLEANED,
+    LoopStatus.FAILED,
+    LoopStatus.CANCELLED,
 }
 _PROPOSAL_STATUSES: set[str] = {"pending", "accepted", "rejected"}
 _TRACKING_KINDS: set[str] = {"jira", "pr", "blocker", "bug"}
@@ -142,6 +156,7 @@ class PlanningService:
             depth=_depth(manifest.get("depth"), _depth_for_profile(profile)),
             root_path=root_path,
             planning_path=self._files.planning_path(work_slug),
+            artifact_root_path=self._files.artifact_root_path(work_slug),
             approved_at=_str_or_none(manifest.get("approved_at")),
             stale=_is_stale(artifacts, manifest),
             artifacts=artifacts,
@@ -446,9 +461,13 @@ def _overview(artifacts: list[PlanArtifactSummary]) -> PlanOverview:
         changed=sum(1 for a in artifacts if a.status == "changed"),
         accepted=sum(1 for a in artifacts if a.status == "accepted"),
         executable=sum(1 for a in artifacts if a.executable),
-        running=sum(1 for a in artifacts if _latest_run_status(a) == "running"),
+        running=sum(
+            1 for a in artifacts if _latest_run_status(a) == PlanRunStatus.RUNNING
+        ),
         review=sum(
-            1 for a in artifacts if _latest_run_status(a) == "completed_pending_review"
+            1
+            for a in artifacts
+            if _latest_run_status(a) == PlanRunStatus.COMPLETED_PENDING_REVIEW
         ),
         blocked=sum(1 for a in artifacts if a.executable and not a.launchable),
     )
@@ -521,8 +540,8 @@ def _dependency_satisfied(artifact: PlanArtifactSummary) -> bool:
     if not artifact.executable:
         return artifact.status in {"approved", "accepted"}
     return artifact.status == "accepted" or _latest_run_status(artifact) in {
-        "completed_pending_review",
-        "accepted",
+        PlanRunStatus.COMPLETED_PENDING_REVIEW,
+        PlanRunStatus.ACCEPTED,
     }
 
 
@@ -561,23 +580,24 @@ def _runs(
     if not isinstance(raw, list):
         return []
     out: list[PlanArtifactRun] = []
-    for item in raw:
+    for idx, item in enumerate(raw, start=1):
         if not isinstance(item, dict):
             continue
+        run_id = _str_or_none(item.get("id")) or f"run-{idx:03d}"
         agent_slug = _str_or_none(item.get("agent_slug"))
         started_at = _str_or_none(item.get("started_at"))
         if not agent_slug or not started_at:
             continue
-        status = item.get("status")
-        if not isinstance(status, str) or status not in _RUN_STATUSES:
-            status = "running"
+        raw_status = item.get("status")
+        status = _run_status(raw_status)
         loop = _dict(item.get("loop"))
-        loop_status = _loop_status(loop.get("status"), status)  # type: ignore[arg-type]
+        loop_status = _loop_status(loop.get("status"), status)
         report_path = _str_or_none(item.get("report_path"))
         out.append(
             PlanArtifactRun(
+                id=run_id,
                 agent_slug=agent_slug,
-                status=status,  # type: ignore[arg-type]
+                status=status,
                 started_at=started_at,
                 completed_at=_str_or_none(item.get("completed_at")),
                 cleanup_at=_str_or_none(item.get("cleanup_at")),
@@ -595,6 +615,13 @@ def _runs(
                 loop_status_reason=_str_or_empty(loop.get("status_reason")),
                 loop_attempt=_int_or_default(loop.get("attempt"), 1),
                 loop_latest_assessment=_str_list(loop.get("findings")),
+                loop_definition_id=_str_or_empty(loop.get("definition_id")),
+                loop_definition_name=_str_or_empty(loop.get("definition_name")),
+                loop_definition_revision=_str_or_empty(
+                    loop.get("definition_revision")
+                ),
+                loop_current_stage_id=_str_or_empty(loop.get("current_stage_id")),
+                loop_stages=_loop_stage_runs(loop.get("stages")),
             )
         )
     return out
@@ -680,12 +707,155 @@ def _tracking(manifest: dict[str, Any], artifact_id: str) -> list[PlanTrackingLi
 
 
 def _loop_status(value: object, fallback: PlanRunStatus) -> LoopStatus:
-    if isinstance(value, str) and value in _LOOP_STATUSES:
-        return value  # type: ignore[return-value]
+    if isinstance(value, str):
+        try:
+            status = LoopStatus(value)
+        except ValueError:
+            pass
+        else:
+            if status in _LOOP_STATUSES:
+                return status
     return loop_status_for_run_status(fallback)
 
 
-def _latest_run_status(artifact: PlanArtifactSummary) -> str | None:
+def _loop_stage_runs(value: object) -> list[PlanLoopStageRun]:
+    if not isinstance(value, list):
+        return []
+    stages: list[PlanLoopStageRun] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        raw_kind = item.get("kind")
+        raw_status = item.get("status")
+        if not isinstance(raw_kind, str) or not isinstance(raw_status, str):
+            continue
+        try:
+            kind = LoopStepKind(raw_kind)
+            status = LoopStepStatus(raw_status)
+        except (TypeError, ValueError):
+            continue
+        stage_id = _str_or_none(item.get("id"))
+        name = _str_or_none(item.get("name"))
+        if not stage_id or not name:
+            continue
+        stages.append(
+            PlanLoopStageRun(
+                id=stage_id,
+                name=name,
+                kind=kind,
+                status=status,
+                attempt=_int_or_default(item.get("attempt"), 0),
+                max_attempts=_int_or_default(item.get("max_attempts"), 1),
+                agent_slug=_str_or_none(item.get("agent_slug")),
+                permissions=_loop_permission(item.get("permissions")),
+                session=_loop_session(item.get("session")),
+                summary=_str_or_empty(item.get("summary")),
+                findings=_str_list(item.get("findings")),
+                changes=_str_or_empty(item.get("changes")),
+                validation_evidence=_str_or_empty(item.get("validation_evidence")),
+                divergences=_str_or_empty(item.get("divergences")),
+                skipped_scope=_str_or_empty(item.get("skipped_scope")),
+                blocker=_str_or_empty(item.get("blocker")),
+                artifact_refs=_str_list(item.get("artifact_refs")),
+                finding_details=_loop_finding_details(item.get("finding_details")),
+                criteria_coverage=_loop_criteria(item.get("criteria_coverage")),
+                changed_files=_loop_changed_files(item.get("changed_files")),
+                resolved_context=_str_list(item.get("resolved_context")),
+                context_warnings=_str_list(item.get("context_warnings")),
+            )
+        )
+    return stages
+
+
+def _loop_permission(value: object) -> LoopPermission | None:
+    try:
+        return LoopPermission(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _loop_session(value: object) -> LoopSessionPolicy | None:
+    try:
+        return LoopSessionPolicy(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def _loop_finding_details(value: object) -> list[LoopFinding]:
+    if not isinstance(value, list):
+        return []
+    rows: list[LoopFinding] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        text = _str_or_empty(item.get("text"))
+        if not text:
+            continue
+        try:
+            severity = LoopFindingSeverity(_str_or_empty(item.get("severity")))
+        except ValueError:
+            severity = LoopFindingSeverity.MEDIUM
+        rows.append(
+            LoopFinding(
+                text=text,
+                severity=severity,
+                location=_str_or_empty(item.get("location")),
+            )
+        )
+    return rows
+
+
+def _loop_criteria(value: object) -> list[LoopCriterionCoverage]:
+    if not isinstance(value, list):
+        return []
+    rows: list[LoopCriterionCoverage] = []
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("met"), bool):
+            continue
+        text = _str_or_empty(item.get("text"))
+        if text:
+            rows.append(
+                LoopCriterionCoverage(
+                    text=text,
+                    met=bool(item["met"]),
+                    note=_str_or_empty(item.get("note")),
+                )
+            )
+    return rows
+
+
+def _loop_changed_files(value: object) -> list[LoopChangedFile]:
+    if not isinstance(value, list):
+        return []
+    rows: list[LoopChangedFile] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        path = _str_or_empty(item.get("path"))
+        if path:
+            rows.append(
+                LoopChangedFile(
+                    path=path,
+                    additions=_int_or_default(item.get("additions"), 0),
+                    deletions=_int_or_default(item.get("deletions"), 0),
+                )
+            )
+    return rows
+
+
+def _run_status(value: object) -> PlanRunStatus:
+    if isinstance(value, str):
+        try:
+            status = PlanRunStatus(value)
+        except ValueError:
+            pass
+        else:
+            if status in _RUN_STATUSES:
+                return status
+    return PlanRunStatus.RUNNING
+
+
+def _latest_run_status(artifact: PlanArtifactSummary) -> PlanRunStatus | None:
     return artifact.runs[-1].status if artifact.runs else None
 
 
@@ -763,7 +933,7 @@ def _str_or_empty(value: object) -> str:
 
 
 def _int_or_default(value: object, default: int) -> int:
-    return value if isinstance(value, int) and value > 0 else default
+    return value if isinstance(value, int) and value >= 0 else default
 
 
 def _str_list(value: object) -> list[str]:

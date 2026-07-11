@@ -40,12 +40,12 @@ from src.domain.commands.chats import compact, delete, read_compaction_summary, 
 from src.domain.commands.projects import get as projects_get
 from src.domain.commands.works import create as works_create
 from src.domain.models import Chat, ChatMessage
-from src.domain.projectstore.ports import ProjectStore
 from src.domain.planning.ports import PlanningFiles
 from src.domain.planning.readiness import (
     PlanningChatReadiness,
     planning_readiness_from_record,
 )
+from src.domain.projectstore.ports import ProjectStore
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.dtos import (
     CreateWorkChatContextFolder,
@@ -560,6 +560,7 @@ def _to_summary(record: ChatRecord) -> ChatSummary:
         title=chat.title,
         provider=chat.provider,
         model=chat.model,
+        options=chat.options or {},
         grounding=(
             ChatGroundingSchema(kind=chat.grounding_kind, ref=chat.grounding_ref)
             if chat.grounding_kind is not None and chat.grounding_ref is not None

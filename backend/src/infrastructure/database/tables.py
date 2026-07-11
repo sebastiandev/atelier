@@ -30,6 +30,7 @@ from sqlalchemy import (
     MetaData,
     String,
     Table,
+    UniqueConstraint,
 )
 from sqlalchemy.types import TypeDecorator
 
@@ -223,6 +224,96 @@ chats_table = Table(
         nullable=True,
         index=True,
     ),
+)
+
+
+planning_sessions_table = Table(
+    "planning_sessions",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "work_slug",
+        String,
+        ForeignKey("works.slug", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "planning_chat_slug",
+        String,
+        ForeignKey("chats.slug", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    ),
+    Column("root_path", String, nullable=False),
+    Column("artifact_root_path", String, nullable=True),
+    Column("framework", String, nullable=False),
+    Column("profile", String, nullable=False),
+    Column("provider", String, nullable=False),
+    Column("model", String, nullable=False),
+    Column("options", JsonDict, nullable=True),
+    Column("created_at", UTCDateTime, nullable=False),
+    Column("updated_at", UTCDateTime, nullable=False),
+)
+
+
+loop_runs_table = Table(
+    "loop_runs",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("run_key", String, nullable=False),
+    Column(
+        "work_slug",
+        String,
+        ForeignKey("works.slug", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("target_kind", String, nullable=False),
+    Column("target_ref", String, nullable=False),
+    Column("artifact_id", String, nullable=True),
+    Column("plan_run_id", String, nullable=True),
+    Column("definition_id", String, nullable=False),
+    Column("definition_revision", String, nullable=False),
+    Column("definition_snapshot", JsonDict, nullable=False),
+    Column("status", String, nullable=False, index=True),
+    Column("current_step_id", String, nullable=True),
+    Column("state", JsonDict, nullable=False),
+    Column("started_at", UTCDateTime, nullable=False),
+    Column("updated_at", UTCDateTime, nullable=False),
+    Column("completed_at", UTCDateTime, nullable=True),
+    Column("accepted_at", UTCDateTime, nullable=True),
+    Column("cancelled_at", UTCDateTime, nullable=True),
+    Column("cleanup_at", UTCDateTime, nullable=True),
+    Column("lease_owner", String, nullable=True),
+    Column("lease_expires_at", UTCDateTime, nullable=True),
+    UniqueConstraint("work_slug", "run_key", name="uq_loop_runs_work_run"),
+)
+
+
+loop_step_runs_table = Table(
+    "loop_step_runs",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column(
+        "loop_run_id",
+        Integer,
+        ForeignKey("loop_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("step_id", String, nullable=False),
+    Column("kind", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("attempt", Integer, nullable=False, default=0),
+    Column("agent_slug", String, nullable=True),
+    Column("cursor", Integer, nullable=False, default=0),
+    Column("state", JsonDict, nullable=False),
+    Column("updated_at", UTCDateTime, nullable=False),
+    Column("lease_owner", String, nullable=True),
+    Column("lease_expires_at", UTCDateTime, nullable=True),
+    UniqueConstraint("loop_run_id", "step_id", name="uq_loop_step_runs_run_step"),
 )
 
 
@@ -437,6 +528,8 @@ __all__ = [
     "artifacts_table",
     "connections_table",
     "handoffs_table",
+    "loop_runs_table",
+    "loop_step_runs_table",
     "metadata",
     "projects_table",
     "schema_version_table",

@@ -1,20 +1,42 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  type Connection,
-  type ConnectionType,
-  type ContextEntry,
   type CreateWorkPayload,
   type ProjectSummary,
-  listConnections,
+  type WorkDetail,
 } from "./api";
-import { useConnectionDescriptors } from "./connectionDescriptors";
-import { ContextRow } from "./ContextRow";
-import { PaperclipIcon } from "./Icons";
+import { FolderPickerDialog } from "./FolderPickerDialog";
+import {
+  AgentIcon,
+  BranchIcon,
+  CheckIcon,
+  DocIcon,
+  FolderIcon,
+} from "./Icons";
+import { PlanningAgentControls } from "./PlanningMode";
+import {
+  PLANNING_FRAMEWORKS,
+  PLANNING_PROFILES,
+  type PlanningAgentConfig,
+  type PlanningFrameworkId,
+  type PlanningStartSeed,
+  planningFrameworkDefinition,
+  planningProfileDefinition,
+} from "./planningSetup";
+
+type WorkMode = "manual" | "planning" | "loop";
+
+export type NewWorkIntent =
+  | { mode: "manual" }
+  | { mode: "planning"; seed: PlanningStartSeed }
+  | { mode: "loop" };
 
 type Props = {
   onClose: () => void;
-  onCreate: (payload: CreateWorkPayload) => Promise<void>;
+  onCreate: (
+    payload: CreateWorkPayload,
+    intent: NewWorkIntent,
+  ) => Promise<WorkDetail>;
   projects?: ProjectSummary[];
   // When opened from a project-scoped context, seed the picker. ``null``
   // is "Loose"; ``undefined`` leaves the picker free.
@@ -25,6 +47,36 @@ type Props = {
   lockProjectSlug?: boolean;
 };
 
+const MODE_CARDS: Array<{
+  id: WorkMode;
+  glyph: "agent" | "planning" | "loop";
+  tag: string;
+  title: string;
+  desc: string;
+}> = [
+  {
+    id: "manual",
+    glyph: "agent",
+    tag: "current",
+    title: "Manual",
+    desc: "Launch and steer agents by hand on a shared canvas.",
+  },
+  {
+    id: "planning",
+    glyph: "planning",
+    tag: "BMAD",
+    title: "Planning",
+    desc: "Describe the idea; BMAD writes source docs and a launchable plan.",
+  },
+  {
+    id: "loop",
+    glyph: "loop",
+    tag: "soon",
+    title: "Loop",
+    desc: "Run toward a verifiable goal with memory until it is met.",
+  },
+];
+
 export function NewWorkDialog({
   onClose,
   onCreate,
@@ -32,28 +84,37 @@ export function NewWorkDialog({
   presetProjectSlug,
   lockProjectSlug = false,
 }: Props) {
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-  const [contexts, setContexts] = useState<ContextEntry[]>([]);
-  const [connections, setConnections] = useState<Connection[]>([]);
+  const [title, setTitle] = useState("");
+  const [idea, setIdea] = useState("");
   const [projectSlug, setProjectSlug] = useState<string | null>(
     presetProjectSlug ?? null,
   );
+  const [mode, setMode] = useState<WorkMode>("planning");
+  const [framework, setFramework] = useState<PlanningFrameworkId>("bmad");
+  const [profile, setProfile] = useState("feature" as PlanningStartSeed["profile"]);
+  const [folder, setFolder] = useState("");
+  const [planDir, setPlanDir] = useState("");
+  const [planDirDefault, setPlanDirDefault] = useState(true);
+  const [agentConfig, setAgentConfig] = useState<PlanningAgentConfig | null>(null);
+  const [picker, setPicker] = useState<"work" | "plan" | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const nameRef = useRef<HTMLInputElement>(null);
-  const { descriptors } = useConnectionDescriptors();
+  const titleRef = useRef<HTMLInputElement>(null);
+
   const selectedProject = useMemo(
     () => projects.find((p) => p.slug === projectSlug) ?? null,
     [projects, projectSlug],
   );
-  // Filter to types whose backend fetcher actually works — picking a
-  // non-fetchable type would 422 at agent creation time. ``descriptors``
-  // is null while loading; render no buttons until it arrives.
-  const fetchableTypes = (descriptors ?? []).filter((d) => d.context_fetchable);
+  const selectedFramework = planningFrameworkDefinition(framework);
+  const selectedProfile = planningProfileDefinition(profile);
+  const hasTitle = title.trim().length > 0;
+  const canSubmit =
+    !submitting &&
+    ((mode === "manual" && hasTitle) ||
+      (mode === "planning" && hasTitle && folder.trim().length > 0));
 
   useEffect(() => {
-    nameRef.current?.focus();
+    titleRef.current?.focus();
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
@@ -61,77 +122,51 @@ export function NewWorkDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  useEffect(() => {
-    listConnections()
-      .then(setConnections)
-      .catch(() => setConnections([]));
-  }, []);
-
-  // Seed context rows from the selected project's default Jira / Sentry
-  // connection slugs. Track the last-seeded rows in a ref so a project
-  // change drops the previous prefill before applying the new one — this
-  // keeps the user's manually-added rows intact while letting them flip
-  // projects without orphan defaults piling up. Trade-off: a manually-
-  // edited prefill row is treated as still-seeded (we filter by type +
-  // conn_id) and gets removed on switch; that's fine — switching projects
-  // means the user wanted those defaults gone anyway.
-  const lastSeededRef = useRef<ContextEntry[]>([]);
-  const projectJira = selectedProject?.default_jira_conn ?? null;
-  const projectSentry = selectedProject?.default_sentry_conn ?? null;
-  useEffect(() => {
-    const seeded: ContextEntry[] = [];
-    if (projectJira) {
-      seeded.push({ type: "jira", value: "", conn_id: projectJira });
+  function pickWorkFolder(path: string) {
+    setFolder(path);
+    if (planDirDefault || !planDir.trim()) {
+      setPlanDir(defaultPlanDir(path));
+      setPlanDirDefault(true);
     }
-    if (projectSentry) {
-      seeded.push({ type: "sentry", value: "", conn_id: projectSentry });
-    }
-    setContexts((prev) => {
-      const previous = lastSeededRef.current;
-      const without = prev.filter(
-        (c) =>
-          !previous.some(
-            (p) => p.type === c.type && p.conn_id === c.conn_id,
-          ),
-      );
-      return [...without, ...seeded];
-    });
-    lastSeededRef.current = seeded;
-  }, [projectJira, projectSentry]);
-
-  function addContext(type: ConnectionType) {
-    setContexts((prev) => [...prev, { type, value: "", conn_id: null }]);
+    setPicker(null);
   }
 
-  function patchContext(index: number, next: ContextEntry) {
-    setContexts((prev) => prev.map((c, i) => (i === index ? next : c)));
+  function clearWorkFolder() {
+    setFolder("");
+    if (planDirDefault) setPlanDir("");
   }
 
-  function removeContext(index: number) {
-    setContexts((prev) => prev.filter((_, i) => i !== index));
+  function pickPlanDir(path: string) {
+    setPlanDir(path);
+    setPlanDirDefault(path === defaultPlanDir(folder));
+    setPicker(null);
   }
-
-  function upsertConnection(connection: Connection) {
-    setConnections((prev) => {
-      const without = prev.filter((c) => c.slug !== connection.slug);
-      return [...without, connection];
-    });
-  }
-
-  const canSubmit = name.trim() && !submitting;
 
   async function submit() {
     if (!canSubmit) return;
     const payload: CreateWorkPayload = {
-      name: name.trim(),
-      description: desc.trim(),
-      contexts: contexts.filter((c) => c.value.trim() || c.conn_id),
+      name: title.trim(),
+      description: idea.trim(),
       project_slug: projectSlug,
     };
+    const intent: NewWorkIntent =
+      mode === "planning"
+        ? {
+            mode: "planning",
+            seed: {
+              idea: idea.trim(),
+              framework,
+              profile,
+              folder,
+              planDir: planDir.trim() || null,
+              agentConfig,
+            },
+          }
+        : { mode: "manual" };
     setSubmitting(true);
     setError(null);
     try {
-      await onCreate(payload);
+      await onCreate(payload, intent);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);
@@ -141,7 +176,7 @@ export function NewWorkDialog({
   return (
     <div className="scrim" onClick={onClose}>
       <div
-        className="modal"
+        className="modal nw-modal"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -153,132 +188,287 @@ export function NewWorkDialog({
       >
         <div className="modal-hd">
           <div>
-            <h3>
-              New work
-              {selectedProject ? <span className="hint"> in {selectedProject.name}</span> : null}
-            </h3>
+            <h3>Start a new work</h3>
             <div className="sub">
-              Define the goal and any constraints. You'll spawn agents in the next view.
+              Name it, describe it, and choose how it should run - all in one step.
             </div>
           </div>
-          <button className="btn-icon" onClick={onClose} aria-label="Close">
+          <button className="btn ghost icon sm" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
 
         <div className="modal-bd">
-          {projects.length > 0 && (
-            <div className="field">
-              <span className="label">
-                Project
-                {lockProjectSlug && (
-                  <span className="hint"> · locked to current scope</span>
-                )}
-              </span>
-              <div className="proj-pick-row">
-                <button
-                  type="button"
-                  className={"proj-pick-chip" + (projectSlug == null ? " active" : "")}
-                  onClick={() => !lockProjectSlug && setProjectSlug(null)}
-                  disabled={lockProjectSlug && projectSlug != null}
-                >
-                  Loose
-                </button>
-                {projects.map((p) => (
-                  <button
-                    key={p.slug}
-                    type="button"
-                    className={"proj-pick-chip" + (projectSlug === p.slug ? " active" : "")}
-                    style={{ ["--proj-h" as string]: String(p.color) }}
-                    onClick={() => !lockProjectSlug && setProjectSlug(p.slug)}
-                    disabled={lockProjectSlug && projectSlug !== p.slug}
+          <div className="nw-identity">
+            <label className="nw-field">
+              <span className="nw-lbl">Title</span>
+              <input
+                ref={titleRef}
+                className="nw-input"
+                placeholder="e.g. Port LPN to Kernel"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </label>
+
+            <label className="nw-field">
+              <span className="nw-lbl">Brief description</span>
+              <textarea
+                className="nw-textarea"
+                placeholder="What should change? What constraints matter?"
+                value={idea}
+                onChange={(e) => setIdea(e.target.value)}
+              />
+            </label>
+
+            {projects.length > 0 && (
+              <label className="nw-field nw-proj-field">
+                <span className="nw-lbl">Project</span>
+                <span className="nw-proj mini-sel">
+                  <FolderIcon size={11} />
+                  <select
+                    value={projectSlug ?? ""}
+                    disabled={lockProjectSlug}
+                    onChange={(e) => setProjectSlug(e.target.value || null)}
                   >
-                    <span className="proj-pick-glyph mono">{p.glyph}</span>
-                    {p.name}
-                  </button>
-                ))}
+                    <option value="">Loose work</option>
+                    {projects.map((p) => (
+                      <option key={p.slug} value={p.slug}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mini-chev" aria-hidden>▾</span>
+                </span>
+              </label>
+            )}
+          </div>
+
+          <div className="nw-modelbl">How should this work run?</div>
+          <div className="mode-cards">
+            {MODE_CARDS.map((card) => (
+              <button
+                key={card.id}
+                type="button"
+                className={
+                  "mode-card" +
+                  (mode === card.id ? " active" : "") +
+                  (card.id === "loop" ? " soon" : "")
+                }
+                onClick={() => setMode(card.id)}
+              >
+                <span className="mc-sel">
+                  <CheckIcon size={14} />
+                </span>
+                <span className="mc-top">
+                  <span className="mc-glyph">{renderModeIcon(card.glyph, 17)}</span>
+                  <span className="mc-tag">{card.tag}</span>
+                </span>
+                <span className="mc-name">{card.title}</span>
+                <span className="mc-desc">{card.desc}</span>
+              </button>
+            ))}
+          </div>
+
+          {mode === "planning" ? (
+            <div className="empty-prompt">
+              <div className="pm-empty-prompt-head">
+                <div className="ep-lbl">
+                  <DocIcon size={12} /> Plan setup
+                </div>
+                <label className="pm-framework-select" title={selectedFramework.desc}>
+                  <span>Framework</span>
+                  <select
+                    value={framework}
+                    onChange={(e) => setFramework(e.target.value as PlanningFrameworkId)}
+                  >
+                    {PLANNING_FRAMEWORKS.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
-              {selectedProject &&
-                (selectedProject.default_jira_conn || selectedProject.default_sentry_conn) && (
-                  <span className="hint">
-                    {selectedProject.default_jira_conn && "Jira prefilled"}
-                    {selectedProject.default_jira_conn && selectedProject.default_sentry_conn && " · "}
-                    {selectedProject.default_sentry_conn && "Sentry prefilled"}{" "}
-                    from project defaults
+
+              <div className="pm-profile-pick">
+                <div className="pm-profile-grid">
+                  {PLANNING_PROFILES.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={"pm-profile-chip" + (profile === item.id ? " active" : "")}
+                      onClick={() => setProfile(item.id)}
+                    >
+                      <span className="pm-profile-name">{item.name}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="pm-profile-detail">
+                  <span className={`pm-profile-depth d-${selectedProfile.depth}`}>
+                    {selectedProfile.depth}
                   </span>
-                )}
+                  <span className="pm-profile-desc">{selectedProfile.desc}</span>
+                  <span className="pm-profile-artifacts">
+                    {selectedProfile.artifacts}
+                  </span>
+                </div>
+              </div>
+
+              <div className="pm-empty-divider" />
+
+              <FolderRow
+                icon={<FolderIcon size={15} />}
+                label="Work folder"
+                value={folder}
+                placeholder="Choose a repository or project root"
+                onChoose={() => setPicker("work")}
+                onClear={clearWorkFolder}
+                disabled={submitting}
+              />
+              <FolderRow
+                icon={<DocIcon size={15} />}
+                label="Planning files"
+                value={planDir}
+                placeholder="Where should the framework write its docs?"
+                badge={planDir && planDirDefault ? "default" : null}
+                onChoose={() => setPicker("plan")}
+                onClear={() => {
+                  setPlanDir("");
+                  setPlanDirDefault(false);
+                }}
+                disabled={submitting}
+              />
+
+              <div className="pm-empty-divider" />
+
+              <div className="pm-agent-cfg">
+                <span className="pm-agent-cfg-label">Plan chat</span>
+                <PlanningAgentControls
+                  value={agentConfig}
+                  onChange={setAgentConfig}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className={"empty-prompt" + (mode === "loop" ? " disabled" : "")}>
+              <div className="ep-lbl">
+                {mode === "manual" ? <AgentIcon size={12} /> : <BranchIcon size={12} />}
+                {mode === "manual" ? "Manual" : "Loop"}
+              </div>
+              <p className="nw-mode-desc">
+                {mode === "manual"
+                  ? "Open the agent canvas for this work and steer agents directly."
+                  : "Loop mode is not available yet."}
+              </p>
             </div>
           )}
-
-          <label className="field">
-            <span className="label">Name</span>
-            <input
-              ref={nameRef}
-              className="input"
-              placeholder="e.g. Fix checkout 500 spike"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
-
-          <label className="field">
-            <span className="label">
-              Brief description <span className="hint">· optional</span>
-            </span>
-            <textarea
-              className="textarea"
-              rows={3}
-              placeholder="What does done look like? Any constraints?"
-              value={desc}
-              onChange={(e) => setDesc(e.target.value)}
-            />
-          </label>
-
-          <div className="field">
-            <span className="label">Context</span>
-            {contexts.map((c, i) => (
-              <ContextRow
-                key={i}
-                context={c}
-                connections={connections}
-                onChange={(next) => patchContext(i, next)}
-                onRemove={() => removeContext(i)}
-                onConnectionSaved={upsertConnection}
-              />
-            ))}
-            <div className="add-context-row">
-              <span className="add-context-icon" aria-label="Add context" title="Add context">
-                <PaperclipIcon size={13} />
-              </span>
-              {fetchableTypes.map((d) => (
-                <button
-                  key={d.type}
-                  type="button"
-                  className="btn sm"
-                  data-source={d.type}
-                  onClick={() => addContext(d.type)}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
-          </div>
 
           {error && <div className="form-error">{error}</div>}
         </div>
 
         <div className="modal-ft">
-          <span className="hint" style={{ marginRight: "auto" }}>
-            You can edit everything later.
-          </span>
+          <span className="ep-hint nw-fthint">{footerHint(mode, hasTitle, folder, selectedFramework.name, selectedProfile)}</span>
+          <span className="spacer" />
           <button className="btn" onClick={onClose} disabled={submitting}>
             Cancel
           </button>
           <button className="btn primary" disabled={!canSubmit} onClick={submit}>
-            {submitting ? "Creating…" : "Create work"}
+            {primaryLabel(mode, submitting)}
           </button>
         </div>
       </div>
+
+      {picker && (
+        <FolderPickerDialog
+          initialPath={picker === "work" ? folder || null : planDir || folder || null}
+          onCancel={() => setPicker(null)}
+          onPick={picker === "work" ? pickWorkFolder : pickPlanDir}
+        />
+      )}
     </div>
   );
+}
+
+function FolderRow({
+  icon,
+  label,
+  value,
+  placeholder,
+  badge,
+  disabled,
+  onChoose,
+  onClear,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  placeholder: string;
+  badge?: string | null;
+  disabled: boolean;
+  onChoose: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className={"ep-folder" + (value ? " set" : "")}>
+      <span className="ef-ico">{icon}</span>
+      <span className="ef-meta">
+        <span className="ef-lbl">
+          {label}
+          {badge && (
+            <span className="ef-inherited">
+              <CheckIcon size={9} /> {badge}
+            </span>
+          )}
+        </span>
+        <span className="ef-val">{value || placeholder}</span>
+      </span>
+      {value && (
+        <button
+          type="button"
+          className="ef-clear"
+          onClick={onClear}
+          disabled={disabled}
+          aria-label={`Clear ${label}`}
+          title="Clear"
+        >
+          ×
+        </button>
+      )}
+      <button className="btn sm" type="button" onClick={onChoose} disabled={disabled}>
+        {value ? "Change" : "Choose"}
+      </button>
+    </div>
+  );
+}
+
+function renderModeIcon(icon: "agent" | "planning" | "loop", size: number) {
+  if (icon === "agent") return <AgentIcon size={size} />;
+  if (icon === "loop") return <BranchIcon size={size} />;
+  return <DocIcon size={size} />;
+}
+
+function defaultPlanDir(folder: string): string {
+  return folder ? `${folder.replace(/\/+$/, "")}/.atelier/plan` : "";
+}
+
+function footerHint(
+  mode: WorkMode,
+  hasTitle: boolean,
+  folder: string,
+  framework: string,
+  profile: ReturnType<typeof planningProfileDefinition>,
+): string {
+  if (!hasTitle) return "Give the work a title to continue.";
+  if (mode === "manual") return "Opens the agent canvas for this work.";
+  if (mode === "loop") return "Loop isn't available yet.";
+  if (!folder.trim()) return "Choose a work folder to continue.";
+  return `${framework} will draft a ${profile.depth} plan - ${profile.artifacts}.`;
+}
+
+function primaryLabel(mode: WorkMode, submitting: boolean): string {
+  if (submitting) return "Starting...";
+  if (mode === "manual") return "Open canvas ›";
+  if (mode === "loop") return "Not yet";
+  return "⟡ Plan this work";
 }

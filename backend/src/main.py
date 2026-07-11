@@ -1,3 +1,4 @@
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -14,6 +15,7 @@ from src.application.http.routes import (
     fs,
     git,
     health,
+    loops,
     projects,
     providers,
     shared_folders,
@@ -27,8 +29,12 @@ from src.application.ws import agents as ws_agents
 from src.application.ws import chats as ws_chats
 from src.domain.agents import record_artifact
 from src.domain.chatstore import ChatStoreService
+from src.domain.commands.planning import run_monitor as planning_run_monitor
 from src.domain.connections import ConnectionStoreService
+from src.domain.loop.dtos import LoopStatus, LoopTargetKind
 from src.domain.models import Artifact
+from src.domain.planning.dtos import PlanRunStatus
+from src.domain.planning.service import PlanningService
 from src.domain.projectstore import ProjectStoreService
 from src.domain.projectstore import reconcile as reconcile_projects
 from src.domain.sharedfolders import SharedFolderStoreService
@@ -37,10 +43,13 @@ from src.domain.workstore import WorkStoreService, reconcile
 from src.infrastructure.agents.compaction_sessions import (
     AdapterCompactionSessionClient,
 )
+from src.infrastructure.agents.factory import ConfiguredAgentAdapterFactory
 from src.infrastructure.artifacts.pr_status_poller import PrStatusPoller
 from src.infrastructure.connections import KeyringSecretStore, fetch_context, verify
 from src.infrastructure.database import (
     SqlChatRepository,
+    SqlLoopRunRepository,
+    SqlPlanningSessionRepository,
     SqlProjectRepository,
     SqlWorkRepository,
     configure_mappings,
@@ -56,6 +65,7 @@ from src.infrastructure.database.user_settings_repository import (
 from src.infrastructure.filesystem import (
     FsChatFiles,
     FsChatTranscriptLog,
+    FsLoopDefinitionRepository,
     FsPlanningFiles,
     FsProjectFiles,
     FsTranscriptLog,
@@ -64,6 +74,8 @@ from src.infrastructure.filesystem import (
 )
 from src.infrastructure.filesystem.share_provisioner import FsShareProvisioner
 from src.infrastructure.git import GitWorktreeManager
+from src.infrastructure.loop_check_runner import SubprocessLoopCheckRunner
+from src.infrastructure.loop_context_resolver import FilesystemLoopContextResolver
 from src.infrastructure.summarizer import build_summarizer
 from src.infrastructure.update_check import GitUpdateChecker, UpdateCheckPoller
 from src.settings import Settings, get_settings
@@ -98,6 +110,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         repo = SqlWorkRepository(session_factory)
         files = FsWorkspaceFiles(paths)
         planning_files = FsPlanningFiles(paths)
+        planning_sessions = SqlPlanningSessionRepository(session_factory)
+        loop_definitions = FsLoopDefinitionRepository()
+        loop_check_runner = SubprocessLoopCheckRunner()
+        loop_context_resolver = FilesystemLoopContextResolver()
+        loop_runs = SqlLoopRunRepository(session_factory)
+        agent_adapter_factory = ConfiguredAgentAdapterFactory(resolved)
         transcript_log = FsTranscriptLog(paths)
 
         # Projects reconcile FIRST: works carry a project_slug FK, and the
@@ -211,10 +229,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             worktree_manager.sweep_orphans(work.slug, live)
 
         app.state.settings = resolved
+        app.state.agent_adapter_factory = agent_adapter_factory
         app.state.engine = engine
         app.state.session_factory = session_factory
         app.state.workstore = workstore
         app.state.planningfiles = planning_files
+        app.state.planning_sessions = planning_sessions
+        app.state.loop_check_runner = loop_check_runner
+        app.state.loop_context_resolver = loop_context_resolver
+        app.state.loop_runs = loop_runs
+        app.state.loop_definitions = loop_definitions
         app.state.projectstore = projectstore
         app.state.chatstore = chatstore
         app.state.supervisor = supervisor
@@ -235,6 +259,82 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.compaction_session_client = AdapterCompactionSessionClient(
             resolved
         )
+        planning_run_monitor_tasks: dict[str, asyncio.Task[Any]] = {}
+        app.state.planning_run_monitor_tasks = planning_run_monitor_tasks
+        for persisted in loop_runs.list_active():
+            if (
+                persisted.status != LoopStatus.RUNNING
+                or persisted.target_kind != LoopTargetKind.PLANNING_ARTIFACT
+                or persisted.artifact_id is None
+                or persisted.plan_run_id is None
+            ):
+                continue
+            key = (
+                f"{persisted.work_slug}:{persisted.artifact_id}:"
+                f"{persisted.plan_run_id}"
+            )
+            planning_run_monitor_tasks[key] = asyncio.create_task(
+                planning_run_monitor.execute(
+                    workstore,
+                    planning_files,
+                    supervisor,
+                    worktree_manager,
+                    connection_store,
+                    sharestore,
+                    share_provisioner,
+                    agent_adapter_factory,
+                    loop_check_runner,
+                    loop_runs,
+                    resolved,
+                    planning_run_monitor.MonitorArtifactRunRequest(
+                        work_slug=persisted.work_slug,
+                        artifact_id=persisted.artifact_id,
+                        run_id=persisted.plan_run_id,
+                    ),
+                ),
+                name=(
+                    f"planning-run-{persisted.work_slug}-"
+                    f"{persisted.artifact_id}-{persisted.plan_run_id}"
+                ),
+            )
+
+        # Compatibility import boundary for manifest runs created before the
+        # SQL loop index existed. New runs are recovered from ``loop_runs``.
+        planning_service = PlanningService(planning_files)
+        for work in workstore.list_works():
+            if work.slug is None:
+                continue
+            plan = planning_service.get_plan(work.slug)
+            if plan is None:
+                continue
+            for artifact in plan.artifacts:
+                for run in artifact.runs:
+                    if run.status != PlanRunStatus.RUNNING:
+                        continue
+                    key = f"{work.slug}:{artifact.id}:{run.id}"
+                    if key in planning_run_monitor_tasks:
+                        continue
+                    planning_run_monitor_tasks[key] = asyncio.create_task(
+                        planning_run_monitor.execute(
+                            workstore,
+                            planning_files,
+                            supervisor,
+                            worktree_manager,
+                            connection_store,
+                            sharestore,
+                            share_provisioner,
+                            agent_adapter_factory,
+                            loop_check_runner,
+                            loop_runs,
+                            resolved,
+                            planning_run_monitor.MonitorArtifactRunRequest(
+                                work_slug=work.slug,
+                                artifact_id=artifact.id,
+                                run_id=run.id,
+                            ),
+                        ),
+                        name=f"planning-run-{work.slug}-{artifact.id}-{run.id}",
+                    )
 
         # Background loop that refreshes non-terminal PR artifact
         # statuses against GitHub every 5 minutes. No-op when the user
@@ -258,6 +358,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
+            for task in planning_run_monitor_tasks.values():
+                task.cancel()
+            if planning_run_monitor_tasks:
+                await asyncio.gather(
+                    *planning_run_monitor_tasks.values(),
+                    return_exceptions=True,
+                )
             await update_check_poller.stop()
             await pr_status_poller.stop()
             await chat_supervisor.shutdown()
@@ -268,6 +375,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router, prefix="/api")
     app.include_router(projects.router, prefix="/api")
     app.include_router(works.router, prefix="/api")
+    app.include_router(loops.router, prefix="/api")
     app.include_router(chats.router, prefix="/api")
     app.include_router(agents.router, prefix="/api")
     app.include_router(providers.router, prefix="/api")

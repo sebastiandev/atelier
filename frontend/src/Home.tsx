@@ -22,7 +22,8 @@ import {
   SlidersIcon,
 } from "./Icons";
 import { NewProjectDialog } from "./NewProjectDialog";
-import { NewWorkDialog } from "./NewWorkDialog";
+import { NewWorkDialog, type NewWorkIntent } from "./NewWorkDialog";
+import { planningStartStorageKey } from "./planningSetup";
 import { SearchModal } from "./SearchModal";
 import { Switcher, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
@@ -112,10 +113,19 @@ export function Home() {
     searchOpen,
   ]);
 
-  async function handleCreateWork(payload: CreateWorkPayload) {
-    await createWork(payload);
-    await refresh();
+  async function handleCreateWork(payload: CreateWorkPayload, intent: NewWorkIntent) {
+    const created = await createWork(payload);
     setWorkDialogOpen(false);
+    if (intent.mode === "planning") {
+      sessionStorage.setItem(
+        planningStartStorageKey(created.slug),
+        JSON.stringify(intent.seed),
+      );
+      window.location.assign(`/works/${created.slug}?start=planning`);
+      return created;
+    }
+    window.location.assign(`/works/${created.slug}?mode=manual`);
+    return created;
   }
 
   const projectMap = useMemo(() => {
