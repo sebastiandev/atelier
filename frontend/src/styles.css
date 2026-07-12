@@ -943,6 +943,7 @@
   min-height: 0;
   overflow-y: auto;
   padding: 28px 24px 36px;
+  contain: layout paint;
 }
 
 .chat-reading {
@@ -3007,6 +3008,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  contain: layout paint;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 13px;
   line-height: 1.5;
@@ -5584,6 +5586,7 @@ h5.md-h {
 
 .canvas-cell {
   display: flex;
+  align-self: stretch;
   min-height: 0;
   border-radius: 9px;
   position: relative;
@@ -5596,6 +5599,7 @@ h5.md-h {
 }
 .canvas-cell .agent-tile {
   width: 100%;
+  min-height: 0;
 }
 
 /* Tile-header hint slot --------------------------------------------------
@@ -8341,7 +8345,9 @@ h5.md-h {
 .work-right-canvas.tiles {
   display: grid;
   gap: 12px;
-  align-content: start;
+  align-content: stretch;
+  align-items: stretch;
+  grid-auto-rows: minmax(0, 1fr);
 }
 .work-right-canvas.tiles[data-cols="1"] { grid-template-columns: 1fr; }
 .work-right-canvas.tiles[data-cols="2"] { grid-template-columns: 1fr 1fr; }

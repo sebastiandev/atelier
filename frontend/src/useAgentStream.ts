@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 
+import { getTranscriptChunk } from "./api";
 import type { ContextEntry } from "./api";
 
 export type AgentEvent = {
@@ -52,6 +53,7 @@ const CLOSE_CODE_AGENT_NOT_RUNNING = 4404;
 // to the cap.
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 const STREAM_EVENT_FLUSH_MS = 50;
+const DEFAULT_INITIAL_REPLAY_LIMIT = 100;
 
 function delayForAttempt(attempt: number): number {
   return RETRY_DELAYS_MS[Math.min(attempt, RETRY_DELAYS_MS.length - 1)];
@@ -71,13 +73,46 @@ function delayForAttempt(attempt: number): number {
  */
 export type StreamResource = "agents" | "chats";
 
+export type StreamHistoryState = {
+  oldestSeq: number | null;
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  error: string | null;
+};
+
+function initialHistoryState(): StreamHistoryState {
+  return { oldestSeq: null, hasOlder: false, loadingOlder: false, error: null };
+}
+
+function isAgentEvent(value: unknown): value is AgentEvent {
+  if (!value || typeof value !== "object") return false;
+  const event = value as Record<string, unknown>;
+  return (
+    typeof event.seq === "number" &&
+    typeof event.type === "string" &&
+    typeof event.ts === "string"
+  );
+}
+
+function mergeEvents(existing: AgentEvent[], incoming: AgentEvent[]): AgentEvent[] {
+  if (incoming.length === 0) return existing;
+  const bySeq = new Map<number, AgentEvent>();
+  for (const event of existing) bySeq.set(event.seq, event);
+  for (const event of incoming) bySeq.set(event.seq, event);
+  return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
+}
+
 export function useAgentStream(
   agentSlug: string,
-  options: { resource?: StreamResource } = {},
+  options: { resource?: StreamResource; initialReplayLimit?: number } = {},
 ) {
   const resource = options.resource ?? "agents";
+  const initialReplayLimit =
+    options.initialReplayLimit ?? DEFAULT_INITIAL_REPLAY_LIMIT;
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
+  const [history, setHistory] = useState<StreamHistoryState>(initialHistoryState);
+  const historyRef = useRef<StreamHistoryState>(initialHistoryState());
   const wsRef = useRef<WebSocket | null>(null);
   const lastSeqRef = useRef(0);
   const retryAttemptRef = useRef(0);
@@ -85,6 +120,21 @@ export function useAgentStream(
   const clientEventOrdinalRef = useRef(0);
   const pendingEventsRef = useRef<AgentEvent[]>([]);
   const flushHandleRef = useRef<number | null>(null);
+
+  function setHistoryState(next: StreamHistoryState) {
+    historyRef.current = next;
+    setHistory(next);
+  }
+
+  function updateHistoryState(
+    updater: (current: StreamHistoryState) => StreamHistoryState,
+  ) {
+    setHistory((current) => {
+      const next = updater(current);
+      historyRef.current = next;
+      return next;
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -117,7 +167,9 @@ export function useAgentStream(
       const pending = pendingEventsRef.current;
       if (pending.length === 0) return;
       pendingEventsRef.current = [];
-      setEvents((prev) => [...prev, ...pending]);
+      startTransition(() => {
+        setEvents((prev) => mergeEvents(prev, pending));
+      });
     }
 
     function scheduleEventFlush() {
@@ -136,6 +188,7 @@ export function useAgentStream(
     pendingEventsRef.current = [];
     setEvents([]);
     setStatus("connecting");
+    setHistoryState(initialHistoryState());
     lastSeqRef.current = 0;
     clientEventOrdinalRef.current = 0;
     retryAttemptRef.current = 0;
@@ -158,10 +211,13 @@ export function useAgentStream(
       const connectionId = connectionIdRef.current + 1;
       connectionIdRef.current = connectionId;
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const params = new URLSearchParams({ cursor: String(lastSeqRef.current) });
+      if (lastSeqRef.current === 0 && initialReplayLimit > 0) {
+        params.set("replay_limit", String(initialReplayLimit));
+      }
       const url =
         `${proto}//${window.location.host}` +
-        `/api/${resource}/${agentSlug}/stream` +
-        `?cursor=${lastSeqRef.current}`;
+        `/api/${resource}/${agentSlug}/stream?${params.toString()}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
@@ -175,6 +231,17 @@ export function useAgentStream(
         if (!isCurrentConnection(ws, connectionId)) return;
         try {
           const parsed = JSON.parse(msg.data) as Record<string, unknown>;
+          if (parsed.type === "history_state") {
+            const oldestSeq =
+              typeof parsed.oldest_seq === "number" ? parsed.oldest_seq : null;
+            setHistoryState({
+              oldestSeq,
+              hasOlder: parsed.has_older === true,
+              loadingOlder: false,
+              error: null,
+            });
+            return;
+          }
           const hasServerSeq = typeof parsed.seq === "number";
           if (hasServerSeq) lastSeqRef.current = parsed.seq as number;
           const event = (
@@ -225,7 +292,40 @@ export function useAgentStream(
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [agentSlug, resource]);
+  }, [agentSlug, resource, initialReplayLimit]);
+
+  async function loadOlder() {
+    const current = historyRef.current;
+    if (current.loadingOlder || !current.hasOlder || current.oldestSeq === null) {
+      return;
+    }
+    updateHistoryState((prev) => ({ ...prev, loadingOlder: true, error: null }));
+    try {
+      const chunk = await getTranscriptChunk(
+        resource,
+        agentSlug,
+        current.oldestSeq,
+        initialReplayLimit,
+      );
+      const olderEvents = chunk.events.filter(isAgentEvent);
+      setEvents((prev) => mergeEvents(prev, olderEvents));
+      const oldestSeq =
+        chunk.oldest_seq ?? olderEvents[0]?.seq ?? current.oldestSeq;
+      updateHistoryState((prev) => ({
+        ...prev,
+        oldestSeq,
+        hasOlder: chunk.has_older,
+        loadingOlder: false,
+        error: null,
+      }));
+    } catch (err) {
+      updateHistoryState((prev) => ({
+        ...prev,
+        loadingOlder: false,
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }
 
   function sendInput(text: string, contexts?: ContextEntry[]) {
     const ws = wsRef.current;
@@ -326,6 +426,8 @@ export function useAgentStream(
     sendPermission,
     sendSessionConfig,
     sendSessionConfigRefresh,
+    loadOlder,
+    history,
     pendingPermissions,
     pendingHandoff,
   };

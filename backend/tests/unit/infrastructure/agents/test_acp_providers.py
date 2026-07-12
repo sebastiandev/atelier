@@ -89,11 +89,11 @@ def test_codex_acp_spec_builds_typed_config() -> None:
     config = CodexAcpSpec().build(
         _common(),
         "gpt-5.6-terra",
-        {"reasoning_effort": "ultra", "mode": "read-only", "fast-mode": "on"},
+        {"reasoning_effort": "max", "mode": "read-only", "fast-mode": "on"},
     )
     assert isinstance(config, CodexAcpAgentConfig)
     assert config.model is CodexAcpModel.GPT_5_6_TERRA
-    assert config.reasoning_effort is CodexAcpEffort.ULTRA
+    assert config.reasoning_effort is CodexAcpEffort.MAX
     assert config.mode is CodexAcpMode.READ_ONLY
     assert config.fast_mode is CodexAcpFastMode.ON
 

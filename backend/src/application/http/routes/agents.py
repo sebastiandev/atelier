@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from src.application.http.schemas import (
     AgentCompactionSummaryResponse,
@@ -25,6 +25,7 @@ from src.application.http.schemas import (
     NewAgentRequest,
     PatchAgentRequest,
     SwitchThreadRequest,
+    TranscriptChunkResponse,
 )
 from src.domain.agents.compactions import CompactionSessionClient
 from src.domain.agents.handoffs import Summarizer
@@ -42,7 +43,7 @@ from src.domain.connections import ConnectionStore, ContextFetchError
 from src.domain.models import Agent, Context
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.supervisor import AgentSupervisorService
-from src.domain.workstore.ports import WorkStore
+from src.domain.workstore.ports import TranscriptLog, WorkStore
 from src.domain.worktrees import WorktreeManager, WorktreeProvisionFailed
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
@@ -50,6 +51,7 @@ from src.infrastructure.filesystem.terminal import open_in_terminal
 from src.settings import Settings
 
 router = APIRouter()
+_MAX_TRANSCRIPT_CHUNK_LIMIT = 2000
 
 
 def get_workstore(request: Request) -> WorkStore:
@@ -88,7 +90,12 @@ def get_compaction_session_client(request: Request) -> CompactionSessionClient:
     return request.app.state.compaction_session_client  # type: ignore[no-any-return]
 
 
+def get_transcript_log(request: Request) -> TranscriptLog:
+    return request.app.state.transcript_log  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
+TranscriptLogDep = Annotated[TranscriptLog, Depends(get_transcript_log)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
 WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
@@ -177,6 +184,32 @@ async def create_agent(
 
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
     return _to_summary(work_slug, agent, paths)
+
+
+@router.get("/agents/{agent_slug}/transcript", response_model=TranscriptChunkResponse)
+def get_agent_transcript_chunk(
+    agent_slug: str,
+    workstore: WorkStoreDep,
+    transcript_log: TranscriptLogDep,
+    before_seq: int = Query(..., ge=1),
+    limit: int = Query(500, ge=1, le=_MAX_TRANSCRIPT_CHUNK_LIMIT),
+) -> TranscriptChunkResponse:
+    work_slug = workstore.get_work_slug_for_agent(agent_slug)
+    if work_slug is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+        )
+    events = list(transcript_log.read_before(work_slug, agent_slug, before_seq, limit))
+    return _to_transcript_chunk(events)
+
+
+def _to_transcript_chunk(events: list[dict[str, object]]) -> TranscriptChunkResponse:
+    oldest_seq = events[0]["seq"] if events else None
+    return TranscriptChunkResponse(
+        events=events,
+        oldest_seq=oldest_seq if isinstance(oldest_seq, int) else None,
+        has_older=isinstance(oldest_seq, int) and oldest_seq > 1,
+    )
 
 
 @router.post("/agents/{agent_slug}/detach", response_model=DetachResponse)

@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 class ConnectRequest:
     agent_slug: str
     cursor: int = 0
+    replay_limit: int | None = None
 
 
 class AgentNotFound(ValueError):
@@ -100,7 +101,9 @@ async def execute(
         if synced:
             await supervisor.refresh_seq_from_disk(req.agent_slug)
 
-    async with supervisor.subscribe(req.agent_slug, cursor=req.cursor) as sub:
+    async with supervisor.subscribe(
+        req.agent_slug, cursor=req.cursor, replay_limit=req.replay_limit
+    ) as sub:
         yield sub
 
 

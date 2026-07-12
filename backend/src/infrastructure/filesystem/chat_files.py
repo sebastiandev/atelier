@@ -8,7 +8,10 @@ from src.infrastructure.filesystem.atomic import atomic_write_json, atomic_write
 from src.infrastructure.filesystem.ndjson import (
     append_event,
     last_seq,
+    read_before,
     read_from_cursor,
+    read_recent_by_type,
+    read_tail,
 )
 from src.infrastructure.filesystem.paths import WorkspacePaths
 
@@ -51,6 +54,43 @@ class FsChatFiles:
 
     def read_transcript(self, chat_slug: str) -> Iterator[dict[str, Any]]:
         return read_from_cursor(self._paths.chat_transcript(chat_slug), 0)
+
+    def read_transcript_before(
+        self, chat_slug: str, before_seq: int, limit: int
+    ) -> Iterator[dict[str, Any]]:
+        return read_before(self._paths.chat_transcript(chat_slug), before_seq, limit)
+
+    def read_transcript_tail(
+        self,
+        chat_slug: str,
+        *,
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        return read_tail(
+            self._paths.chat_transcript(chat_slug),
+            cursor=cursor,
+            limit=limit,
+            before_seq=before_seq,
+        )
+
+    def read_transcript_recent_by_type(
+        self,
+        chat_slug: str,
+        event_types: set[str],
+        *,
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        return read_recent_by_type(
+            self._paths.chat_transcript(chat_slug),
+            event_types,
+            cursor=cursor,
+            limit=limit,
+            before_seq=before_seq,
+        )
 
     def write_chat_compaction_doc(
         self, chat_slug: str, filename: str, content: str

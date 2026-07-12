@@ -360,6 +360,29 @@ class TranscriptLog(Protocol):
         self, work_slug: str, agent_slug: str, cursor: int
     ) -> Iterator[dict[str, Any]]: ...
 
+    def read_before(
+        self, work_slug: str, agent_slug: str, before_seq: int, limit: int
+    ) -> Iterator[dict[str, Any]]: ...
+
+    def read_tail(
+        self,
+        work_slug: str,
+        agent_slug: str,
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]: ...
+
+    def read_recent_by_type(
+        self,
+        work_slug: str,
+        agent_slug: str,
+        event_types: set[str],
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]: ...
+
     def last_seq(self, work_slug: str, agent_slug: str) -> int:
         """Highest ``seq`` currently on disk; ``0`` if the log is empty.
 

@@ -316,6 +316,57 @@ class StubTranscriptLog:
             if isinstance(seq, int) and not isinstance(seq, bool) and seq > cursor:
                 yield ev
 
+    def read_before(
+        self, work_slug: str, agent_slug: str, before_seq: int, limit: int
+    ) -> Iterator[dict[str, Any]]:
+        events = [
+            ev
+            for ev in self.events.get((work_slug, agent_slug), [])
+            if isinstance(ev.get("seq"), int)
+            and not isinstance(ev.get("seq"), bool)
+            and ev["seq"] < before_seq
+        ]
+        yield from events[-limit:] if limit > 0 else []
+
+    def read_tail(
+        self,
+        work_slug: str,
+        agent_slug: str,
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        events = []
+        for ev in self.events.get((work_slug, agent_slug), []):
+            seq = ev.get("seq")
+            if not isinstance(seq, int) or isinstance(seq, bool) or seq <= cursor:
+                continue
+            if before_seq is not None and seq >= before_seq:
+                continue
+            events.append(ev)
+        yield from events[-limit:] if limit > 0 else []
+
+    def read_recent_by_type(
+        self,
+        work_slug: str,
+        agent_slug: str,
+        event_types: set[str],
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        events = []
+        for ev in self.events.get((work_slug, agent_slug), []):
+            seq = ev.get("seq")
+            if not isinstance(seq, int) or isinstance(seq, bool) or seq <= cursor:
+                continue
+            if before_seq is not None and seq >= before_seq:
+                continue
+            if ev.get("type") not in event_types:
+                continue
+            events.append(ev)
+        yield from events[-limit:] if limit > 0 else []
+
     def last_seq(self, work_slug: str, agent_slug: str) -> int:
         seqs = [
             ev.get("seq")

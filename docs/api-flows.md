@@ -194,8 +194,9 @@ Browser ──► WS Router (application/ws/chats.py)
                         ├─► ChatStore.claim_initial_prompt()
                         │       └─► append chat_initial_prompt_delivered marker
                         ├─► chat_supervisor.send_input(first, record_user_input=False)
-                        └─► async with chat_supervisor.subscribe(slug, cursor)
-                                ├─► replay legacy rows as AgentEvent-shaped frames
+                        └─► async with chat_supervisor.subscribe(slug, cursor, replay_limit?)
+                                ├─► optional history_state control frame
+                                ├─► replay bounded/new rows as AgentEvent-shaped frames
                                 └─► live provider events
 ```
 
@@ -486,7 +487,7 @@ The supervisor → browser fan-out, plus the inbound input/stop/permission frame
 ### Case A — agent is live in the supervisor
 
 ```
-Browser ─── connect ?cursor=N ───► Router (ws/agents.py)
+Browser ─── connect ?cursor=N[&replay_limit=M] ───► Router (ws/agents.py)
                                        │
                                        ├─► supervisor.get_work_slug_for(slug) → work_slug
                                        ├─► await websocket.accept()
@@ -494,9 +495,9 @@ Browser ─── connect ?cursor=N ───► Router (ws/agents.py)
                                        └─► async with supervisor.subscribe(slug):  (atomic)
                                               │            ──► (from_seq, AgentSubscription{queue, kicked})
                                               │
-                                              ├─► REPLAY: transcript_log.read_from_cursor(work, slug, N)
-                                              │           filter seq ≤ from_seq
-                                              │           websocket.send_json(event) for each
+                                              ├─► REPLAY: transcript_log.read_from_cursor/read_tail(work, slug, N)
+                                              │           filter seq ≤ from_seq, optionally cap to newest M
+                                              │           send history_state when capped, then events
                                               │
                                               └─► LIVE: race three tasks
                                                     drain: queue.get() → ws.send_json
@@ -504,7 +505,7 @@ Browser ─── connect ?cursor=N ───► Router (ws/agents.py)
                                                     kick:  sub.kicked.wait() → close(4408)
 ```
 
-Atomicity (`subscribe` snapshots `from_seq` *under the publish lock* and registers the queue under the same lock) gives "no overlap, no gap": every event with `seq ≤ from_seq` is on disk and replayable; every event with `seq > from_seq` flows only through the queue.
+Atomicity (`subscribe` snapshots `from_seq` *under the publish lock* and registers the queue under the same lock) gives "no overlap, no gap": every event with `seq ≤ from_seq` is on disk and replayable; every event with `seq > from_seq` flows only through the queue. `replay_limit` is an additive optimization for mounted UI surfaces: it sends only the newest replay rows plus a `history_state` marker, with sticky session-config metadata merged in so controls do not disappear after a bounded mount. Older rows are fetched on demand through `GET /api/agents/{slug}/transcript?before_seq=S&limit=M`; chats use the analogous `/api/chats/{slug}/transcript` route.
 
 The `recv` task dispatches inbound frames:
 - `{"type":"input","text":"…"}` → `supervisor.send_input(slug, text)` (starts/resumes as needed, then writes `user_input` only if the adapter accepts the text).

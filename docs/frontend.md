@@ -147,11 +147,13 @@ loader.
 
 ## `useAgentStream`
 
-`useAgentStream(slug, { resource })` is the single point of contact with supervisor-backed websocket streams. The default resource is `"agents"` (`/api/agents/<slug>/stream`); chat surfaces pass `{ resource: "chats" }` for `/api/chats/<slug>/stream`. It returns `{ events, status, sendInput, sendStop, sendPermission, sendSessionConfig, pendingPermissions }` and handles:
+`useAgentStream(slug, { resource })` is the single point of contact with supervisor-backed websocket streams. The default resource is `"agents"` (`/api/agents/<slug>/stream`); chat surfaces pass `{ resource: "chats" }` for `/api/chats/<slug>/stream`. It returns `{ events, status, sendInput, sendStop, sendPermission, sendSessionConfig, loadOlder, history, pendingPermissions }` and handles:
 
 **Cursor-based resume.** Within a session, on WS close + reconnect it appends `?cursor=<lastSeq>` so the server replays only the window we missed before going live. The server's replay-then-live semantics guarantee no duplicates and no gaps (see `backend.md` → WS protocol). The cursor lives in a closure-scoped `lastSeqRef` and resets to `0` on every fresh mount — the transcript itself isn't persisted client-side, so seeding non-zero on mount would yield an empty tile (the bug that retired the old `atelier:cursors` localStorage key).
 
-**Paint-batched stream events.** Incoming WS frames are buffered for 50ms before appending to React state, with an immediate flush on socket close. `lastSeqRef` still advances as each frame arrives, so reconnect cursors stay exact while dense token streams avoid one React/Markdown/scroll pass per tiny delta.
+**Bounded initial replay.** Fresh mounts also pass `replay_limit` (default 100) so very long transcripts, such as `agt22`'s 170 MB log, do not freeze the browser before the render cap helps. The hook treats the server's `history_state` frame as metadata, not a transcript event; `AgentTile`, `ChatView`, and `ChatTile` show **Load older**, which calls `loadOlder()` and prepends `GET /api/{agents|chats}/{slug}/transcript?before_seq=<oldest>&limit=<limit>` chunks. The backend may also replay sticky session-config metadata outside the visible tail so the model/effort/fast controls render before the next user input; local transcript caps ignore those invisible metadata rows when counting hidden lines. This keeps React state, permission scans, metrics scans, and first-send/focus work bounded to the loaded window instead of the whole on-disk transcript.
+
+**Paint-batched stream events.** Incoming WS frames are buffered for 50ms before appending to React state, with an immediate flush on socket close. The append is scheduled with React `startTransition`, so transcript painting is lower priority than typing into the controlled composer textarea while an agent is streaming. `lastSeqRef` still advances as each frame arrives, so reconnect cursors stay exact while dense token streams avoid one React/Markdown/scroll pass per tiny delta.
 
 **Exponential reconnect backoff.** Schedule: `1s → 2s → 4s → 8s → 16s → 30s` (cap). Resets on a successful `onopen`, so a single transient blip costs one 1s retry — only consecutive failures walk the ladder.
 
@@ -230,6 +232,8 @@ Each persona owns a hue. Components opt in by setting `data-persona="<id>"` on a
 The five canonical personas are listed in `frontend/src/api.ts` (`PERSONAS`, `PERSONA_GLYPH`). Writing `var(--p-color, var(--accent))` gives a sensible fallback when no persona is in scope.
 
 This is what powers: the `AgentTile` tile-mode top border, the `WorkView` rail row's tint + accent bar when focused, the canvas-cell ring when a tile is selected, the persona-card hover/active in `NewAgentDialog`.
+
+WorkView tile canvases use stretched grid rows (`frontend/src/styles.css`) so agent/chat tiles fill the available canvas height. Transcript caps should change internal scroll content, not the outer tile height.
 
 ## Dialogs — minimal-first pattern
 

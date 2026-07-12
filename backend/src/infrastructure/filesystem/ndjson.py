@@ -57,19 +57,141 @@ def read_from_cursor(path: Path, cursor: int) -> Iterator[dict[str, Any]]:
         for raw in f:
             if not raw.endswith(b"\n"):
                 continue
-            line = raw[:-1].strip()
-            if not line:
+            event = _decode_event_line(raw[:-1])
+            if event is None:
                 continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            seq = event.get("seq")
-            if not isinstance(seq, int) or isinstance(seq, bool) or seq <= cursor:
+            seq = event["seq"]
+            if seq <= cursor:
                 continue
             yield event
+
+
+def read_before(path: Path, before_seq: int, limit: int) -> Iterator[dict[str, Any]]:
+    """Yield up to ``limit`` events with ``seq < before_seq`` in file order."""
+    if limit <= 0:
+        return
+    yield from _tail_events(path, limit=limit, min_seq=None, max_seq=before_seq - 1)
+
+
+def read_tail(
+    path: Path,
+    *,
+    cursor: int,
+    limit: int,
+    before_seq: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield up to ``limit`` newest events with ``cursor < seq < before_seq``.
+
+    ``before_seq`` is exclusive. When omitted, the tail window is bounded
+    only by ``cursor``.
+    """
+    if limit <= 0:
+        return
+    max_seq = before_seq - 1 if before_seq is not None else None
+    yield from _tail_events(path, limit=limit, min_seq=cursor + 1, max_seq=max_seq)
+
+
+def read_recent_by_type(
+    path: Path,
+    event_types: set[str],
+    *,
+    cursor: int,
+    limit: int,
+    before_seq: int | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield newest matching event types with ``cursor < seq < before_seq``.
+
+    This uses the same reverse chunk scan as ``read_tail`` so callers can
+    recover sticky metadata from large transcripts without a full replay.
+    """
+    if limit <= 0 or not event_types:
+        return
+    max_seq = before_seq - 1 if before_seq is not None else None
+    yield from _tail_events(
+        path,
+        limit=limit,
+        min_seq=cursor + 1,
+        max_seq=max_seq,
+        event_types=event_types,
+    )
+
+
+def _decode_event_line(line: bytes) -> dict[str, Any] | None:
+    stripped = line.strip()
+    if not stripped:
+        return None
+    try:
+        event = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict):
+        return None
+    seq = event.get("seq")
+    if not isinstance(seq, int) or isinstance(seq, bool):
+        return None
+    return event
+
+
+def _tail_events(
+    path: Path,
+    *,
+    limit: int,
+    min_seq: int | None,
+    max_seq: int | None,
+    event_types: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return []
+    if size == 0 or limit <= 0:
+        return []
+
+    chunk = 64 * 1024
+    selected: list[dict[str, Any]] = []
+    pending_prefix = b""
+    first_chunk = True
+
+    with path.open("rb") as f:
+        pos = size
+        while pos > 0 and len(selected) < limit:
+            read_size = min(chunk, pos)
+            pos -= read_size
+            f.seek(pos)
+            buf = f.read(read_size) + pending_prefix
+            parts = buf.split(b"\n")
+
+            if pos > 0:
+                pending_prefix = parts[0]
+                complete = parts[1:]
+            else:
+                pending_prefix = b""
+                complete = parts
+
+            if first_chunk and complete:
+                # read_from_cursor drops a non-newline-terminated tail. Do
+                # the same here so a crash fragment cannot show up in a
+                # history chunk. If the file ends cleanly, split() leaves
+                # an empty sentinel after the final newline; drop that too.
+                complete = complete[:-1]
+                first_chunk = False
+
+            for raw_line in reversed(complete):
+                event = _decode_event_line(raw_line)
+                if event is None:
+                    continue
+                seq = event["seq"]
+                if max_seq is not None and seq > max_seq:
+                    continue
+                if min_seq is not None and seq < min_seq:
+                    return list(reversed(selected))
+                if event_types is not None and event.get("type") not in event_types:
+                    continue
+                selected.append(event)
+                if len(selected) >= limit:
+                    break
+
+    return list(reversed(selected))
 
 
 def _repair_partial_trailing_line(path: Path) -> None:
@@ -143,4 +265,11 @@ def last_seq(path: Path) -> int:
     return 0
 
 
-__all__ = ["append_event", "last_seq", "read_from_cursor"]
+__all__ = [
+    "append_event",
+    "last_seq",
+    "read_before",
+    "read_from_cursor",
+    "read_recent_by_type",
+    "read_tail",
+]

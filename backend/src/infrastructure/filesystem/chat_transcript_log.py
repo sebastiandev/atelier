@@ -43,6 +43,49 @@ class FsChatTranscriptLog:
             if converted is not None:
                 yield converted
 
+    def read_before(
+        self, _work_slug: str, agent_slug: str, before_seq: int, limit: int
+    ) -> Iterator[dict[str, Any]]:
+        for event in self._files.read_transcript_before(agent_slug, before_seq, limit):
+            converted = _event_for_stream(event)
+            if converted is not None:
+                yield converted
+
+    def read_tail(
+        self,
+        _work_slug: str,
+        agent_slug: str,
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        for event in self._files.read_transcript_tail(
+            agent_slug, cursor=cursor, limit=limit, before_seq=before_seq
+        ):
+            converted = _event_for_stream(event)
+            if converted is not None:
+                yield converted
+
+    def read_recent_by_type(
+        self,
+        _work_slug: str,
+        agent_slug: str,
+        event_types: set[str],
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        for event in self._files.read_transcript_recent_by_type(
+            agent_slug,
+            event_types,
+            cursor=cursor,
+            limit=limit,
+            before_seq=before_seq,
+        ):
+            converted = _event_for_stream(event)
+            if converted is not None:
+                yield converted
+
     def last_seq(self, _work_slug: str, agent_slug: str) -> int:
         return self._files.last_seq(agent_slug)
 

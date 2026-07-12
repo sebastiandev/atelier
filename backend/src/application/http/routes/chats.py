@@ -21,6 +21,7 @@ from src.application.http.schemas import (
     PatchChatRequest,
     PromoteChatRequest,
     SendChatMessageRequest,
+    TranscriptChunkResponse,
     WorkChatContextFolderSummary,
     WorkChatRef,
     WorkDetail,
@@ -49,11 +50,12 @@ from src.domain.workstore.dtos import (
     WorkChatProvenance,
     WorkRecord,
 )
-from src.domain.workstore.ports import WorkStore
+from src.domain.workstore.ports import TranscriptLog, WorkStore
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.settings import Settings
 
 router = APIRouter()
+_MAX_TRANSCRIPT_CHUNK_LIMIT = 2000
 
 
 def get_chatstore(request: Request) -> ChatStore:
@@ -84,7 +86,12 @@ def get_compaction_session_client(request: Request) -> CompactionSessionClient:
     return request.app.state.compaction_session_client  # type: ignore[no-any-return]
 
 
+def get_chat_transcript_log(request: Request) -> TranscriptLog:
+    return request.app.state.chat_transcript_log  # type: ignore[no-any-return]
+
+
 ChatStoreDep = Annotated[ChatStore, Depends(get_chatstore)]
+ChatTranscriptLogDep = Annotated[TranscriptLog, Depends(get_chat_transcript_log)]
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
@@ -153,6 +160,31 @@ def get_chat_endpoint(chat_slug: str, chatstore: ChatStoreDep) -> ChatDetail:
             status.HTTP_404_NOT_FOUND, detail=f"chat not found: {chat_slug}"
         )
     return _to_detail(record)
+
+
+@router.get("/chats/{chat_slug}/transcript", response_model=TranscriptChunkResponse)
+def get_chat_transcript_chunk(
+    chat_slug: str,
+    chatstore: ChatStoreDep,
+    transcript_log: ChatTranscriptLogDep,
+    before_seq: int = Query(..., ge=1),
+    limit: int = Query(500, ge=1, le=_MAX_TRANSCRIPT_CHUNK_LIMIT),
+) -> TranscriptChunkResponse:
+    if chatstore.get_chat(chat_slug) is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"chat not found: {chat_slug}"
+        )
+    events = list(transcript_log.read_before("__chat__", chat_slug, before_seq, limit))
+    return _to_transcript_chunk(events)
+
+
+def _to_transcript_chunk(events: list[dict[str, object]]) -> TranscriptChunkResponse:
+    oldest_seq = events[0]["seq"] if events else None
+    return TranscriptChunkResponse(
+        events=events,
+        oldest_seq=oldest_seq if isinstance(oldest_seq, int) else None,
+        has_older=isinstance(oldest_seq, int) and oldest_seq > 1,
+    )
 
 
 @router.patch("/chats/{chat_slug}", response_model=ChatDetail)

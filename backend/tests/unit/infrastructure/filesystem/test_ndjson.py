@@ -12,7 +12,10 @@ from pathlib import Path
 from src.infrastructure.filesystem.ndjson import (
     _repair_partial_trailing_line,
     append_event,
+    read_before,
     read_from_cursor,
+    read_recent_by_type,
+    read_tail,
 )
 
 
@@ -33,6 +36,46 @@ def test_read_filters_by_cursor(tmp_path: Path) -> None:
         append_event(log, {"seq": i, "v": i})
     events = list(read_from_cursor(log, 2))
     assert [e["seq"] for e in events] == [3, 4, 5]
+
+
+def test_read_tail_returns_newest_matching_events_in_order(tmp_path: Path) -> None:
+    log = tmp_path / "transcript.ndjson"
+    for i in range(1, 8):
+        append_event(log, {"seq": i, "v": i})
+
+    events = list(read_tail(log, cursor=2, limit=3, before_seq=7))
+
+    assert [e["seq"] for e in events] == [4, 5, 6]
+
+
+def test_read_before_pages_older_events(tmp_path: Path) -> None:
+    log = tmp_path / "transcript.ndjson"
+    for i in range(1, 8):
+        append_event(log, {"seq": i, "v": i})
+
+    events = list(read_before(log, before_seq=5, limit=2))
+
+    assert [e["seq"] for e in events] == [3, 4]
+
+
+def test_read_recent_by_type_returns_newest_matching_events(tmp_path: Path) -> None:
+    log = tmp_path / "transcript.ndjson"
+    append_event(log, {"seq": 1, "type": "session_config_options"})
+    append_event(log, {"seq": 2, "type": "message_delta"})
+    append_event(log, {"seq": 3, "type": "session_config_changed"})
+    append_event(log, {"seq": 4, "type": "message_complete"})
+    append_event(log, {"seq": 5, "type": "session_config_options"})
+
+    events = list(
+        read_recent_by_type(
+            log,
+            {"session_config_options", "session_config_changed"},
+            cursor=0,
+            limit=2,
+        )
+    )
+
+    assert [e["seq"] for e in events] == [3, 5]
 
 
 def test_read_missing_file_yields_empty(tmp_path: Path) -> None:

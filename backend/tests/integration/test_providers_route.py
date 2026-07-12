@@ -121,6 +121,7 @@ def test_codex_descriptor_has_acp_mode_and_reasoning(app_client: TestClient) -> 
         "medium",
         "high",
         "xhigh",
+        "max",
         "extra",
         "ultra",
     ]

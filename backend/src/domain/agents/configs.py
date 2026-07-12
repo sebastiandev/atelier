@@ -205,6 +205,7 @@ class CodexReasoningEffort(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
+    MAX = "max"
     EXTRA = "extra"
     ULTRA = "ultra"
 
@@ -386,6 +387,7 @@ class CodexAcpEffort(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
+    MAX = "max"
     EXTRA = "extra"
     ULTRA = "ultra"
 

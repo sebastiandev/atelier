@@ -30,6 +30,7 @@ router = APIRouter()
 _CLOSE_CHAT_NOT_RUNNING = 4404
 _CLOSE_SLOW_SUBSCRIBER = 4408
 _CLOSE_ADAPTER_TERMINATED = 4409
+_MAX_REPLAY_LIMIT = 2000
 
 
 @router.websocket("/chats/{chat_slug}/stream")
@@ -41,6 +42,7 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
     settings = websocket.app.state.settings
 
     cursor = _parse_cursor(websocket.query_params.get("cursor"))
+    replay_limit = _parse_limit(websocket.query_params.get("replay_limit"))
 
     try:
         async with connect.execute(
@@ -49,7 +51,11 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
             workstore,
             projectstore,
             settings,
-            connect.ConnectChatRequest(chat_slug=chat_slug, cursor=cursor),
+            connect.ConnectChatRequest(
+                    chat_slug=chat_slug,
+                    cursor=cursor,
+                    replay_limit=replay_limit,
+                ),
         ) as sub:
             await websocket.accept()
             send_task = asyncio.create_task(_drain(sub, websocket))
@@ -86,6 +92,15 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
 
 
 async def _drain(sub: AgentSubscription, websocket: WebSocket) -> None:
+    if sub.replay_limit is not None:
+        await websocket.send_json(
+            {
+                "type": "history_state",
+                "oldest_seq": sub.history_oldest_seq,
+                "has_older": sub.history_has_older,
+                "replay_limit": sub.replay_limit,
+            }
+        )
     async for event in sub.stream():
         await websocket.send_json(event)
 
@@ -169,6 +184,16 @@ def _parse_cursor(value: str | None) -> int:
     except ValueError:
         return 0
     return max(n, 0)
+
+
+def _parse_limit(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        n = int(value)
+    except ValueError:
+        return None
+    return min(max(n, 0), _MAX_REPLAY_LIMIT)
 
 
 def _stored_chat_option_key(

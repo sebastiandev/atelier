@@ -224,6 +224,10 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   const clipboardFallbackTimerRef = useRef<number | null>(null);
   const systemClipboardPasteInFlightRef = useRef(false);
   const lastRuntimeSeqRef = useRef(0);
+  const pendingScrollRestoreRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
   const { byName: providersByName } = useProviderDescriptors();
   const {
     events,
@@ -232,6 +236,8 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     sendStop,
     sendPermission,
     sendSessionConfig,
+    loadOlder,
+    history,
     pendingPermissions,
   } = useAgentStream(chatSlug, { resource: "chats" });
 
@@ -256,7 +262,15 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   }, [chatSlug]);
 
   useLayoutEffect(() => {
-    streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
+    const pending = pendingScrollRestoreRef.current;
+    const el = streamRef.current;
+    if (!el) return;
+    if (pending) {
+      el.scrollTop = el.scrollHeight - pending.scrollHeight + pending.scrollTop;
+      pendingScrollRestoreRef.current = null;
+      return;
+    }
+    el.scrollTo({ top: el.scrollHeight });
   }, [events.length]);
 
   useEffect(() => {
@@ -266,7 +280,11 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     const transcript = chatMessagesFromEvents(events);
     setChat((current) =>
       current
-        ? { ...current, transcript, message_count: transcript.length }
+        ? {
+            ...current,
+            transcript,
+            message_count: Math.max(current.message_count, transcript.length),
+          }
         : current,
     );
   }, [events]);
@@ -306,6 +324,17 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
         : contextSnapshotFor(lastMetrics, modelMeta),
     [lastMetrics, modelMeta, staleMetricsSeq],
   );
+
+  async function handleLoadOlder() {
+    const el = streamRef.current;
+    if (el) {
+      pendingScrollRestoreRef.current = {
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      };
+    }
+    await loadOlder();
+  }
 
   function send() {
     const body = draft.trim();
@@ -448,6 +477,16 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               {" · "}{streamStatus}
             </div>
             <div className="transcript chat-transcript">
+              {history.hasOlder && (
+                <button
+                  type="button"
+                  className="transcript-load-older"
+                  onClick={() => void handleLoadOlder()}
+                  disabled={history.loadingOlder}
+                >
+                  {history.loadingOlder ? "Loading older..." : "Load older"}
+                </button>
+              )}
               <TranscriptUnits
                 units={runtimeUnits}
                 agentSlug={chat.slug}
@@ -607,6 +646,10 @@ export function ChatTile({
   const systemClipboardPasteInFlightRef = useRef(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const lastSummarySeqRef = useRef(0);
+  const pendingScrollRestoreRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
   const dragHandle = useDragHandle();
   const { byName: providersByName } = useProviderDescriptors();
   const {
@@ -616,6 +659,8 @@ export function ChatTile({
     sendStop,
     sendPermission,
     sendSessionConfig,
+    loadOlder,
+    history,
     pendingPermissions,
   } = useAgentStream(chatSlug, { resource: "chats" });
 
@@ -638,7 +683,15 @@ export function ChatTile({
   }, [chatSlug]);
 
   useLayoutEffect(() => {
-    streamRef.current?.scrollTo({ top: streamRef.current.scrollHeight });
+    const pending = pendingScrollRestoreRef.current;
+    const el = streamRef.current;
+    if (!el) return;
+    if (pending) {
+      el.scrollTop = el.scrollHeight - pending.scrollHeight + pending.scrollTop;
+      pendingScrollRestoreRef.current = null;
+      return;
+    }
+    el.scrollTo({ top: el.scrollHeight });
   }, [events.length]);
 
   useEffect(() => {
@@ -686,7 +739,7 @@ export function ChatTile({
       chatSummaryFromDetail({
         ...chat,
         transcript,
-        message_count: transcript.length,
+        message_count: Math.max(chat.message_count, transcript.length),
       }),
     );
   }, [chat, events, onUpdated]);
@@ -739,6 +792,17 @@ export function ChatTile({
     onFocus: () => setHint(text),
     onBlur: () => setHint((current) => (current === text ? null : current)),
   });
+
+  async function handleLoadOlder() {
+    const el = streamRef.current;
+    if (el) {
+      pendingScrollRestoreRef.current = {
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      };
+    }
+    await loadOlder();
+  }
 
   function send() {
     if (!chat) return;
@@ -1005,6 +1069,16 @@ export function ChatTile({
                 {chat.slug} · talking to {chat.model}
                 {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
               </div>
+              {history.hasOlder && (
+                <button
+                  type="button"
+                  className="transcript-load-older"
+                  onClick={() => void handleLoadOlder()}
+                  disabled={history.loadingOlder}
+                >
+                  {history.loadingOlder ? "Loading older..." : "Load older"}
+                </button>
+              )}
               <TranscriptUnits
                 units={runtimeUnits}
                 agentSlug={chat.slug}

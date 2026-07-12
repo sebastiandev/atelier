@@ -277,6 +277,7 @@ def test_codex_describe_lists_models_and_options() -> None:
         CodexReasoningEffort.MEDIUM.value,
         CodexReasoningEffort.HIGH.value,
         CodexReasoningEffort.XHIGH.value,
+        CodexReasoningEffort.MAX.value,
         CodexReasoningEffort.EXTRA.value,
         CodexReasoningEffort.ULTRA.value,
     ]
@@ -339,6 +340,16 @@ def test_codex_build_with_full_options() -> None:
     assert config.reasoning_effort is CodexReasoningEffort.ULTRA
     assert config.sandbox is CodexSandbox.READ_ONLY
     assert config.approval_mode is CodexApprovalMode.UNTRUSTED
+
+
+def test_codex_build_accepts_max_reasoning_effort() -> None:
+    config = CodexSpec().build(
+        _common(),
+        CodexModel.GPT_5_5.value,
+        options={"reasoning_effort": "max"},
+    )
+
+    assert config.reasoning_effort is CodexReasoningEffort.MAX
 
 
 def test_codex_build_accepts_terra_aliases() -> None:

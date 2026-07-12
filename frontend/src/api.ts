@@ -65,6 +65,37 @@ export type CreateWorkChatContextFolder = {
   context_filename?: string;
 };
 
+export type TranscriptEvent = {
+  seq: number;
+  type: string;
+  ts: string;
+  [key: string]: unknown;
+};
+
+export type TranscriptChunk = {
+  events: TranscriptEvent[];
+  oldest_seq: number | null;
+  has_older: boolean;
+};
+
+export type TranscriptResource = "agents" | "chats";
+
+export function getTranscriptChunk(
+  resource: TranscriptResource,
+  slug: string,
+  beforeSeq: number,
+  limit: number,
+): Promise<TranscriptChunk> {
+  const params = new URLSearchParams({
+    before_seq: String(beforeSeq),
+    limit: String(limit),
+  });
+  return fetch(`/api/${resource}/${slug}/transcript?${params.toString()}`).then(
+    (r) => jsonOrThrow<TranscriptChunk>(r),
+  );
+}
+
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.text().catch(() => "");

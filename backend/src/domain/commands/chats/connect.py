@@ -25,6 +25,7 @@ _CHAT_WORK_SLUG = "__chat__"
 class ConnectChatRequest:
     chat_slug: str
     cursor: int = 0
+    replay_limit: int | None = None
 
 
 class ChatNotFound(ValueError):
@@ -70,7 +71,9 @@ async def execute(
             record_user_input=False,
         )
 
-    async with supervisor.subscribe(req.chat_slug, req.cursor) as sub:
+    async with supervisor.subscribe(
+        req.chat_slug, cursor=req.cursor, replay_limit=req.replay_limit
+    ) as sub:
         yield sub
 
 

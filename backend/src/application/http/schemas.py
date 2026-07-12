@@ -156,6 +156,12 @@ class AgentSummary(BaseModel):
     worktree_path: str
 
 
+class TranscriptChunkResponse(BaseModel):
+    events: list[dict[str, Any]]
+    oldest_seq: int | None = None
+    has_older: bool = False
+
+
 class DetachResponse(BaseModel):
     """Result of POSTing /agents/{slug}/detach."""
 

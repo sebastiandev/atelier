@@ -5,6 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  memo,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -18,10 +19,10 @@ import { codeToTokensBase, type ThemedToken } from "shiki";
 // agents accumulate thousands of events (every status change, every
 // MessageDelta, every tool call/result), and rendering them all bloats
 // the DOM until scrolling and selection lag noticeably. The cap keeps
-// the working set bounded; the user can expand by 500 at a time when
+// the working set bounded; the user can expand by 100 at a time when
 // they want to scroll into history.
-const TRANSCRIPT_CAP_INITIAL = 500;
-const TRANSCRIPT_CAP_STEP = 500;
+const TRANSCRIPT_CAP_INITIAL = 100;
+const TRANSCRIPT_CAP_STEP = 100;
 const ACTIVE_EVENT_STALE_MS = 5 * 60 * 1000;
 
 import {
@@ -177,6 +178,8 @@ export function AgentTile({
     sendPermission,
     sendSessionConfig,
     sendSessionConfigRefresh,
+    loadOlder,
+    history,
     pendingPermissions,
     pendingHandoff,
   } = useAgentStream(agentSlug);
@@ -337,19 +340,30 @@ export function AgentTile({
   const clipboardFallbackTimerRef = useRef<number | null>(null);
   const systemClipboardPasteInFlightRef = useRef(false);
 
-  // Cap the rendered slice so multi-thousand-event transcripts don't
-  // blow the DOM. Default holds the last 500 events; "Load older"
-  // expands the cap by another 500 each click. Reset on agent change
-  // so reopening a different agent always starts at the cap.
+  // Cap the rendered slice so loaded transcript chunks don't blow the
+  // DOM. The stream hook itself also asks the backend for a bounded
+  // initial replay; "Load older" first reveals locally hidden events,
+  // then fetches another older chunk on demand.
   const [visibleCap, setVisibleCap] = useState(TRANSCRIPT_CAP_INITIAL);
   useEffect(() => {
     setVisibleCap(TRANSCRIPT_CAP_INITIAL);
   }, [agentSlug]);
-  const visibleEvents = useMemo(
-    () => events.slice(-visibleCap),
+  const transcriptWindow = useMemo(
+    () => transcriptWindowFor(events, visibleCap),
     [events, visibleCap],
   );
-  const olderEventCount = events.length - visibleEvents.length;
+  const visibleEvents = transcriptWindow.events;
+  const olderLoadedEventCount = transcriptWindow.hiddenCount;
+  const canLoadOlderEvents = olderLoadedEventCount > 0 || history.hasOlder;
+  const loadOlderLabel = history.loadingOlder
+    ? "Loading older..."
+    : olderLoadedEventCount > 0
+      ? `Load ${Math.min(TRANSCRIPT_CAP_STEP, olderLoadedEventCount)} older${
+          olderLoadedEventCount > TRANSCRIPT_CAP_STEP
+            ? ` · ${olderLoadedEventCount} hidden`
+            : ""
+        }`
+      : `Load ${TRANSCRIPT_CAP_STEP} older`;
 
   const units = useMemo(() => groupEvents(visibleEvents), [visibleEvents]);
   const agentStatus = useMemo(() => latestStatus(events), [events]);
@@ -607,7 +621,7 @@ export function AgentTile({
     scrollTop: number;
   } | null>(null);
 
-  function handleLoadOlder() {
+  async function handleLoadOlder() {
     if (guardBlockedCompaction()) return;
     const el = transcriptRef.current;
     if (el) {
@@ -616,6 +630,11 @@ export function AgentTile({
         scrollTop: el.scrollTop,
       };
     }
+    if (olderLoadedEventCount > 0) {
+      setVisibleCap((c) => c + TRANSCRIPT_CAP_STEP);
+      return;
+    }
+    await loadOlder();
     setVisibleCap((c) => c + TRANSCRIPT_CAP_STEP);
   }
 
@@ -629,7 +648,7 @@ export function AgentTile({
     }
     // Leave the ref set; the auto-scroll effect below clears it after
     // skipping one round.
-  }, [visibleCap]);
+  }, [visibleCap, events.length]);
 
   // Auto-scroll to bottom on new content.
   useLayoutEffect(() => {
@@ -1322,16 +1341,14 @@ export function AgentTile({
           </div>
         )}
         <div className="transcript" ref={transcriptRef}>
-          {olderEventCount > 0 && (
+          {canLoadOlderEvents && (
             <button
               type="button"
               className="transcript-load-older"
-              onClick={handleLoadOlder}
+              onClick={() => void handleLoadOlder()}
+              disabled={history.loadingOlder}
             >
-              Load {Math.min(TRANSCRIPT_CAP_STEP, olderEventCount)} older
-              {olderEventCount > TRANSCRIPT_CAP_STEP
-                ? ` · ${olderEventCount} hidden`
-                : ""}
+              {loadOlderLabel}
             </button>
           )}
           <TranscriptUnits units={units} agentSlug={agentSlug} />
@@ -2228,6 +2245,52 @@ export function latestSessionConfigOptionByIds(
   return null;
 }
 
+type TranscriptWindow = {
+  events: AgentEvent[];
+  hiddenCount: number;
+};
+
+function transcriptWindowFor(
+  events: AgentEvent[],
+  visibleCount: number,
+): TranscriptWindow {
+  if (visibleCount <= 0) {
+    return { events: [], hiddenCount: countRenderableTranscriptEvents(events) };
+  }
+  let rendered = 0;
+  let start = 0;
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (isRenderableTranscriptEvent(events[i])) rendered += 1;
+    if (rendered >= visibleCount) {
+      start = i;
+      break;
+    }
+  }
+  if (rendered < visibleCount) start = 0;
+  return {
+    events: events.slice(start),
+    hiddenCount: countRenderableTranscriptEvents(events.slice(0, start)),
+  };
+}
+
+function countRenderableTranscriptEvents(events: AgentEvent[]): number {
+  let count = 0;
+  for (const event of events) {
+    if (isRenderableTranscriptEvent(event)) count += 1;
+  }
+  return count;
+}
+
+function isRenderableTranscriptEvent(event: AgentEvent): boolean {
+  switch (event.type) {
+    case "session_config_options":
+    case "session_config_changed":
+      return false;
+    default:
+      return true;
+  }
+}
+
 export function sessionConfigChoicesForSelect(
   option: SessionConfigOption,
 ): SessionConfigChoice[] {
@@ -2862,7 +2925,7 @@ type CompactionSummaryLoader = (
   filename: string,
 ) => Promise<{ content: string }>;
 
-export function TranscriptUnits({
+export const TranscriptUnits = memo(function TranscriptUnits({
   units,
   agentSlug,
   compactionSummaryLoader = getAgentCompactionSummary,
@@ -2924,9 +2987,9 @@ export function TranscriptUnits({
       ))}
     </>
   );
-}
+});
 
-function Unit({
+const Unit = memo(function Unit({
   unit,
   agentSlug,
   compactionSummaryLoader,
@@ -2998,7 +3061,7 @@ function Unit({
         </div>
       );
   }
-}
+});
 
 function ProviderCompactionBoundary({
   unit,

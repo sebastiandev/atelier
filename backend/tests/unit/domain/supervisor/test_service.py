@@ -557,6 +557,73 @@ def test_subscribe_with_cursor_zero_replays_full_disk_history() -> None:
     assert _run(run()) == [1, 2, 3, 4, 5]
 
 
+def test_subscribe_with_replay_limit_replays_tail_and_marks_history() -> None:
+    async def run() -> tuple[list[int], int | None, bool, int | None]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter(_scripted(), keep_alive=True)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_seq(supervisor, "agt-1", 5)
+
+        async with supervisor.subscribe("agt-1", cursor=0, replay_limit=2) as sub:
+            seqs = [e["seq"] for e in sub.replay]
+            result = (
+                seqs,
+                sub.history_oldest_seq,
+                sub.history_has_older,
+                sub.replay_limit,
+            )
+
+        await supervisor.shutdown()
+        return result
+
+    assert _run(run()) == ([4, 5], 4, True, 2)
+
+
+def test_subscribe_with_replay_limit_keeps_sticky_session_config_metadata() -> None:
+    async def run() -> tuple[list[int], int | None, bool]:
+        log = StubTranscriptLog()
+        ts = UTC_NOW.isoformat()
+        log.events[("WRK-001", "agt-1")] = [
+            {
+                "seq": 1,
+                "type": "session_config_options",
+                "ts": ts,
+                "options": [
+                    {
+                        "id": "model",
+                        "name": "Model",
+                        "choices": [{"value": "gpt-5.6", "name": "GPT-5.6"}],
+                        "current_value": "gpt-5.6",
+                    }
+                ],
+            },
+            {"seq": 2, "type": "status_change", "ts": ts, "status": "idle"},
+            {"seq": 3, "type": "message_complete", "ts": ts, "text": "older"},
+            {"seq": 4, "type": "user_input", "ts": ts, "text": "newer"},
+            {"seq": 5, "type": "message_complete", "ts": ts, "text": "newest"},
+        ]
+        supervisor = AgentSupervisorService(log)
+        await supervisor.register_agent(
+            "WRK-001",
+            "agt-1",
+            StubAgentAdapter([], keep_alive=True),
+            _start_context(),
+            lazy=True,
+        )
+
+        async with supervisor.subscribe("agt-1", cursor=0, replay_limit=2) as sub:
+            result = (
+                [e["seq"] for e in sub.replay],
+                sub.history_oldest_seq,
+                sub.history_has_older,
+            )
+
+        await supervisor.shutdown()
+        return result
+
+    assert _run(run()) == ([1, 4, 5], 4, True)
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle
 # ---------------------------------------------------------------------------

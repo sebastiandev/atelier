@@ -129,6 +129,9 @@ SUBSCRIBER_QUEUE_MAX = 256
 # through these cleanup paths.
 ADAPTER_CLOSE_TIMEOUT_SECONDS = 5.0
 
+STICKY_REPLAY_EVENT_TYPES = {"session_config_options", "session_config_changed"}
+STICKY_REPLAY_LIMIT = 50
+
 
 class AgentTerminated(RuntimeError):
     """Raised by ``send_input`` when the agent's event pump has ended
@@ -161,6 +164,9 @@ class AgentSubscription:
     # publish lock so it never overlaps with what's about to land in the
     # queue.
     replay: list[dict[str, Any]] = dataclasses.field(default_factory=list)
+    replay_limit: int | None = None
+    history_oldest_seq: int | None = None
+    history_has_older: bool = False
 
     async def stream(self) -> AsyncIterator[dict[str, Any]]:
         """Yield every event exactly once, in order: replay then live."""
@@ -441,7 +447,10 @@ class AgentSupervisorService:
 
     @asynccontextmanager
     async def subscribe(
-        self, agent_slug: str, cursor: int = 0
+        self,
+        agent_slug: str,
+        cursor: int = 0,
+        replay_limit: int | None = None,
     ) -> AsyncIterator[AgentSubscription]:
         """Yield a ``Subscription`` whose ``stream()`` emits every event
         with ``seq > cursor`` exactly once, in order: disk replay first,
@@ -478,13 +487,37 @@ class AgentSupervisorService:
         # Disk read is sync + slow; do it outside the publish lock so it
         # doesn't block other publishes. Filter to (cursor, from_seq] —
         # events past from_seq land in the live queue instead, so reading
-        # them from disk would create duplicates.
-        all_events = await asyncio.to_thread(
-            self._read_disk_window, state.work_slug, agent_slug, cursor
-        )
-        subscription.replay = [
-            e for e in all_events if e["seq"] <= from_seq
-        ]
+        # them from disk would create duplicates. A bounded replay is
+        # opt-in for long transcripts; the default remains the historical
+        # full replay for older clients.
+        if replay_limit is None:
+            all_events = await asyncio.to_thread(
+                self._read_disk_window, state.work_slug, agent_slug, cursor
+            )
+            subscription.replay = [e for e in all_events if e["seq"] <= from_seq]
+        else:
+            limit = max(replay_limit, 0)
+            subscription.replay_limit = limit
+            tail = await asyncio.to_thread(
+                self._read_disk_tail_window,
+                state.work_slug,
+                agent_slug,
+                cursor,
+                from_seq,
+                limit,
+            )
+            sticky = await asyncio.to_thread(
+                self._read_disk_sticky_window,
+                state.work_slug,
+                agent_slug,
+                cursor,
+                from_seq,
+            )
+            subscription.replay = _merge_replay_windows(sticky, tail)
+            if tail:
+                oldest = tail[0]["seq"]
+                subscription.history_oldest_seq = oldest
+                subscription.history_has_older = oldest > cursor + 1
         try:
             yield subscription
         finally:
@@ -497,6 +530,40 @@ class AgentSupervisorService:
     ) -> list[dict[str, Any]]:
         return list(
             self._transcript_log.read_from_cursor(work_slug, agent_slug, cursor)
+        )
+
+    def _read_disk_tail_window(
+        self,
+        work_slug: str,
+        agent_slug: str,
+        cursor: int,
+        from_seq: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+        return list(
+            self._transcript_log.read_tail(
+                work_slug,
+                agent_slug,
+                cursor,
+                limit,
+                before_seq=from_seq + 1,
+            )
+        )
+
+    def _read_disk_sticky_window(
+        self, work_slug: str, agent_slug: str, cursor: int, from_seq: int
+    ) -> list[dict[str, Any]]:
+        return list(
+            self._transcript_log.read_recent_by_type(
+                work_slug,
+                agent_slug,
+                STICKY_REPLAY_EVENT_TYPES,
+                cursor,
+                STICKY_REPLAY_LIMIT,
+                before_seq=from_seq + 1,
+            )
         )
 
     async def stop_agent(self, agent_slug: str) -> None:
@@ -863,6 +930,18 @@ class AgentSupervisorService:
         if state is None:
             raise ValueError(f"agent not running: {agent_slug}")
         return state
+
+
+def _merge_replay_windows(
+    *windows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_seq: dict[int, dict[str, Any]] = {}
+    for window in windows:
+        for event in window:
+            seq = event.get("seq")
+            if isinstance(seq, int) and not isinstance(seq, bool):
+                by_seq[seq] = event
+    return [by_seq[seq] for seq in sorted(by_seq)]
 
 
 # Optional keys dropped from the wire/transcript dict when None, per

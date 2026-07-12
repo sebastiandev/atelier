@@ -53,6 +53,26 @@ class ChatFiles(Protocol):
     def append_transcript_event(self, chat_slug: str, event: dict[str, Any]) -> None: ...
     def last_seq(self, chat_slug: str) -> int: ...
     def read_transcript(self, chat_slug: str) -> Iterator[dict[str, Any]]: ...
+    def read_transcript_before(
+        self, chat_slug: str, before_seq: int, limit: int
+    ) -> Iterator[dict[str, Any]]: ...
+    def read_transcript_tail(
+        self,
+        chat_slug: str,
+        *,
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]: ...
+    def read_transcript_recent_by_type(
+        self,
+        chat_slug: str,
+        event_types: set[str],
+        *,
+        cursor: int,
+        limit: int,
+        before_seq: int | None = None,
+    ) -> Iterator[dict[str, Any]]: ...
     def write_chat_compaction_doc(
         self, chat_slug: str, filename: str, content: str
     ) -> str: ...

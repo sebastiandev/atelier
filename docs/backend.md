@@ -195,7 +195,7 @@ The resume command preserves the agent's selector + provider options so the CLI 
 |---|---|---|
 | Claude | `--model <id>` | `--effort <level>` (skipped when `thinking_effort=="off"`); `--permission-mode <m>` (skipped when `permission_mode=="default"`, since the CLI applies that anyway) |
 | Amp | `--mode <mode>` | `--dangerously-allow-all` when `permission_mode=="allow_all"`. Amp's other permission modes (`default`/`custom`) and `custom_allowed_tools` are Atelier-side constructs (the bridge) — they don't translate to CLI flags. |
-| Codex | `--model <id>` | `--add-dir <resolved-share-root>` for mounted project shared folders when sandbox is `workspace-write`; `--sandbox <mode>` (skipped when `workspace-write`, the default); `--ask-for-approval <mode>` (skipped when `on-request`, the default); `-c model_reasoning_effort=<level>` (skipped when `medium`, the default) routed through Codex's TOML config override since the CLI has no dedicated reasoning-effort flag. The resume invocation is interactive `codex resume <sid>` plus the flags; `codex exec resume` is non-interactive and requires a prompt. |
+| Codex | `--model <id>` | `--add-dir <resolved-share-root>` for mounted project shared folders when sandbox is `workspace-write`; `--sandbox <mode>` (skipped when `workspace-write`, the default); `--ask-for-approval <mode>` (skipped when `on-request`, the default); `-c model_reasoning_effort=<level>` (skipped when `medium`, the default) routed through Codex's TOML config override since the CLI has no dedicated reasoning-effort flag. The accepted ladder includes `xhigh`, `max`, and `ultra`; ACP-backed Codex uses the same high-end values through `reasoning_effort`. The resume invocation is interactive `codex resume <sid>` plus the flags; `codex exec resume` is non-interactive and requires a prompt. |
 
 Legacy agents whose `options` column is NULL (rows created before schema v9) detach with the bare `claude --resume <id>` / `amp threads continue <id>` / `codex resume <id>` shape — same behaviour as before the column existed. Unit tests in `tests/unit/infrastructure/cli_launcher/test_build_resume_command.py` pin every flag combination.
 
@@ -437,11 +437,11 @@ The cursor is a `seq` integer. `read_from_cursor(work_slug, agent_slug, cursor)`
 
 ## WS protocol
 
-`/api/agents/{agent_slug}/stream?cursor=N`
+`/api/agents/{agent_slug}/stream?cursor=N[&replay_limit=M]` and `/api/chats/{chat_slug}/stream?cursor=N[&replay_limit=M]`
 
 For stuck `thinking` / `reconnecting` states, start with `docs/troubleshooting.md`. In particular, prove whether the transcript is appending and whether the supervisor has evicted the live state before assuming the frontend or ACP restore path is the root cause.
 
-**Server → client**: each frame is one `AgentEvent` serialized as JSON. The supervisor maintains the seq monotonicity, so the client can persist the last seq and resume from there on reconnect.
+**Server → client**: each normal frame is one `AgentEvent` serialized as JSON. The supervisor maintains the seq monotonicity, so the client can persist the last seq and resume from there on reconnect. When the client opts into `replay_limit`, the first frame is a non-transcript `history_state` control frame with `{oldest_seq, has_older, replay_limit}`; clients use that to show a **Load older** control and fetch previous chunks through `GET /api/agents/{slug}/transcript?before_seq=S&limit=M` or `GET /api/chats/{slug}/transcript?before_seq=S&limit=M`. Bounded replay also includes the newest sticky session-config events (`session_config_options` / `session_config_changed`) so model/effort/service-tier controls are available immediately even when their metadata is older than the visible tail; `history_state.oldest_seq` still points at the visible tail window, not those sticky rows.
 
 **Client → server**: the WS receive loop parses each frame into a typed `UserAction` (`domain/agents/user_actions.py`) and forwards to `handle_user_action.execute`. Four action types:
 
@@ -456,7 +456,7 @@ Frames that don't parse to a known action are ignored.
 **Replay-then-live** semantics on connect:
 
 1. Take a snapshot `from_seq` of the supervisor's current seq for this agent.
-2. Replay the disk-side window `(cursor, from_seq]`.
+2. Replay the disk-side window `(cursor, from_seq]`. If `replay_limit` is present, use the newest at-most-`M` rows from that same window instead of scanning/sending the entire transcript.
 3. Drain the per-subscription `asyncio.Queue` for `seq > from_seq`.
 
 This is "no duplicates, no gaps" by construction — events with `seq <= cursor` are excluded from replay; events with `seq > from_seq` arrive only via the queue.
