@@ -6,6 +6,7 @@ import {
 } from "react";
 
 type PaneResizeHandleProps = {
+  defaultValue: number;
   edge: "left" | "right";
   label: string;
   max: number;
@@ -19,6 +20,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 export function PaneResizeHandle({
+  defaultValue,
   edge,
   label,
   max,
@@ -63,7 +65,7 @@ export function PaneResizeHandle({
   }
 
   function onKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
-    const step = event.shiftKey ? 40 : 12;
+    const step = event.shiftKey ? 32 : 16;
     const direction = edge === "right" ? 1 : -1;
     if (event.key === "ArrowRight") {
       event.preventDefault();
@@ -92,6 +94,7 @@ export function PaneResizeHandle({
       aria-valuenow={value}
       role="separator"
       onPointerDown={beginResize}
+      onDoubleClick={() => setWidth(defaultValue)}
       onKeyDown={onKeyDown}
     />
   );

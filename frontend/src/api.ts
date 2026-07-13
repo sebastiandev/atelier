@@ -1,4 +1,5 @@
 export type WorkStatus = "active" | "completed" | "archived";
+export type WorkModeKind = "manual" | "planning" | "loop";
 
 export type WorkSummary = {
   slug: string;
@@ -44,6 +45,9 @@ export type ContextEntry = {
 export type WorkDetail = WorkSummary & {
   contexts: ContextEntry[];
   chat_context_folders: WorkChatContextFolder[];
+  // Optional until the backend work-mode migration lands. The query-string
+  // seed still handles the first navigation from New Work.
+  mode?: WorkModeKind | null;
 };
 
 export type CreateWorkPayload = {
@@ -390,7 +394,7 @@ export type LoopStepStatus =
   | "failed"
   | "cancelled";
 
-export type LoopDefinitionScope = "builtin" | "repo";
+export type LoopDefinitionScope = "builtin" | "repo" | "work";
 export type LoopStepKind =
   | "agent_task"
   | "agent_review"
@@ -424,7 +428,7 @@ export type LoopContextReference = {
 
 export type LoopAgentPolicy = {
   session: LoopSessionPolicy;
-  permissions: LoopPermission;
+  permissions: LoopPermission | null;
   provider: string | null;
   model: string | null;
   effort: string | null;
@@ -464,7 +468,7 @@ export type LoopDefinition = {
 
 export type SaveLoopDefinitionPayload = Pick<
   LoopDefinition,
-  "id" | "name" | "description" | "forked_from" | "stages"
+  "id" | "name" | "description" | "scope" | "forked_from" | "stages"
 > & { expected_revision?: string | null };
 export type PlanProposalStatus = "pending" | "accepted" | "rejected";
 export type PlanTrackingKind = "jira" | "pr" | "blocker" | "bug";
@@ -535,6 +539,43 @@ export type PlanArtifactRun = {
   loop_definition_revision: string;
   loop_current_stage_id: string;
   loop_stages: PlanLoopStageRun[];
+};
+
+export type WorkLoopRun = {
+  id: string;
+  number: number;
+  goal: string;
+  status: LoopStatus;
+  status_reason: string;
+  loop_definition_id: string;
+  loop_definition_name: string;
+  loop_definition_revision: string;
+  current_stage_id: string | null;
+  stages: PlanLoopStageRun[];
+  root_path: string;
+  workspace_path: string;
+  provider: string;
+  model: string;
+  options: Record<string, string>;
+  started_at: string;
+  completed_at: string | null;
+  accepted_at: string | null;
+  elapsed_seconds: number | null;
+  cost_usd: number | null;
+  summary: string;
+  changed_files: Array<{ path: string; additions: number; deletions: number }>;
+  evidence: string[];
+  source_run_id: string | null;
+};
+
+export type StartWorkLoopRunPayload = {
+  goal: string;
+  root_path: string;
+  loop_definition_id: string;
+  loop_revision: string;
+  provider: string;
+  model: string;
+  options?: Record<string, string>;
 };
 
 export type PlanArtifactProposal = {
@@ -903,8 +944,24 @@ export function markPlanRunCleaned(
   ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
-export function listLoopDefinitions(workSlug: string): Promise<LoopDefinition[]> {
-  return fetch(`/api/works/${workSlug}/loop-definitions`).then((response) =>
+function loopsPath(
+  workSlug: string | null,
+  rootPath?: string | null,
+  scope?: LoopDefinitionScope,
+): string {
+  const query = new URLSearchParams();
+  if (workSlug) query.set("work_slug", workSlug);
+  if (rootPath) query.set("root_path", rootPath);
+  if (scope) query.set("scope", scope);
+  const suffix = query.toString();
+  return `/api/loops${suffix ? `?${suffix}` : ""}`;
+}
+
+export function listLoopDefinitions(
+  workSlug: string | null,
+  rootPath?: string | null,
+): Promise<LoopDefinition[]> {
+  return fetch(loopsPath(workSlug, rootPath)).then((response) =>
     jsonOrThrow<LoopDefinition[]>(response),
   );
 }
@@ -912,24 +969,28 @@ export function listLoopDefinitions(workSlug: string): Promise<LoopDefinition[]>
 export function getLoopDefinition(
   workSlug: string,
   definitionId: string,
+  rootPath?: string | null,
+  scope?: LoopDefinitionScope,
 ): Promise<LoopDefinition> {
-  return fetch(`/api/works/${workSlug}/loop-definitions/${definitionId}`).then(
+  const query = loopsPath(workSlug, rootPath, scope).split("?")[1];
+  return fetch(`/api/loops/${encodeURIComponent(definitionId)}${query ? `?${query}` : ""}`).then(
     (response) => jsonOrThrow<LoopDefinition>(response),
   );
 }
 
 export function saveLoopDefinition(
-  workSlug: string,
+  workSlug: string | null,
   payload: SaveLoopDefinitionPayload,
+  rootPath?: string | null,
 ): Promise<LoopDefinition> {
-  const updating = Boolean(payload.expected_revision);
+  const updating = payload.expected_revision !== null && payload.expected_revision !== undefined;
   const url = updating
-    ? `/api/works/${workSlug}/loop-definitions/${payload.id}`
-    : `/api/works/${workSlug}/loop-definitions`;
+    ? `/api/loops/${encodeURIComponent(payload.id)}`
+    : "/api/loops";
   return fetch(url, {
     method: updating ? "PUT" : "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, work_slug: workSlug, root_path: rootPath }),
   }).then((response) => jsonOrThrow<LoopDefinition>(response));
 }
 
@@ -937,19 +998,23 @@ export function forkLoopDefinition(
   workSlug: string,
   sourceId: string,
   payload: { id: string; name: string },
+  rootPath?: string | null,
 ): Promise<LoopDefinition> {
-  return fetch(`/api/works/${workSlug}/loop-definitions/${sourceId}/fork`, {
+  return fetch(`/api/loops/${encodeURIComponent(sourceId)}/fork`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ ...payload, work_slug: workSlug, root_path: rootPath }),
   }).then((response) => jsonOrThrow<LoopDefinition>(response));
 }
 
 export function deleteLoopDefinition(
-  workSlug: string,
+  workSlug: string | null,
   definitionId: string,
+  rootPath?: string | null,
+  scope?: LoopDefinitionScope,
 ): Promise<void> {
-  return fetch(`/api/works/${workSlug}/loop-definitions/${definitionId}`, {
+  const query = loopsPath(workSlug, rootPath, scope).split("?")[1];
+  return fetch(`/api/loops/${encodeURIComponent(definitionId)}${query ? `?${query}` : ""}`, {
     method: "DELETE",
   }).then((response) => {
     if (!response.ok) return jsonOrThrow<never>(response);
@@ -957,15 +1022,95 @@ export function deleteLoopDefinition(
 }
 
 export function revealLoopDefinition(
-  workSlug: string,
+  workSlug: string | null,
   definitionId: string,
+  rootPath?: string | null,
+  scope?: LoopDefinitionScope,
 ): Promise<void> {
+  const query = loopsPath(workSlug, rootPath, scope).split("?")[1];
   return fetch(
-    `/api/works/${workSlug}/loop-definitions/${definitionId}/reveal`,
+    `/api/loops/${encodeURIComponent(definitionId)}/reveal${query ? `?${query}` : ""}`,
     { method: "POST" },
   ).then((response) => {
     if (!response.ok) return jsonOrThrow<never>(response);
   });
+}
+
+export function listWorkLoopRuns(workSlug: string): Promise<WorkLoopRun[]> {
+  return fetch(`/api/works/${workSlug}/runs`).then((response) =>
+    jsonOrThrow<WorkLoopRun[]>(response),
+  );
+}
+
+export function getWorkLoopRun(
+  workSlug: string,
+  runId: string,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}`).then((response) =>
+    jsonOrThrow<WorkLoopRun>(response),
+  );
+}
+
+export function startWorkLoopRun(
+  workSlug: string,
+  payload: StartWorkLoopRunPayload,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function resumeWorkLoopRun(
+  workSlug: string,
+  runId: string,
+  resolutionNote = "",
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ resolution_note: resolutionNote || undefined }),
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function requestWorkLoopRunChanges(
+  workSlug: string,
+  runId: string,
+  note: string,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/request-changes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function acceptWorkLoopRun(
+  workSlug: string,
+  runId: string,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/accept`, {
+    method: "POST",
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function createWorkLoopRunPullRequest(
+  workSlug: string,
+  runId: string,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/pull-request`, {
+    method: "POST",
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function rerunWorkLoopRun(
+  workSlug: string,
+  runId: string,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/rerun`, {
+    method: "POST",
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
 
 export type Persona = "architect" | "developer" | "product" | "ux" | "writer";
@@ -1092,6 +1237,7 @@ export type CreateAgentPayload = {
   provider: string;
   model: string;
   folder: string;
+  workspace_mode?: "isolated" | "shared";
   options?: Record<string, string>;
   contexts?: ContextEntry[];
   // When set, fork the worktree from this existing agent in the same
@@ -1544,6 +1690,7 @@ export type ProjectSummary = {
   // hue tints background, glyph bg, soft wash, and border line.
   color: number;
   pinned: boolean;
+  default_folder?: string | null;
   default_jira_conn: string | null;
   default_sentry_conn: string | null;
   created_at: string;
@@ -1558,6 +1705,7 @@ export type CreateProjectPayload = {
   glyph: string;
   color: number;
   pinned?: boolean;
+  default_folder?: string | null;
   default_jira_conn?: string | null;
   default_sentry_conn?: string | null;
 };
@@ -1573,6 +1721,7 @@ export type PatchProjectPayload = {
   glyph?: string;
   color?: number;
   pinned?: boolean;
+  default_folder?: string | null;
   default_jira_conn?: string | null;
   default_sentry_conn?: string | null;
 };

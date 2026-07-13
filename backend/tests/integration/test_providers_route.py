@@ -107,6 +107,9 @@ def test_codex_descriptor_has_acp_mode_and_reasoning(app_client: TestClient) -> 
     codex = next(p for p in response.json() if p["name"] == "codex-acp")
     assert codex["primary_field"]["label"] == "Model"
     assert codex["primary_field"]["default"] == "gpt-5.5"
+    assert "gpt-5.6-terra" in codex["primary_field"]["values"]
+    assert "gpt-5.6-luna" in codex["primary_field"]["values"]
+    assert "gpt-5.6-sol" in codex["primary_field"]["values"]
     assert "gpt-5.4" in codex["primary_field"]["values"]
     assert "gpt-5.5" in codex["primary_field"]["values"]
     assert "gpt-5.4-mini" in codex["primary_field"]["values"]
@@ -117,10 +120,15 @@ def test_codex_descriptor_has_acp_mode_and_reasoning(app_client: TestClient) -> 
         "medium",
         "high",
         "xhigh",
+        "extra",
+        "ultra",
     ]
     assert codex["options"]["reasoning_effort"]["default"] == "medium"
     assert codex["options"]["mode"]["default"] == "auto"
     assert "Mode" in codex["advanced_intro"]
+    assert codex["model_meta"]["gpt-5.6-terra"]["input_per_mtok"] is None
+    assert codex["model_meta"]["gpt-5.6-luna"]["input_per_mtok"] is None
+    assert codex["model_meta"]["gpt-5.6-sol"]["input_per_mtok"] is None
     assert codex["model_meta"]["gpt-5.5"]["context_window"] == 400_000
     assert codex["model_meta"]["gpt-5.5"]["input_per_mtok"] == 5.0
     assert codex["model_meta"]["gpt-5.5"]["output_per_mtok"] == 30.0

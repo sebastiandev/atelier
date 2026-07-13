@@ -140,15 +140,15 @@ export function SearchModal({
             placeholder="search work units, projects, ids…"
           />
           {scopeProject && (
-            <div className="scope-toggle" role="tablist">
+            <div className="scope-toggle view-toggle" role="tablist">
               <button
-                className={scope === "all" ? "active" : ""}
+                className={`view-toggle-btn${scope === "all" ? " active" : ""}`}
                 onClick={() => setScope("all")}
               >
                 all
               </button>
               <button
-                className={scope !== "all" ? "active" : ""}
+                className={`view-toggle-btn${scope !== "all" ? " active" : ""}`}
                 onClick={() => setScope({ slug: scopeProject.slug })}
               >
                 {scopeProject.slug}
@@ -179,8 +179,7 @@ export function SearchModal({
                     "search-result" + (active === i ? " kbd-active" : "")
                   }
                   style={{
-                    ["--proj-color" as string]: `oklch(0.62 0.16 ${p.color})`,
-                    ["--proj-soft" as string]: `oklch(0.62 0.16 ${p.color} / 0.12)`,
+                    ["--proj-h" as string]: String(p.color),
                   }}
                   onMouseEnter={() => setActive(i)}
                   onClick={() =>
@@ -227,8 +226,7 @@ export function SearchModal({
                     style={
                       p
                         ? {
-                            ["--proj-color" as string]: `oklch(0.62 0.16 ${p.color})`,
-                            ["--proj-soft" as string]: `oklch(0.62 0.16 ${p.color} / 0.12)`,
+                            ["--proj-h" as string]: String(p.color),
                           }
                         : undefined
                     }
@@ -244,7 +242,6 @@ export function SearchModal({
                           ? {
                               background: "var(--bg-2)",
                               color: "var(--fg-3)",
-                              borderColor: "var(--line)",
                             }
                           : undefined
                       }

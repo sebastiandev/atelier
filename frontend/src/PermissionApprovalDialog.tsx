@@ -268,7 +268,9 @@ function SingleApprovalCard({
         {detailsOpen ? (
           <pre className="permission-approval-command">
             <span aria-hidden>$ </span>
-            {request.detail}
+            {request.detail.split(/(--?[\w-]+)/g).map((part, index) =>
+              /^--?/.test(part) ? <mark key={index}>{part}</mark> : part,
+            )}
           </pre>
         ) : (
           <div className="permission-approval-summary">{request.summary}</div>
@@ -284,7 +286,7 @@ function SingleApprovalCard({
           <div className="permission-approval-actions">
             <button
               type="button"
-              className="permission-approval-btn reject"
+              className="btn ghost"
               onClick={onReject}
               title={optionLabel(prompt, "reject_once") ?? undefined}
             >
@@ -295,7 +297,7 @@ function SingleApprovalCard({
             <div className="permission-approval-affirm">
               <button
                 type="button"
-                className="permission-approval-btn allow"
+                className="btn primary"
                 onClick={onAllow}
                 title={optionLabel(prompt, "allow_once") ?? undefined}
               >
@@ -305,7 +307,7 @@ function SingleApprovalCard({
               {hasOptionKind(prompt, "allow_always") && (
                 <button
                   type="button"
-                  className="permission-approval-btn always"
+                  className="btn permission-approval-always"
                   onClick={onAllowAlways}
                   title={optionLabel(prompt, "allow_always") ?? undefined}
                 >
@@ -358,7 +360,7 @@ function GroupedApprovalCard({
         <span className="spacer" />
         <button
           type="button"
-          className="permission-approval-btn allow sm"
+          className="btn sm primary"
           disabled={pendingCount === 0}
           onClick={onAllowAll}
         >
@@ -367,7 +369,7 @@ function GroupedApprovalCard({
         </button>
         <button
           type="button"
-          className="permission-approval-btn reject sm"
+          className="btn sm ghost"
           disabled={pendingCount === 0}
           onClick={onRejectAll}
         >
@@ -403,7 +405,7 @@ function GroupedApprovalCard({
                 <span className="permission-approval-row-actions">
                   <button
                     type="button"
-                    className="permission-approval-icon-btn allow"
+                    className="btn icon sm permission-approval-allow"
                     onClick={() => onAllow(prompt)}
                     aria-label={`Allow ${request.tool}`}
                     title={optionLabel(prompt, "allow_once") ?? "Allow"}
@@ -412,7 +414,7 @@ function GroupedApprovalCard({
                   </button>
                   <button
                     type="button"
-                    className="permission-approval-icon-btn reject"
+                    className="btn icon sm ghost permission-approval-reject"
                     onClick={() => onReject(prompt)}
                     aria-label={`Reject ${request.tool}`}
                     title={optionLabel(prompt, "reject_once") ?? "Reject"}

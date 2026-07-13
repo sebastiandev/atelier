@@ -369,6 +369,26 @@ export function AgentIcon({ size = 14, ...rest }: IconProps) {
   );
 }
 
+export function PersonIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      {...rest}
+    >
+      <circle cx="10" cy="6.5" r="3.2" />
+      <path d="M3.8 17c.7-3.2 3.2-5 6.2-5s5.5 1.8 6.2 5" />
+    </svg>
+  );
+}
+
 export function EyeIcon({ size = 14, ...rest }: IconProps) {
   return (
     <svg

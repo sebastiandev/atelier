@@ -97,6 +97,9 @@ export function NewAgentDialog({
   const [workdirMode, setWorkdirMode] = useState<"fresh" | "fork">(
     forkFromAgent ? "fork" : "fresh",
   );
+  const [workspaceMode, setWorkspaceMode] = useState<"isolated" | "shared">(
+    "isolated",
+  );
 
   // Folder + recents (per-work first, then global). Default to the first
   // candidate so the common "same folder as last time" case is one click.
@@ -300,15 +303,16 @@ export function NewAgentDialog({
       provider: provider.name,
       model,
       folder: trimmedFolder,
+      workspace_mode: workspaceMode,
     };
     if (Object.keys(options).length > 0) {
       payload.options = options;
     }
-    if (forkFromAgent && workdirMode === "fork") {
+    if (forkFromAgent && workdirMode === "fork" && workspaceMode === "isolated") {
       payload.fork_from_agent = forkFromAgent.slug;
     }
     const trimmedBranch = branchName.trim();
-    if (trimmedBranch) {
+    if (trimmedBranch && workspaceMode === "isolated") {
       payload.branch_name = trimmedBranch;
     }
     // Prepend the optional initial-goal textarea as a synthesized text
@@ -341,19 +345,19 @@ export function NewAgentDialog({
   return (
     <div className="scrim" onClick={onClose}>
       <div
-        className="modal modal-lg"
+        className="modal modal-lg new-agent-modal"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
         <div className="modal-hd">
           <div>
-            <h3>Launch new agent</h3>
+            <h3>New agent</h3>
             <div className="sub">
               In <span className="mono">{workSlug}</span> · {workName}
             </div>
           </div>
-          <button className="btn-icon" onClick={onClose} aria-label="Close">
+          <button className="btn ghost icon sm" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
@@ -382,10 +386,9 @@ export function NewAgentDialog({
               <button
                 type="button"
                 className={"persona-card" + (customMode ? " active" : "")}
-                style={{ borderStyle: "dashed" }}
                 onClick={pickCustom}
               >
-                <span className="pp-pip" style={{ background: "transparent" }}>
+                <span className="pp-pip custom">
                   +
                 </span>
                 <span className="pp-meta">
@@ -409,20 +412,98 @@ export function NewAgentDialog({
             </label>
           )}
 
-          <label className="field">
-            <span className="label">Name</span>
-            <input
-              ref={nameRef}
-              className="input"
-              placeholder="e.g. Architect-01"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
+          <div className="field-row agent-identity-row">
+            <label className="field field-grow">
+              <span className="label">Name</span>
+              <input
+                ref={nameRef}
+                className="input"
+                placeholder="e.g. Architect-01"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
+
+            <label className="field field-branch">
+              <span className="label">
+                Branch <span className="hint">optional</span>
+              </span>
+              <div className="folder-input-row branch-input-wrap">
+                <input
+                  className="input"
+                  placeholder="detached HEAD"
+                  value={branchName}
+                  onChange={(e) => setBranchName(e.target.value)}
+                  disabled={workspaceMode === "shared" || workdirMode === "fork"}
+                />
+                <button
+                  type="button"
+                  className="btn icon folder-input-pick"
+                  onClick={() => openBranchPicker()}
+                  disabled={
+                    workspaceMode === "shared" ||
+                    workdirMode === "fork" ||
+                    !folder.trim()
+                  }
+                  aria-label="Pick existing branch"
+                  title={folder.trim() ? "Pick an existing branch" : "Set a folder first"}
+                >
+                  <BranchIcon />
+                </button>
+                {branchPickerOpen && (
+                  <BranchPicker
+                    loading={branchesLoading}
+                    branches={branchOptions}
+                    onPick={(b) => {
+                      setBranchName(b);
+                      setBranchPickerOpen(false);
+                    }}
+                    onClose={() => setBranchPickerOpen(false)}
+                  />
+                )}
+              </div>
+            </label>
+          </div>
+
+          <div className="field">
+            <span className="label">Workdir</span>
+            <div className="workspace-mode-pick">
+              <label className={"workspace-mode-opt" + (workspaceMode === "isolated" ? " active" : "")}>
+                <input
+                  type="radio"
+                  name="workspace-mode"
+                  value="isolated"
+                  checked={workspaceMode === "isolated"}
+                  onChange={() => setWorkspaceMode("isolated")}
+                />
+                <span>
+                  <strong>Isolated worktree</strong>
+                  <small>safe parallel edits</small>
+                </span>
+              </label>
+              <label className={"workspace-mode-opt" + (workspaceMode === "shared" ? " active" : "")}>
+                <input
+                  type="radio"
+                  name="workspace-mode"
+                  value="shared"
+                  checked={workspaceMode === "shared"}
+                  onChange={() => {
+                    setWorkspaceMode("shared");
+                    setWorkdirMode("fresh");
+                    setBranchName("");
+                  }}
+                />
+                <span>
+                  <strong>Shared folder</strong>
+                  <small>edits the repo live</small>
+                </span>
+              </label>
+            </div>
+          </div>
 
           {forkFromAgent && (
             <div className="field">
-              <span className="label">Workdir</span>
+              <span className="label">Starting point</span>
               <div className="workdir-pick">
                 <label className="workdir-pick-opt">
                   <input
@@ -430,7 +511,10 @@ export function NewAgentDialog({
                     name="workdir-mode"
                     value="fork"
                     checked={workdirMode === "fork"}
-                    onChange={() => setWorkdirMode("fork")}
+                    onChange={() => {
+                      setWorkspaceMode("isolated");
+                      setWorkdirMode("fork");
+                    }}
                   />
                   <span>
                     <strong>Continue from {forkFromAgent.name}</strong>
@@ -463,88 +547,37 @@ export function NewAgentDialog({
             </div>
           )}
 
-          <div className="field-row">
-            <label className="field field-grow">
-              <span className="label">Working folder</span>
-              <div className="folder-input-row">
-                <input
-                  className="input"
-                  list={`folder-recents-${workSlug}`}
-                  placeholder="/Users/you/code/some-repo"
-                  value={folder}
-                  onChange={(e) => {
-                    setFolder(e.target.value);
-                    // Folder changed → cached branch list is stale.
-                    setBranchOptions(null);
-                  }}
-                />
-                <button
-                  type="button"
-                  className="btn-icon folder-input-pick"
-                  onClick={() => setPickerOpen(true)}
-                  aria-label="Browse for folder"
-                  title="Browse"
-                >
-                  <FolderIcon />
-                </button>
-              </div>
-              {folderCandidates.length > 0 && (
-                <datalist id={`folder-recents-${workSlug}`}>
-                  {folderCandidates.map((f) => (
-                    <option key={f} value={f} />
-                  ))}
-                </datalist>
-              )}
-              <span className="hint">
-                Created on start if missing. Git repos get their own
-                worktree.
-              </span>
-            </label>
-
-            <label className="field field-branch">
-              <span className="label">
-                Branch <span className="hint">(optional)</span>
-              </span>
-              <div className="folder-input-row branch-input-wrap">
-                <input
-                  className="input"
-                  placeholder="detached HEAD"
-                  value={branchName}
-                  onChange={(e) => setBranchName(e.target.value)}
-                  disabled={workdirMode === "fork"}
-                />
-                <button
-                  type="button"
-                  className="btn-icon folder-input-pick"
-                  onClick={() => openBranchPicker()}
-                  disabled={workdirMode === "fork" || !folder.trim()}
-                  aria-label="Pick existing branch"
-                  title={
-                    folder.trim()
-                      ? "Pick an existing branch"
-                      : "Set a folder first"
-                  }
-                >
-                  <BranchIcon />
-                </button>
-                {branchPickerOpen && (
-                  <BranchPicker
-                    loading={branchesLoading}
-                    branches={branchOptions}
-                    onPick={(b) => {
-                      setBranchName(b);
-                      setBranchPickerOpen(false);
-                    }}
-                    onClose={() => setBranchPickerOpen(false)}
-                  />
-                )}
-              </div>
-              <span className="hint">
-                Blank = detached HEAD from master; agent names the branch later via{" "}
-                <code>git switch -c</code>.
-              </span>
-            </label>
-          </div>
+          <label className="field">
+            <span className="label">Working folder <span className="hint">git repository root</span></span>
+            <div className="folder-input-row">
+              <input
+                className="input"
+                list={`folder-recents-${workSlug}`}
+                placeholder="/Users/you/code/some-repo"
+                value={folder}
+                onChange={(e) => {
+                  setFolder(e.target.value);
+                  setBranchOptions(null);
+                }}
+              />
+              <button
+                type="button"
+                className="btn icon folder-input-pick"
+                onClick={() => setPickerOpen(true)}
+                aria-label="Browse for folder"
+                title="Browse"
+              >
+                <FolderIcon />
+              </button>
+            </div>
+            {folderCandidates.length > 0 && (
+              <datalist id={`folder-recents-${workSlug}`}>
+                {folderCandidates.map((f) => (
+                  <option key={f} value={f} />
+                ))}
+              </datalist>
+            )}
+          </label>
 
           {providers && (
             <>
@@ -680,8 +713,7 @@ export function NewAgentDialog({
           <div className="field">
             <span className="label">Context</span>
             <span className="hint">
-              Pointers the agent can read on demand. Connection-backed sources
-              get full content in a later sprint.
+              References this agent starts with.
             </span>
             {contexts.map((c, i) =>
               isSimpleContextType(c.type) ? (

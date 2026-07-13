@@ -102,12 +102,12 @@ async def execute(
                 for stage in definition.stages
                 if stage.kind == LoopStepKind.AGENT_TASK
                 and stage.agent is not None
-                and stage.agent.permissions == LoopPermission.WRITE
+                and stage.agent.permissions != LoopPermission.READ
             ),
             None,
         )
     if not destination:
-        raise PlanArtifactRunNotChangeable("loop has no write stage for changes")
+        raise PlanArtifactRunNotChangeable("loop has no implementation stage for changes")
     stage = stage_by_id(definition, destination)
     stage_row = _stage_row(loop, destination)
     approval_row = _stage_row(loop, approval_id)
@@ -149,6 +149,12 @@ async def execute(
     stage_row["status"] = LoopStepStatus.RUNNING.value
     stage_row["attempt"] = actions.int_or_default(stage_row.get("attempt"), 1) + 1
     loop["current_stage_id"] = destination
+    if (
+        stage.kind == LoopStepKind.AGENT_TASK
+        and stage.agent is not None
+        and stage.agent.permissions != LoopPermission.READ
+    ):
+        loop["source_agent_slug"] = agent_slug
     loop["status"] = LoopStatus.RUNNING.value
     loop["status_reason"] = f"{stage.name} resumed with requested changes."
     loop["last_checked_seq"] = cursor

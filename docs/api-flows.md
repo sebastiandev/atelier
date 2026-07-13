@@ -342,12 +342,42 @@ Artifact endpoints:
 - `POST /api/works/{slug}/plan/artifacts/{id}/tracking` attaches Jira/PR/blocker metadata to the artifact. Blocker links participate in launch gating.
 - `POST /api/works/{slug}/plan/artifacts/{id}/bugs` creates a source-backed `bugs/bug-NNN.md` from a review finding and links it back to the source artifact.
 
-Reusable loop definitions are repository-owned under `.atelier/loops/`:
+Loop definitions use one canonical resource:
 
-- `GET|POST /api/works/{slug}/loop-definitions` lists built-ins plus saved definitions or creates one.
-- `GET|PUT|DELETE /api/works/{slug}/loop-definitions/{id}` reads, revision-safely updates, or deletes a saved definition.
-- `POST /api/works/{slug}/loop-definitions/{id}/fork` creates an editable repository definition from a built-in or saved loop.
-- `POST /api/works/{slug}/loop-definitions/{id}/reveal` opens the saved definition folder in the host file browser.
+- `GET|POST /api/loops` lists the visible catalog or creates a reusable/Work-owned definition. `work_slug` includes that Work's overlay; `root_path` adds legacy repository definitions for existing installs.
+- `GET|PUT|PATCH|DELETE /api/loops/{id}` reads, revision-safely updates, or deletes a definition. `scope=work|repo` disambiguates ownership when needed.
+- `POST /api/loops/{id}/fork` creates an editable reusable copy; `POST /api/loops/{id}/reveal` opens its owning folder.
+- Existing `/api/works/{slug}/loop-definitions*` routes remain compatibility aliases. New clients must use `/api/loops`.
+- Reusable definitions live in `<workspace-root>/.atelier/loops`; private overlays live in `<workspace-root>/works/<slug>/.atelier/loops`. Launch resolution prefers the Work overlay, then library, built-in, and legacy repository. Runs persist the full resolved definition snapshot.
+
+The consolidated frontend also defines backend follow-up contracts. They are
+intentionally typed in `frontend/src/api.ts` but are not implemented by the
+backend yet:
+
+- Standalone Loop mode launches a freeform objective with
+  `POST /api/works/{slug}/runs` and lists/polls with
+  `GET /api/works/{slug}/runs[/{run}]`. The launch body carries goal, root,
+  definition id/revision and parent provider/model/options. Context is defined
+  per stage in the Work-owned or reusable definition.
+  Actions are `/resume`, `/request-changes`, `/accept`, `/pull-request`, and
+  `/rerun`. The Work should persist `mode="loop"` so later navigation returns
+  to this surface without the initial query seed. Chat discussion reuses the
+  existing chat endpoint with Work grounding and the run workspace as cwd;
+  editor opening remains client-side through the configured editor URL.
+- New Agent sends `workspace_mode="isolated"|"shared"`. Isolated keeps the
+  current worktree behavior; shared must run against the selected repository
+  folder without creating a worktree. The create-agent request and command do
+  not consume this field yet.
+- New Agent renders a simple `folder` context beside text, link, and file. The
+  backend context type/renderer must accept that kind before it can be sent to
+  an agent.
+- New Project sends an optional `default_folder`, which New Work inherits when
+  that project is selected. Project persistence and its REST schemas do not yet
+  store or return this field.
+
+These routes must reuse the existing domain loop runner and structured report
+contract; they must not introduce frontend prompt composition or a second
+state machine.
 
 ---
 

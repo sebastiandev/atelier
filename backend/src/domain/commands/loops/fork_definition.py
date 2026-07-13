@@ -2,8 +2,17 @@
 
 from dataclasses import dataclass
 
-from src.domain.commands.loops._root import WorkNotFound, resolve_working_root
+from src.domain.commands.loops._root import (
+    WorkNotFound,
+    resolve_catalog_roots,
+    resolve_working_root,
+)
 from src.domain.loop.builtins import builtin_loop_definition
+from src.domain.loop.catalog import (
+    LoopDefinitionRoots,
+    locate_definition,
+    writable_root,
+)
 from src.domain.loop.definitions import (
     LoopDefinitionConflict,
     LoopDefinitionInvalid,
@@ -12,8 +21,8 @@ from src.domain.loop.definitions import (
     prepare_definition,
     repository_copy,
 )
-from src.domain.loop.dtos import LoopDefinition
-from src.domain.loop.ports import LoopDefinitionRepository
+from src.domain.loop.dtos import LoopDefinition, LoopDefinitionScope
+from src.domain.loop.ports import LoopDefinitionLocations, LoopDefinitionRepository
 from src.domain.planning.ports import PlanningSessionRepository
 from src.domain.workstore.ports import WorkStore
 
@@ -22,35 +31,72 @@ from src.domain.workstore.ports import WorkStore
 class ForkLoopDefinitionRequest:
     """Input for copying a loop into the current repository."""
 
-    work_slug: str
     source_id: str
     definition_id: str
     name: str
+    target_scope: LoopDefinitionScope | None = None
+    work_slug: str | None = None
+    root_path: str | None = None
+    legacy_only: bool = False
 
 
 def execute(
     workstore: WorkStore,
     planning_sessions: PlanningSessionRepository,
+    locations: LoopDefinitionLocations,
     repository: LoopDefinitionRepository,
     req: ForkLoopDefinitionRequest,
 ) -> LoopDefinition:
-    """Create a repository copy of a built-in or custom definition."""
-    root = resolve_working_root(workstore, planning_sessions, req.work_slug)
-    source = builtin_loop_definition(req.source_id) or repository.get_definition(
-        root, req.source_id
-    )
-    if source is None:
-        raise LoopDefinitionNotFound(f"loop definition not found: {req.source_id}")
-    if builtin_loop_definition(req.definition_id) is not None:
+    """Create a global or Work-local copy of an available definition."""
+    target_scope = LoopDefinitionScope.REPOSITORY
+    if not req.legacy_only:
+        target_scope = req.target_scope or (
+            LoopDefinitionScope.WORK
+            if req.work_slug is not None
+            else LoopDefinitionScope.REPOSITORY
+        )
+    if req.legacy_only:
+        if req.work_slug is None:
+            raise WorkNotFound("work slug is required for legacy loop storage")
+        roots = LoopDefinitionRoots(
+            library=resolve_working_root(
+                workstore,
+                planning_sessions,
+                req.work_slug,
+            )
+        )
+    else:
+        roots = resolve_catalog_roots(
+            workstore,
+            planning_sessions,
+            locations,
+            work_slug=req.work_slug,
+            root_path=req.root_path,
+        )
+    source = locate_definition(repository, roots, req.source_id).definition
+    if (
+        target_scope == LoopDefinitionScope.REPOSITORY
+        and builtin_loop_definition(req.definition_id) is not None
+    ):
         raise LoopDefinitionConflict(
             f"loop definition id is reserved by a built-in: {req.definition_id}"
         )
     prepared = prepare_definition(
-        repository_copy(source, definition_id=req.definition_id, name=req.name)
+        repository_copy(
+            source,
+            definition_id=req.definition_id,
+            name=req.name,
+            scope=target_scope,
+        )
     )
     if not prepared.valid:
         raise LoopDefinitionInvalid(" ".join(prepared.errors))
-    return repository.save_definition(root, prepared, expected_revision=None)
+    return repository.save_definition(
+        writable_root(roots, target_scope),
+        prepared,
+        expected_revision=None,
+        scope=target_scope,
+    )
 
 
 __all__ = [

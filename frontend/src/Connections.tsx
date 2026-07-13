@@ -17,6 +17,7 @@ import {
 } from "./api";
 import { BrandMark } from "./BrandMark";
 import { useConnectionDescriptors } from "./connectionDescriptors";
+import { EyeIcon } from "./Icons";
 import { ThemeToggle } from "./ThemeToggle";
 import { TweaksToggle } from "./TweaksPanel";
 
@@ -257,7 +258,7 @@ export function Connections({ chromeless = false }: { chromeless?: boolean } = {
                         >
                           <div className="conn-card-name">
                             <span className="conn-card-title">{c.name}</span>
-                            {c.verified && <span className="verify-pill ok">✓ Verified</span>}
+                            {c.verified && <span className="tag good">✓ verified</span>}
                           </div>
                           <div className="conn-card-meta mono">
                             {configMeta(c.config).map((m, i) => (
@@ -295,7 +296,7 @@ export function Connections({ chromeless = false }: { chromeless?: boolean } = {
                                 Disconnect
                               </button>
                               <span className="spacer" />
-                              <VerifyPill state={editVerify} />
+                              <VerifyTag state={editVerify} />
                               <button
                                 type="button"
                                 className="btn sm"
@@ -341,7 +342,7 @@ export function Connections({ chromeless = false }: { chromeless?: boolean } = {
                           Cancel
                         </button>
                         <span className="spacer" />
-                        <VerifyPill state={newVerify} />
+                        <VerifyTag state={newVerify} />
                         <button
                           type="button"
                           className="btn sm"
@@ -375,16 +376,16 @@ export function Connections({ chromeless = false }: { chromeless?: boolean } = {
   );
 }
 
-function VerifyPill({ state }: { state: VerifyState }) {
+function VerifyTag({ state }: { state: VerifyState }) {
   if (state === "verifying") {
     return (
-      <span className="verify-pill">
+      <span className="tag">
         <span className="spinner" /> Verifying…
       </span>
     );
   }
-  if (state === "ok") return <span className="verify-pill ok">✓ Verified</span>;
-  if (state === "err") return <span className="verify-pill err">✗ Couldn't verify</span>;
+  if (state === "ok") return <span className="tag good">✓ verified</span>;
+  if (state === "err") return <span className="tag danger">✗ couldn't verify</span>;
   return null;
 }
 
@@ -439,11 +440,12 @@ function ConnFieldGrid({
               {onToggleReveal && (
                 <button
                   type="button"
-                  className="conn-reveal"
+                  className="btn icon sm ghost conn-reveal"
                   onClick={onToggleReveal}
                   title={revealed ? "Hide" : "Show"}
+                  aria-label={revealed ? "Hide secret" : "Reveal secret"}
                 >
-                  {revealed ? "🙈" : "👁"}
+                  <EyeIcon size={12} />
                 </button>
               )}
             </span>

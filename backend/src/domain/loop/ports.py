@@ -11,6 +11,7 @@ from src.domain.loop.dtos import (
     LoopContextResolution,
     LoopContextResolutionRequest,
     LoopDefinition,
+    LoopDefinitionScope,
 )
 from src.domain.loop.models import LoopRunRecord, LoopStepRunRecord
 
@@ -18,12 +19,21 @@ from src.domain.loop.models import LoopRunRecord, LoopStepRunRecord
 class LoopDefinitionRepository(Protocol):
     """Read and write custom loop definitions below one working root."""
 
-    def list_definitions(self, root_path: str) -> list[LoopDefinition]:
+    def list_definitions(
+        self,
+        root_path: str,
+        *,
+        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+    ) -> list[LoopDefinition]:
         """Return every repository definition, including invalid entries."""
         ...
 
     def get_definition(
-        self, root_path: str, definition_id: str
+        self,
+        root_path: str,
+        definition_id: str,
+        *,
+        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
     ) -> LoopDefinition | None:
         """Return one repository definition when present."""
         ...
@@ -34,12 +44,25 @@ class LoopDefinitionRepository(Protocol):
         definition: LoopDefinition,
         *,
         expected_revision: str | None,
+        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
     ) -> LoopDefinition:
         """Create or replace one valid repository definition."""
         ...
 
     def delete_definition(self, root_path: str, definition_id: str) -> None:
         """Delete one repository definition directory."""
+        ...
+
+
+class LoopDefinitionLocations(Protocol):
+    """Resolve Atelier-owned roots for global and Work-local loop storage."""
+
+    def loop_library_root(self) -> str:
+        """Return the root below which the reusable loop library is stored."""
+        ...
+
+    def work_loop_root(self, work_slug: str) -> str:
+        """Return the root below which one Work's private loops are stored."""
         ...
 
 
@@ -82,6 +105,7 @@ class LoopRunRepository(Protocol):
 __all__ = [
     "LoopCheckRunner",
     "LoopContextResolver",
+    "LoopDefinitionLocations",
     "LoopDefinitionRepository",
     "LoopRunRepository",
 ]

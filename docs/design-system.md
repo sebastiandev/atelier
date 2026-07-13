@@ -17,7 +17,27 @@ oklch literal in a component** — pick the matching token, or add one to
 The accent (`--accent`) is user-tunable via `TweaksPanel` (slider drives
 `--accent-h`); `--accent-soft` / `--accent-line` derive from it via
 `oklch()`. Status hues (`--good`, `--warn`, `--danger`, `--info`) are
-theme-stable. Full list in [`frontend.md` → Design tokens](frontend.md#design-tokens).
+theme-stable and each owns a `-soft` and `-line` ramp. `--hint` adjusts
+soft/line intensity per theme without component-specific color mixing. Full
+list in [`frontend.md` → Design tokens](frontend.md#design-tokens).
+
+## Tonal hierarchy
+
+Direction D is borderless and tonal. Surfaces move one step at a time:
+
+- `--bg`: page/canvas
+- `--bg-1`: rails, topbar, cards, framed tools
+- `--bg-2`: controls, inputs, selected rows
+- `--bg-3`: hover and nested control state
+
+Cards and controls do not draw borders. A line is reserved for a real seam,
+tree connector, resize handle, or focus/selection state. Floating layers use
+`--bg-2`, `--radius-pop`, and `--shadow-pop`; ordinary cards never cast a
+shadow.
+
+Search and plan-reference pickers use that floating-layer recipe. Tool
+approval is the exception: it grows the existing `--bg-2` composer dock
+upward, joined by a 2px accent seam, rather than introducing another card.
 
 ## Brand mark — Constellation
 
@@ -38,26 +58,53 @@ asymmetry is intentional; don't recenter or "balance" it.
 The original handoff with full design rationale is at
 `design/design_handoff_atelier_icon/` (gitignored).
 
-## Section headers
+## Chrome and headers
 
-`.latest-title` is the shared treatment for **Projects** and **Latest work**
-labels: 13px, uppercase, `letter-spacing: 0.08em`, `font-weight: 600`,
-`color: var(--fg-2)`. The trailing count uses `var(--font-mono)` at the
-same size, `var(--fg-3)`.
+Application chrome uses `--font-mono` at 11px, weight 500, uppercase, and
+`0.05em` tracking (`--chrome-*`). This applies to rail section labels, mode
+labels, compact counts, and control labels. Prose, document headings, card
+titles, and explanatory copy remain Inter with sentence case.
 
-When a header carries pills/toggles in addition to the title, anchor it
-with a hairline divider — `border-bottom: 1px solid var(--line)` plus
-`padding-bottom: 0.7rem` on the header row, and ~1rem gap between header
-and the content below. Without that, busy header rows visually float above
-their cards. See `.latest-hd` for the canonical pattern.
+`ShellTopbar.tsx` is the stable 48px app header. Its origin lane matches the
+active rail width and holds the Atelier wordmark plus project/work
+breadcrumbs; an optional view lane holds full-view identity, inline metadata,
+and status; primary and utility actions stay at the right edge. Full-view
+surfaces such as the Loop library/editor use this lane instead of drawing a
+second chrome bar. Content-column titles such as Settings sections and run
+headers remain in the canvas as Inter content voice. Mode identity still
+belongs in the rail (`Planning`, `Loop`, etc.), and a rail must not repeat the
+wordmark or breadcrumbs. Dense tile toolbars remain local because they control
+a tool rather than identify the route.
 
-## Rail Crown
+Breadcrumbs are navigation, not decoration. The Atelier wordmark is the root
+link, so do not add a `workspace` crumb. Every routed or stateful ancestor is
+clickable; only the current leaf is plain text with `aria-current="page"`.
+Nested views keep the view they came from as the final clickable ancestor
+(`settings / loops / create loop`, `work / plan overview / ST-04 / run`) and do not
+repeat that navigation with a back arrow. Route ancestors use links; in-place
+views use breadcrumb buttons that restore the parent view.
 
-The top of every left rail uses `ShellCrown.tsx`: the inline Atelier
-wordmark on the left and the search/settings/theme icon cluster on the
-right. Planning Mode should compose this same crown rather than drawing a
-mode-specific boxed app mark, so the app chrome stays visually stable while
-the content below changes by route.
+Section headers are unframed. Counts use a compact `--bg-2` tag. Add a line
+only where the header is also a structural seam; do not add decorative
+dividers to make unframed content feel like a card.
+
+## Responsive shells
+
+The 48px topbar remains a stable first row at every width. View detail hides
+before the title, and the origin lane yields to the view title on narrow
+screens. Below 700px,
+Settings turns its vertical rail into a horizontal scrolling navigation row,
+and standalone Loop mode hides the definition rail and resize handle so setup
+and run content use the full viewport. Dense secondary metadata may disappear,
+but primary names, status, and actions must remain available. The update banner
+moves to the bottom edge on narrow screens so it never covers breadcrumbs or
+topbar controls.
+
+Loop-editor stage rows use the same internal person icon as Manual work for an
+agent task. Keep a visible gap between the kind node and stage card, and keep
+file/folder context selection behind the shared picker rather than a free-text
+path control. The editor topbar carries breadcrumbs and save state only; loop
+name and storage location sit above Description in the canvas.
 
 ## Chat surfaces
 
@@ -75,18 +122,41 @@ in-app mode pickers.
 - **Promotion** uses the summary modal shape (`.promote-summary-modal`) with the chat provenance card at the top. The modal is about confirming the work seed, not choosing promotion modes.
 - **Context docs** use a document viewer modal (`.context-doc-modal`) with the generated `context.md` rendered as simple headings, bullets, and paragraphs, plus a direct link back to the source chat.
 
-## Card rhythm
+## Documents and loops
 
-Workspace cards favor breathing room over density:
+Rendered Markdown uses the `.doc` recipe: Inter 15px/1.7, 720px measure,
+sentence-case headings with visibly stronger hierarchy, and mono code. Inline
+editing is section-based; an edit icon appears on hover, Save/Cancel are
+explicit, and Esc returns to preview without changing the stored document.
 
-- `.proj-card` — min-column 300px, min-height 160px, padding ~1.2rem,
-  name 16px, count number 22px (mono).
-- `.work-card` (tile view) — narrower, denser; meta line at top, then
-  description, then `.wc-stats` row at the bottom.
-- `.work-row` (list view) — single line, all meta inline.
+Loop stages use semantic kind tints independent of agent persona: task =
+warn, review = review-magenta, deterministic check = good, human approval =
+info. Selector, library, editor, Planning artifact runs, and standalone Loop
+mode all consume the same definition and stage components. A selected stage
+highlights its existing connector; selection never changes connector width or
+layout. Run-level provider/context overrides do not mutate the definition;
+editing stages or transitions opens the structure editor and forks a built-in
+to the repository.
 
-If a card needs a variant, add a class on top of the base rather than
-restyling the base — the base sets the visual contract for the workspace.
+## Shape and cards
+
+The shape scale is fixed: tag/control/card 2px, tile 3px, input 6px, popover
+8px. Text pills and fully rounded rectangles are retired. Status, scope, and
+count labels use the 2px tag recipe; icon buttons use the control recipe.
+
+Cards are for repeated records, modals, and genuine tools. They use `--bg-1`
+or, inside an existing `--bg-1` surface, `--bg-2`; no border and no shadow.
+Page sections remain unframed. Never put a card inside another card. Agent
+tiles are the deliberate richer exception: a persona-colored 2px top edge
+identifies ownership while the rest of the tile remains tonal.
+
+Semantic status tags keep their ramp tone in every view: ready/done use good,
+draft/review/pending use warn, running uses info, and blocked/gated/failed use
+danger. Planning's `.pm-spill` follows this mapping through the shared tag
+recipe; generic tag styling must not flatten those states to neutral.
+Planning artifact rows pair the muted kind (`STORY`, `SPIKE`, `BUG`, `TASK`)
+with the bright path basename; the descriptive title belongs in the document
+view, not beside a filename that repeats it.
 
 ## Inline icons
 

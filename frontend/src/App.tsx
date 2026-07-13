@@ -1,9 +1,16 @@
 import { useEffect, useState } from "react";
 
 import { AgentView } from "./AgentView";
+import {
+  type ProjectSummary,
+  type WorkSummary,
+  listProjects,
+  listWorks,
+} from "./api";
 import { ChatView } from "./Chat";
 import { Home } from "./Home";
 import { ProjectScreen } from "./ProjectScreen";
+import { SearchModal, type SearchScope } from "./SearchModal";
 import { Settings, type SettingsSection } from "./Settings";
 import { hydrateSettings, useSettingsStore } from "./state/settings";
 import { TweaksPanel } from "./TweaksPanel";
@@ -19,9 +26,64 @@ export function App() {
   return (
     <>
       <RouteView path={path} />
+      <GlobalSearch path={path} />
       <UpdateBanner />
       <TweaksPanel />
     </>
+  );
+}
+
+function GlobalSearch({ path }: { path: string }) {
+  const [open, setOpen] = useState(false);
+  const [works, setWorks] = useState<WorkSummary[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      if (document.querySelector(".search-modal")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setOpen(true);
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    Promise.all([listWorks(), listProjects()])
+      .then(([nextWorks, nextProjects]) => {
+        if (cancelled) return;
+        setWorks(nextWorks);
+        setProjects(nextProjects);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWorks([]);
+        setProjects([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => setOpen(false), [path]);
+
+  if (!open) return null;
+  const projectSlug = path.startsWith("/projects/")
+    ? path.slice("/projects/".length).split("/")[0]
+    : "";
+  const scope: SearchScope = projectSlug ? { slug: projectSlug } : "all";
+  return (
+    <SearchModal
+      works={works}
+      projects={projects}
+      defaultScope={scope}
+      onClose={() => setOpen(false)}
+    />
   );
 }
 
@@ -62,7 +124,7 @@ function RouteView({ path }: { path: string }) {
   if (path === "/settings" || path.startsWith("/settings/")) {
     const sub = path.slice("/settings".length).replace(/^\//, "");
     const section: SettingsSection =
-      sub === "connections" || sub === "appearance" || sub === "about"
+      sub === "loops" || sub === "connections" || sub === "appearance" || sub === "about"
         ? sub
         : "tools";
     return <Settings section={section} />;

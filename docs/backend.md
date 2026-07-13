@@ -41,7 +41,7 @@ Runtime-backed chats use a separate `AgentSupervisorService` instance (`app.stat
 
 ### Reusable multi-stage loops
 
-Repository loop definitions live under `<planning-root>/.atelier/loops/<id>/`: `loop.yaml` stores the ordered contract and `steps/*.md` stores agent-authored instructions. Built-ins and repository definitions pass the same validator and are revision-hashed; a run snapshots the complete selected definition. Static context references are resolved by `LoopContextResolver` before agent creation, required misses reject launch, and optional misses are retained as stage warnings. Provider-facing task/review prompts are built only in `domain/loop/prompts.py` and include the resolved reference index plus the immutable JSON report contract.
+Reusable loop definitions live under `<workspace-root>/.atelier/loops/<id>/`; Work-only overlays live under `<workspace-root>/works/<WRK>/.atelier/loops/<id>/`. Existing `<planning-root>/.atelier/loops/` definitions remain a compatibility read-through. Resolution is Work overlay, reusable library, built-in, then legacy repository, and every run snapshots the complete resolved definition so later edits or moves cannot change history. `loop.yaml` stores the ordered contract and `steps/*.md` stores agent-authored instructions. Built-ins and stored definitions pass the same validator and are revision-hashed. Static stage context is resolved by `LoopContextResolver` before agent creation, required misses reject launch, and optional misses are retained as stage warnings. Agent stages may inherit or override provider, model, effort, and permissions; missing permissions in legacy YAML still mean read-only, while new explicit `inherit` preserves the parent runtime policy. Provider-facing task/review prompts are built only in `domain/loop/prompts.py` and include the resolved reference index plus the immutable JSON report contract.
 
 Selected loops run implementation, fresh read-only review/security actors, direct-argv deterministic checks, and final user approval through `commands/planning/run_monitor.py`. Reports can carry criterion coverage, severity/location findings, changed-file stats, evidence, divergences, and source references. Review `changes_requested` transitions reuse the write session; **Request changes** from final approval follows the same configured transition. Cleanup is one backend command and removes every agent in the run-owned ledger before marking the run `cleaned`.
 
@@ -291,7 +291,7 @@ Two safety details: `stop_turn` and `close` walk every pending future and `set_r
 
 Amp's SDK has no async permission callback — its CLI exposes a *declarative* permission system (per-tool ``allow|reject|ask|delegate`` rules in a settings file) and a ``--dangerously-allow-all`` flag. ``ask`` blocks the CLI on a TTY prompt, which we can't answer because we pipe stdin/stdout. So the only knob that lets us hold the model mid-call is ``delegate`` — substituting a custom command for the tool's native execution.
 
-We use ``delegate`` to gate Bash specifically. The other tools (Read/Edit/Write/Grep/Glob/…) are Amp-internal; replacing them would mean reimplementing their semantics, which would drift fast. **So only Bash is gated on Amp.** That covers ``git commit/push``, ``gh pr create``, file deletes, ``sudo`` — the real footguns. Edit/Write to your own working tree is comparable risk to typing it yourself.
+We use ``delegate`` to gate Bash specifically for normal write-capable sessions. The other tools (Read/Edit/Write/Grep/Glob/…) are Amp-internal; replacing them would mean reimplementing their semantics, which would drift fast. That covers ``git commit/push``, ``gh pr create``, file deletes, ``sudo`` — the real footguns. Loop read-only sessions instead use Amp's declarative rules to allow inspection tools and reject everything else.
 
 ```
    Amp CLI ──► python amp_permission_bridge.py -c "<command>"
@@ -328,8 +328,10 @@ We use ``delegate`` to gate Bash specifically. The other tools (Read/Edit/Write/
 - ``ALLOW_ALL`` — passes ``--dangerously-allow-all``, skips the socket entirely. Old pre-permission behaviour. Risky.
 - ``CUSTOM`` — opens the socket, ``Bash → delegate``, allow-list comes from the user-supplied tool names. ``"Bash"`` in that list is silently dropped (the user isn't allowed to disable shell gating from the dialog).
 
+Loop stages with generic ``read`` permission use a separate hidden Amp posture: Read/Grep/Glob/WebFetch/diagnostics are allowed and a final wildcard rejects every mutating or unknown tool. Generic ``write`` keeps Amp's normal ``DEFAULT`` posture and Bash gating; it never implies ``ALLOW_ALL``. Detach-to-CLI is rejected for read-only Amp stages because the standalone CLI command cannot preserve that hidden rule set.
+
 **Limitations to keep in mind:**
-- Only Bash is gated. Edit/Write to your repo by an agent you launched is auto-approved on Amp; if that's a concern, run those tasks under Claude.
+- In normal write-capable sessions, only Bash is gated and Edit/Write is auto-approved. Loop read-only stages use the stricter reject-rest posture described above.
 - ``allow_always`` is per-tool, session-only. A "Allow always" click on Bash means *every* subsequent Bash invocation runs without asking. The session-only scope means restarting the agent restores the prompt.
 - The CLI's default for un-listed tools is ``ask``, which would hang. So the adapter **enumerates** every tool the agent uses. If a brand-new Amp tool ships and isn't in our list, the agent will block; the fix is adding it to ``AMP_DEFAULT_AUTO_ALLOWED_TOOLS``. Failing closed beats silent auto-allow.
 - The bridge is fail-closed. Missing socket, missing env var, malformed handshake → exits non-zero with a stderr message.

@@ -40,25 +40,34 @@ _REPORT_SCHEMA = LoopReportSchema(
 class FsLoopDefinitionRepository:
     """Store custom loop definitions under ``<root>/.atelier/loops``."""
 
-    def list_definitions(self, root_path: str) -> list[LoopDefinition]:
+    def list_definitions(
+        self,
+        root_path: str,
+        *,
+        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+    ) -> list[LoopDefinition]:
         root = _loops_root(root_path)
         try:
             entries = sorted(root.iterdir(), key=lambda path: path.name)
         except FileNotFoundError:
             return []
         return [
-            self._read_definition(entry)
+            self._read_definition(entry, scope=scope)
             for entry in entries
             if entry.is_dir() and not entry.name.startswith(".")
         ]
 
     def get_definition(
-        self, root_path: str, definition_id: str
+        self,
+        root_path: str,
+        definition_id: str,
+        *,
+        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
     ) -> LoopDefinition | None:
         directory = _definition_dir(root_path, definition_id)
         if not directory.is_dir():
             return None
-        return self._read_definition(directory)
+        return self._read_definition(directory, scope=scope)
 
     def save_definition(
         self,
@@ -66,9 +75,14 @@ class FsLoopDefinitionRepository:
         definition: LoopDefinition,
         *,
         expected_revision: str | None,
+        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
     ) -> LoopDefinition:
         directory = _definition_dir(root_path, definition.definition_id)
-        current = self.get_definition(root_path, definition.definition_id)
+        current = self.get_definition(
+            root_path,
+            definition.definition_id,
+            scope=scope,
+        )
         if current is not None and expected_revision != current.revision:
             raise LoopDefinitionConflict(
                 f"loop definition changed: {definition.definition_id}"
@@ -92,7 +106,7 @@ class FsLoopDefinitionRepository:
             directory / "loop.yaml",
             yaml.safe_dump(data, sort_keys=False, allow_unicode=False),
         )
-        return self._read_definition(directory)
+        return self._read_definition(directory, scope=scope)
 
     def delete_definition(self, root_path: str, definition_id: str) -> None:
         directory = _definition_dir(root_path, definition_id)
@@ -100,18 +114,28 @@ class FsLoopDefinitionRepository:
             raise LoopDefinitionNotFound(f"loop definition not found: {definition_id}")
         shutil.rmtree(directory)
 
-    def _read_definition(self, directory: Path) -> LoopDefinition:
+    def _read_definition(
+        self,
+        directory: Path,
+        *,
+        scope: LoopDefinitionScope,
+    ) -> LoopDefinition:
         try:
             raw = yaml.safe_load((directory / "loop.yaml").read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise ValueError("loop.yaml must contain a mapping")
-            definition = _from_yaml_data(directory, raw)
+            definition = _from_yaml_data(directory, raw, scope=scope)
             return prepare_definition(definition)
         except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
-            return _invalid_definition(directory.name, str(exc))
+            return _invalid_definition(directory.name, str(exc), scope=scope)
 
 
-def _from_yaml_data(directory: Path, raw: dict[str, Any]) -> LoopDefinition:
+def _from_yaml_data(
+    directory: Path,
+    raw: dict[str, Any],
+    *,
+    scope: LoopDefinitionScope,
+) -> LoopDefinition:
     version = raw.get("schema_version")
     if version != _SCHEMA_VERSION:
         raise ValueError(f"unsupported schema_version: {version!r}")
@@ -129,7 +153,7 @@ def _from_yaml_data(directory: Path, raw: dict[str, Any]) -> LoopDefinition:
         report_schema=_REPORT_SCHEMA,
         retry_limit=max((stage.retry.max_attempts for stage in stages), default=1),
         description=_optional_str(raw.get("description")),
-        scope=LoopDefinitionScope.REPOSITORY,
+        scope=scope,
         forked_from=_optional_str(raw.get("forked_from")) or None,
         stages=stages,
     )
@@ -194,10 +218,13 @@ def _agent_from_data(value: object, kind: LoopStepKind) -> LoopAgentPolicy | Non
         return None
     if not isinstance(value, dict):
         raise ValueError("agent stage requires an agent mapping")
+    raw_permissions = value.get("permissions", "read")
     return LoopAgentPolicy(
         session=LoopSessionPolicy(_optional_str(value.get("session")) or "fresh"),
-        permissions=LoopPermission(
-            _optional_str(value.get("permissions")) or "read"
+        permissions=(
+            None
+            if raw_permissions == "inherit"
+            else LoopPermission(_optional_str(raw_permissions) or "read")
         ),
         provider=_optional_str(value.get("provider")) or None,
         model=_optional_str(value.get("model")) or None,
@@ -250,7 +277,11 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
     if stage.agent is not None:
         data["agent"] = {
             "session": stage.agent.session.value,
-            "permissions": stage.agent.permissions.value,
+            "permissions": (
+                stage.agent.permissions.value
+                if stage.agent.permissions is not None
+                else "inherit"
+            ),
             **({"provider": stage.agent.provider} if stage.agent.provider else {}),
             **({"model": stage.agent.model} if stage.agent.model else {}),
             **({"effort": stage.agent.effort} if stage.agent.effort else {}),
@@ -284,14 +315,19 @@ def _context_to_data(context: LoopContextReference) -> dict[str, Any]:
     }
 
 
-def _invalid_definition(definition_id: str, error: str) -> LoopDefinition:
+def _invalid_definition(
+    definition_id: str,
+    error: str,
+    *,
+    scope: LoopDefinitionScope,
+) -> LoopDefinition:
     return LoopDefinition(
         definition_id=definition_id,
         name=definition_id.replace("-", " ").title(),
         trigger="artifact_or_objective",
         report_schema=_REPORT_SCHEMA,
         description="Repository loop could not be loaded.",
-        scope=LoopDefinitionScope.REPOSITORY,
+        scope=scope,
         errors=(error,),
     )
 
@@ -304,7 +340,12 @@ def _loops_root(root_path: str) -> Path:
 
 
 def _definition_dir(root_path: str, definition_id: str) -> Path:
-    if not definition_id or "/" in definition_id or "\\" in definition_id:
+    if (
+        not definition_id
+        or definition_id in {".", ".."}
+        or "/" in definition_id
+        or "\\" in definition_id
+    ):
         raise ValueError(f"invalid loop definition id: {definition_id!r}")
     return _loops_root(root_path) / definition_id
 

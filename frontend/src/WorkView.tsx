@@ -96,7 +96,12 @@ import {
 } from "./Icons";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
+import { LoopMode } from "./LoopMode";
 import { LoopSelectorDialog } from "./LoopUI";
+import {
+  type LoopStartSeed,
+  loopStartStorageKey,
+} from "./loopSetup";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import {
   PlanningMode,
@@ -117,7 +122,7 @@ import {
   providerOptionsPayload,
 } from "./providerDescriptors";
 import { SearchModal } from "./SearchModal";
-import { ShellCrown } from "./ShellCrown";
+import { ShellTopbar } from "./ShellTopbar";
 import { SortableCanvasCell } from "./SortableCanvasCell";
 import { Switcher, type SwitcherItem } from "./Switcher";
 import {
@@ -187,8 +192,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const planningStartConsumedRef = useRef(false);
   const [planningSetupPrompt, setPlanningSetupPrompt] =
     useState<PlanningSetupPrompt | null>(null);
-  const [workMode, setWorkMode] = useState<"manual" | "planning">("planning");
+  const [workMode, setWorkMode] = useState<"manual" | "planning" | "loop">("planning");
   const [workModeExplicit, setWorkModeExplicit] = useState(false);
+  const [loopStartSeed, setLoopStartSeed] = useState<LoopStartSeed | null>(null);
   const [planningView, setPlanningView] = useState<PlanningView>({ kind: "overview" });
   const [planOverviewTab, setPlanOverviewTab] =
     useState<PlanOverviewTab>("summary");
@@ -313,12 +319,16 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }, [agents, agentOrderOverride]);
 
   const artifactSearchActive = artifactSearchQuery.trim().length > 0;
+  const pullRequests = useMemo(
+    () => artifacts.filter((artifact) => artifact.type === "pr"),
+    [artifacts],
+  );
   const filteredArtifacts = useMemo(() => {
-    if (!artifactSearchActive) return artifacts;
-    return artifacts.filter((artifact) =>
+    if (!artifactSearchActive) return pullRequests;
+    return pullRequests.filter((artifact) =>
       artifactMatchesSearch(artifact, artifactSearchQuery),
     );
-  }, [artifacts, artifactSearchActive, artifactSearchQuery]);
+  }, [pullRequests, artifactSearchActive, artifactSearchQuery]);
 
   useEffect(() => {
     if (!artifactSearchOpen) return;
@@ -332,10 +342,12 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const manual = params.get("mode") === "manual";
+    const mode = params.get("mode");
     const seededPlanning = params.get("start") === "planning";
-    setWorkMode(manual ? "manual" : "planning");
-    setWorkModeExplicit(manual || seededPlanning);
+    const seededLoop = params.get("start") === "loop";
+    setWorkMode(mode === "manual" ? "manual" : mode === "loop" || seededLoop ? "loop" : "planning");
+    setWorkModeExplicit(mode === "manual" || mode === "planning" || mode === "loop" || seededPlanning || seededLoop);
+    setLoopStartSeed(readLoopStartSeed(workSlug));
     setPlanningView({ kind: "overview" });
     setPlanOverviewTab("summary");
     setPlanPromptDraft(null);
@@ -352,7 +364,19 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }, [workSlug]);
 
   useEffect(() => {
-    if (workModeExplicit) return;
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get("mode");
+    const routeSelectsMode =
+      mode === "manual" ||
+      mode === "planning" ||
+      mode === "loop" ||
+      params.get("start") === "planning" ||
+      params.get("start") === "loop";
+    if (workModeExplicit || routeSelectsMode) return;
+    if (work?.mode === "loop") {
+      setWorkMode("loop");
+      return;
+    }
     if (plan !== null || planningChatFrom(chats, workSlug) !== null) {
       setWorkMode("planning");
       return;
@@ -362,7 +386,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       return;
     }
     setWorkMode("planning");
-  }, [agents.length, chats.length, plan, workModeExplicit, workSlug]);
+  }, [agents.length, chats.length, plan, work?.mode, workModeExplicit, workSlug]);
 
   useEffect(() => {
     if (!work || planningStartConsumedRef.current) return;
@@ -447,7 +471,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     setChatComposerGrounding({ kind: "work", ref: workSlug });
   }
 
-  function chooseWorkMode(mode: "manual" | "planning") {
+  function chooseWorkMode(mode: "manual" | "planning" | "loop") {
     setWorkMode(mode);
     setWorkModeExplicit(true);
   }
@@ -1383,8 +1407,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const projectStyleVars: React.CSSProperties | undefined = projectHue
     ? {
         ["--proj-h" as string]: projectHue,
-        ["--proj-color" as string]: `oklch(0.62 0.16 ${projectHue})`,
-        ["--proj-soft" as string]: `oklch(0.62 0.16 ${projectHue} / 0.10)`,
       }
     : undefined;
   const workShellStyle: React.CSSProperties = {
@@ -1397,6 +1419,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const selectedContextFolder =
     chatContextFolders.find((f) => f.name === contextDocFolder) ?? null;
   const planningModeActive = workMode === "planning";
+  const loopModeActive = workMode === "loop";
   const planInitialRoot =
     agents[0]?.folder ??
     visibleChats.find((chat) => chat.working_directory)?.working_directory ??
@@ -1430,7 +1453,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             </div>
           </div>
           <button
-            className="btn-icon"
+            className="btn icon"
             onClick={() => {
               setPlanError(planningSetupPrompt.message);
               setPlanningSetupPrompt(null);
@@ -1467,6 +1490,20 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       </div>
     </div>
   ) : null;
+
+  if (loopModeActive) {
+    return (
+      <LoopMode
+        work={work}
+        project={project}
+        artifacts={artifacts}
+        chats={chats}
+        initialSeed={loopStartSeed}
+        onSearch={openSearch}
+        onOpenChat={(chatSlug) => window.location.assign(`/chats/${chatSlug}`)}
+      />
+    );
+  }
 
   if (planningModeActive) {
     return (
@@ -1516,6 +1553,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           onCreateSourcePlan={handleCreateSourcePlanFromPlanningChat}
           onFinishConversation={handleFinishPlanningConversation}
           onManual={() => chooseWorkMode("manual")}
+          onLoop={() => {
+            setLoopStartSeed({
+              folder: planningRoot ?? "",
+              goal: planPromptDraft ?? work.description ?? work.name,
+            });
+            chooseWorkMode("loop");
+          }}
           onDraftChange={setPlanDraft}
           onSave={handleSavePlanArtifact}
           onReset={() => {
@@ -1542,6 +1586,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         {pendingLoopTarget && (
           <LoopSelectorDialog
             workSlug={work.slug}
+            rootPath={planningRoot}
             target={pendingLoopTarget}
             onClose={() => setPendingLoopTarget(null)}
             onStart={(definition) =>
@@ -1595,7 +1640,21 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }
 
   return (
-    <div className="shell-v3 narrow-left work-v3" style={workShellStyle}>
+    <div className="shell-v3 narrow-left work-v3 has-topbar" style={workShellStyle}>
+      <ShellTopbar
+        crumbs={[
+          ...(project
+            ? [{ href: `/projects/${project.slug}`, hue: project.color, label: project.name }]
+            : []),
+          { label: work.slug },
+        ]}
+        onSearch={openSearch}
+        primaryAction={
+          <button className="btn primary sm" onClick={() => setAgentDialogOpen(true)}>
+            + New agent <span className="kbd">N</span>
+          </button>
+        }
+      />
 
       {completeOpen && (
         <CompleteWorkDialog
@@ -1636,24 +1695,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       )}
 
       <aside className="shell-left work-rail">
-        <ShellCrown onSearch={openSearch} />
-
-        <div className="crumbs-v3">
-          <a className="crumb" href="/">
-            ← workspace
-          </a>
-          {work.project_slug && (
-            <>
-              <span className="sep">/</span>
-              <a className="crumb" href={`/projects/${work.project_slug}`}>
-                {project?.name ?? work.project_slug}
-              </a>
-            </>
-          )}
-          <span className="sep">/</span>
-          <span className="now">{work.slug}</span>
-        </div>
-
         <div className="work-hero">
           <div className="id-line">
             {work.slug} · {formatAge(work.created_at)}
@@ -1720,7 +1761,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
         <div
           className={`scrolly work-rail-sections${
-            artifacts.length > 0 ? " has-artifacts" : ""
+            pullRequests.length > 0 ? " has-pull-requests" : ""
           }`}
         >
           {sharedFolderCount > 0 && (
@@ -1898,15 +1939,15 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             </section>
           )}
 
-          {artifacts.length > 0 && (
-            <section className="work-rail-section artifacts-section">
+          {pullRequests.length > 0 && (
+            <section className="work-rail-section pull-requests-section">
               <div className="v3-shd">
                 <span>
-                  Artifacts{" "}
+                  Pull requests{" "}
                   <span className="num" style={{ marginLeft: 8 }}>
                     {artifactSearchActive
-                      ? `${filteredArtifacts.length}/${artifacts.length}`
-                      : artifacts.length}
+                      ? `${filteredArtifacts.length}/${pullRequests.length}`
+                      : pullRequests.length}
                   </span>
                 </span>
                 <span className="right">
@@ -1921,8 +1962,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         setArtifactSearchOpen(true);
                       }
                     }}
-                    title={artifactSearchOpen ? "Close artifact search" : "Search artifacts"}
-                    aria-label={artifactSearchOpen ? "Close artifact search" : "Search artifacts"}
+                    title={artifactSearchOpen ? "Close pull request search" : "Search pull requests"}
+                    aria-label={artifactSearchOpen ? "Close pull request search" : "Search pull requests"}
                     aria-pressed={artifactSearchOpen}
                   >
                     <SearchIcon size={11} />
@@ -1945,8 +1986,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         setArtifactSearchOpen(false);
                       }
                     }}
-                    placeholder="Filter artifacts"
-                    aria-label="Filter artifacts"
+                    placeholder="Filter pull requests"
+                    aria-label="Filter pull requests"
                   />
                   {artifactSearchQuery.trim() && (
                     <button
@@ -1963,7 +2004,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
               )}
               <div className="work-rail-section-body themed-scrollbar">
                 {filteredArtifacts.length === 0 && (
-                  <div className="v3-empty">no matching artifacts.</div>
+                  <div className="v3-empty">no matching pull requests.</div>
                 )}
                 {filteredArtifacts.map((a) => (
                   <V3RailArtifactRow key={a.slug} artifact={a} />
@@ -1983,7 +2024,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           </span>
           <span style={{ flex: 1 }} />
           <button
-            className="btn-icon"
+            className="btn icon"
             title={`Open ${work.atelier_path} in the file browser`}
             onClick={() => {
               revealWork(work.slug).catch(() => {
@@ -1996,6 +2037,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           </button>
         </div>
         <PaneResizeHandle
+          defaultValue={280}
           edge="right"
           label="Resize work rail"
           max={WORK_RAIL_MAX}
@@ -2006,29 +2048,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       </aside>
 
       <main className="shell-right work-right">
-        <div className="work-right-hd">
-          <div className="ttl">
-            <span className="t">{work.name}</span>
-            <span className="d">
-              {canvasAgents.length} agent
-              {canvasAgents.length === 1 ? "" : "s"}
-              {canvasChatSlugs.length > 0
-                ? ` + ${canvasChatSlugs.length} chat${
-                    canvasChatSlugs.length === 1 ? "" : "s"
-                  }`
-                : ""}{" "}
-              on canvas
-            </span>
-          </div>
-          <div className="spacer" />
-          <button
-            className="btn primary"
-            onClick={() => setAgentDialogOpen(true)}
-          >
-            + New agent <span className="kbd" style={{ marginLeft: 4 }}>N</span>
-          </button>
-        </div>
-
         {completeOpen && (
           <CompleteWorkDialog
             work={work}
@@ -2844,4 +2863,25 @@ function formatAge(iso: string): string {
   if (w < 5) return `${w}w ago`;
   const mo = Math.floor(d / 30);
   return `${mo}mo ago`;
+}
+
+function readLoopStartSeed(workSlug: string): LoopStartSeed | null {
+  const raw = sessionStorage.getItem(loopStartStorageKey(workSlug));
+  if (!raw) return null;
+  try {
+    const seed = JSON.parse(raw) as Partial<LoopStartSeed>;
+    if (typeof seed.folder !== "string" || typeof seed.goal !== "string") return null;
+    return {
+      folder: seed.folder,
+      goal: seed.goal,
+      definitionId:
+        typeof seed.definitionId === "string" ? seed.definitionId : undefined,
+      createDefinition:
+        typeof seed.createDefinition === "boolean"
+          ? seed.createDefinition
+          : undefined,
+    };
+  } catch {
+    return null;
+  }
 }

@@ -13,7 +13,7 @@ from src.domain.agents.launch import AgentLaunchRequest, launch_agent
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.commands.planning import _loop_persistence, _loop_runtime
 from src.domain.connections import ConnectionStore
-from src.domain.loop.agent_policy import apply_stage_agent_policy
+from src.domain.loop.agent_policy import apply_stage_agent_policy, resolve_stage_model
 from src.domain.loop.dtos import (
     LoopCheckRequest,
     LoopCheckResult,
@@ -489,6 +489,12 @@ async def _advance_after_stage_report(
     next_row["attempt"] = actions.int_or_default(next_row.get("attempt"), 0) + 1
     next_row["agent_slug"] = next_agent
     _record_owned_agent(loop, next_agent)
+    if (
+        next_stage.kind == LoopStepKind.AGENT_TASK
+        and next_stage.agent is not None
+        and next_stage.agent.permissions != LoopPermission.READ
+    ):
+        loop["source_agent_slug"] = next_agent
     loop["current_stage_id"] = next_stage.step_id
     loop["last_checked_seq"] = cursor
     loop["status"] = LoopStatus.RUNNING.value
@@ -719,11 +725,13 @@ async def _launch_or_resume_stage_agent(
     if source is None:
         raise AgentNotFound(f"source agent not found on work: {source_slug}")
     provider = cast(Provider, stage.agent.provider or source.provider)
-    model = stage.agent.model or source.model
+    model = resolve_stage_model(provider, source.provider, source.model, stage.agent)
     options = apply_stage_agent_policy(
         provider,
-        dict(source.options or {}) if provider == source.provider else {},
+        dict(source.options or {}),
         stage.agent,
+        parent_provider=source.provider,
+        parent_model=source.model,
     )
     launched = await launch_agent(
         workstore,
@@ -751,8 +759,15 @@ async def _launch_or_resume_stage_agent(
 
 
 def _write_stage_agent_slug(definition: LoopDefinition, loop: dict[str, Any]) -> str:
+    source = actions.str_or_none(loop.get("source_agent_slug"))
+    if source:
+        return source
     for stage in reversed(definition.stages):
-        if stage.agent is None or stage.agent.permissions != LoopPermission.WRITE:
+        if (
+            stage.kind != LoopStepKind.AGENT_TASK
+            or stage.agent is None
+            or stage.agent.permissions == LoopPermission.READ
+        ):
             continue
         row = _stage_row(loop, stage.step_id)
         slug = actions.str_or_none(row.get("agent_slug")) if row else None

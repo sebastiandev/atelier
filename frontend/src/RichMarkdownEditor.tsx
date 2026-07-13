@@ -44,6 +44,10 @@ export function RichMarkdownEditor({
     setEditing({ key: section.key, draft: section.text });
   }
 
+  function cancelEdit() {
+    setEditing(null);
+  }
+
   function saveEdit(section: MarkdownSection) {
     if (!editing || editing.key !== section.key) return;
     updateSection(section, editing.draft);
@@ -56,7 +60,7 @@ export function RichMarkdownEditor({
   ) {
     if (event.key === "Escape") {
       event.preventDefault();
-      setEditing(null);
+      cancelEdit();
       return;
     }
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -66,7 +70,7 @@ export function RichMarkdownEditor({
   }
 
   return (
-    <div className={["rich-md-editor", className].filter(Boolean).join(" ")}>
+    <div className={["rich-md-editor", "doc", className].filter(Boolean).join(" ")}>
       <div className="rich-md-sections">
         {sections.map((section) => {
           const sectionEditing = activeKey === section.key;
@@ -78,18 +82,26 @@ export function RichMarkdownEditor({
             >
               <div className="rich-md-section-head">
                 <span>{section.title}</span>
-                {!readOnly && (
+                {!readOnly && !sectionEditing && (
                   <button
                     type="button"
                     className="rich-md-edit-button"
-                    onClick={() =>
-                      sectionEditing ? saveEdit(section) : beginEdit(section)
-                    }
-                    title={sectionEditing ? "Save section" : "Edit section"}
-                    aria-label={sectionEditing ? "Save section" : "Edit section"}
+                    onClick={() => beginEdit(section)}
+                    title="Edit section"
+                    aria-label="Edit section"
                   >
-                    {sectionEditing ? <CheckIcon size={13} /> : <EditIcon size={13} />}
+                    <EditIcon size={13} />
                   </button>
+                )}
+                {sectionEditing && (
+                  <div className="rich-md-edit-actions">
+                    <button type="button" className="btn ghost sm" onClick={cancelEdit}>
+                      Cancel
+                    </button>
+                    <button type="button" className="btn primary sm" onClick={() => saveEdit(section)}>
+                      <CheckIcon size={12} /> Save section
+                    </button>
+                  </div>
                 )}
               </div>
               {sectionEditing ? (

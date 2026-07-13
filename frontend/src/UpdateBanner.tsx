@@ -147,7 +147,7 @@ export function UpdateBanner() {
             </button>
             <button
               type="button"
-              className="btn-ghost-sm"
+              className="btn ghost sm"
               onClick={dismiss}
             >
               Dismiss

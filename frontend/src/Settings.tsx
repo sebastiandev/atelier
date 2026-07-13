@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { type Connection, listConnections } from "./api";
+import { type Connection, listConnections, listLoopDefinitions } from "./api";
 import { Connections } from "./Connections";
 import { CheckIcon, SlidersIcon } from "./Icons";
-import { ShellCrown } from "./ShellCrown";
+import { LoopLibraryScreen } from "./LoopUI";
+import { ShellTopbar } from "./ShellTopbar";
 import {
   type ToolOption,
   type Theme,
@@ -12,37 +13,84 @@ import {
 
 export type SettingsSection =
   | "tools"
+  | "loops"
   | "connections"
   | "appearance"
   | "about";
 
-const SECTIONS: { id: SettingsSection; label: string; href: string }[] = [
-  { id: "tools", label: "default tools", href: "/settings" },
-  { id: "connections", label: "connections", href: "/settings/connections" },
-  { id: "appearance", label: "appearance", href: "/settings/appearance" },
-  { id: "about", label: "about", href: "/settings/about" },
-];
+const SECTIONS = [
+  {
+    id: "tools",
+    label: "default tools",
+    title: "Default tools",
+    detail: "Editor and terminal defaults",
+    description: "Apps that fire when you click an agent's open-in-editor / open-in-terminal button. Options come from the backend settings descriptor.",
+    href: "/settings",
+  },
+  {
+    id: "loops",
+    label: "loops",
+    title: "Loops",
+    detail: "Reusable multi-stage loops",
+    href: "/settings/loops",
+  },
+  {
+    id: "connections",
+    label: "connections",
+    title: "Connections",
+    detail: "Saved source credentials",
+    description: "Source creds, saved once. Reused whenever an agent needs to pull a ticket, error, or trace.",
+    href: "/settings/connections",
+  },
+  {
+    id: "appearance",
+    label: "appearance",
+    title: "Appearance",
+    detail: "Theme preferences",
+    description: "The shell theme cycles light → dark → ANSI. ANSI is the default — a softer dark with bright 16-colour terminal accents.",
+    href: "/settings/appearance",
+  },
+  {
+    id: "about",
+    label: "about",
+    title: "About",
+    detail: "Workspace and runtime",
+    description: "Workspace + runtime info. Atelier is local-first: every agent's transcript, every artifact, every connection lives on this machine.",
+    href: "/settings/about",
+  },
+] satisfies Array<{
+  id: SettingsSection;
+  label: string;
+  title: string;
+  detail: string;
+  description?: string;
+  href: string;
+}>;
 
 export function Settings({ section }: { section: SettingsSection }) {
   // Connection count drives the nav-item chip — fetched lazily.
   const [connectionCount, setConnectionCount] = useState<number | null>(null);
+  const [loopCount, setLoopCount] = useState<number | null>(null);
   useEffect(() => {
     listConnections()
       .then((rows: Connection[]) => setConnectionCount(rows.length))
       .catch(() => setConnectionCount(null));
   }, []);
+  useEffect(() => {
+    listLoopDefinitions(null)
+      .then((rows) => setLoopCount(rows.length))
+      .catch(() => setLoopCount(null));
+  }, []);
+  const currentSection = SECTIONS.find((item) => item.id === section)!;
 
   return (
-    <div className="shell-v3 settings-v3">
+    <div className="shell-v3 settings-v3 has-topbar">
+      <ShellTopbar
+        crumbs={section === "tools"
+          ? [{ label: "settings" }]
+          : [{ href: "/settings", label: "settings" }, { label: currentSection.label }]}
+      />
       <aside className="shell-left settings-rail">
-        <ShellCrown />
-        <div className="crumbs-v3">
-          <a className="crumb" href="/">
-            ← workspace
-          </a>
-          <span className="sep">/</span>
-          <span className="now">settings</span>
-        </div>
         <nav className="settings-nav">
           {SECTIONS.map((s) => (
             <a
@@ -56,6 +104,9 @@ export function Settings({ section }: { section: SettingsSection }) {
               {s.id === "connections" && connectionCount != null && (
                 <span className="count">{connectionCount}</span>
               )}
+              {s.id === "loops" && loopCount != null && (
+                <span className="count">{loopCount}</span>
+              )}
             </a>
           ))}
         </nav>
@@ -68,7 +119,14 @@ export function Settings({ section }: { section: SettingsSection }) {
 
       <main className="shell-right settings-right">
         <div className="settings-body">
+          {section !== "loops" && (
+            <div className="settings-section-hd">
+              <h1>{currentSection.title}</h1>
+              <p>{currentSection.description ?? currentSection.detail}</p>
+            </div>
+          )}
           {section === "tools" && <SettingsTools />}
+          {section === "loops" && <SettingsLoops />}
           {section === "connections" && <SettingsConnections />}
           {section === "appearance" && <SettingsAppearance />}
           {section === "about" && <SettingsAbout />}
@@ -78,17 +136,10 @@ export function Settings({ section }: { section: SettingsSection }) {
   );
 }
 
-function SettingsSectionHd({
-  title,
-  sub,
-}: {
-  title: string;
-  sub: string;
-}) {
+function SettingsLoops() {
   return (
-    <div className="settings-section-hd">
-      <h1 className="title">{title}</h1>
-      <p className="sub">{sub}</p>
+    <div className="settings-loops">
+      <LoopLibraryScreen workSlug={null} embedded />
     </div>
   );
 }
@@ -124,10 +175,6 @@ function SettingsTools() {
   const setTerminal = useSettingsStore((s) => s.setTerminal);
   return (
     <>
-      <SettingsSectionHd
-        title="Default tools"
-        sub="Apps that fire when you click an agent's open-in-editor / open-in-terminal button. Options come from the backend settings descriptor."
-      />
       <SettingsCard
         label="EDITOR"
         hint="Opens when an agent tile's “Open in editor” fires."
@@ -211,15 +258,7 @@ function ToolCardTerminal({
 // ─── Connections ────────────────────────────────────────────────
 
 function SettingsConnections() {
-  return (
-    <>
-      <SettingsSectionHd
-        title="Connections"
-        sub="Source creds, saved once. Reused whenever an agent needs to pull a ticket, error, or trace."
-      />
-      <Connections chromeless />
-    </>
-  );
+  return <Connections chromeless />;
 }
 
 // ─── Appearance ─────────────────────────────────────────────────
@@ -233,12 +272,7 @@ function SettingsAppearance() {
     { value: "ansi", label: "ANSI terminal", swatch: "swatch-ansi" },
   ];
   return (
-    <>
-      <SettingsSectionHd
-        title="Appearance"
-        sub="The shell theme cycles light → dark → ANSI. ANSI is the default — a softer dark with bright 16-colour terminal accents."
-      />
-      <SettingsCard label="THEME" hint="Click any card to switch.">
+    <SettingsCard label="THEME" hint="Click any card to switch.">
         <div className="tool-grid">
           {themes.map((t) => (
             <button
@@ -263,8 +297,7 @@ function SettingsAppearance() {
             </button>
           ))}
         </div>
-      </SettingsCard>
-    </>
+    </SettingsCard>
   );
 }
 
@@ -283,10 +316,6 @@ function SettingsAbout() {
   );
   return (
     <>
-      <SettingsSectionHd
-        title="About"
-        sub="Workspace + runtime info. Atelier is local-first: every agent's transcript, every artifact, every connection lives on this machine."
-      />
       <SettingsCard label="RUNTIME">
         <div className="settings-card-body">
           {rows.map((row) => (

@@ -22,7 +22,10 @@ frontend/src/
 ├── NewAgentDialog.tsx   # POST /api/works/<slug>/agents
 ├── MarkdownText.tsx     # react-markdown + remark-gfm + shiki wrapper
 ├── RichMarkdownEditor.tsx # rendered markdown with inline section editing
-├── ShellCrown.tsx       # shared left-rail wordmark + search/settings/theme actions
+├── ShellTopbar.tsx      # shared wordmark, breadcrumbs, utilities, and primary action
+├── LoopMode.tsx         # standalone goal → loop setup → staged run/result surface
+├── LoopUI.tsx           # reusable loop selector, library, and structure editor
+├── LoopRunView.tsx      # reusable staged Planning run/report/result primitives
 ├── useAgentStream.ts    # WS hook with replay + reconnect backoff
 ├── state/               # narrow Zustand stores (frontend-local concerns)
 │   ├── theme.ts         # dark/light/ansi cycle, persisted
@@ -42,11 +45,15 @@ State: Zustand for frontend-local presentation concerns (see [State](#state)).
 
 Hand-rolled in `App.tsx`. Path prefix → component. We don't ship a router because:
 
-- Five route patterns total (`/agents/<slug>`, `/works/<slug>`, `/projects/<slug>`, `/chats/<slug>`, `/connections`) plus the home.
+- The route table is still a small prefix switch (`agents`, `works`, `projects`, `chats`, `connections`, and `settings`) plus Home.
 - No nested routes, no parameterized search, no transitions.
 - Adding `react-router` would be more code than the router itself.
 
 If routing grows beyond ~5 patterns, swap it in.
+
+Work modes have stable navigation URLs: `?mode=manual`, `?mode=planning`, and
+`?mode=loop`. The `?start=planning|loop` variants remain one-shot creation
+entry points that consume their `sessionStorage` seed.
 
 ## Exploratory chats
 
@@ -54,19 +61,21 @@ If routing grows beyond ~5 patterns, swap it in.
 
 `/chats/<slug>` uses the `shell-v3 narrow-left` two-column layout: left rail for grounding/model/provenance, right column for the transcript and composer. The page fetches REST metadata with `GET /api/chats/{slug}` but renders and sends turns through `useAgentStream(chatSlug, { resource: "chats" })`, which opens `WS /api/chats/{slug}/stream`. Promotion is the single summary modal path: the user confirms name, brief, and project, then `POST /api/chats/{slug}/promote` returns the new Work and the UI navigates there. WorkView renders promoted chat context folders before project shares; clicking one opens `ContextDocModal`, which reads `GET /api/works/{work}/chat-contexts/{folder}/{filename}` and links back to the source chat. The full chat rail also exposes a neutral **Compact context** action that calls `POST /api/chats/{slug}/compact`.
 
-`NewWorkDialog` is the single work-creation entry point: title, description, project, mode cards, and planning setup now live in one modal. Planning submissions create the work through the normal `POST /api/works` path, stash a short `PlanningStartSeed` in `sessionStorage`, and navigate to `/works/<slug>?start=planning`; WorkView consumes that seed once and starts the Planning chat with the selected framework, profile, work folder, plan files folder, and chat model options. Manual submissions navigate to `/works/<slug>?mode=manual`.
+`NewWorkDialog` is the single work-creation entry point: title, description, project, and Manual/Planning/Loop mode setup live in one modal. Planning submissions create the work through the normal `POST /api/works` path, stash a short `PlanningStartSeed` in `sessionStorage`, and navigate to `/works/<slug>?start=planning`; WorkView consumes that seed once and starts the Planning chat with the selected framework, profile, work folder, plan files folder, and chat model options. Loop mode loads definitions from `GET /api/loops`, lets the user select one or choose **Create a new loop**, then stashes that choice with the required work folder in `LoopStartSeed` before navigating to `/works/<slug>?start=loop`. `LoopMode` opens the selected definition or new-definition editor and owns the later goal, run parameters, launch, and staged result surface. Context belongs to individual stages in the shared editor, not to the run setup. Manual submissions navigate to `/works/<slug>?mode=manual`.
 
 Inside WorkView, planning is a durable work mode rather than a canvas card. Empty works open the `PlanningMode` surface by default; works that already have agents/chats still default to the manual canvas unless a source plan or reserved Planning chat exists. The empty Planning setup lets the user choose framework, profile, work folder, plan files folder, and Planning agent provider/model/effort/permissions before starting. Starting Planning opens the folder picker and checks `POST /api/works/{work}/plan/framework-status`; if the selected framework is missing, the UI asks whether to create a setup chat. No stops the flow. Yes calls `POST /api/works/{work}/planning-setup-chat`, focuses the normal visible setup chat, and lets the existing chat runtime stream installer output and permission prompts from the selected folder. When the framework is ready, the UI calls `POST /api/works/{work}/planning-chat`; the backend creates/reuses one real work-grounded chat titled `Planning`, builds the first prompt, stores the selected folder as the chat working directory, and persists the selected planning setup in SQL. Before source docs exist, `PlanningMode` shows that real chat centered with no plan rail or right dock, while the left rail shows the setup/discovery/ready/materializing timeline. The **Create source plan** action is hidden until the chat stream or REST summary reports `planning_readiness.ready`; then it calls `POST /api/works/{work}/plan` with the Planning chat slug only. That POST resolves root/framework/profile/provider/model/options from the persisted PlanningSession, starts/resumes the background materializer, and returns status immediately; WorkView polls `GET /api/works/{work}/plan/materialization-status` until complete. The rail timeline stays phase-only, while the center materialization panel shows running, waiting-permission, stalled, failed, or complete state, echoes the latest transcript summary when available, and exposes approve/retry actions for paused or failed runs. The backend runs or reuses the internal write-capable materializer, parses its `atelier_plan_materialization` metadata report, and returns the source-backed plan. The UI reads document content only when opening/editing a specific artifact. After materialization, `PlanningMode` renders the handoff-style shell: left rail with static Planning badge, progress bar, outline tree, source documents, and footstrip; center overview/detail/source/approve views; and the same `Planning` chat reused as the right dock. The dock collapses the discovery transcript behind a previous-conversation button by default so it opens as a ready revision chat. Typing `@` in that Planning chat opens a compact plan-document picker sourced from the current `plan.artifacts`; selecting a row inserts `@relative/path.md` into the plain chat message, matching the backend-seeded prompt contract. The reserved Planning chat is hidden from the normal Work chats rail/canvas so it does not appear twice. The surface is a projection over the flat `/api/works/{work}/plan` payload, deriving the epic outline and status buckets client-side.
 
 `plan.planning_path` is the Atelier-owned state folder (`.atelier/planning/<WRK>`). Editable source artifacts live under `plan.artifact_root_path`, which defaults from the backend framework definition but can be overridden in Planning setup, and artifact `path` values are relative to that folder.
 
-Left-rail shell headers use `ShellCrown.tsx` for the Atelier wordmark and the search/settings/theme action cluster. Work and Project pass an `onSearch` callback for their search modal; surfaces without a local search modal keep the same visual crown and use the default search link behavior.
+Mode screens use `ShellTopbar.tsx` for one stable 48px app header: the rail-aligned origin lane contains the Atelier wordmark and project/work breadcrumbs, the optional view lane contains merged full-view identity and status, and primary plus search/settings/theme actions stay right-aligned. Clickable parent crumbs replace header back arrows. The Loop library/editor merge identity and actions into this bar; Settings sections and run headers keep their Inter content titles in the canvas. Dense tile toolbars remain inside their owning surface. Mode identity belongs at the top of the left rail below the bar; rails never repeat the app wordmark or breadcrumbs.
 
-WorkView's normal left rail, Planning Mode's left rail, and the Planning chat dock are resizable through `PaneResizeHandle`. Widths are frontend-local presentation state in `state/layout.ts` (`localStorage["atelier:layout"]`) and feed CSS grid variables (`--shell-left-width`, `--pm-rail-width`, `--pm-dock-width`) so the backend plan/work shapes remain unchanged.
+Home, Work/Loop, Planning, the Planning chat dock, and the Loop editor inspector are resizable through one `PaneResizeHandle`. Arrow keys move by 16px (Shift by 32px), double-click restores the surface default, and widths persist in `state/layout.ts` (`localStorage["atelier:layout"]`). Defaults and clamps are Home 500 (360–560), Work/Loop 280 (240–520), Planning 296 (248–420), and both right docks 420 (340–620).
 
 Artifact and source views still use the same source-backed plan endpoints: selecting a story/spike/bug loads `GET /api/works/{work}/plan/artifacts/{id}`, editable source saves go through the hash-checked `PUT`, and plan approval calls `/plan/approve`. Plan approval is the initial baseline action for the generated source snapshot, so the Planning header, epic view, and approval-related story blockers expose an Approve plan action until the baseline exists. Once a baseline exists, saving a story/source edit through the UI updates that file's approved hash immediately; external file changes still surface as `changed` until the user saves or approves the latest snapshot. Launching from a ready executable artifact uses the existing `NewAgentDialog` and passes the artifact Markdown as a normal `file` context; after the agent is created, `POST /plan/artifacts/{id}/runs` starts a `run-NNN`, sends the backend run prompt, and schedules background monitoring. While the plan overview reports running artifacts, WorkView polls the plan so run state updates without a manual collect-report action. The inspector shows backend loop state (`loop_status`, reason, and findings), dependency launch blockers, proposal diff review, and tracking links; the left rail `+ bug` action opens the handoff-styled bug modal with problem text, completed/in-review story picker, optional Sentry link, and optional context URL before posting to `/plan/artifacts/{id}/bugs`. `blocked_user` reports expose a `Mark resolved` action that posts to `/runs/{run}/resume`; accepted runs use `/runs/{run}/accept`; cleanup calls the existing agent delete flow and then `/runs/{run}/cleanup` so accepted artifacts keep an audit timestamp without keeping transient workspaces around.
 
-The reusable-loop launch path supersedes the old NewAgentDialog handoff above. **Work on `<artifact>`** opens `LoopSelectorDialog`, defaults to Atelier Reviewed, and can open the repository loop library/editor without losing the target. The backend creates stage agents after the selected definition and required context pass validation. `LoopRunView` renders the live ordered stages, structured reports, evidence, warnings, and blocker action; awaiting approval switches to the result view with **Request changes** and **Approve result**. Cleanup is a single backend call that owns all stage-agent teardown. WorkView polls the selected artifact while the overview reports an active run, so task, review, check, and approval transitions update without opening agent transcripts.
+The reusable-loop launch path supersedes the old NewAgentDialog handoff above. A story's first right-side action is **Start work**, which opens `LoopSelectorDialog`, defaults to Atelier Reviewed, and can open the loop library/editor without losing the target. In Planning and Loop mode, plain **Save** writes a Work-owned overlay while **Save to library** creates a reusable copy; Settings writes the reusable library directly. Each agent stage can inherit or override provider, model, effort, and permissions, and file/folder context uses the shared filesystem picker. Settings asks for a temporary reference working folder before that picker opens and persists only the selected relative path, so reusable definitions remain portable. The backend creates stage agents after the selected definition and required context pass validation. `LoopRunView` renders the live ordered stages, structured reports, evidence, warnings, and blocker action; awaiting approval switches to the result view with **Request changes** and **Approve result**. Cleanup is a single backend call that owns all stage-agent teardown. WorkView polls the selected artifact while the overview reports an active run, so task, review, check, and approval transitions update without opening agent transcripts.
+
+Standalone `LoopMode` reuses those same definition and run primitives with a freeform goal instead of a Planning artifact. The setup screen captures a repository root, definition revision, and parent provider/model/options. Structural edits open `LoopStructureEditor` and persist to the Work unless explicitly promoted to the library; stage context stays in that definition. After launch, the rail gains run history, pull requests, and chats; the main area shows the current stage's output below the stage spine. Blocked runs expose quick scope decisions, a freeform answer, and **Answer in chat**; reviewable runs expose Request changes/Approve, and accepted results expose Create PR, configured-editor, work-scoped chat, and rerun-from-current-state actions.
 
 Plan artifact/source documents use `RichMarkdownEditor`: it renders sectioned markdown through `MarkdownText`, each heading section can be edited inline through an icon button, Esc cancels an active section edit, and the outer Save/Reset controls still go through the same plan artifact/source endpoints.
 
@@ -103,9 +112,7 @@ Loose work uses the neutral tokens (`--bg-2`, `--line`, `--fg-3`) so the same sh
 
 ## Topbar shape (shared)
 
-Home, Project, Work, Agent, and Connections all share the same chrome — brand on far-left, tools on far-right, divider at the bottom. WorkView's `.wv-topbar` is the canonical look. Home and Project sit inside `.home` (no max-width; `padding: 0 2.25rem 3rem`); the topbar uses `margin: 0 -2.25rem 1.5rem` to break out of the side padding and go edge-to-edge, picking up `.wv-topbar`'s elevated background. Same negative-margin trick on `.proj-hero` for the gradient bleed. The `:has(+ .proj-hero)` rule on the topbar drops its bottom margin so the project hero's tinted bar sits flush.
-
-Project crumb pattern: `← Workspace` (`btn-ghost-sm` button, links to `/`) followed by a `crumbs` span with `/ [glyph chip] {Name}`. WorkView extends with another `/ {WRK-slug}` and a folder-pill on the right.
+`ShellTopbar` is the canonical app chrome on Project, Work, Planning, Loop, Chat, Agent, and Settings screens. It is a 48px `--bg-1` band with no drawn border: a rail-width origin lane, an optional truncating full-view identity lane, and a right action cluster. `view={{ title, detail, inline, onBack }}` is reserved for identities the handoff explicitly merges into app chrome; ordinary section titles stay in content. Project breadcrumbs set only `--proj-h`; the cascade derives the swatch. Home intentionally keeps its handoff-specific two-pane workspace composition, but uses the same compact brand mark and global utility vocabulary.
 
 ### UpdateChip
 
@@ -127,7 +134,7 @@ The shared header markup lives in `TileHeader.tsx`; AgentTile, ChatTile, and Pla
 
 - **Left** cell: persona pip + status dot + h2 title. h2 truncates with `text-overflow: ellipsis` so long names don't push the meta off-center.
 - **Center** cell: `agent-slug` (mono) + `provider-pill` (`amp · rush`) + `conn-status` (`CONNECTED`) + a `folder-pill mono` showing `shortenPath(worktreePath)`. Left-click reveals the worktree in Finder; **right-click opens a small context menu** (`.folder-pill-menu`, anchored at cursor coords) with two options: *Open worktree* and *Open Atelier folder* (the per-agent dir under `~/Atelier/works/<work>/agents/<agent>/` — transcript, agent.json, contexts/). Backend dispatch via `POST /api/agents/{slug}/reveal?kind=worktree|atelier`. Center stays horizontally centered regardless of how wide the title or controls clusters get; the 1fr columns absorb the slack equally.
-- **Right** cell: `tile-controls` wrapper with **open-in-IDE / handoff / maximize / detach / close** buttons. Buttons are 26×26 with 13×13 SVG glyphs; controlled by `.tile-controls .tile-ctl` so the meta/folder pill in the center stays at default sizing. The open-in-IDE button uses the selected editor descriptor from `GET /api/settings` (`url_template` plus path tokens such as `{path_uri}` / `{path_param}`) — browsers route unknown protocols to the OS handler without navigating, so the page stays.
+- **Right** cell: `tile-controls` wrapper with **open-in-IDE / handoff / maximize / detach / close** `.btn.icon.sm` controls. The open-in-IDE button uses the selected editor descriptor from `GET /api/settings` (`url_template` plus path tokens such as `{path_uri}` / `{path_param}`) — browsers route unknown protocols to the OS handler without navigating, so the page stays.
 
 The standalone worktree-icon button (formerly between conn-status and tile-controls) was removed — the folder pill is itself the reveal affordance. Path display shortening lives in `pathFormat.ts` for reuse by AgentTile/Chat surfaces without importing WorkView.
 
@@ -226,11 +233,11 @@ Lifted from `design/design_handoff_atelier/design_files/styles.css` (gitignored 
 - Lines: `--line`, `--line-soft`
 - Status hues: `--good`, `--warn`, `--danger`, `--info`
 - Accent: `--accent`, `--accent-soft` (focus glow), `--accent-line` (focus border), `--accent-fg`
-- Radii: `--radius-sm`, `--radius`, `--radius-lg`
-- Shadows: `--shadow-1`, `--shadow-2`, `--shadow-pop`
+- Shape: `--radius-tag` / `--radius-ctl` / `--radius-card` = 2px, `--radius-tile` = 3px, `--radius-input` = 6px, `--radius-pop` = 8px
+- Floating layers only: `--shadow-pop`
+- Controls: `--ctl`, `--ctl-sm`; chrome typography: `--chrome-*`
+- Document reading: `--doc-size`, `--doc-leading`, `--doc-fg`, `--doc-measure`
 - Fonts: `--font-ui` (Inter w/ system fallback), `--font-mono` (JetBrains Mono w/ system fallback)
-
-**Legacy aliases**: the older names (`--bg-elev`, `--muted`, `--border`, `--status-*`) point at the new tokens, so existing selectors keep working without churn. Prefer the new names in new code; don't go on a renaming spree.
 
 ## Persona theming
 
@@ -247,11 +254,33 @@ This is what powers: the `AgentTile` tile-mode top border, the `WorkView` rail r
 
 ## Dialogs — minimal-first pattern
 
-Both dialogs (`NewWorkDialog`, `NewAgentDialog`) keep the surface small. Advanced controls land as the stories that own them ship; the dialogs grow rather than carrying stub UI ahead of time.
+`NewWorkDialog` is one compact creation flow. Identity fields come first,
+followed by the Manual / Planning / Loop mode cards. Planning expands inline
+setup for work type, framework, working folder, framework output folder, and
+the Planning agent; Loop expands an inline searchable definition picker plus a
+create-new choice, then captures the working folder and hands off to the
+standalone setup screen. One **Create work** action ends every variant.
 
-Both dialogs accept an optional `contexts` array of `ContextEntry`. `NewWorkDialog` exposes one button per `ConnectionType`; `NewAgentDialog` exposes the connection-backed types **plus** simple `text` / `url` / `file` types. Connection-backed entries render through `ContextRow` (see below); the simple types render through `SimpleContextRow.tsx` — a stripped-down card with a textarea (text) or input (url, file) and a remove button.
+`NewProjectDialog` uses the same compact shell for name, optional description,
+the seven project hue swatches, and an optional default repository folder.
+New Work inherits that folder when the project is selected. The frontend
+contract is ready, but project persistence does not store `default_folder` yet.
 
-**Working folder + Branch row.** The two fields share one `.field-row` (folder grows; branch is fixed-width). The folder field opens a Finder-style `FolderPickerDialog`; the branch field has an inline `BranchPicker` popup (click-outside dismiss, autofocused filter input, Enter-to-pick when one match remains, Esc to close). The picker calls `GET /api/git/branches?path=<folder>` lazily on first open and caches the result until the folder value changes. Blank branch name = detached HEAD from `master` (the recommended default — see `backend.md` → WorktreeManager); typing or picking a name creates that branch from `master` on agent start. Disabled in fork mode because forks inherit the source agent's current HEAD plus working state.
+`NewAgentDialog` keeps name and branch in one row, then presents an explicit
+workspace choice: an isolated worktree for parallel edits or the selected
+folder shared in place. Working folder, provider/model options, goal, and
+context follow in that order. Fork/fresh remains a separate starting-point
+choice. The folder field opens `FolderPickerDialog`; branch uses
+`BranchPicker`, which calls `GET /api/git/branches?path=<folder>` lazily and
+caches until the folder changes. Shared mode disables branch and starting-point
+controls. The frontend already sends `workspace_mode`, but the backend must
+still implement its shared-folder semantics.
+
+Only `NewAgentDialog` owns per-agent `contexts`. Connection-backed entries
+render through `ContextRow`; simple text, link, file, and folder entries render
+through `SimpleContextRow`. The backend does not yet accept the simple `folder`
+kind, so that option is a declared frontend contract until the context model and
+renderer support it.
 
 ## ContextRow
 

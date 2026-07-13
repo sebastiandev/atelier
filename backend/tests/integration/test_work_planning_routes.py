@@ -1358,6 +1358,38 @@ def test_artifact_run_full_loop_lifecycle(
     assert cleaned.json()["artifact"]["runs"][0]["cleanup_at"] is not None
 
 
+def test_legacy_run_ignores_work_overlay_of_default_loop(
+    app_client: TestClient,
+    test_settings: Settings,
+) -> None:
+    _create_work(app_client)
+    root = test_settings.workspace_root / "repo"
+    _start_plan(app_client, root)
+    agent = _create_agent(app_client, root)
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    payload = app_client.get("/api/loops/atelier-fast").json()
+    saved = app_client.post(
+        "/api/loops",
+        json={
+            **payload,
+            "name": "Shadowed fast",
+            "scope": "work",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={"agent_slug": agent["slug"]},
+    )
+
+    assert started.status_code == 200, started.text
+    run = started.json()["artifact"]["runs"][0]
+    assert run["loop_definition_name"] == "Atelier Fast"
+
+
 def test_reviewed_loop_routes_findings_back_to_implementation(
     app_client: TestClient,
     test_settings: Settings,
@@ -1387,14 +1419,25 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
         "_launch_or_resume_stage_agent",
         fake_launch_reviewer,
     )
-    reviewed = builtin_loop_definition("atelier-reviewed")
-    assert reviewed is not None
+    overlay_payload = app_client.get("/api/loops/atelier-reviewed").json()
+    overlay_payload["stages"][0]["agent"]["permissions"] = None
+    overlay_response = app_client.post(
+        "/api/loops",
+        json={
+            **overlay_payload,
+            "scope": "work",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+        },
+    )
+    assert overlay_response.status_code == 201, overlay_response.text
+    overlay = overlay_response.json()
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
             "agent_slug": implementation["slug"],
-            "loop_definition_id": reviewed.definition_id,
-            "loop_revision": reviewed.revision,
+            "loop_definition_id": overlay["id"],
+            "loop_revision": overlay["revision"],
         },
     )
     assert started.status_code == 200, started.text
@@ -1797,14 +1840,27 @@ def test_selected_loop_launches_first_agent_from_planning_session(
         options={"permission_mode": "default"},
     )
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
-    reviewed = builtin_loop_definition("atelier-reviewed")
-    assert reviewed is not None
+    builtin = app_client.get("/api/loops/atelier-reviewed")
+    assert builtin.status_code == 200, builtin.text
+    reviewed = app_client.post(
+        "/api/loops",
+        json={
+            **builtin.json(),
+            "name": "Work reviewed",
+            "scope": "work",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+            "forked_from": "atelier-reviewed",
+        },
+    )
+    assert reviewed.status_code == 201, reviewed.text
+    selected = reviewed.json()
 
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
-            "loop_definition_id": reviewed.definition_id,
-            "loop_revision": reviewed.revision,
+            "loop_definition_id": selected["id"],
+            "loop_revision": selected["revision"],
         },
     )
 
@@ -1817,6 +1873,154 @@ def test_selected_loop_launches_first_agent_from_planning_session(
     launched = next(agent for agent in agents if agent["slug"] == run["agent_slug"])
     assert launched["provider"] == "amp"
     assert launched["model"] == "rush"
+    stored = app_client.app.state.loop_runs.list_active()[0]
+    assert stored.definition_snapshot["name"] == "Work reviewed"
+
+
+def test_selected_loop_forks_supplied_agent_for_first_stage_override(
+    app_client: TestClient,
+    test_settings: Settings,
+) -> None:
+    _create_work(app_client)
+    root = test_settings.workspace_root / "repo"
+    _start_plan(app_client, root)
+    existing = _create_agent(app_client, root)
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    payload = app_client.get("/api/loops/atelier-fast").json()
+    payload["stages"][0]["agent"]["model"] = "rush"
+    saved = app_client.post(
+        "/api/loops",
+        json={
+            **payload,
+            "scope": "work",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "agent_slug": existing["slug"],
+            "loop_definition_id": saved.json()["id"],
+            "loop_revision": saved.json()["revision"],
+        },
+    )
+
+    assert started.status_code == 200, started.text
+    run_agent = started.json()["artifact"]["runs"][0]["agent_slug"]
+    assert run_agent != existing["slug"]
+    agents = app_client.get("/api/works/WRK-001/agents").json()
+    launched = next(agent for agent in agents if agent["slug"] == run_agent)
+    assert launched["model"] == "rush"
+
+
+def test_selected_loop_preflight_remembers_reused_stage_config(
+    app_client: TestClient,
+    test_settings: Settings,
+) -> None:
+    _create_work(app_client)
+    root = test_settings.workspace_root / "repo"
+    _start_plan(app_client, root)
+    _create_planning_session(
+        app_client,
+        root,
+        provider="amp",
+        model="smart",
+        options={"permission_mode": "default"},
+    )
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    payload = app_client.get("/api/loops/atelier-reviewed").json()
+    implementation = payload["stages"][0]
+    implementation["agent"]["model"] = "smart"
+    implementation["transitions"]["pass"] = "second-implementation"
+    second = json.loads(json.dumps(implementation))
+    second.update(id="second-implementation", name="Second implementation")
+    second["agent"].update(
+        session="fresh",
+        provider="codex-acp",
+        model="gpt-5.4",
+        effort="medium",
+    )
+    second["transitions"]["pass"] = "code-review"
+    payload["stages"].insert(1, second)
+    saved = app_client.post(
+        "/api/loops",
+        json={
+            **payload,
+            "id": "reuse-config",
+            "name": "Reuse config",
+            "scope": "work",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "loop_definition_id": saved.json()["id"],
+            "loop_revision": saved.json()["revision"],
+        },
+    )
+
+    assert started.status_code == 200, started.text
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        pytest.param({"model": "gpt-5.5"}, id="model"),
+        pytest.param({"effort": "high"}, id="effort"),
+    ],
+)
+def test_selected_loop_preflights_inherited_stage_policy(
+    app_client: TestClient,
+    test_settings: Settings,
+    override: dict[str, str],
+) -> None:
+    _create_work(app_client)
+    root = test_settings.workspace_root / "repo"
+    _start_plan(app_client, root)
+    _create_planning_session(
+        app_client,
+        root,
+        provider="amp",
+        model="rush",
+        options={"permission_mode": "default"},
+    )
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    payload = app_client.get("/api/loops/atelier-reviewed").json()
+    review = next(stage for stage in payload["stages"] if stage["id"] == "code-review")
+    review["agent"]["provider"] = None
+    review["agent"].update(override)
+    saved = app_client.post(
+        "/api/loops",
+        json={
+            **payload,
+            "scope": "work",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "loop_definition_id": saved.json()["id"],
+            "loop_revision": saved.json()["revision"],
+        },
+    )
+
+    assert started.status_code == 422, started.text
+    assert started.json()["detail"]
+    assert app_client.get("/api/works/WRK-001/agents").json() == []
+    detail = app_client.get("/api/works/WRK-001/plan/artifacts/story-001").json()
+    assert detail["artifact"]["runs"] == []
+    assert app_client.app.state.loop_runs.list_active() == []
 
 
 def test_background_run_monitor_auto_continues_incomplete_report(

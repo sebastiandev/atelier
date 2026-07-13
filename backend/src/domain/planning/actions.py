@@ -430,6 +430,7 @@ def initialized_loop_snapshot(
             "definition_revision": definition.revision,
             "definition_snapshot": definition_snapshot(definition),
             "current_stage_id": first.step_id,
+            "source_agent_slug": agent_slug,
             "owned_agent_slugs": [agent_slug],
             "stages": [
                 {
@@ -447,7 +448,9 @@ def initialized_loop_snapshot(
                         agent_slug if stage.step_id == first.step_id else None
                     ),
                     "permissions": (
-                        stage.agent.permissions.value if stage.agent else None
+                        stage.agent.permissions.value
+                        if stage.agent and stage.agent.permissions is not None
+                        else None
                     ),
                     "session": stage.agent.session.value if stage.agent else None,
                     "summary": "",

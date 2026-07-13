@@ -84,7 +84,11 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
         "agent": (
             {
                 "session": stage.agent.session.value,
-                "permissions": stage.agent.permissions.value,
+                "permissions": (
+                    stage.agent.permissions.value
+                    if stage.agent.permissions is not None
+                    else None
+                ),
                 "provider": stage.agent.provider,
                 "model": stage.agent.model,
                 "effort": stage.agent.effort,
@@ -165,9 +169,14 @@ def _agent_from_snapshot(value: object) -> LoopAgentPolicy | None:
         return None
     if not isinstance(value, dict):
         raise ValueError("loop agent snapshot must be a mapping")
+    raw_permissions = value.get("permissions")
     return LoopAgentPolicy(
         session=LoopSessionPolicy(_string(value, "session")),
-        permissions=LoopPermission(_string(value, "permissions")),
+        permissions=(
+            LoopPermission(raw_permissions)
+            if isinstance(raw_permissions, str)
+            else None
+        ),
         provider=_optional_string(value.get("provider")) or None,
         model=_optional_string(value.get("model")) or None,
         effort=_optional_string(value.get("effort")) or None,

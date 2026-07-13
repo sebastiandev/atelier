@@ -29,10 +29,11 @@ import {
   MoreIcon,
 } from "./Icons";
 import { NewWorkDialog, type NewWorkIntent } from "./NewWorkDialog";
+import { loopStartStorageKey } from "./loopSetup";
 import { planningStartStorageKey } from "./planningSetup";
 import { SearchModal } from "./SearchModal";
 import { SharedFoldersSection } from "./SharedFoldersSection";
-import { ShellCrown } from "./ShellCrown";
+import { ShellTopbar } from "./ShellTopbar";
 import { Switcher, type SwitcherItem } from "./Switcher";
 
 type Tab = "active" | "completed";
@@ -136,6 +137,14 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
       window.location.assign(`/works/${created.slug}?start=planning`);
       return created;
     }
+    if (intent.mode === "loop") {
+      sessionStorage.setItem(
+        loopStartStorageKey(created.slug),
+        JSON.stringify(intent.seed),
+      );
+      window.location.assign(`/works/${created.slug}?start=loop`);
+      return created;
+    }
     window.location.assign(`/works/${created.slug}?mode=manual`);
     return created;
   }
@@ -201,25 +210,17 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
 
   return (
     <div
-      className="shell-v3 project-v3"
+      className="shell-v3 project-v3 has-topbar"
       style={{
         ["--proj-h" as string]: String(project.color),
-        ["--proj-color" as string]: `oklch(0.62 0.16 ${project.color})`,
-        ["--proj-soft" as string]: `oklch(0.62 0.16 ${project.color} / 0.10)`,
       }}
     >
-      {/* LEFT — rail: crown, crumbs, hero, stats, defaults, shared folders, actions */}
+      <ShellTopbar
+        crumbs={[{ hue: project.color, label: project.name }]}
+        onSearch={() => setSearchOpen(true)}
+      />
+      {/* LEFT — project rail: hero, stats, defaults, shared folders, actions */}
       <aside className="shell-left proj-rail">
-        <ShellCrown onSearch={() => setSearchOpen(true)} />
-
-        <div className="crumbs-v3">
-          <a className="crumb" href="/">
-            ← workspace
-          </a>
-          <span className="sep">/</span>
-          <span className="now">{project.slug}</span>
-        </div>
-
         <div className="scrolly">
           <div className="hero-block">
             <div className="hero-glyph">{project.glyph}</div>
@@ -357,8 +358,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           <div>
             <div className="title">Latest work</div>
             <div className="sub">
-              {works.length} {works.length === 1 ? "unit" : "units"} in{" "}
-              {project.name}
+              {works.length} {works.length === 1 ? "unit" : "units"} in {project.name}
             </div>
           </div>
         </div>
@@ -582,7 +582,7 @@ function SharedFoldersManagerDialog({
             </div>
           </div>
           <button
-            className="btn-ghost-sm"
+            className="btn ghost sm"
             onClick={onClose}
             aria-label="Close"
           >

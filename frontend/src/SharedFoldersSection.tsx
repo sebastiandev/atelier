@@ -211,7 +211,7 @@ function ShareRow({
       </div>
       <div className="shared-folder-actions">
         <button
-          className="btn-icon"
+          className="btn icon"
           aria-label="More"
           title="More"
           onClick={(e) => {

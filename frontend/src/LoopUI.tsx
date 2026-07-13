@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { type CSSProperties, useEffect, useState } from "react";
 
 import {
   type LoopContextKind,
@@ -13,8 +13,9 @@ import {
   revealLoopDefinition,
   saveLoopDefinition,
 } from "./api";
+import { FolderPickerDialog } from "./FolderPickerDialog";
 import {
-  AgentIcon,
+  AlertIcon,
   BranchIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -24,8 +25,10 @@ import {
   EyeIcon,
   FlaskIcon,
   FolderIcon,
+  LockIcon,
   LoopIcon,
   PlayIcon,
+  PersonIcon,
   ReturnIcon,
   SearchIcon,
   ShieldIcon,
@@ -34,17 +37,40 @@ import {
   UserCheckIcon,
 } from "./Icons";
 import { MarkdownText } from "./MarkdownText";
-import { modelPickerOptions } from "./providerDescriptors";
-import { useProviderDescriptors } from "./providerDescriptors";
+import { PaneResizeHandle } from "./PaneResizeHandle";
+import { ShellTopbar } from "./ShellTopbar";
+import {
+  modelPickerOptions,
+  optionLabel,
+  providerEffortOption,
+  useProviderDescriptors,
+} from "./providerDescriptors";
+import {
+  LOOP_INSPECTOR_MAX,
+  LOOP_INSPECTOR_MIN,
+  useLayoutStore,
+} from "./state/layout";
 
 type EditorSeed = {
   definition: LoopDefinition;
   expectedRevision: string | null;
 };
 
+type LoopSaveScope = "repo" | "work";
+
 type LoopSelectorDialogProps = {
   workSlug: string;
-  target: PlanArtifactDetail;
+  rootPath?: string | null;
+  target?: PlanArtifactDetail;
+  targetSummary?: {
+    glyph: string;
+    meta: string;
+    title: string;
+  };
+  title?: string;
+  subtitle?: string;
+  confirmLabel?: string;
+  initialDefinitionId?: string | null;
   onClose: () => void;
   onStart: (definition: LoopDefinition) => Promise<void>;
 };
@@ -74,32 +100,42 @@ const OUTCOMES: Array<{ key: LoopOutcome; label: string }> = [
 
 export function LoopSelectorDialog({
   workSlug,
+  rootPath,
   target,
+  targetSummary,
+  title,
+  subtitle,
+  confirmLabel = "Start run",
+  initialDefinitionId,
   onClose,
   onStart,
 }: LoopSelectorDialogProps) {
   const [definitions, setDefinitions] = useState<LoopDefinition[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState("atelier-reviewed");
+  const [selectedId, setSelectedId] = useState(
+    initialDefinitionId ?? "atelier-reviewed",
+  );
   const [editor, setEditor] = useState<EditorSeed | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [starting, setStarting] = useState(false);
 
   const refresh = () =>
-    listLoopDefinitions(workSlug)
+    listLoopDefinitions(workSlug, rootPath)
       .then((rows) => {
         setDefinitions(rows);
         setError(null);
-        if (!rows.some((row) => row.id === selectedId && row.valid)) {
-          setSelectedId(defaultLoop(rows)?.id ?? "");
-        }
+        setSelectedId((current) =>
+          rows.some((row) => row.id === current && row.valid)
+            ? current
+            : defaultLoop(rows)?.id ?? "",
+        );
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
 
   useEffect(() => {
     void refresh();
-  }, [workSlug]);
+  }, [rootPath, workSlug]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -129,7 +165,7 @@ export function LoopSelectorDialog({
     defaultLoop(launchable);
 
   function editDefinition(definition: LoopDefinition, duplicate = false) {
-    setEditor(editorSeed(definition, duplicate));
+    setEditor(editorSeed(definition, duplicate, "work"));
   }
 
   async function start(definition: LoopDefinition) {
@@ -147,9 +183,15 @@ export function LoopSelectorDialog({
     return (
       <LoopEditorScreen
         workSlug={workSlug}
+        rootPath={rootPath}
+        saveScope="work"
         seed={editor}
         onClose={() => setEditor(null)}
         onSaved={(saved) => {
+          setDefinitions((rows) => [
+            saved,
+            ...(rows ?? []).filter((row) => row.id !== saved.id),
+          ]);
           setEditor(null);
           setSelectedId(saved.id);
           void refresh();
@@ -162,7 +204,7 @@ export function LoopSelectorDialog({
     return (
       <LoopLibraryScreen
         workSlug={workSlug}
-        rootPath=".atelier/loops/"
+        rootPath={rootPath}
         onClose={() => {
           setLibraryOpen(false);
           void refresh();
@@ -182,13 +224,15 @@ export function LoopSelectorDialog({
       >
         <div className="modal-hd loop-modal-hd">
           <div>
-            <h3 id="loop-selector-title">Work on {target.artifact.id.toUpperCase()} with a loop</h3>
-            <div className="sub">Select the multi-stage loop this run will follow</div>
+            <h3 id="loop-selector-title">
+              {title ?? (target ? `Work on ${target.artifact.id.toUpperCase()} with a loop` : "Choose a loop")}
+            </h3>
+            <div className="sub">{subtitle ?? "Select the multi-stage loop this run will follow"}</div>
           </div>
           <button className="btn ghost icon sm" onClick={onClose} aria-label="Close">×</button>
         </div>
         <div className="modal-bd">
-          <TargetRow target={target} />
+          {target ? <TargetRow target={target} /> : targetSummary ? <LoopTargetSummary {...targetSummary} /> : null}
           <div className="loop-selector-body">
             <div className="loop-section-label">
               <span>Choose a loop</span>
@@ -208,41 +252,29 @@ export function LoopSelectorDialog({
             {!definitions && !error && <div className="loop-loading">Loading loops…</div>}
             <div className="loop-selector-list">
               {visible.map((definition) => (
-                <button
+                <LoopDefinitionChoice
                   key={definition.id}
-                  className={"loop-card loop-select-card" + (definition.id === selected?.id ? " active" : "")}
-                  onClick={() => setSelectedId(definition.id)}
-                >
-                  <div className="loop-card-head">
-                    <span className="loop-card-icon"><LoopIcon size={16} /></span>
-                    <span className="loop-card-copy">
-                      <strong>
-                        <Highlight text={definition.name} query={needle} />
-                        <ScopeBadge definition={definition} />
-                        {definition.is_default && <em className="loop-default-pill">default</em>}
-                      </strong>
-                      <small><Highlight text={definition.description} query={needle} /></small>
-                    </span>
-                    {definition.id === selected?.id && <CheckIcon size={16} />}
-                  </div>
-                  {definition.id === selected?.id && <StageStrip definition={definition} subtle />}
-                </button>
+                  definition={definition}
+                  query={needle}
+                  selected={definition.id === selected?.id}
+                  onSelect={() => setSelectedId(definition.id)}
+                />
               ))}
               {definitions && visible.length === 0 && (
                 <div className="loop-search-empty">
                   <SearchIcon size={18} />
                   <span>No loops match “{query}”.</span>
-                  <button className="btn sm" onClick={() => setEditor(newLoopSeed())}>+ Create a loop</button>
+                  <button className="btn sm" onClick={() => setEditor(newLoopSeed("work"))}>+ Create a loop</button>
                 </div>
               )}
             </div>
             {selected && (
               <div className="loop-edit-actions">
                 <button className="btn sm" onClick={() => editDefinition(selected)}>
-                  <EditIcon size={11} /> {selected.scope === "builtin" ? "Edit (forks to repo)" : "Edit loop"}
+                  <EditIcon size={11} /> Edit loop
                 </button>
                 <button className="btn sm" onClick={() => editDefinition(selected, true)}><CopyIcon size={11} /> Duplicate</button>
-                <button className="btn sm" onClick={() => setEditor(newLoopSeed())}>+ Create loop</button>
+                <button className="btn sm" onClick={() => setEditor(newLoopSeed("work"))}>+ Create loop</button>
                 <button className="btn ghost sm" onClick={() => setLibraryOpen(true)}><LoopIcon size={11} /> Library</button>
               </div>
             )}
@@ -252,10 +284,65 @@ export function LoopSelectorDialog({
           <button className="btn" disabled={starting} onClick={onClose}>Cancel</button>
           <span className="spacer" />
           <button className="btn primary" disabled={!selected || starting} onClick={() => selected && void start(selected)}>
-            <PlayIcon size={12} /> {starting ? "Starting…" : "Start run"}
+            <PlayIcon size={12} /> {starting ? "Selecting…" : confirmLabel}
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+export function LoopDefinitionPickerDialog({
+  workSlug,
+  rootPath,
+  goal,
+  initialDefinitionId,
+  onClose,
+  onSelect,
+}: {
+  workSlug: string;
+  rootPath?: string | null;
+  goal: string;
+  initialDefinitionId?: string | null;
+  onClose: () => void;
+  onSelect: (definition: LoopDefinition) => Promise<void>;
+}) {
+  return (
+    <LoopSelectorDialog
+      workSlug={workSlug}
+      rootPath={rootPath}
+      targetSummary={{
+        glyph: "GO",
+        title: goal || "Untitled goal",
+        meta: "Loop objective · stage-owned context",
+      }}
+      title="Choose a loop"
+      subtitle="Select the reusable stages this goal will follow"
+      confirmLabel="Use this loop"
+      initialDefinitionId={initialDefinitionId}
+      onClose={onClose}
+      onStart={onSelect}
+    />
+  );
+}
+
+function LoopTargetSummary({
+  glyph,
+  meta,
+  title,
+}: {
+  glyph: string;
+  meta: string;
+  title: string;
+}) {
+  return (
+    <div className="loop-target">
+      <span className="loop-target-glyph">{glyph}</span>
+      <span className="loop-target-copy">
+        <strong>{title}</strong>
+        <small>{meta}</small>
+      </span>
+      <span className="loop-ready"><CheckIcon size={10} /> Ready</span>
     </div>
   );
 }
@@ -274,14 +361,106 @@ function TargetRow({ target }: { target: PlanArtifactDetail }) {
   );
 }
 
+export function LoopDefinitionSummaryCard({
+  definition,
+}: {
+  definition: LoopDefinition;
+}) {
+  return (
+    <article className="loop-card loop-mode-definition-card">
+      <div className="loop-card-head">
+        <span className="loop-card-icon"><LoopIcon size={16} /></span>
+        <span className="loop-card-copy">
+          <strong>
+            {definition.name}
+            <ScopeBadge definition={definition} />
+            {definition.is_default && <em className="loop-default-pill">default</em>}
+          </strong>
+          <small>{definition.description}</small>
+        </span>
+      </div>
+      <StageStrip definition={definition} subtle />
+    </article>
+  );
+}
+
+export function LoopDefinitionChoice({
+  compact = false,
+  definition,
+  onSelect,
+  query = "",
+  selected,
+}: {
+  compact?: boolean;
+  definition: LoopDefinition;
+  onSelect: () => void;
+  query?: string;
+  selected: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={
+        "loop-card loop-select-card" +
+        (compact ? " compact" : "") +
+        (selected ? " active" : "")
+      }
+      onClick={onSelect}
+    >
+      <div className="loop-card-head">
+        <span className="loop-card-icon"><LoopIcon size={compact ? 13 : 16} /></span>
+        <span className="loop-card-copy">
+          <strong>
+            <Highlight text={definition.name} query={query} />
+            <ScopeBadge definition={definition} />
+            {!compact && definition.is_default && (
+              <em className="loop-default-pill">default</em>
+            )}
+          </strong>
+          <small><Highlight text={definition.description} query={query} /></small>
+        </span>
+        {!compact && selected && <CheckIcon size={16} />}
+      </div>
+      {!compact && selected && <StageStrip definition={definition} subtle />}
+    </button>
+  );
+}
+
+export function LoopStructureEditor({
+  workSlug,
+  rootPath,
+  definition,
+  onClose,
+  onSaved,
+}: {
+  workSlug: string;
+  rootPath?: string | null;
+  definition?: LoopDefinition;
+  onClose: () => void;
+  onSaved: (definition: LoopDefinition) => void;
+}) {
+  return (
+    <LoopEditorScreen
+      workSlug={workSlug}
+      rootPath={rootPath}
+      saveScope="work"
+      seed={definition ? editorSeed(definition, false, "work") : newLoopSeed("work")}
+      onClose={onClose}
+      onSaved={onSaved}
+    />
+  );
+}
+
 export function LoopLibraryScreen({
   workSlug,
   rootPath,
   onClose,
+  embedded = false,
 }: {
-  workSlug: string;
-  rootPath: string;
-  onClose: () => void;
+  workSlug: string | null;
+  rootPath?: string | null;
+  onClose?: () => void;
+  embedded?: boolean;
 }) {
   const [definitions, setDefinitions] = useState<LoopDefinition[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -289,7 +468,7 @@ export function LoopLibraryScreen({
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const refresh = () =>
-    listLoopDefinitions(workSlug)
+    listLoopDefinitions(workSlug, rootPath)
       .then((rows) => {
         setDefinitions(rows);
         setError(null);
@@ -298,12 +477,14 @@ export function LoopLibraryScreen({
 
   useEffect(() => {
     void refresh();
-  }, [workSlug]);
+  }, [rootPath, workSlug]);
 
   if (editor) {
     return (
       <LoopEditorScreen
         workSlug={workSlug}
+        rootPath={rootPath}
+        saveScope={editor.definition.scope === "work" ? "work" : "repo"}
         seed={editor}
         onClose={() => setEditor(null)}
         onSaved={() => {
@@ -316,13 +497,14 @@ export function LoopLibraryScreen({
 
   const builtins = definitions?.filter((row) => row.scope === "builtin") ?? [];
   const repository = definitions?.filter((row) => row.scope === "repo") ?? [];
+  const work = definitions?.filter((row) => row.scope === "work") ?? [];
   const defaultBuiltin = defaultLoop(builtins);
 
   async function remove(definition: LoopDefinition) {
     if (!window.confirm(`Delete ${definition.name}? Historical runs keep their snapshot.`)) return;
     setBusyId(definition.id);
     try {
-      await deleteLoopDefinition(workSlug, definition.id);
+      await deleteLoopDefinition(workSlug, definition.id, rootPath, definition.scope);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -332,35 +514,68 @@ export function LoopLibraryScreen({
   }
 
   return (
-    <div className="loop-fullscreen">
-      <header className="loop-library-head">
-        <button className="btn ghost icon sm" onClick={onClose} aria-label="Back">←</button>
-        <span className="loop-library-icon"><LoopIcon size={17} /></span>
-        <span>
-          <strong>Loops</strong>
-          <small>{workSlug} · {rootPath}</small>
-        </span>
-        <button className="btn sm" disabled={!defaultBuiltin} onClick={() => defaultBuiltin && setEditor(editorSeed(defaultBuiltin, true))}><CopyIcon size={11} /> From existing</button>
-        <button className="btn primary sm" onClick={() => setEditor(newLoopSeed())}>+ Create loop</button>
-      </header>
+    <div className={"loop-fullscreen" + (embedded ? " embedded" : " has-topbar")}>
+      {!embedded && (
+        <ShellTopbar
+          crumbs={workSlug
+            ? [
+                { href: `/works/${workSlug}?mode=manual`, label: workSlug },
+                ...(onClose ? [{ onClick: onClose, label: "loop" }] : []),
+                { label: "loops" },
+              ]
+            : [{ href: "/settings", label: "settings" }, { label: "loops" }]}
+          primaryAction={(
+            <>
+              <button className="btn sm" disabled={!defaultBuiltin} onClick={() => defaultBuiltin && setEditor(editorSeed(defaultBuiltin, true, "repo"))}><CopyIcon size={11} /> From existing</button>
+              <button className="btn primary sm" onClick={() => setEditor(newLoopSeed("repo"))}>+ Create loop</button>
+            </>
+          )}
+          showUtilities={false}
+          view={{
+            inline: true,
+            title: <span className="loop-library-root">{rootPath ?? "Atelier library"}</span>,
+          }}
+        />
+      )}
+      {embedded && (
+        <header className="loop-library-head embedded">
+          <span className="loop-library-title">
+            <strong>Loops</strong>
+            <small>Reusable multi-stage loops. Repository loops live in <code>.atelier/loops/</code>.</small>
+          </span>
+          <button className="btn sm" disabled={!defaultBuiltin} onClick={() => defaultBuiltin && setEditor(editorSeed(defaultBuiltin, true, "repo"))}><CopyIcon size={11} /> From existing</button>
+          <button className="btn primary sm" onClick={() => setEditor(newLoopSeed("repo"))}>+ Create loop</button>
+        </header>
+      )}
       <main className="loop-library-body themed-scrollbar">
         {error && <div className="form-error">{error}</div>}
         <LoopLibraryGroup
           label="Built-in"
           note="read-only · bundled"
           definitions={builtins}
-          onEdit={(definition) => setEditor(editorSeed(definition))}
-          onDuplicate={(definition) => setEditor(editorSeed(definition, true))}
+          onEdit={(definition) => setEditor(editorSeed(definition, false, "repo"))}
+          onDuplicate={(definition) => setEditor(editorSeed(definition, true, "repo"))}
         />
         <LoopLibraryGroup
-          label="Repository"
-          note=".atelier/loops/"
+          label="Library"
+          note="reusable across Works"
           definitions={repository}
-          onEdit={(definition) => setEditor(editorSeed(definition))}
-          onDuplicate={(definition) => setEditor(editorSeed(definition, true))}
+          onEdit={(definition) => setEditor(editorSeed(definition, false, "repo"))}
+          onDuplicate={(definition) => setEditor(editorSeed(definition, true, "repo"))}
           onDelete={(definition) => void remove(definition)}
           busyId={busyId}
         />
+        {work.length > 0 && (
+          <LoopLibraryGroup
+            label="Work"
+            note="available only to this Work"
+            definitions={work}
+            onEdit={(definition) => setEditor(editorSeed(definition, false, "work"))}
+            onDuplicate={(definition) => setEditor(editorSeed(definition, true, "work"))}
+            onDelete={(definition) => void remove(definition)}
+            busyId={busyId}
+          />
+        )}
       </main>
     </div>
   );
@@ -424,11 +639,15 @@ function LoopLibraryGroup({
 
 function LoopEditorScreen({
   workSlug,
+  rootPath,
+  saveScope,
   seed,
   onClose,
   onSaved,
 }: {
-  workSlug: string;
+  workSlug: string | null;
+  rootPath?: string | null;
+  saveScope: LoopSaveScope;
   seed: EditorSeed;
   onClose: () => void;
   onSaved: (definition: LoopDefinition) => void;
@@ -442,7 +661,13 @@ function LoopEditorScreen({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dirty, setDirty] = useState(seed.expectedRevision === null);
+  const [contextRoot, setContextRoot] = useState<string | null>(rootPath ?? null);
+  const loopInspectorWidth = useLayoutStore((state) => state.loopInspectorWidth);
+  const setLoopInspectorWidth = useLayoutStore((state) => state.setLoopInspectorWidth);
   const selected = draft.stages.find((stage) => stage.id === selectedId) ?? null;
+  const storagePath = saveScope === "work" && workSlug
+    ? `works/${workSlug}/.atelier/loops/${draft.id}`
+    : `${rootPath ? `${rootPath.replace(/[\\/]+$/, "")}/` : ""}.atelier/loops/${draft.id}`;
 
   function updateDraft(next: LoopDefinition) {
     setDraft(next);
@@ -511,18 +736,43 @@ function LoopEditorScreen({
     if (selectedId === stage.id) setSelectedId(stages[0]?.id ?? "");
   }
 
-  async function save() {
+  async function save(targetScope: LoopSaveScope = saveScope) {
     setSaving(true);
     setError(null);
     try {
+      const promoting = targetScope === "repo" && saveScope === "work";
+      let targetId = draft.id;
+      let expectedRevision = seed.expectedRevision;
+      let forkedFrom = draft.forked_from;
+      if (promoting) {
+        const library = await listLoopDefinitions(null);
+        const baseId = `${draft.id}-library`;
+        const previousPromotion = library.find((definition) =>
+          definition.scope === "repo" &&
+          definition.forked_from === draft.id &&
+          (definition.id === baseId || definition.id.startsWith(`${baseId}-`)),
+        ) ?? library.find((definition) =>
+          definition.scope === "repo" &&
+          definition.id === draft.id &&
+          Boolean(definition.forked_from) &&
+          draft.forked_from === definition.id,
+        ) ?? null;
+        targetId = previousPromotion?.id ?? uniqueId(
+          baseId,
+          library.map((definition) => definition.id),
+        );
+        expectedRevision = previousPromotion?.revision ?? null;
+        forkedFrom = previousPromotion?.forked_from ?? draft.id;
+      }
       const saved = await saveLoopDefinition(workSlug, {
-        id: draft.id,
+        id: targetId,
         name: draft.name,
         description: draft.description,
-        forked_from: draft.forked_from,
+        scope: targetScope,
+        forked_from: forkedFrom,
         stages: draft.stages,
-        expected_revision: seed.expectedRevision,
-      });
+        expected_revision: expectedRevision,
+      }, promoting ? undefined : rootPath);
       setDirty(false);
       onSaved(saved);
     } catch (err) {
@@ -533,45 +783,82 @@ function LoopEditorScreen({
   }
 
   return (
-    <div className="loop-fullscreen loop-editor">
-      <header className="loop-editor-head">
-        <button className="btn ghost icon sm" onClick={onClose} aria-label="Back">←</button>
-        <div className="loop-editor-title">
-          <span className="loop-editor-name-row">
-            <input value={draft.name} onChange={(event) => updateDraft({ ...draft, name: event.target.value })} aria-label="Loop name" />
-            <button
-              className="btn ghost icon sm"
-              disabled={seed.expectedRevision === null}
-              title={
-                seed.expectedRevision === null
-                  ? "Save before revealing this loop"
-                  : `.atelier/loops/${draft.id}`
-              }
-              onClick={() =>
-                void revealLoopDefinition(workSlug, draft.id).catch((err) =>
-                  setError(err instanceof Error ? err.message : String(err)),
-                )
-              }
-            >
-              <FolderIcon size={13} />
-            </button>
-          </span>
-          <span>
-            {draft.stages.length} stages
-            {draft.forked_from && <> · forked from {draft.forked_from}</>}
-            {dirty ? <em>● unsaved changes</em> : <> · rev {draft.revision}</>}
-          </span>
-        </div>
-        <label className="loop-id-field">id <input value={draft.id} disabled={seed.expectedRevision !== null} onChange={(event) => updateDraft({ ...draft, id: slugify(event.target.value) })} /></label>
-        <button className="btn sm" onClick={onClose}>Close</button>
-        <button className="btn primary sm" disabled={!dirty || saving || !draft.name.trim() || !draft.id} onClick={() => void save()}><CheckIcon size={11} /> {saving ? "Saving…" : "Save"}</button>
-      </header>
+    <div
+      className="loop-fullscreen loop-editor has-topbar"
+      style={{ "--loop-inspector-width": `${loopInspectorWidth}px` } as CSSProperties}
+    >
+      <ShellTopbar
+        crumbs={workSlug
+          ? [
+              { href: `/works/${workSlug}?mode=manual`, label: workSlug },
+              { onClick: onClose, label: "loops" },
+              { label: seed.expectedRevision === null ? "create loop" : "edit loop" },
+            ]
+          : [
+              { href: "/settings", label: "settings" },
+              { href: "/settings/loops", label: "loops" },
+              { label: seed.expectedRevision === null ? "create loop" : "edit loop" },
+            ]}
+        primaryAction={(
+          <>
+            <button className="btn sm" onClick={onClose}>Close</button>
+            {saveScope === "work" && (
+              <button className="btn sm" disabled={saving || !draft.name.trim() || !draft.id} onClick={() => void save("repo")}><CopyIcon size={11} /> Save to library</button>
+            )}
+            <button className="btn primary sm" disabled={!dirty || saving || !draft.name.trim() || !draft.id} onClick={() => void save()}><CheckIcon size={11} /> {saving ? "Saving…" : "Save"}</button>
+          </>
+        )}
+        showUtilities={false}
+        view={{
+          inline: true,
+          title: (
+            <span className="loop-editor-meta">
+              {draft.stages.length} stages
+              {draft.forked_from && <> · forked from {draft.forked_from}</>}
+              {dirty ? <em>● unsaved changes</em> : <> · rev {draft.revision}</>}
+            </span>
+          ),
+        }}
+      />
       {error && <div className="loop-editor-error form-error">{error}</div>}
       <div className="loop-editor-columns">
         <main className="loop-timeline themed-scrollbar">
           <div className="loop-contract-note">
-            <span>🔒</span>
+            <LockIcon size={12} />
             <span>The immutable execution, reporting, and safety contract is appended by Atelier. You author <b>instructions</b> and <b>context</b>, never provider prompts.</span>
+          </div>
+          <div className="loop-identity-fields">
+            <label className="loop-name-field">
+              Loop name
+              <input
+                value={draft.name}
+                onChange={(event) => {
+                  const name = event.target.value;
+                  updateDraft({
+                    ...draft,
+                    name,
+                    id: seed.expectedRevision === null ? slugify(name) : draft.id,
+                  });
+                }}
+                placeholder="Untitled loop"
+              />
+            </label>
+            <div className="loop-storage-field">
+              Storage folder
+              <button
+                type="button"
+                disabled={seed.expectedRevision === null}
+                title={seed.expectedRevision === null ? "Save before opening this folder" : storagePath}
+                onClick={() =>
+                  void revealLoopDefinition(workSlug, draft.id, rootPath, saveScope).catch((err) =>
+                    setError(err instanceof Error ? err.message : String(err)),
+                  )
+                }
+              >
+                <FolderIcon size={13} />
+                <code>{storagePath}</code>
+              </button>
+            </div>
           </div>
           <label className="loop-description-field">Description<input value={draft.description} onChange={(event) => updateDraft({ ...draft, description: event.target.value })} placeholder="What this loop is for" /></label>
           <AddStageSlot index={0} open={addAt === 0} onToggle={() => setAddAt(addAt === 0 ? null : 0)} onAdd={addStage} />
@@ -597,10 +884,21 @@ function LoopEditorScreen({
             ))}
           </div>
         </main>
+        <PaneResizeHandle
+          defaultValue={420}
+          edge="left"
+          label="Resize loop inspector"
+          min={LOOP_INSPECTOR_MIN}
+          max={LOOP_INSPECTOR_MAX}
+          value={loopInspectorWidth}
+          onChange={setLoopInspectorWidth}
+        />
         {selected ? (
           <StageInspector
             stage={selected}
             stages={draft.stages}
+            rootPath={contextRoot}
+            onRootPath={setContextRoot}
             tab={tab}
             preview={preview}
             advanced={advanced}
@@ -638,22 +936,22 @@ function StageTimelineCard({
 }) {
   const backlink = stages.find((item) => item.id === stage.transitions.changes_requested);
   return (
-    <div className="loop-stage-row" data-persona={stagePersona(stage.kind)}>
+    <div className="loop-stage-row" data-stage-kind={stage.kind}>
       <span className="loop-stage-rail"><i>{stageIcon(stage)}</i>{!last && <b />}</span>
       <div>
         {backlink && <div className="loop-stage-backlink"><ReturnIcon size={11} /> changes requested → {backlink.name}</div>}
         <button className={"loop-stage-card" + (selected ? " selected" : "")} onClick={onSelect}>
           <span className="loop-stage-card-head"><strong>{stage.name}</strong><em>{stageKindLabel(stage.kind)}</em></span>
           <span className="loop-stage-card-meta">
-            {stage.agent && <><i>{stage.agent.permissions === "write" ? "write" : "read-only"}</i><i>{stage.agent.session} session</i></>}
+            {stage.agent && <><i>{stage.agent.permissions ?? "inherit"}</i><i>{stage.agent.session} session</i></>}
             {stage.context.length > 0 && <i>{stage.context.length} context</i>}
             {stage.kind === "user_approval" && <i>waits for you</i>}
           </span>
           <span className="loop-stage-card-actions" onClick={(event) => event.stopPropagation()}>
             <button className="btn icon sm" disabled={index === 0} onClick={() => onMove(-1)} title="Move up">↑</button>
             <button className="btn icon sm" disabled={last} onClick={() => onMove(1)} title="Move down">↓</button>
-            <button className="btn icon sm" onClick={onDuplicate} title="Duplicate"><CopyIcon size={12} /></button>
-            <button className="btn icon sm danger" onClick={onDelete} title="Delete"><TrashIcon size={12} /></button>
+            <button className="btn icon sm" onClick={onDuplicate} title="Duplicate"><CopyIcon size={14} /></button>
+            <button className="btn icon sm" onClick={onDelete} title="Delete"><TrashIcon size={14} /></button>
           </span>
         </button>
       </div>
@@ -666,6 +964,8 @@ type InspectorTab = "instructions" | "context" | "agent" | "outcome";
 function StageInspector({
   stage,
   stages,
+  rootPath,
+  onRootPath,
   tab,
   preview,
   advanced,
@@ -676,6 +976,8 @@ function StageInspector({
 }: {
   stage: LoopStepDefinition;
   stages: LoopStepDefinition[];
+  rootPath?: string | null;
+  onRootPath: (path: string) => void;
   tab: InspectorTab;
   preview: boolean;
   advanced: boolean;
@@ -696,7 +998,7 @@ function StageInspector({
       ];
   return (
     <aside className="loop-inspector">
-      <div className="loop-inspector-head" data-persona={stagePersona(stage.kind)}>
+      <div className="loop-inspector-head" data-stage-kind={stage.kind}>
         <span>{stageIcon(stage)} {stageKindLabel(stage.kind)}</span>
         <input value={stage.name} onChange={(event) => onPatch({ name: event.target.value })} />
       </div>
@@ -705,7 +1007,7 @@ function StageInspector({
       </div>
       <div className="loop-inspector-body themed-scrollbar">
         {tab === "instructions" && <InstructionsPanel stage={stage} preview={preview} onPreview={onPreview} onPatch={onPatch} />}
-        {tab === "context" && <ContextPanel stage={stage} stages={stages} onPatch={onPatch} />}
+        {tab === "context" && <ContextPanel stage={stage} stages={stages} rootPath={rootPath} onRootPath={onRootPath} onPatch={onPatch} />}
         {tab === "agent" && <AgentPanel stage={stage} onPatch={onPatch} />}
         {tab === "outcome" && <OutcomePanel stage={stage} stages={stages} onPatch={onPatch} />}
         {!approval && (
@@ -735,13 +1037,16 @@ function InstructionsPanel({ stage, preview, onPreview, onPatch }: { stage: Loop
   return (
     <InspectorField label="Instructions · Markdown" action={<span className="loop-md-toggle"><button className={!preview ? "active" : ""} onClick={() => onPreview(false)}>Write</button><button className={preview ? "active" : ""} onClick={() => onPreview(true)}>Preview</button></span>}>
       {preview ? <div className="loop-md-preview"><MarkdownText text={stage.instructions} /></div> : <textarea className="loop-md-editor" value={stage.instructions} onChange={(event) => onPatch({ instructions: event.target.value })} />}
-      <div className="loop-inspector-note"><DocIcon size={13} /> Stored as <code>steps/{stage.id}.md</code> and referenced from loop.yaml.</div>
+      <div className="loop-inspector-note"><DocIcon size={13} /><span>Stored as <code>steps/{stage.id}.md</code> and referenced from loop.yaml.</span></div>
     </InspectorField>
   );
 }
 
-function ContextPanel({ stage, stages, onPatch }: { stage: LoopStepDefinition; stages: LoopStepDefinition[]; onPatch: (patch: Partial<LoopStepDefinition>) => void }) {
+function ContextPanel({ stage, stages, rootPath, onRootPath, onPatch }: { stage: LoopStepDefinition; stages: LoopStepDefinition[]; rootPath?: string | null; onRootPath: (path: string) => void; onPatch: (patch: Partial<LoopStepDefinition>) => void }) {
   const context = stage.context;
+  const [pickerIndex, setPickerIndex] = useState<number | null>(null);
+  const [pickerError, setPickerError] = useState<string | null>(null);
+  const [choosingRoot, setChoosingRoot] = useState(false);
   function patch(index: number, next: LoopContextReference) {
     onPatch({ context: context.map((item, itemIndex) => itemIndex === index ? next : item) });
   }
@@ -758,7 +1063,16 @@ function ContextPanel({ stage, stages, onPatch }: { stage: LoopStepDefinition; s
               <div className="loop-context-row" key={`${item.kind}:${index}`}>
                 <span className="loop-context-icon">{contextIcon(item.kind)}</span>
                 <span className="loop-context-copy"><strong>{meta.label}</strong><small>{meta.hint}</small>
-                  {(item.kind === "files" || item.kind === "folder") && <input value={item.paths.join(", ")} onChange={(event) => patch(index, { ...item, paths: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) })} placeholder="docs/adr/*.md" />}
+                  {(item.kind === "files" || item.kind === "folder") && (
+                    <div className="loop-context-path-picker">
+                      {item.paths.map((path) => (
+                        <span key={path}>{path}<button type="button" onClick={() => patch(index, { ...item, paths: item.paths.filter((value) => value !== path) })} aria-label={`Remove ${path}`}>×</button></span>
+                      ))}
+                      <button type="button" onClick={() => { setPickerError(null); setPickerIndex(index); setChoosingRoot(!rootPath); }}>
+                        <FolderIcon size={10} /> {item.paths.length ? "Add" : "Choose"} {item.kind === "files" ? "file" : "folder"}
+                      </button>
+                    </div>
+                  )}
                   {item.kind === "previous_report" && <select value={item.step ?? ""} onChange={(event) => patch(index, { ...item, step: event.target.value || null })}><option value="">Choose stage…</option>{stages.filter((row) => row.id !== stage.id).map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select>}
                   {item.kind === "shared_context" && <input value={item.ref ?? ""} onChange={(event) => patch(index, { ...item, ref: event.target.value || null })} placeholder="Shared context reference" />}
                 </span>
@@ -773,7 +1087,39 @@ function ContextPanel({ stage, stages, onPatch }: { stage: LoopStepDefinition; s
       <InspectorField label="Add context">
         <div className="loop-add-context">{CONTEXT_KINDS.map((item) => <button key={item.kind} onClick={() => add(item.kind)}>+ {item.label}</button>)}</div>
       </InspectorField>
-      <div className="loop-inspector-note">🔒 Required context blocks the stage when unresolved. Paths cannot escape the working root.</div>
+      {pickerError && <div className="loop-inspector-note"><AlertIcon size={13} /> {pickerError}</div>}
+      {rootPath && <div className="loop-inspector-note"><FolderIcon size={13} /> Paths are relative to <code>{rootPath}</code>.</div>}
+      <div className="loop-inspector-note"><LockIcon size={13} /> Required context blocks the stage when unresolved. Paths cannot escape the working root.</div>
+      {choosingRoot && (
+        <FolderPickerDialog
+          mode="folder"
+          onCancel={() => { setChoosingRoot(false); setPickerIndex(null); }}
+          onPick={(path) => { onRootPath(path); setChoosingRoot(false); }}
+        />
+      )}
+      {pickerIndex !== null && rootPath && (
+        <FolderPickerDialog
+          initialPath={rootPath}
+          mode={context[pickerIndex]?.kind === "files" ? "file" : "folder"}
+          onCancel={() => setPickerIndex(null)}
+          onPick={(path) => {
+            const relative = relativeContextPath(rootPath, path);
+            const item = context[pickerIndex];
+            if (!relative || !item) {
+              setPickerError("Choose a path inside the working folder.");
+              setPickerIndex(null);
+              return;
+            }
+            patch(pickerIndex, {
+              ...item,
+              paths: item.kind === "files"
+                ? [...new Set([...item.paths, relative])]
+                : [relative],
+            });
+            setPickerIndex(null);
+          }}
+        />
+      )}
     </>
   );
 }
@@ -787,21 +1133,73 @@ function AgentPanel({ stage, onPatch }: { stage: LoopStepDefinition; onPatch: (p
   const provider = descriptors?.find((item) => item.name === stage.agent?.provider) ?? null;
   const models = provider ? modelPickerOptions(provider) : [];
   const agent = stage.agent;
+  const effort = provider
+    ? providerEffortOption(provider, agent.model ?? provider.primary_field.default)
+    : null;
+  const inheritedEffortProviders = (descriptors ?? []).filter(
+    (descriptor) => !agent.model || descriptor.primary_field.values.includes(agent.model),
+  );
+  const modelChoices = provider
+    ? models
+    : Array.from(
+        new Map(
+          (descriptors ?? [])
+            .flatMap((descriptor) =>
+              modelPickerOptions(descriptor).map((item) => ({
+                ...item,
+                label: `${descriptor.label} · ${item.label}`,
+              })),
+            )
+            .map((item) => [item.value, item]),
+        ).values(),
+      );
+  const effortChoices = provider && effort
+    ? effort.field.values.map((value) => ({
+        value,
+        label: optionLabel(effort.field, value),
+      }))
+    : Array.from(
+        new Map(
+          inheritedEffortProviders
+            .flatMap((descriptor) => {
+              const option = providerEffortOption(
+                descriptor,
+                agent.model ?? descriptor.primary_field.default,
+              );
+              return option?.field.values.map((value) => ({
+                value,
+                label: optionLabel(option.field, value),
+              })) ?? [];
+            })
+            .map((item) => [item.value, item]),
+        ).values(),
+      );
   return (
     <>
-      <InspectorField label="Provider & model" hint="inherit loop defaults">
+      <InspectorField label="Provider & model" hint="each setting can inherit the parent">
         <div className="loop-inspector-grid">
-          <select value={agent.provider ?? ""} onChange={(event) => onPatch({ agent: { ...agent, provider: event.target.value || null, model: null } })}><option value="">inherit provider</option>{descriptors?.map((item) => <option key={item.name} value={item.name}>{item.label}</option>)}</select>
-          <select value={agent.model ?? ""} disabled={!provider} onChange={(event) => onPatch({ agent: { ...agent, model: event.target.value || null } })}><option value="">inherit model</option>{models.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
+          <select value={agent.provider ?? ""} onChange={(event) => onPatch({ agent: { ...agent, provider: event.target.value || null, model: null, effort: null } })}><option value="">inherit provider</option>{descriptors?.map((item) => <option key={item.name} value={item.name}>{item.label}</option>)}</select>
+          <select value={agent.model ?? ""} disabled={!modelChoices.length && !agent.model} onChange={(event) => onPatch({ agent: { ...agent, model: event.target.value || null, effort: null } })}>
+            <option value="">inherit model</option>
+            {agent.model && !modelChoices.some((item) => item.value === agent.model) && <option value={agent.model}>{agent.model}</option>}
+            {modelChoices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
         </div>
       </InspectorField>
+      <PostureRow label="Effort" hint={agent.effort ? "Overrides the parent run effort" : "Uses the parent run effort"}>
+        <select value={agent.effort ?? ""} disabled={!effortChoices.length && !agent.effort} onChange={(event) => onPatch({ agent: { ...agent, effort: event.target.value || null } })}>
+          <option value="">inherit</option>
+          {agent.effort && !effortChoices.some((item) => item.value === agent.effort) && <option value={agent.effort}>{agent.effort}</option>}
+          {effortChoices.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+        </select>
+      </PostureRow>
       <PostureRow label="Session policy" hint={agent.session === "reuse" ? "Resume the same agent after change requests" : "Fresh agent for independent judgment"}>
         <select value={agent.session} onChange={(event) => onPatch({ agent: { ...agent, session: event.target.value as "reuse" | "fresh" } })}><option value="reuse">reuse</option><option value="fresh">fresh</option></select>
       </PostureRow>
-      <PostureRow label="Permissions" hint={agent.permissions === "write" ? "May modify the run workspace" : "Inspects but cannot mutate the workspace"}>
-        <select value={agent.permissions} onChange={(event) => onPatch({ agent: { ...agent, permissions: event.target.value as "read" | "write" } })}><option value="write">write</option><option value="read">read-only</option></select>
+      <PostureRow label="Permissions" hint={agent.permissions === "write" ? "May modify the run workspace" : agent.permissions === "read" ? "Inspects but cannot mutate the workspace" : "Uses the parent run permissions"}>
+        <select value={agent.permissions ?? ""} onChange={(event) => onPatch({ agent: { ...agent, permissions: event.target.value ? event.target.value as "read" | "write" : null } })}><option value="">inherit</option><option value="write">write</option><option value="read">read-only</option></select>
       </PostureRow>
-      <div className="loop-inspector-note">🔒 Review and security stages default to read-only.</div>
+      <div className="loop-inspector-note"><LockIcon size={13} /> Review and security stages default to read-only.</div>
     </>
   );
 }
@@ -849,15 +1247,15 @@ const STAGE_PRESETS: Array<{ id: StagePreset; name: string; kind: LoopStepKind; 
 ];
 
 function AddStageSlot({ index, open, onToggle, onAdd }: { index: number; open: boolean; onToggle: () => void; onAdd: (index: number, preset: StagePreset) => void }) {
-  return <div className="loop-add-stage"><button onClick={onToggle}>+ Add stage</button>{open && <div className="loop-add-menu">{STAGE_PRESETS.map((preset) => <button key={preset.id} data-persona={stagePersona(preset.kind)} onClick={() => onAdd(index, preset.id)}><i>{stageIcon({ id: preset.id, name: preset.name, kind: preset.kind } as LoopStepDefinition)}</i><span><strong>{preset.name}</strong><small>{preset.hint}</small></span></button>)}</div>}</div>;
+  return <div className="loop-add-stage"><button onClick={onToggle}>+ Add stage</button>{open && <div className="loop-add-menu">{STAGE_PRESETS.map((preset) => <button key={preset.id} data-stage-kind={preset.kind} onClick={() => onAdd(index, preset.id)}><i>{stageIcon({ id: preset.id, name: preset.name, kind: preset.kind } as LoopStepDefinition)}</i><span><strong>{preset.name}</strong><small>{preset.hint}</small></span></button>)}</div>}</div>;
 }
 
 function StageStrip({ definition, subtle = false }: { definition: LoopDefinition; subtle?: boolean }) {
-  return <div className={"loop-stage-strip" + (subtle ? " subtle" : "")}>{definition.stages.map((stage, index) => <span key={stage.id} className="loop-stage-strip-unit"><span className="loop-stage-chip" data-persona={stagePersona(stage.kind)}><i>{stageIcon(stage)}</i><b>{stage.name}</b>{!subtle && stage.agent && <small>{stage.agent.permissions}</small>}</span>{index < definition.stages.length - 1 && <ChevronRightIcon size={11} />}</span>)}</div>;
+  return <div className={"loop-stage-strip" + (subtle ? " subtle" : "")}>{definition.stages.map((stage, index) => <span key={stage.id} className="loop-stage-strip-unit"><span className="loop-stage-chip" data-stage-kind={stage.kind}><i>{stageIcon(stage)}</i><b>{stage.name}</b>{!subtle && stage.agent && <small>{stage.agent.permissions ?? "inherit"}</small>}</span>{index < definition.stages.length - 1 && <ChevronRightIcon size={11} />}</span>)}</div>;
 }
 
 function ScopeBadge({ definition }: { definition: LoopDefinition }) {
-  return <em className={`loop-scope-badge ${definition.scope}`}>{definition.scope === "builtin" ? "built-in" : "repo"}</em>;
+  return <em className={`loop-scope-badge ${definition.scope}`}>{definition.scope === "builtin" ? "built-in" : definition.scope}</em>;
 }
 
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -871,9 +1269,22 @@ function defaultLoop(definitions: LoopDefinition[]): LoopDefinition | null {
   return definitions.find((row) => row.is_default && row.valid) ?? definitions.find((row) => row.valid) ?? null;
 }
 
-function editorSeed(definition: LoopDefinition, duplicate = false): EditorSeed {
-  if (definition.scope === "repo" && !duplicate) {
+function editorSeed(definition: LoopDefinition, duplicate = false, scope: LoopSaveScope = "repo"): EditorSeed {
+  if (definition.scope === scope && !duplicate) {
     return { definition: structuredClone(definition), expectedRevision: definition.revision };
+  }
+  if (scope === "work" && !duplicate) {
+    return {
+      definition: {
+        ...structuredClone(definition),
+        scope: "work",
+        revision: "",
+        is_default: false,
+        forked_from: definition.id,
+        errors: [],
+      },
+      expectedRevision: null,
+    };
   }
   const suffix = definition.scope === "builtin" && !duplicate ? "repository" : "copy";
   return {
@@ -881,7 +1292,7 @@ function editorSeed(definition: LoopDefinition, duplicate = false): EditorSeed {
       ...structuredClone(definition),
       id: `${definition.id}-${suffix}`,
       name: `${definition.name}${suffix === "repository" ? " — Repository" : " copy"}`,
-      scope: "repo",
+      scope,
       revision: "",
       is_default: false,
       forked_from: definition.id,
@@ -891,7 +1302,7 @@ function editorSeed(definition: LoopDefinition, duplicate = false): EditorSeed {
   };
 }
 
-function newLoopSeed(): EditorSeed {
+function newLoopSeed(scope: LoopSaveScope = "repo"): EditorSeed {
   const implementation = stageFromPreset("implementation", []);
   const approval = stageFromPreset("approval", [implementation]);
   implementation.transitions.pass = approval.id;
@@ -900,7 +1311,7 @@ function newLoopSeed(): EditorSeed {
       id: "untitled-loop",
       name: "Untitled loop",
       description: "",
-      scope: "repo",
+      scope,
       revision: "",
       valid: true,
       errors: [],
@@ -924,7 +1335,7 @@ function stageFromPreset(preset: StagePreset, existing: LoopStepDefinition[]): L
     kind: meta.kind,
     instructions: approval || check ? "" : presetInstructions(preset),
     context: approval ? [] : [{ kind: "target", required: true, paths: [], step: null, ref: null }],
-    agent: approval || check ? null : { session: review ? "fresh" : "reuse", permissions: review ? "read" : "write", provider: null, model: null, effort: null },
+    agent: approval || check ? null : { session: review ? "fresh" : "reuse", permissions: review ? "read" : null, provider: null, model: null, effort: null },
     report_contract: review ? "review" : check ? "check" : "implementation",
     retry: { max_attempts: check ? 1 : 2, timeout_minutes: check ? 10 : 20 },
     transitions: approval ? {} : { pass: "approval", changes_requested: review ? "implementation" : null, blocked_user: "pause", failed: "fail" },
@@ -946,13 +1357,6 @@ function uniqueId(base: string, ids: string[]): string {
   return `${base}-${number}`;
 }
 
-function stagePersona(kind: LoopStepKind): string {
-  if (kind === "agent_task") return "developer";
-  if (kind === "agent_review") return "ux";
-  if (kind === "deterministic_check") return "product";
-  return "writer";
-}
-
 function stageKindLabel(kind: LoopStepKind): string {
   if (kind === "agent_task") return "Agent task";
   if (kind === "agent_review") return "Agent review";
@@ -961,11 +1365,11 @@ function stageKindLabel(kind: LoopStepKind): string {
 }
 
 function stageIcon(stage: Pick<LoopStepDefinition, "id" | "name" | "kind">) {
-  if (stage.id.includes("security") || stage.name.toLowerCase().includes("security")) return <ShieldIcon size={13} />;
-  if (stage.kind === "agent_review") return <EyeIcon size={13} />;
-  if (stage.kind === "deterministic_check") return <FlaskIcon size={13} />;
-  if (stage.kind === "user_approval") return <UserCheckIcon size={13} />;
-  return <AgentIcon size={13} />;
+  if (stage.id.includes("security") || stage.name.toLowerCase().includes("security")) return <ShieldIcon size={14} />;
+  if (stage.kind === "agent_review") return <EyeIcon size={14} />;
+  if (stage.kind === "deterministic_check") return <FlaskIcon size={14} />;
+  if (stage.kind === "user_approval") return <UserCheckIcon size={14} />;
+  return <PersonIcon size={14} />;
 }
 
 function contextIcon(kind: LoopContextKind) {
@@ -991,4 +1395,13 @@ function artifactGlyph(kind: string): string {
 
 function slugify(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function relativeContextPath(rootPath: string, selectedPath: string): string | null {
+  const root = rootPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const selected = selectedPath.replace(/\\/g, "/");
+  if (selected === root) return ".";
+  return selected.startsWith(`${root}/`)
+    ? selected.slice(root.length + 1)
+    : null;
 }

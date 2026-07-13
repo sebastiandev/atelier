@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from src.domain.agents.configs import CommonAgentConfig
 from src.domain.agents.launch import (
     AgentFolderMissing,
     AgentLaunchRequest,
@@ -13,23 +14,29 @@ from src.domain.agents.launch import (
     launch_agent,
 )
 from src.domain.agents.ports import AgentAdapterFactory
+from src.domain.agents.specs import SPECS
 from src.domain.commands.planning import _loop_persistence, _loop_runtime
 from src.domain.connections import ConnectionStore
-from src.domain.loop.agent_policy import apply_stage_agent_policy
+from src.domain.loop.agent_policy import apply_stage_agent_policy, resolve_stage_model
 from src.domain.loop.builtins import builtin_loop_definition
+from src.domain.loop.catalog import LoopDefinitionRoots, locate_definition
 from src.domain.loop.definitions import (
     LoopDefinitionConflict,
     LoopDefinitionInvalid,
     LoopDefinitionNotFound,
 )
 from src.domain.loop.dtos import (
+    LoopAgentPolicy,
     LoopContextResolution,
     LoopContextResolutionRequest,
     LoopDefinition,
+    LoopPermission,
+    LoopSessionPolicy,
     LoopStepKind,
 )
 from src.domain.loop.ports import (
     LoopContextResolver,
+    LoopDefinitionLocations,
     LoopDefinitionRepository,
     LoopRunRepository,
 )
@@ -70,6 +77,9 @@ class LoopContextMissing(ValueError):
     """One or more required loop context references could not be resolved."""
 
 
+_StageAgentConfig = tuple[Provider, str, dict[str, object]]
+
+
 @dataclass(frozen=True)
 class StartArtifactRunRequest:
     """Command input for starting one artifact run."""
@@ -86,6 +96,7 @@ async def execute(
     files: PlanningFiles,
     planning_sessions: PlanningSessionRepository,
     loop_definitions: LoopDefinitionRepository,
+    loop_locations: LoopDefinitionLocations,
     loop_runs: LoopRunRepository,
     context_resolver: LoopContextResolver,
     supervisor: AgentSupervisorService,
@@ -110,7 +121,53 @@ async def execute(
     manifest = actions.manifest_or_raise(files, req.work_slug)
     detail = actions.detail_or_raise(files, req.work_slug, req.artifact_id)
     actions.require_executable(detail.artifact)
-    definition = _resolve_definition(files, loop_definitions, req)
+    definition = _resolve_definition(
+        files,
+        loop_definitions,
+        loop_locations,
+        req,
+    )
+    if req.agent_slug is None:
+        session = planning_sessions.get_by_work_slug(req.work_slug)
+        if session is None:
+            raise PlanningNotStarted(f"planning session not found: {req.work_slug}")
+        parent_provider = session.provider
+        parent_model = session.model
+        parent_options = dict(session.options or {})
+        parent_folder = Path(session.root_path).expanduser()
+    else:
+        parent_agent = next(
+            (
+                agent
+                for agent in workstore.list_agents_for_work(req.work_slug)
+                if agent.slug == req.agent_slug
+            ),
+            None,
+        )
+        if parent_agent is None:
+            raise AgentNotFound(f"agent not found on work: {req.agent_slug}")
+        parent_provider = parent_agent.provider
+        parent_model = parent_agent.model
+        parent_options = dict(parent_agent.options or {})
+        parent_folder = parent_agent.folder
+    reuse_initial_agent = req.agent_slug is not None and (
+        req.loop_definition_id is None
+        or _can_reuse_initial_agent(
+            definition,
+            parent_provider=parent_provider,
+            parent_model=parent_model,
+            parent_options=parent_options,
+            parent_folder=parent_folder,
+        )
+    )
+    _validate_stage_agent_policies(
+        definition,
+        parent_provider=parent_provider,
+        parent_model=parent_model,
+        parent_options=parent_options,
+        parent_folder=parent_folder,
+        reuse_initial_agent=reuse_initial_agent,
+    )
     resolutions = _resolve_contexts(
         files,
         context_resolver,
@@ -132,10 +189,9 @@ async def execute(
     if missing:
         raise LoopContextMissing("Required loop context is missing: " + "; ".join(missing))
     agent_slug = req.agent_slug
-    if agent_slug is None:
+    if not reuse_initial_agent:
         agent_slug = await _launch_initial_agent(
             workstore,
-            planning_sessions,
             supervisor,
             worktree_manager,
             connection_store,
@@ -144,9 +200,13 @@ async def execute(
             adapter_factory,
             req,
             definition,
+            parent_provider=parent_provider,
+            parent_model=parent_model,
+            parent_options=parent_options,
+            parent_folder=parent_folder,
+            fork_from_agent=req.agent_slug,
         )
-    elif workstore.get_work_slug_for_agent(agent_slug) != req.work_slug:
-        raise AgentNotFound(f"agent not found on work: {agent_slug}")
+    assert agent_slug is not None
     runs = actions.artifact_runs_for_update(manifest, req.artifact_id)
     run_id = actions.next_run_id(runs)
     cursor = _loop_runtime.last_transcript_seq(
@@ -220,28 +280,209 @@ async def execute(
 def _resolve_definition(
     files: PlanningFiles,
     repository: LoopDefinitionRepository,
+    locations: LoopDefinitionLocations,
     req: StartArtifactRunRequest,
 ) -> LoopDefinition:
     """Resolve and revision-check the loop selected for a run."""
-    definition_id = req.loop_definition_id or "atelier-fast"
-    definition = builtin_loop_definition(definition_id)
-    if definition is None:
-        root = files.working_root(req.work_slug)
-        definition = repository.get_definition(root, definition_id) if root else None
-    if definition is None:
-        raise LoopDefinitionNotFound(f"loop definition not found: {definition_id}")
+    definition_id = req.loop_definition_id
+    if definition_id is None:
+        definition = builtin_loop_definition("atelier-fast")
+        if definition is None:
+            raise LoopDefinitionNotFound("loop definition not found: atelier-fast")
+    else:
+        definition = locate_definition(
+            repository,
+            LoopDefinitionRoots(
+                library=locations.loop_library_root(),
+                work=locations.work_loop_root(req.work_slug),
+                legacy=files.working_root(req.work_slug),
+            ),
+            definition_id,
+        ).definition
     if not definition.valid:
         raise LoopDefinitionInvalid(" ".join(definition.errors))
     if req.loop_revision is not None and req.loop_revision != definition.revision:
         raise LoopDefinitionConflict(
-            f"loop definition changed: {definition_id}"
+            f"loop definition changed: {definition.definition_id}"
         )
     return definition
 
 
+def _resolve_stage_agent_config(
+    policy: LoopAgentPolicy,
+    *,
+    parent_provider: Provider,
+    parent_model: str,
+    parent_options: dict[str, object],
+) -> tuple[Provider, str, dict[str, object]]:
+    """Resolve one stage's provider config without changing runtime state.
+
+    Preconditions: the parent config is valid for its registered provider.
+    Postconditions: returns the stage's effective provider, model, and options.
+    """
+    provider = cast(Provider, policy.provider or parent_provider)
+    model = resolve_stage_model(provider, parent_provider, parent_model, policy)
+    options = apply_stage_agent_policy(
+        provider,
+        parent_options,
+        policy,
+        parent_provider=parent_provider,
+        parent_model=parent_model,
+    )
+    return provider, model, options
+
+
+def _can_reuse_initial_agent(
+    definition: LoopDefinition,
+    *,
+    parent_provider: Provider,
+    parent_model: str,
+    parent_options: dict[str, object],
+    parent_folder: Path,
+) -> bool:
+    """Return whether the supplied agent already matches the first stage.
+
+    Preconditions: the supplied parent agent belongs to the target Work.
+    Postconditions: invalid provider settings fail before launch; no state changes.
+    """
+    stage = definition.stages[0]
+    if stage.agent is None:
+        raise LoopDefinitionInvalid("The first loop stage needs an agent policy.")
+    if stage.agent.session != LoopSessionPolicy.REUSE:
+        return False
+    common = CommonAgentConfig(workdir=parent_folder, system_prompt="")
+    try:
+        provider, model, options = _resolve_stage_agent_config(
+            stage.agent,
+            parent_provider=parent_provider,
+            parent_model=parent_model,
+            parent_options=parent_options,
+        )
+        current = SPECS[parent_provider].build(common, parent_model, parent_options)
+        desired = SPECS[provider].build(common, model, options)
+    except (KeyError, ValueError) as exc:
+        raise InvalidProviderConfig(f"{stage.name}: {exc}") from exc
+    return current == desired
+
+
+def _validate_stage_agent_policies(
+    definition: LoopDefinition,
+    *,
+    parent_provider: Provider,
+    parent_model: str,
+    parent_options: dict[str, object],
+    parent_folder: Path,
+    reuse_initial_agent: bool,
+) -> None:
+    """Preflight every agent stage against its effective parent config.
+
+    Preconditions: the parent config belongs to this Work's initial agent.
+    Postconditions: every reachable agent config can be built, or validation
+    fails before any loop agent or run is persisted.
+    """
+    common = CommonAgentConfig(workdir=parent_folder, system_prompt="")
+    stages = {stage.step_id: stage for stage in definition.stages}
+    first_id = definition.stages[0].step_id
+    launched: dict[str, _StageAgentConfig] = {}
+    if reuse_initial_agent:
+        launched[first_id] = (
+            parent_provider,
+            parent_model,
+            dict(parent_options),
+        )
+    pending = [
+        (
+            first_id,
+            parent_provider,
+            parent_model,
+            dict(parent_options),
+            True,
+            launched,
+        )
+    ]
+    seen: set[tuple[str, Provider, str, str, bool, str]] = set()
+    while pending:
+        (
+            stage_id,
+            source_provider,
+            source_model,
+            source_options,
+            initial,
+            launched,
+        ) = pending.pop()
+        state = (
+            stage_id,
+            source_provider,
+            source_model,
+            repr(sorted(source_options.items())),
+            initial,
+            repr(
+                sorted(
+                    (
+                        launched_id,
+                        config[0],
+                        config[1],
+                        repr(sorted(config[2].items())),
+                    )
+                    for launched_id, config in launched.items()
+                )
+            ),
+        )
+        if state in seen:
+            continue
+        seen.add(state)
+        stage = stages[stage_id]
+        provider = source_provider
+        model = source_model
+        options = source_options
+        next_launched = launched
+        reused = (
+            stage.agent is not None
+            and stage.agent.session == LoopSessionPolicy.REUSE
+            and stage_id in launched
+        )
+        if reused:
+            provider, model, options = launched[stage_id]
+        elif stage.agent is not None:
+            try:
+                provider, model, options = _resolve_stage_agent_config(
+                    stage.agent,
+                    parent_provider=source_provider,
+                    parent_model=source_model,
+                    parent_options=source_options,
+                )
+                SPECS[provider].build(common, model, options)
+            except (KeyError, ValueError) as exc:
+                raise InvalidProviderConfig(f"{stage.name}: {exc}") from exc
+            if stage.agent.session == LoopSessionPolicy.REUSE:
+                next_launched = {
+                    **launched,
+                    stage_id: (provider, model, options),
+                }
+        if not initial and (
+            stage.kind != LoopStepKind.AGENT_TASK
+            or stage.agent is None
+            or stage.agent.permissions == LoopPermission.READ
+        ):
+            provider = source_provider
+            model = source_model
+            options = source_options
+        for destination in stage.transitions.values():
+            if destination in stages:
+                pending.append(
+                    (
+                        destination,
+                        provider,
+                        model,
+                        options,
+                        False,
+                        next_launched,
+                    )
+                )
+
+
 async def _launch_initial_agent(
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
     supervisor: AgentSupervisorService,
     worktree_manager: WorktreeManager,
     connection_store: ConnectionStore,
@@ -250,19 +491,22 @@ async def _launch_initial_agent(
     adapter_factory: AgentAdapterFactory,
     req: StartArtifactRunRequest,
     definition: LoopDefinition,
+    *,
+    parent_provider: Provider,
+    parent_model: str,
+    parent_options: dict[str, object],
+    parent_folder: Path,
+    fork_from_agent: str | None,
 ) -> str:
     """Launch the first stage from persisted Planning runtime settings."""
-    session = planning_sessions.get_by_work_slug(req.work_slug)
-    if session is None:
-        raise PlanningNotStarted(f"planning session not found: {req.work_slug}")
     stage = definition.stages[0]
     if stage.agent is None:
         raise LoopDefinitionInvalid("The first loop stage needs an agent policy.")
-    provider = cast(Provider, stage.agent.provider or session.provider)
-    options = apply_stage_agent_policy(
-        provider,
-        dict(session.options or {}) if provider == session.provider else {},
+    provider, model, options = _resolve_stage_agent_config(
         stage.agent,
+        parent_provider=parent_provider,
+        parent_model=parent_model,
+        parent_options=parent_options,
     )
     agent = await launch_agent(
         workstore,
@@ -282,9 +526,10 @@ async def _launch_initial_agent(
             ),
             role=stage.instructions,
             provider=provider,
-            model=stage.agent.model or session.model,
-            folder=Path(session.root_path).expanduser(),
+            model=model,
+            folder=parent_folder,
             options=options,
+            fork_from_agent=fork_from_agent,
         ),
     )
     if agent.slug is None:

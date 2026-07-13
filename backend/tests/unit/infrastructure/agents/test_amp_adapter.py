@@ -51,6 +51,7 @@ from src.infrastructure.agents import amp_adapter as _amp_adapter_module
 from src.infrastructure.agents.amp_adapter import (
     AmpAdapter,
     _assistant_prompt_tokens,
+    _build_read_only_permissions,
     _convert,
     _TurnAccumulator,
 )
@@ -71,6 +72,17 @@ def _config() -> AmpAgentConfig:
         ),
         mode=AmpMode.SMART,
     )
+
+
+def test_read_only_permissions_reject_mutating_and_unknown_tools() -> None:
+    rules = {rule.tool: rule.action for rule in _build_read_only_permissions()}
+
+    assert rules["Read"] == "allow"
+    assert rules["Grep"] == "allow"
+    assert rules["Glob"] == "allow"
+    assert rules["*"] == "reject"
+    assert "Bash" not in rules
+    assert "edit_file" not in rules
 
 
 # --- StreamMessage builders ------------------------------------------------

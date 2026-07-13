@@ -54,7 +54,7 @@ export function DeleteAgentDialog({ agent, onClose, onDeleted }: Props) {
             </p>
           </div>
           <button
-            className="btn-icon"
+            className="btn icon"
             onClick={onClose}
             aria-label="Close"
             disabled={submitting}

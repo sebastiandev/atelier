@@ -2,16 +2,18 @@ import { useState } from "react";
 
 import type { ContextEntry } from "./api";
 import { FolderPickerDialog } from "./FolderPickerDialog";
+import { FolderIcon } from "./Icons";
 
-export type SimpleContextType = "text" | "url" | "file";
+export type SimpleContextType = "text" | "url" | "file" | "folder";
 
 export const SIMPLE_CONTEXT_PICKER_TYPES: ReadonlyArray<{
   id: SimpleContextType;
   label: string;
 }> = [
   { id: "text", label: "Text" },
-  { id: "url", label: "URL" },
+  { id: "url", label: "Link" },
   { id: "file", label: "File" },
+  { id: "folder", label: "Folder" },
 ];
 
 const SIMPLE_CONTEXT_TYPES: ReadonlySet<string> = new Set(
@@ -35,8 +37,8 @@ const META: Record<SimpleContextType, { label: string; glyph: string; placeholde
     placeholder: "Paste a snippet — notes, an error message, a stack trace…",
   },
   url: {
-    label: "URL",
-    glyph: "UR",
+    label: "Link",
+    glyph: "LK",
     placeholder: "https://…",
   },
   file: {
@@ -44,10 +46,15 @@ const META: Record<SimpleContextType, { label: string; glyph: string; placeholde
     glyph: "FL",
     placeholder: "/absolute/path/to/file",
   },
+  folder: {
+    label: "Folder",
+    glyph: "FD",
+    placeholder: "/absolute/path/to/folder",
+  },
 };
 
 /**
- * Context row for the unconnected types — text, url, file. Stores the
+ * Context row for unconnected text, link, file, and folder references. Stores the
  * value verbatim on the ContextEntry; the backend renderer turns it into
  * a per-source markdown file under the agent's `context/` directory.
  */
@@ -82,7 +89,7 @@ export function SimpleContextRow({ context, onChange, onRemove }: Props) {
             value={context.value}
             onChange={(e) => onChange({ ...context, value: e.target.value })}
           />
-        ) : type === "file" ? (
+        ) : type === "file" || type === "folder" ? (
           <div className="folder-input-row">
             <input
               className="input sm"
@@ -94,10 +101,10 @@ export function SimpleContextRow({ context, onChange, onRemove }: Props) {
               type="button"
               className="folder-input-pick"
               onClick={() => setPickerOpen(true)}
-              aria-label="Browse for file"
+              aria-label={`Browse for ${type}`}
               title="Browse"
             >
-              <FileIcon />
+              {type === "folder" ? <FolderIcon size={14} /> : <FileIcon />}
             </button>
           </div>
         ) : (
@@ -111,7 +118,7 @@ export function SimpleContextRow({ context, onChange, onRemove }: Props) {
       </div>
       {pickerOpen && (
         <FolderPickerDialog
-          mode="file"
+          mode={type === "file" ? "file" : "folder"}
           initialPath={context.value || null}
           onCancel={() => setPickerOpen(false)}
           onPick={(path) => {

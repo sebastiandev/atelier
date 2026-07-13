@@ -8,7 +8,9 @@ import re
 from dataclasses import asdict, replace
 from pathlib import PurePosixPath
 
+from src.domain.agents.specs import SPECS
 from src.domain.loop.dtos import (
+    LoopAgentPolicy,
     LoopContextKind,
     LoopDefinition,
     LoopDefinitionScope,
@@ -101,7 +103,11 @@ def definition_revision(definition: LoopDefinition) -> str:
 
 
 def repository_copy(
-    source: LoopDefinition, *, definition_id: str, name: str
+    source: LoopDefinition,
+    *,
+    definition_id: str,
+    name: str,
+    scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
 ) -> LoopDefinition:
     """Fork a built-in or repository definition into repository scope.
 
@@ -112,7 +118,7 @@ def repository_copy(
         source,
         definition_id=definition_id,
         name=name.strip(),
-        scope=LoopDefinitionScope.REPOSITORY,
+        scope=scope,
         revision="",
         is_default=False,
         forked_from=source.definition_id,
@@ -132,6 +138,8 @@ def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
             errors.append(f"{label} needs Markdown instructions.")
         if stage.agent is None:
             errors.append(f"{label} needs an agent policy.")
+        else:
+            errors.extend(_validate_agent_policy(label, stage.agent))
     if stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
         if stage.check_adapter != "command":
             errors.append(f"{label} needs the supported 'command' check adapter.")
@@ -165,6 +173,37 @@ def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
     ):
         errors.append(f"{label} needs a pass destination.")
     return errors
+
+
+def _validate_agent_policy(label: str, policy: LoopAgentPolicy) -> list[str]:
+    if policy.provider is None:
+        return []
+    if policy.provider not in SPECS:
+        return [f"{label} uses an unknown provider: {policy.provider!r}."]
+    descriptor = SPECS[policy.provider].describe()
+    if (
+        policy.model
+        and policy.provider != "opencode"
+        and policy.model not in descriptor.primary_field.values
+    ):
+        return [f"{label} uses an unsupported model for {policy.provider!r}."]
+    if not policy.effort:
+        return []
+    effort = next(
+        (
+            descriptor.options[key]
+            for key in ("thinking_effort", "reasoning_effort")
+            if key in descriptor.options
+        ),
+        None,
+    )
+    allowed = effort.values if effort is not None else []
+    model_meta = descriptor.model_meta.get(policy.model) if policy.model else None
+    if model_meta is not None and model_meta.effort_values:
+        allowed = list(model_meta.effort_values)
+    if policy.effort not in allowed:
+        return [f"{label} uses an unsupported effort for {policy.provider!r}."]
+    return []
 
 
 def _safe_relative(path: str) -> bool:

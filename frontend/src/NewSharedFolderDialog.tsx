@@ -83,7 +83,7 @@ export function NewSharedFolderDialog({
             <p className="sub">in {projectName}</p>
           </div>
           <button
-            className="btn-icon"
+            className="btn icon"
             onClick={onClose}
             aria-label="Close"
             disabled={submitting}
@@ -160,7 +160,7 @@ export function NewSharedFolderDialog({
                 />
                 <button
                   type="button"
-                  className="btn-icon folder-input-pick"
+                  className="btn icon folder-input-pick"
                   onClick={() => setPickerOpen(true)}
                   aria-label="Browse"
                   title="Browse"

@@ -746,6 +746,35 @@ def test_detach_preserves_amp_allow_all_permission_mode(
     assert "'sess-amp-deep'" in command
 
 
+def test_detach_rejects_amp_read_only_loop_stage(
+    app_client: TestClient,
+    tmp_workdir: str,
+) -> None:
+    work = _create_work(app_client)
+    created = app_client.post(
+        f"/api/works/{work['slug']}/agents",
+        json={
+            "name": "Read-only review",
+            "persona": "architect",
+            "role": "Review only",
+            "provider": "amp",
+            "model": "smart",
+            "folder": tmp_workdir,
+            "options": {"permission_mode": "default", "read_only": "true"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    agent = created.json()
+    app_client.app.state.workstore.set_agent_session_id(
+        agent["slug"], "sess-read-only"
+    )
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/detach")
+
+    assert response.status_code == 409, response.text
+    assert "permission boundary" in response.json()["detail"]
+
+
 def test_detach_returns_clipboard_fallback_when_launch_fails(
     app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

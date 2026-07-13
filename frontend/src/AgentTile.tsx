@@ -937,7 +937,7 @@ export function AgentTile({
               {onOpenInIde && (
                 <button
                   type="button"
-                  className="tile-ctl"
+                  className="btn icon sm"
                   aria-label="Open worktree in editor"
                   onClick={(e) => {
                     if (guardBlockedCompactionEvent(e)) return;
@@ -951,7 +951,7 @@ export function AgentTile({
               {onOpenInConsole && (
                 <button
                   type="button"
-                  className="tile-ctl"
+                  className="btn icon sm"
                   aria-label="Open worktree in console"
                   onClick={(e) => {
                     if (guardBlockedCompactionEvent(e)) return;
@@ -965,7 +965,7 @@ export function AgentTile({
               {onHandoff && (
                 <button
                   type="button"
-                  className="tile-ctl"
+                  className="btn icon sm"
                   aria-label="Handoff to agent"
                   onClick={(e) => {
                     if (guardBlockedCompactionEvent(e)) return;
@@ -978,7 +978,7 @@ export function AgentTile({
               )}
               <button
                 type="button"
-                className="tile-ctl"
+                className="btn icon sm"
                 aria-label={maximized ? "Restore" : "Maximize"}
                 onClick={(e) => {
                   if (guardBlockedCompactionEvent(e)) return;
@@ -991,7 +991,7 @@ export function AgentTile({
               {onDetach && (
                 <button
                   type="button"
-                  className="tile-ctl"
+                  className="btn icon sm"
                   aria-label="Detach to terminal"
                   onClick={(e) => {
                     if (guardBlockedCompactionEvent(e)) return;
@@ -1004,7 +1004,7 @@ export function AgentTile({
               )}
               <button
                 type="button"
-                className="tile-ctl"
+                className="btn icon sm"
                 aria-label={onClose ? "Close" : "Close unavailable"}
                 onClick={(e) => {
                   if (guardBlockedCompactionEvent(e)) return;

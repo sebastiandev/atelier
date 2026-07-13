@@ -140,6 +140,7 @@ _log = logging.getLogger(__name__)
 
 _SHUTDOWN = object()  # sentinel pushed onto the queue by close()
 _BRIDGE_PATH = str(Path(__file__).with_name("amp_permission_bridge.py"))
+_READ_ONLY_TOOLS = ("Read", "Grep", "Glob", "WebFetch", "get_diagnostics")
 
 # Amp's CLI auto-hands-off the conversation to a new thread when the
 # current one approaches its context limit; the existing SDK stream
@@ -285,11 +286,11 @@ class AmpAdapter:
             raise RuntimeError("start() called twice")
         self._resume_thread_id = context.session_id
         # The permission socket is only needed when Bash is gated through
-        # the bridge (DEFAULT and CUSTOM modes). ALLOW_ALL passes
-        # ``--dangerously-allow-all`` and never invokes our shim.
+        # the bridge. ALLOW_ALL bypasses it; read-only rejects Bash directly.
         if (
             self._config.permission_mode is not AmpPermissionMode.ALLOW_ALL
             and not self._config.summary_only
+            and not self._config.read_only
         ):
             # Stand it up before any CLI invocation so the agent's first
             # Bash can't outrace our bind. ``mkdtemp`` mode is 0700.
@@ -484,6 +485,8 @@ class AmpAdapter:
           is visible). The UI surfaces this trade-off in the Permissions
           section: only Bash is user-prompted; all other tools, including
           new/MCP ones, auto-run.
+        - Loop read-only: allow inspection tools and reject ``*``. No bridge
+          is needed because Bash is rejected rather than delegated.
         """
         opts: dict[str, object] = {
             "cwd": str(self._config.common.workdir),
@@ -512,6 +515,11 @@ class AmpAdapter:
                     )
                 ],
             }
+
+        if self._config.read_only:
+            opts["dangerously_allow_all"] = False
+            opts["permissions"] = _build_read_only_permissions()
+            return opts
 
         if self._config.permission_mode is AmpPermissionMode.ALLOW_ALL:
             opts["dangerously_allow_all"] = True
@@ -750,6 +758,29 @@ def _build_permissions(
         )
     )
     return rules
+
+
+def _build_read_only_permissions() -> list[Permission]:
+    """Allow Amp inspection tools and reject every mutating or unknown tool."""
+    return [
+        *[
+            Permission(
+                tool=tool,
+                matches=None,
+                action="allow",
+                context=None,
+                to=None,
+            )
+            for tool in _READ_ONLY_TOOLS
+        ],
+        Permission(
+            tool="*",
+            matches=None,
+            action="reject",
+            context=None,
+            to=None,
+        ),
+    ]
 
 
 def _structured_input_from_argv(argv: list[Any]) -> dict[str, Any]:

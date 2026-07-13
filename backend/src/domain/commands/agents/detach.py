@@ -95,6 +95,11 @@ async def execute(
             f"agent {req.agent_slug} has no provider session yet — "
             "send at least one message first"
         )
+    if agent.provider == "amp" and (agent.options or {}).get("read_only") == "true":
+        raise AgentNotResumable(
+            f"agent {req.agent_slug} is an Amp read-only loop stage and cannot "
+            "detach without losing its permission boundary"
+        )
 
     # Resolve the actual cwd the user should land in. For git repos this
     # is the per-agent worktree (where the supervisor's SDK process was

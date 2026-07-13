@@ -49,7 +49,7 @@ import {
   useProviderDescriptors,
 } from "./providerDescriptors";
 import { RichMarkdownEditor } from "./RichMarkdownEditor";
-import { ShellCrown } from "./ShellCrown";
+import { ShellTopbar, type ShellTopbarCrumb } from "./ShellTopbar";
 import {
   PLANNING_DOCK_MAX,
   PLANNING_DOCK_MIN,
@@ -112,6 +112,7 @@ type PlanningModeProps = {
   onCreateSourcePlan: () => void;
   onFinishConversation: () => void;
   onManual: () => void;
+  onLoop: () => void;
   onDraftChange: (value: string) => void;
   onSave: () => void;
   onReset: () => void;
@@ -176,7 +177,7 @@ const MODE_CARDS = [
   {
     id: "loop",
     glyph: "loop",
-    tag: "soon",
+    tag: "new",
     title: "Loop",
     desc: "Run toward a verifiable goal with memory until it is met.",
   },
@@ -218,6 +219,7 @@ export function PlanningMode({
   onCreateSourcePlan,
   onFinishConversation,
   onManual,
+  onLoop,
   onDraftChange,
   onSave,
   onReset,
@@ -247,6 +249,7 @@ export function PlanningMode({
   const planningStyle: CSSProperties = {
     ["--pm-rail-width" as string]: `${planningRailWidth}px`,
     ["--pm-dock-width" as string]: `${planningDockWidth}px`,
+    ["--shell-left-width" as string]: `${planningRailWidth}px`,
   };
   const hasPlanningChat = planningChatSlug !== null;
   const showChatDock = chatOpen && hasPlanningChat;
@@ -269,16 +272,53 @@ export function PlanningMode({
     loading: sourcePlanBusy,
     status: materializationStatus,
   });
+  const artifactIndex = artifact?.title.match(/^([^:]+):/)?.[1] ?? artifact?.id ?? "item";
+  const planningCrumbs: ShellTopbarCrumb[] = [
+    ...(project
+      ? [{ href: `/projects/${project.slug}`, hue: project.color, label: project.name }]
+      : []),
+    { href: `/works/${work.slug}?mode=planning`, label: work.slug },
+  ];
+  if (!plan || plan.phase === "conversing") {
+    planningCrumbs.push({ label: "planning" });
+  } else if (view.kind === "overview") {
+    planningCrumbs.push({ label: "plan overview" });
+  } else {
+    planningCrumbs.push({ label: "plan overview", onClick: () => onView({ kind: "overview" }) });
+    if (view.kind === "epic") planningCrumbs.push({ label: epic?.id ?? "epic" });
+    if (view.kind === "source") planningCrumbs.push({ label: source?.id ?? "source" });
+    if (view.kind === "artifact") planningCrumbs.push({ label: artifactIndex });
+    if (view.kind === "run") {
+      planningCrumbs.push({ label: artifactIndex, onClick: () => onView({ kind: "artifact", id: view.id }) });
+      planningCrumbs.push({ label: "run" });
+    }
+    if (view.kind === "accept") planningCrumbs.push({ label: "approve plan" });
+  }
+  const topbarView =
+    plan && plan.phase !== "conversing" && view.kind === "artifact" && artifact
+      ? {
+          inline: true,
+          title: artifact.title,
+          detail: <TreeStatus status={uiStatus(artifact)} />,
+        }
+      : undefined;
+  const topbar = (
+    <ShellTopbar
+      crumbs={planningCrumbs}
+      view={topbarView}
+    />
+  );
 
   if (!plan && hasPlanningChat) {
     return (
-      <div className="planning-mode conversation-only" style={planningStyle}>
+      <div className="planning-mode conversation-only has-topbar" style={planningStyle}>
+        {topbar}
         <PlanningStarterRail
           work={work}
-          project={project}
           readiness={planningReady}
           materializing={sourcePlanBusy}
           materializationStatus={materializationStatus}
+          framework={planningFrameworkDefinition(framework).name}
           railWidth={planningRailWidth}
         />
         <main className="pm-main pm-conversation-main">
@@ -311,13 +351,14 @@ export function PlanningMode({
 
   if (plan?.phase === "conversing") {
     return (
-      <div className="planning-mode conversation-only" style={planningStyle}>
+      <div className="planning-mode conversation-only has-topbar" style={planningStyle}>
+        {topbar}
         <PlanningStarterRail
           work={work}
-          project={project}
           readiness={planningReady}
           materializing={saving}
           materializationStatus={null}
+          framework={planningFrameworkDefinition(framework).name}
           railWidth={planningRailWidth}
         />
         <main className="pm-main pm-conversation-main">
@@ -340,7 +381,8 @@ export function PlanningMode({
 
   if (!plan) {
     return (
-      <div className="planning-mode empty-only">
+      <div className="planning-mode empty-only has-topbar" style={planningStyle}>
+        {topbar}
         <PlanEmpty
           work={work}
           loading={loading}
@@ -360,38 +402,28 @@ export function PlanningMode({
           onClearRoot={onClearRoot}
           onStart={onStart}
           onManual={onManual}
+          onLoop={onLoop}
         />
       </div>
     );
   }
 
   return (
-    <div className={"planning-mode" + (showChatDock ? " with-dock" : "")} style={planningStyle}>
+    <div className={"planning-mode has-topbar" + (showChatDock ? " with-dock" : "")} style={planningStyle}>
+      {topbar}
       <PlanRail
         work={work}
-        project={project}
         plan={plan}
         tree={tree}
         counts={counts}
         activeId={activeId}
         railWidth={planningRailWidth}
-        onManual={onManual}
         onEpic={(id) => onView({ kind: "epic", id })}
         onArtifact={(id) => onView({ kind: "artifact", id })}
         onSource={(id) => onView({ kind: "source", id })}
         onCreateBug={() => setBugDialogOpen(true)}
       />
       <main className="pm-main">
-        {view.kind !== "run" && (
-          <PlanHeader
-            work={work}
-            plan={plan}
-            view={view}
-            activeArtifact={artifact ?? source}
-            activeEpic={epic}
-            onBack={() => onView({ kind: "overview" })}
-          />
-        )}
         {error && <div className="pm-error">{error}</div>}
         {view.kind === "overview" && (
           <PlanOverview
@@ -424,12 +456,12 @@ export function PlanningMode({
             onDraftChange={onDraftChange}
             onSave={onSave}
             onReset={onReset}
-            onLaunch={onLaunch}
             onResolveLoopBlocker={onResolveLoopBlocker}
             onCleanupRun={onCleanupRun}
             onOpenRun={() => {
               if (artifact) onView({ kind: "run", id: artifact.id });
             }}
+            onLaunch={onLaunch}
             onEpic={() => onView({ kind: "epic", id: PRIMARY_EPIC_ID })}
             onApprovePlan={onApprovePlan}
           />
@@ -440,7 +472,6 @@ export function PlanningMode({
               artifact={selectedDetail.artifact}
               run={selectedDetail.artifact.runs.at(-1)!}
               saving={saving}
-              onBack={() => onView({ kind: "artifact", id: artifact.id })}
               onResolveBlocker={(agentSlug) =>
                 onResolveLoopBlocker(
                   selectedDetail.artifact,
@@ -489,6 +520,7 @@ export function PlanningMode({
       {showChatDock ? (
         <aside className="pm-chat-dock">
           <PaneResizeHandle
+            defaultValue={420}
             edge="left"
             label="Resize plan chat dock"
             max={PLANNING_DOCK_MAX}
@@ -550,6 +582,7 @@ function PlanEmpty({
   onClearRoot,
   onStart,
   onManual,
+  onLoop,
 }: {
   work: WorkDetail;
   loading: boolean;
@@ -569,6 +602,7 @@ function PlanEmpty({
   onClearRoot: () => void;
   onStart: () => void;
   onManual: () => void;
+  onLoop: () => void;
 }) {
   const [mode, setMode] = useState<(typeof MODE_CARDS)[number]["id"]>("planning");
   const promptId = useId();
@@ -589,7 +623,7 @@ function PlanEmpty({
           {MODE_CARDS.map((card) => (
             <button
               key={card.id}
-              className={"pm-mode-card" + (mode === card.id ? " active" : "") + (card.id === "loop" ? " soon" : "")}
+              className={"pm-mode-card" + (mode === card.id ? " active" : "")}
               onClick={() => setMode(card.id)}
               type="button"
             >
@@ -748,10 +782,10 @@ function PlanEmpty({
           </div>
         )}
         {mode === "loop" && (
-          <div className="pm-empty-prompt disabled">
+          <div className="pm-empty-prompt">
             <div className="pm-empty-row">
-              <span className="pm-empty-hint">Loop mode needs verifiable success criteria and persistent memory. It builds on Planning.</span>
-              <button className="btn" disabled>Not yet</button>
+              <span className="pm-empty-hint">Use the description as the goal and choose the loop and run parameters next.</span>
+              <button className="btn primary" onClick={onLoop}>Set up loop <ChevronRightIcon size={12} /></button>
             </div>
           </div>
         )}
@@ -969,37 +1003,26 @@ function renderProfileIcon(
 
 function PlanningStarterRail({
   work,
-  project,
   readiness,
   materializing,
   materializationStatus,
+  framework,
   railWidth,
 }: {
   work: WorkDetail;
-  project: ProjectSummary | null;
   readiness: boolean;
   materializing: boolean;
   materializationStatus: PlanMaterializationStatus | null;
+  framework: string;
   railWidth: number;
 }) {
   const setPlanningRailWidth = useLayoutStore((s) => s.setPlanningRailWidth);
   return (
     <aside className="pm-rail pm-starter-rail">
-      <ShellCrown />
-      <div className="crumbs-v3 pm-starter-crumbs">
-        <a className="crumb" href="/">
-          ← workspace
-        </a>
-        {project && (
-          <>
-            <span className="sep">/</span>
-            <a className="crumb" href={`/projects/${project.slug}`}>
-              {project.name}
-            </a>
-          </>
-        )}
-        <span className="sep">/</span>
-        <span className="now">{work.slug}</span>
+      <div className="pm-mode-static">
+        <span className="pm-mode-static-glyph">PL</span>
+        <strong>Planning</strong>
+        <em>{framework}</em>
       </div>
       <div className="pm-work-hero">
         <span>{work.slug} · {formatShortDate(work.created_at)}</span>
@@ -1013,6 +1036,7 @@ function PlanningStarterRail({
         />
       </div>
       <PaneResizeHandle
+        defaultValue={296}
         edge="right"
         label="Resize planning rail"
         max={PLANNING_RAIL_MAX}
@@ -1338,26 +1362,22 @@ function PlanningChatCanvas({
 
 function PlanRail({
   work,
-  project,
   plan,
   tree,
   counts,
   activeId,
   railWidth,
-  onManual,
   onEpic,
   onArtifact,
   onSource,
   onCreateBug,
 }: {
   work: WorkDetail;
-  project: ProjectSummary | null;
   plan: WorkPlan;
   tree: PlanTree;
   counts: PlanCounts;
   activeId: string | null;
   railWidth: number;
-  onManual: () => void;
   onEpic: (id: string) => void;
   onArtifact: (id: string) => void;
   onSource: (id: string) => void;
@@ -1366,23 +1386,17 @@ function PlanRail({
   const [open, setOpen] = useState(true);
   const setPlanningRailWidth = useLayoutStore((s) => s.setPlanningRailWidth);
   const activeProgress = counts.running + counts.review + counts.ready + counts.draft;
+  const pullRequests = plan.artifacts.flatMap((item) =>
+    item.tracking
+      .filter((link) => link.kind === "pr")
+      .map((link) => ({ artifactId: item.id, link })),
+  );
   return (
     <aside className="pm-rail">
-      <ShellCrown />
-      <div className="pm-crumbs">
-        <button onClick={onManual}>← canvas</button>
-        <span>/</span>
-        <span>{project?.name ?? "Loose"}</span>
-        <span>/</span>
-        <span>{work.slug}</span>
-      </div>
       <div className="pm-mode-static">
         <span className="pm-mode-static-glyph">PL</span>
-        <span>
-          <span>Work mode</span>
-          <strong>Planning</strong>
-        </span>
-        <em><CheckIcon size={11} /> set</em>
+        <strong>Planning</strong>
+        <em>{plan.framework.toUpperCase()}</em>
       </div>
       <div className="pm-work-hero">
         <span>{work.slug} · {formatShortDate(work.created_at)}</span>
@@ -1405,14 +1419,6 @@ function PlanRail({
       <div className="pm-rail-scroll themed-scrollbar">
         <div className="pm-section-hd">
           <span>Plan outline</span>
-          <button
-            type="button"
-            title={tree.executable.length === 0 ? "No executable plan item yet" : "Create a bug"}
-            disabled={tree.executable.length === 0}
-            onClick={onCreateBug}
-          >
-            + bug
-          </button>
         </div>
         <div className="pm-tree">
           {tree.sources.length > 0 && (
@@ -1435,7 +1441,7 @@ function PlanRail({
                   >
                     <span>
                       <em>{source.kind}</em>
-                      {source.title}
+                      {source.path.split(/[\\/]/).pop() || source.title}
                     </span>
                     <SourceTreeStatus source={source} />
                   </button>
@@ -1462,8 +1468,8 @@ function PlanRail({
                   onClick={() => onArtifact(item.id)}
                 >
                   <span>
-                    {item.kind !== "story" && <em>{item.kind}</em>}
-                    {item.title}
+                    <em>{item.kind}</em>
+                    {item.path.split(/[\\/]/).pop() || item.title}
                   </span>
                   <TreeStatus status={uiStatus(item)} />
                 </button>
@@ -1472,33 +1478,38 @@ function PlanRail({
           )}
         </div>
         <div className="pm-section-hd">
-          <span>Tracking</span>
-          <span>{plan.artifacts.reduce((total, item) => total + item.tracking.length, 0)}</span>
+          <span>Pull requests</span>
+          <span>{pullRequests.length}</span>
         </div>
         <div className="pm-rail-tracking">
-          {plan.artifacts.flatMap((item) =>
-            item.tracking.map((link) => (
-              <button
-                key={`${item.id}:${link.id}`}
-                className="pm-track-row rail"
-                onClick={() => onArtifact(item.id)}
-              >
-                <span className={"pm-track-kind " + link.kind}>{link.kind}</span>
-                <strong>{link.title}</strong>
-                <small>{item.id}</small>
-              </button>
-            )),
-          )}
-          {plan.artifacts.every((item) => item.tracking.length === 0) && (
-            <div className="pm-empty-state">No tracking links.</div>
+          {pullRequests.map(({ artifactId, link }) => (
+            <button
+              key={`${artifactId}:${link.id}`}
+              className="pm-track-row rail"
+              onClick={() => onArtifact(artifactId)}
+            >
+              <span className={"pm-track-kind " + link.kind}>{link.kind}</span>
+              <strong>{link.title}</strong>
+              <small>{artifactId}</small>
+            </button>
+          ))}
+          {pullRequests.length === 0 && (
+            <div className="pm-empty-state">No pull requests.</div>
           )}
         </div>
       </div>
       <div className="pm-footstrip">
-        <span><i /> {counts.running} running</span>
-        <span>{counts.blocked + counts.ready + counts.draft} to do</span>
+        <button
+          className="btn ghost sm"
+          type="button"
+          disabled={tree.executable.length === 0}
+          onClick={onCreateBug}
+        >
+          <BugIcon size={11} /> Add bug
+        </button>
       </div>
       <PaneResizeHandle
+        defaultValue={296}
         edge="right"
         label="Resize planning rail"
         max={PLANNING_RAIL_MAX}
@@ -1584,7 +1595,7 @@ function PlanBugDialog({
             <div className="sub">Lightweight item — launches without full planning</div>
           </div>
           <button
-            className="btn-icon"
+            className="btn icon"
             type="button"
             onClick={onClose}
             aria-label="Close"
@@ -1731,58 +1742,6 @@ function bugStoryStatusLabel(status: PlanUiStatus): string {
   return status.toUpperCase();
 }
 
-function PlanHeader({
-  work,
-  plan,
-  view,
-  activeArtifact,
-  activeEpic,
-  onBack,
-}: {
-  work: WorkDetail;
-  plan: WorkPlan;
-  view: PlanningView;
-  activeArtifact: PlanArtifact | null;
-  activeEpic: PlanEpic | null;
-  onBack: () => void;
-}) {
-  const title =
-    view.kind === "overview"
-      ? "Plan overview"
-      : view.kind === "accept"
-        ? "Approve plan"
-        : view.kind === "epic"
-          ? activeEpic?.title ?? "Epic"
-          : activeArtifact?.title ?? "Planning";
-  const detail =
-    view.kind === "overview"
-      ? `${work.name} · ${plan.framework.toUpperCase()} · ${plan.depth}`
-      : view.kind === "epic"
-        ? `${activeEpic?.id ?? PRIMARY_EPIC_ID} · epic`
-      : view.kind === "source"
-        ? "source document · editable"
-        : view.kind === "artifact"
-          ? `${activeArtifact?.id ?? ""} · source-backed detail`
-          : "applies to the current source index";
-  return (
-    <div className="pm-main-hd">
-      <div>
-        <h2>
-          {view.kind !== "overview" && (
-            <button className="btn ghost icon sm" onClick={onBack} aria-label="Back to overview">←</button>
-          )}
-          {title}
-        </h2>
-        <p>{detail}</p>
-      </div>
-      <span />
-      {view.kind !== "accept" && plan.approved_at && (
-        <span className="pm-edit-state editable">plan approved</span>
-      )}
-    </div>
-  );
-}
-
 function PlanOverview({
   plan,
   tree,
@@ -1826,7 +1785,15 @@ function PlanOverview({
           {tab === "summary" && (
             <>
               <SectionTitle label="Planning progress" />
-              <PlanProgress plan={plan} counts={counts} />
+              <div className="pm-overview-progress">
+                <PlanProgress plan={plan} counts={counts} />
+                <InspectorPanel title="Plan readiness">
+                  <Kv label="Source docs" value={`${tree.sources.filter((source) => source.status !== "changed").length}/${tree.sources.length} reviewed`} tone={tree.sources.some((source) => source.status === "changed") ? "warn" : "good"} />
+                  <Kv label="Executable" value={`${counts.total} items`} />
+                  <Kv label="Blocked" value={String(counts.blocked)} tone={counts.blocked > 0 ? "danger" : "good"} />
+                  <Kv label="Approval" value={plan.approved_at ? "approved" : "pending"} tone={plan.approved_at ? "good" : "warn"} />
+                </InspectorPanel>
+              </div>
               <SectionTitle tone="alert" icon={<SparkIcon size={12} />} label="Needs your attention" count={attention.length} />
               <div className="pm-attn-list">
                 {attention.length === 0 ? (
@@ -1873,16 +1840,14 @@ function PlanOverview({
                   <button className="pm-list-row" onClick={onAccept}>
                     <span className="glyph">PL</span>
                     <strong>Approve the latest plan</strong>
-                    <small>draft · against current source index</small>
                     <StatusPill status="draft" />
                     <ChevronRightIcon className="pm-row-chevron" size={15} />
                   </button>
                 )}
                 {tree.sources.filter((s) => s.status === "changed").map((source) => (
                   <button key={source.id} className="pm-list-row" onClick={() => onSource(source.id)}>
-                    <span className="glyph"><DocIcon size={12} /></span>
+                    <span className="glyph">{source.id.toUpperCase()}</span>
                     <strong>Review {source.title}</strong>
-                    <small>{source.path} · source changed</small>
                     <StatusPill status="review" />
                     <ChevronRightIcon className="pm-row-chevron" size={15} />
                   </button>
@@ -1962,10 +1927,10 @@ function ArtifactDetail({
   onDraftChange,
   onSave,
   onReset,
-  onLaunch,
   onResolveLoopBlocker,
   onCleanupRun,
   onOpenRun,
+  onLaunch,
   onEpic,
   onApprovePlan,
 }: {
@@ -1976,7 +1941,6 @@ function ArtifactDetail({
   onDraftChange: (value: string) => void;
   onSave: () => void;
   onReset: () => void;
-  onLaunch: (detail: PlanArtifactDetail) => void;
   onResolveLoopBlocker: (
     artifact: PlanArtifact,
     runId: string,
@@ -1984,6 +1948,7 @@ function ArtifactDetail({
   ) => void;
   onCleanupRun: (artifact: PlanArtifact, runId: string) => void;
   onOpenRun: () => void;
+  onLaunch: (detail: PlanArtifactDetail) => void;
   onEpic: () => void;
   onApprovePlan: () => void;
 }) {
@@ -1992,9 +1957,9 @@ function ArtifactDetail({
   const status = uiStatus(detail.artifact);
   const editable = status === "draft" || status === "ready" || status === "blocked";
   const dirty = draft !== detail.content;
-  const launchable = detail.artifact.launchable;
   const latestRun = detail.artifact.runs.at(-1) ?? null;
   const latestLoopStatus = latestRun ? loopStatus(latestRun) : null;
+  const pullRequests = detail.artifact.tracking.filter((link) => link.kind === "pr");
   const approvalBlocker = detail.artifact.launch_blockers.find((blocker) =>
     blocker.toLowerCase().startsWith("approve "),
   );
@@ -2053,21 +2018,23 @@ function ArtifactDetail({
           </div>
         </article>
         <aside className="pm-art-aside">
+          {detail.artifact.kind === "story" && (
+            <InspectorPanel title="Start work">
+              <button
+                className="btn primary sm pm-start-work"
+                disabled={!detail.artifact.launchable}
+                onClick={() => onLaunch(detail)}
+              >
+                <LoopIcon size={12} /> Start work
+              </button>
+            </InspectorPanel>
+          )}
           <InspectorPanel title="Readiness">
             <Kv label="Criteria" value={detail.artifact.readiness === "ready" ? "defined" : "missing"} tone={detail.artifact.readiness === "ready" ? "good" : "danger"} />
             <Kv label="Estimate" value={detail.artifact.readiness === "ready" ? "lightweight" : "missing"} />
             <Kv label="Deps" value={detail.artifact.dependencies.length > 0 ? detail.artifact.dependencies.join(", ") : "clear"} tone={detail.artifact.launch_blockers.length > 0 ? "warn" : "good"} />
           </InspectorPanel>
-          <InspectorPanel title="Workspace">
-            <div className="pm-panel-note">
-              <FolderIcon size={12} /> Agent worktrees launch from the selected source repo.
-            </div>
-            <button className="btn sm" disabled={!launchable} onClick={() => onLaunch(detail)}>
-              <LoopIcon size={12} /> Work on {detail.artifact.id}
-            </button>
-            {!launchable && <div className="pm-panel-note">{detail.artifact.launch_blockers[0] ?? "Resolve readiness before launch."}</div>}
-          </InspectorPanel>
-          <InspectorPanel title="Run state">
+          <InspectorPanel title="Latest run">
             {latestRun ? (
               <>
                 <button className="btn primary sm pm-open-run" onClick={onOpenRun}>
@@ -2127,10 +2094,10 @@ function ArtifactDetail({
               <div className="pm-panel-note">No agent run recorded yet.</div>
             )}
           </InspectorPanel>
-          {detail.artifact.tracking.length > 0 && (
-            <InspectorPanel title="Tracking">
+          {pullRequests.length > 0 && (
+            <InspectorPanel title="Pull requests">
               <div className="pm-track-list">
-                {detail.artifact.tracking.map((link) => (
+                {pullRequests.map((link) => (
                   <div key={link.id} className="pm-track-row">
                     <span className={"pm-track-kind " + link.kind}>{link.kind}</span>
                     <strong>{link.title}</strong>
@@ -2303,9 +2270,8 @@ function ArtifactList({
     <div className="pm-list">
       {items.map((item) => (
         <button key={item.id} className="pm-list-row" data-kind={item.kind} onClick={() => onOpen(item.id)}>
-          <span className="glyph">{kindGlyph(item.kind)}</span>
-          <strong>{item.title}</strong>
-          <small>{artifactListSubtitle(item)}</small>
+          <span className="glyph">{item.kind.toUpperCase()}</span>
+          <strong>{item.path.split(/[\\/]/).pop() || item.title}</strong>
           <StatusPill status={uiStatus(item)} />
           <ChevronRightIcon className="pm-row-chevron" size={15} />
         </button>
@@ -2430,26 +2396,6 @@ function loopStatus(run: PlanArtifact["runs"][number]): LoopStatus {
   return "completed";
 }
 
-function artifactListSubtitle(artifact: PlanArtifact): string {
-  const id = artifact.id.toUpperCase();
-  const latestRun = artifact.runs.at(-1);
-  const status = uiStatus(artifact);
-  if (latestRun) {
-    const loop = loopStatus(latestRun);
-    if (status === "review") return `${id} · run done · awaiting review`;
-    if (status === "running") return `${id} · ${latestRun.agent_slug} · ${loopStatusLabel(loop)}`;
-    if (status === "done") return `${id} · accepted`;
-    if (status === "blocked") return `${id} · ${loopStatusLabel(loop)}`;
-  }
-  if (artifact.launch_blockers.length > 0) {
-    return `${id} · ${artifact.launch_blockers[0]}`;
-  }
-  if (status === "ready") return `${id} · ready to launch`;
-  if (artifact.readiness === "needs_detail") return `${id} · needs detail`;
-  if (artifact.status === "changed") return `${id} · source changed`;
-  return `${id} · draft`;
-}
-
 function attentionItems(plan: WorkPlan, tree: PlanTree) {
   const out: {
     id: string;
@@ -2554,22 +2500,6 @@ function buildPlanEpic(
 
 function findArtifact(plan: WorkPlan | null, id: string): PlanArtifact | null {
   return plan?.artifacts.find((artifact) => artifact.id === id) ?? null;
-}
-
-function kindGlyph(kind: PlanArtifact["kind"]): string {
-  return {
-    brief: "BR",
-    architecture: "AR",
-    spec: "SP",
-    scenario: "SC",
-    acceptance: "AC",
-    story: "ST",
-    task: "TK",
-    spike: "SK",
-    bug: "BG",
-    hotfix: "HF",
-    note: "NT",
-  }[kind];
 }
 
 function formatShortDate(value: string): string {

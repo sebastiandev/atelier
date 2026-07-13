@@ -72,7 +72,7 @@ export function HandoffDialog({
             </div>
           </div>
           {!generating && (
-            <button className="btn-icon" onClick={onClose} aria-label="Close">
+            <button className="btn icon" onClick={onClose} aria-label="Close">
               ×
             </button>
           )}

@@ -144,6 +144,7 @@ from src.domain.connections import ConnectionStore
 from src.domain.loop.ports import (
     LoopCheckRunner,
     LoopContextResolver,
+    LoopDefinitionLocations,
     LoopDefinitionRepository,
     LoopRunRepository,
 )
@@ -203,6 +204,10 @@ def get_planning_sessions(request: Request) -> PlanningSessionRepository:
 
 def get_loop_definitions(request: Request) -> LoopDefinitionRepository:
     return request.app.state.loop_definitions  # type: ignore[no-any-return]
+
+
+def get_loop_definition_locations(request: Request) -> LoopDefinitionLocations:
+    return request.app.state.workspace_paths  # type: ignore[no-any-return]
 
 
 def get_connection_store(request: Request) -> ConnectionStore:
@@ -269,6 +274,9 @@ PlanningSessionsDep = Annotated[
 ]
 LoopDefinitionsDep = Annotated[
     LoopDefinitionRepository, Depends(get_loop_definitions)
+]
+LoopDefinitionLocationsDep = Annotated[
+    LoopDefinitionLocations, Depends(get_loop_definition_locations)
 ]
 ConnectionStoreDep = Annotated[ConnectionStore, Depends(get_connection_store)]
 AgentAdapterFactoryDep = Annotated[
@@ -882,6 +890,7 @@ async def start_work_plan_artifact_run_endpoint(
     planningfiles: PlanningFilesDep,
     planning_sessions: PlanningSessionsDep,
     loop_definitions: LoopDefinitionsDep,
+    loop_locations: LoopDefinitionLocationsDep,
     loop_runs: LoopRunRepositoryDep,
     context_resolver: LoopContextResolverDep,
     supervisor: SupervisorDep,
@@ -899,6 +908,7 @@ async def start_work_plan_artifact_run_endpoint(
             planningfiles,
             planning_sessions,
             loop_definitions,
+            loop_locations,
             loop_runs,
             context_resolver,
             supervisor,

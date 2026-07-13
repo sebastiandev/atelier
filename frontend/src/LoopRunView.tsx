@@ -24,7 +24,6 @@ type LoopRunViewProps = {
   artifact: PlanArtifact;
   run: PlanArtifactRun;
   saving: boolean;
-  onBack: () => void;
   onResolveBlocker: (agentSlug: string) => void;
   onRequestChanges: (note: string) => Promise<void>;
   onApprove: () => Promise<void>;
@@ -35,7 +34,6 @@ export function LoopRunView({
   artifact,
   run,
   saving,
-  onBack,
   onResolveBlocker,
   onRequestChanges,
   onApprove,
@@ -48,7 +46,6 @@ export function LoopRunView({
         artifact={artifact}
         run={run}
         saving={saving}
-        onBack={onBack}
         onRequestChanges={onRequestChanges}
         onApprove={onApprove}
         onCleanup={onCleanup}
@@ -58,7 +55,8 @@ export function LoopRunView({
   const current = run.loop_stages.find((stage) => stage.id === run.loop_current_stage_id);
   return (
     <div className="run">
-      <RunHeader artifact={artifact} run={run} onBack={onBack} />
+      <RunHeader artifact={artifact} run={run} />
+      <LoopRunStageSpine stages={run.loop_stages} attempt={run.loop_attempt} />
       <div className="run-body themed-scrollbar">
         <div className="run-wrap">
           {run.loop_status === "blocked_user" && (
@@ -80,28 +78,62 @@ export function LoopRunView({
               </div>
             </div>
           )}
-          {run.loop_stages.map((stage, index) => (
-            <RunStage
-              key={stage.id}
-              stage={stage}
-              last={index === run.loop_stages.length - 1}
-            />
-          ))}
+          <LoopRunStageTimeline stages={run.loop_stages} />
         </div>
       </div>
     </div>
   );
 }
 
-function RunHeader({
-  artifact,
-  run,
-  onBack,
+export function LoopRunStageSpine({
+  stages,
+  attempt,
+  trailing,
 }: {
-  artifact: PlanArtifact;
-  run: PlanArtifactRun;
-  onBack: () => void;
+  stages: PlanLoopStageRun[];
+  attempt?: number | null;
+  trailing?: ReactNode;
 }) {
+  return (
+    <div className="run-stage-spine">
+      {stages.map((stage, index) => {
+        const state = stageStatus(stage.status);
+        return (
+          <span className="run-stage-spine-unit" key={stage.id}>
+            <span className={`run-stage-chip ${state}`} data-stage-kind={stage.kind}>
+              {state === "passed" ? <CheckIcon size={10} /> : stageIcon(stage)}
+              {stage.name}
+            </span>
+            {index < stages.length - 1 && <span className="run-stage-arrow">→</span>}
+          </span>
+        );
+      })}
+      <span className="run-stage-attempt">
+        {trailing ?? <>attempt {attempt ?? Math.max(1, ...stages.map((stage) => stage.attempt))}</>}
+      </span>
+    </div>
+  );
+}
+
+export function LoopRunStageTimeline({
+  stages,
+}: {
+  stages: PlanLoopStageRun[];
+}) {
+  return (
+    <>
+      {stages.map((stage, index) => (
+        <RunStage
+          key={stage.id}
+          stage={stage}
+          last={index === stages.length - 1}
+        />
+      ))}
+    </>
+  );
+}
+
+export function LoopRunStatus({ run }: { run: PlanArtifactRun }) {
   const statusClass = run.loop_status === "blocked_user" || run.loop_status === "failed"
     ? "blocked"
     : run.loop_status === "awaiting_approval" || run.loop_status === "accepted" || run.loop_status === "cleaned"
@@ -119,8 +151,13 @@ function RunHeader({
           ? "Failed"
           : "Running";
   return (
+    <span className={`run-status-pill ${statusClass}`}><span className="dot" />{label}</span>
+  );
+}
+
+function RunHeader({ artifact, run }: { artifact: PlanArtifact; run: PlanArtifactRun }) {
+  return (
     <div className="run-hd" data-arti={artifact.kind}>
-      <button className="btn ghost icon sm" onClick={onBack} aria-label="Back to artifact">←</button>
       <div className="rh-meta">
         <div className="rh-t"><LoopIcon size={14} /> {artifact.title}</div>
         <div className="rh-d">
@@ -129,7 +166,7 @@ function RunHeader({
           <span>·</span><span>{run.agent_slug}</span>
         </div>
       </div>
-      <span className={`run-status-pill ${statusClass}`}><span className="dot" />{label}</span>
+      <LoopRunStatus run={run} />
     </div>
   );
 }
@@ -137,7 +174,7 @@ function RunHeader({
 function RunStage({ stage, last }: { stage: PlanLoopStageRun; last: boolean }) {
   const state = stageStatus(stage.status);
   return (
-    <div className="rstage" data-persona={stagePersona(stage)}>
+    <div className="rstage" data-stage-kind={stage.kind}>
       <div className="rstage-rail">
         <span className={`rstage-node ${state}`}>
           {state === "passed" ? <CheckIcon size={14} /> : state === "blocked" ? <AlertIcon size={13} /> : stageIcon(stage)}
@@ -179,7 +216,7 @@ function RunStage({ stage, last }: { stage: PlanLoopStageRun; last: boolean }) {
 
 function StageReport({ stage }: { stage: PlanLoopStageRun }) {
   return (
-    <div className="report">
+    <div className="report doc">
       <ReportSection label={stage.kind === "agent_review" ? "Verdict & summary" : "Summary"} icon={<DocIcon size={11} />}>
         <div className="report-summary">{stage.summary}</div>
       </ReportSection>
@@ -235,7 +272,6 @@ function LoopResultView({
   artifact,
   run,
   saving,
-  onBack,
   onRequestChanges,
   onApprove,
   onCleanup,
@@ -247,10 +283,11 @@ function LoopResultView({
   const reviews = run.loop_stages.filter((stage) => stage.kind === "agent_review");
   return (
     <div className="run">
-      <RunHeader artifact={artifact} run={run} onBack={onBack} />
+      <RunHeader artifact={artifact} run={run} />
+      <LoopRunStageSpine stages={run.loop_stages} attempt={run.loop_attempt} />
       <div className="result-body themed-scrollbar">
         <div className="result-wrap">
-          <div className="result-hero">
+          <div className="result-hero doc">
             <span className="rhi"><CheckIcon size={17} /></span>
             <div className="rh-meta"><div className="rh-t">{accepted ? "Result approved" : "Result ready for approval"}</div><div className="rh-d">{implementation?.summary || run.summary}</div></div>
           </div>
@@ -278,7 +315,7 @@ function LoopResultView({
 }
 
 function ResultSection({ label, icon, count, children }: { label: string; icon: ReactNode; count?: number; children: ReactNode }) {
-  return <section className="result-sec"><div className="result-sec-hd">{icon}{label}{count !== undefined && <span className="rs-count">{count}</span>}</div><div className="result-sec-bd">{children}</div></section>;
+  return <section className="result-sec doc"><div className="result-sec-hd">{icon}{label}{count !== undefined && <span className="rs-count">{count}</span>}</div><div className="result-sec-bd">{children}</div></section>;
 }
 
 function stageIcon(stage: PlanLoopStageRun) {
@@ -286,13 +323,6 @@ function stageIcon(stage: PlanLoopStageRun) {
   if (stage.kind === "user_approval") return <UserCheckIcon size={14} />;
   if (stage.kind === "deterministic_check") return <FlaskIcon size={14} />;
   return <SparkIcon size={14} />;
-}
-
-function stagePersona(stage: PlanLoopStageRun) {
-  if (stage.kind === "agent_review") return "ux";
-  if (stage.kind === "deterministic_check") return "product";
-  if (stage.kind === "user_approval") return "writer";
-  return "developer";
 }
 
 function stageStatus(status: PlanLoopStageRun["status"]) {

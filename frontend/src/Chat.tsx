@@ -83,7 +83,7 @@ import {
   withOpenCodeModelOptions,
 } from "./providerDescriptors";
 import { SessionModelPicker } from "./SessionModelPicker";
-import { ShellCrown } from "./ShellCrown";
+import { ShellTopbar } from "./ShellTopbar";
 import {
   type AgentEvent,
   useAgentStream,
@@ -262,15 +262,16 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     streamStatus !== "connected" || compacting || compactDialog !== null;
 
   return (
-    <div className="shell-v3 narrow-left chat-v3">
+    <div className="shell-v3 narrow-left chat-v3 has-topbar">
+      <ShellTopbar
+        crumbs={[
+          ...(grounding.kind !== "none"
+            ? [{ href: grounding.href, label: grounding.label }]
+            : []),
+          { label: chat.slug },
+        ]}
+      />
       <aside className="shell-left chat-rail">
-        <ShellCrown />
-        <div className="crumbs-v3">
-          <a className="crumb" href="/">← workspace</a>
-          <span className="sep">/</span>
-          <span className="now">chat</span>
-        </div>
-
         <div className="chat-hero">
           <div className="kind-line"><ChatIcon size={11} /> exploratory chat · {chat.slug}</div>
           <div className="title">{chat.title}</div>
@@ -978,7 +979,7 @@ export function ChatTile({
             {onClose && (
               <button
                 type="button"
-                className="tile-ctl"
+                className="btn icon sm"
                 aria-label={
                   planningPlacement === "dock" ? "Minimize Planning" : "Close Planning"
                 }
@@ -1003,7 +1004,7 @@ export function ChatTile({
               {onStartAgent && (
                 <button
                   type="button"
-                  className="tile-ctl"
+                  className="btn icon sm"
                   aria-label="Start agent from chat"
                   onClick={() => void startAgent()}
                   disabled={!chat || startingAgent}
@@ -1014,7 +1015,7 @@ export function ChatTile({
               )}
               <button
                 type="button"
-                className="tile-ctl"
+                className="btn icon sm"
                 aria-label={maximized ? "Restore" : "Maximize"}
                 onClick={() => setMaximized((m) => !m)}
                 {...hintHandlers(maximized ? "Restore" : "Maximize")}
@@ -1024,7 +1025,7 @@ export function ChatTile({
               {onClose && (
                 <button
                   type="button"
-                  className="tile-ctl"
+                  className="btn icon sm"
                   aria-label="Close chat tile"
                   onClick={onClose}
                   {...hintHandlers("Close · stays in Chats")}
@@ -1249,14 +1250,9 @@ export function ChatTile({
           {mention && (
             <div className="composer-plan-mentions">
               <div className="composer-plan-mentions-head">
-                <div>
-                  <span className="composer-plan-mentions-title">
-                    Plan references
-                  </span>
-                  <span className="composer-plan-mentions-sub mono">
-                    {mentionSearchMatches.length} matches
-                  </span>
-                </div>
+                <span className="composer-plan-mentions-title">
+                  Plan references
+                </span>
                 <div className="composer-plan-mention-filters">
                   {visibleMentionFilters.map((filter) => (
                     <button
@@ -1299,7 +1295,13 @@ export function ChatTile({
                         insertPlanReference(ref);
                       }}
                     >
-                      <span className="pm-ref-kind">{planReferenceLabel(ref)}</span>
+                      <span
+                        className="pm-ref-kind"
+                        data-ref-kind={ref.kind}
+                        data-executable={ref.executable || undefined}
+                      >
+                        {planReferenceLabel(ref)}
+                      </span>
                       <span className="pm-ref-main">
                         <strong>{ref.title}</strong>
                         <small>{ref.path}</small>
@@ -1392,6 +1394,7 @@ export function ChatComposer({
   projects,
   works,
   presetGrounding,
+  presetWorkingDirectory,
   hideGrounding = false,
   linkProjects,
   linkWorks,
@@ -1402,6 +1405,7 @@ export function ChatComposer({
   projects: ProjectSummary[];
   works: WorkSummary[];
   presetGrounding?: ChatGrounding | null;
+  presetWorkingDirectory?: string | null;
   hideGrounding?: boolean;
   linkProjects?: ProjectSummary[];
   linkWorks?: WorkSummary[];
@@ -1416,7 +1420,9 @@ export function ChatComposer({
   const [opencodeModelsLoading, setOpencodeModelsLoading] = useState(false);
   const [opencodeModelsError, setOpencodeModelsError] = useState<string | null>(null);
   const [grounding, setGrounding] = useState<ChatGrounding | null>(presetGrounding ?? null);
-  const [workingDirectory, setWorkingDirectory] = useState<string | null>(null);
+  const [workingDirectory, setWorkingDirectory] = useState<string | null>(
+    presetWorkingDirectory ?? null,
+  );
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1956,7 +1962,7 @@ export function DeleteChatDialog({
             <p className="sub">{chat.title}</p>
           </div>
           <button
-            className="btn-icon"
+            className="btn icon"
             onClick={onClose}
             aria-label="Close"
             disabled={submitting}
@@ -2014,7 +2020,7 @@ export function ContextDocModal({
             <h3><DocIcon size={13} /> {folder.name}/{folder.context_filename}</h3>
             <div className="sub">Shared context for this work, written when the chat was promoted.</div>
           </div>
-          <button className="btn-icon" onClick={onClose}>×</button>
+          <button className="btn icon" onClick={onClose}>×</button>
         </div>
         <div className="modal-bd">
           <div className="context-doc scroll">
@@ -2072,7 +2078,7 @@ function PromoteChatModal({
             <h3><SparkIcon size={13} /> Start work from this chat</h3>
             <div className="sub">Promote this conversation into a tracked work unit.</div>
           </div>
-          <button className="btn-icon" onClick={onClose}>×</button>
+          <button className="btn icon" onClick={onClose}>×</button>
         </div>
         <div className="modal-bd">
           <div className="promote-prov">
@@ -2155,7 +2161,7 @@ function GroundingPicker({
               <button
                 key={p.slug}
                 className={"ground-chip" + (value?.kind === "project" && value.ref === p.slug ? " active" : "")}
-                style={{ ["--proj-color" as string]: `oklch(0.62 0.16 ${p.color})` }}
+                style={{ ["--proj-h" as string]: String(p.color) }}
                 onClick={() => onChange({ kind: "project", ref: p.slug })}
               >
                 <span className="g-glyph mono">{p.glyph}</span> {p.name}
@@ -2296,7 +2302,7 @@ function workGroundStyle(
 ): Record<string, string> | undefined {
   const project = projects.find((p) => p.slug === work.project_slug);
   if (!project) return undefined;
-  return { "--proj-color": `oklch(0.62 0.16 ${project.color})` };
+  return { "--proj-h": String(project.color) };
 }
 
 function GroundingCard({ grounding }: { grounding: GroundingInfo }) {

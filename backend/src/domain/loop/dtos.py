@@ -59,6 +59,7 @@ class LoopDefinitionScope(StrEnum):
 
     BUILTIN = "builtin"
     REPOSITORY = "repo"
+    WORK = "work"
 
 
 class LoopStepKind(StrEnum):
@@ -195,7 +196,7 @@ class LoopAgentPolicy:
     """Provider and permission defaults for an agent-backed stage."""
 
     session: LoopSessionPolicy = LoopSessionPolicy.FRESH
-    permissions: LoopPermission = LoopPermission.READ
+    permissions: LoopPermission | None = None
     provider: str | None = None
     model: str | None = None
     effort: str | None = None

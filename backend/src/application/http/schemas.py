@@ -764,7 +764,7 @@ class LoopContextReferenceSchema(BaseModel):
 
 class LoopAgentPolicySchema(BaseModel):
     session: LoopSessionPolicy = LoopSessionPolicy.FRESH
-    permissions: LoopPermission = LoopPermission.READ
+    permissions: LoopPermission | None = LoopPermission.READ
     provider: str | None = None
     model: str | None = None
     effort: str | None = None
@@ -806,6 +806,9 @@ class SaveLoopDefinitionRequest(BaseModel):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     description: str = ""
+    scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY
+    work_slug: str | None = None
+    root_path: str | None = None
     expected_revision: str | None = None
     forked_from: str | None = None
     stages: list[LoopStepDefinitionSchema] = Field(default_factory=list)
@@ -814,6 +817,9 @@ class SaveLoopDefinitionRequest(BaseModel):
 class ForkLoopDefinitionRequest(BaseModel):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
+    scope: LoopDefinitionScope | None = None
+    work_slug: str | None = None
+    root_path: str | None = None
 
 
 class MarkPlanRunCleanedRequest(BaseModel):
