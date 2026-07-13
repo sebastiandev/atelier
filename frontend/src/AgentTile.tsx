@@ -15,13 +15,7 @@ import {
 import { diffLines } from "diff";
 import { codeToTokensBase, type ThemedToken } from "shiki";
 
-// Render the most recent N events of a transcript by default. Long-lived
-// agents accumulate thousands of events (every status change, every
-// MessageDelta, every tool call/result), and rendering them all bloats
-// the DOM until scrolling and selection lag noticeably. The cap keeps
-// the working set bounded; the user can expand by 100 at a time when
-// they want to scroll into history.
-const TRANSCRIPT_CAP_INITIAL = 100;
+const AGENT_INITIAL_REPLAY_LIMIT = 500;
 const TRANSCRIPT_CAP_STEP = 100;
 const ACTIVE_EVENT_STALE_MS = 5 * 60 * 1000;
 
@@ -57,6 +51,10 @@ import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
 import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
+import {
+  adaptiveTranscriptLimit,
+  transcriptWindowFor,
+} from "./transcriptWindow";
 import {
   type AgentEvent,
   type PermissionDecision,
@@ -182,7 +180,9 @@ export function AgentTile({
     history,
     pendingPermissions,
     pendingHandoff,
-  } = useAgentStream(agentSlug);
+  } = useAgentStream(agentSlug, {
+    initialReplayLimit: AGENT_INITIAL_REPLAY_LIMIT,
+  });
   const [handoffSwitching, setHandoffSwitching] = useState(false);
   const [handoffError, setHandoffError] = useState<string | null>(null);
   // Reset transient switching/error state whenever the offer goes away
@@ -340,14 +340,14 @@ export function AgentTile({
   const clipboardFallbackTimerRef = useRef<number | null>(null);
   const systemClipboardPasteInFlightRef = useRef(false);
 
-  // Cap the rendered slice so loaded transcript chunks don't blow the
-  // DOM. The stream hook itself also asks the backend for a bounded
-  // initial replay; "Load older" first reveals locally hidden events,
-  // then fetches another older chunk on demand.
-  const [visibleCap, setVisibleCap] = useState(TRANSCRIPT_CAP_INITIAL);
+  // Keep ordinary sessions useful while shrinking the rendered working set
+  // as the server sequence shows that an agent has grown large.
+  const [visibleExpansion, setVisibleExpansion] = useState(0);
   useEffect(() => {
-    setVisibleCap(TRANSCRIPT_CAP_INITIAL);
+    setVisibleExpansion(0);
   }, [agentSlug]);
+  const latestSeq = Math.floor(events[events.length - 1]?.seq ?? 0);
+  const visibleCap = adaptiveTranscriptLimit(latestSeq) + visibleExpansion;
   const transcriptWindow = useMemo(
     () => transcriptWindowFor(events, visibleCap),
     [events, visibleCap],
@@ -631,11 +631,11 @@ export function AgentTile({
       };
     }
     if (olderLoadedEventCount > 0) {
-      setVisibleCap((c) => c + TRANSCRIPT_CAP_STEP);
+      setVisibleExpansion((count) => count + TRANSCRIPT_CAP_STEP);
       return;
     }
     await loadOlder();
-    setVisibleCap((c) => c + TRANSCRIPT_CAP_STEP);
+    setVisibleExpansion((count) => count + TRANSCRIPT_CAP_STEP);
   }
 
   useLayoutEffect(() => {
@@ -2289,52 +2289,6 @@ export function latestSessionConfigOptionByIds(
     if (option !== null) return option;
   }
   return null;
-}
-
-type TranscriptWindow = {
-  events: AgentEvent[];
-  hiddenCount: number;
-};
-
-function transcriptWindowFor(
-  events: AgentEvent[],
-  visibleCount: number,
-): TranscriptWindow {
-  if (visibleCount <= 0) {
-    return { events: [], hiddenCount: countRenderableTranscriptEvents(events) };
-  }
-  let rendered = 0;
-  let start = 0;
-  for (let i = events.length - 1; i >= 0; i--) {
-    if (isRenderableTranscriptEvent(events[i])) rendered += 1;
-    if (rendered >= visibleCount) {
-      start = i;
-      break;
-    }
-  }
-  if (rendered < visibleCount) start = 0;
-  return {
-    events: events.slice(start),
-    hiddenCount: countRenderableTranscriptEvents(events.slice(0, start)),
-  };
-}
-
-function countRenderableTranscriptEvents(events: AgentEvent[]): number {
-  let count = 0;
-  for (const event of events) {
-    if (isRenderableTranscriptEvent(event)) count += 1;
-  }
-  return count;
-}
-
-function isRenderableTranscriptEvent(event: AgentEvent): boolean {
-  switch (event.type) {
-    case "session_config_options":
-    case "session_config_changed":
-      return false;
-    default:
-      return true;
-  }
 }
 
 export function sessionConfigChoicesForSelect(

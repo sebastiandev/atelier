@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test useAgentStream.test.mjs",
+    "test": "node --test *.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
