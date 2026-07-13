@@ -1805,12 +1805,25 @@ type ToolDiff = { path: string; old_text: string | null; new_text: string };
 type ToolResultPayload = { content: string; isError: boolean; diff?: ToolDiff | null };
 
 export type RenderUnit =
-  | { kind: "assistant"; key: number; text: string; complete: boolean }
-  | { kind: "thinking"; key: number; text: string; complete: boolean }
+  | {
+      kind: "assistant";
+      key: number;
+      revision: number;
+      text: string;
+      complete: boolean;
+    }
+  | {
+      kind: "thinking";
+      key: number;
+      revision: number;
+      text: string;
+      complete: boolean;
+    }
   | { kind: "user"; key: number; text: string }
   | {
       kind: "tool_call";
       key: number;
+      revision: number;
       name: string;
       args: Record<string, unknown>;
       // Set when a tool_result event matching this call's tool_id is
@@ -1845,10 +1858,10 @@ export type RenderUnit =
 export function groupEvents(events: AgentEvent[]): RenderUnit[] {
   const out: RenderUnit[] = [];
   let pendingAssistant:
-    | { kind: "assistant"; key: number; text: string; complete: boolean }
+    | Extract<RenderUnit, { kind: "assistant" }>
     | null = null;
   let pendingThinking:
-    | { kind: "thinking"; key: number; text: string; complete: boolean }
+    | Extract<RenderUnit, { kind: "thinking" }>
     | null = null;
   // tool_use_ids whose matching tool_result we want to drop, because we
   // already rendered the call in a richer form (e.g. TodoWrite as a
@@ -1872,8 +1885,15 @@ export function groupEvents(events: AgentEvent[]): RenderUnit[] {
       pendingThinking = null;
       if (pendingAssistant) {
         pendingAssistant.text += text;
+        pendingAssistant.revision = ev.seq;
       } else {
-        pendingAssistant = { kind: "assistant", key: ev.seq, text, complete: false };
+        pendingAssistant = {
+          kind: "assistant",
+          key: ev.seq,
+          revision: ev.seq,
+          text,
+          complete: false,
+        };
         out.push(pendingAssistant);
       }
     } else if (ev.type === "message_complete") {
@@ -1882,17 +1902,31 @@ export function groupEvents(events: AgentEvent[]): RenderUnit[] {
       if (pendingAssistant) {
         pendingAssistant.text = text;
         pendingAssistant.complete = true;
+        pendingAssistant.revision = ev.seq;
         pendingAssistant = null;
       } else {
-        out.push({ kind: "assistant", key: ev.seq, text, complete: true });
+        out.push({
+          kind: "assistant",
+          key: ev.seq,
+          revision: ev.seq,
+          text,
+          complete: true,
+        });
       }
     } else if (ev.type === "thinking_delta") {
       const text = stringField(ev, "text");
       pendingAssistant = null;
       if (pendingThinking) {
         pendingThinking.text += text;
+        pendingThinking.revision = ev.seq;
       } else {
-        pendingThinking = { kind: "thinking", key: ev.seq, text, complete: false };
+        pendingThinking = {
+          kind: "thinking",
+          key: ev.seq,
+          revision: ev.seq,
+          text,
+          complete: false,
+        };
         out.push(pendingThinking);
       }
     } else if (ev.type === "thinking_complete") {
@@ -1901,9 +1935,16 @@ export function groupEvents(events: AgentEvent[]): RenderUnit[] {
       if (pendingThinking) {
         pendingThinking.text = text;
         pendingThinking.complete = true;
+        pendingThinking.revision = ev.seq;
         pendingThinking = null;
       } else {
-        out.push({ kind: "thinking", key: ev.seq, text, complete: true });
+        out.push({
+          kind: "thinking",
+          key: ev.seq,
+          revision: ev.seq,
+          text,
+          complete: true,
+        });
       }
     } else if (ev.type === "tool_call" && stringField(ev, "name") === "TodoWrite") {
       pendingAssistant = null;
@@ -1943,6 +1984,7 @@ export function groupEvents(events: AgentEvent[]): RenderUnit[] {
       };
       if (matched) {
         matched.result = payload;
+        matched.revision = ev.seq;
       } else {
         // Orphan: result arrived without a tool_call we recognise
         // (replay race, suppressed-call edge cases). Show standalone so
@@ -1971,7 +2013,10 @@ export function groupEvents(events: AgentEvent[]): RenderUnit[] {
       const tid = stringField(ev, "tool_id");
       const matched = tid ? toolCallByTd.get(tid) : undefined;
       const status = stringField(ev, "status");
-      if (matched && status) matched.status = status;
+      if (matched && status) {
+        matched.status = status;
+        matched.revision = ev.seq;
+      }
     } else if (ev.type === "plan_update") {
       pendingAssistant = null;
       pendingThinking = null;
@@ -2079,6 +2124,7 @@ function renderUnitFor(ev: AgentEvent): RenderUnit | null {
       return {
         kind: "tool_call",
         key: ev.seq,
+        revision: ev.seq,
         name: stringField(ev, "name"),
         args:
           ev.arguments && typeof ev.arguments === "object"
@@ -3061,6 +3107,32 @@ const Unit = memo(function Unit({
         </div>
       );
   }
+}, (previous, next) => {
+  if (
+    previous.agentSlug !== next.agentSlug ||
+    previous.compactionSummaryLoader !== next.compactionSummaryLoader ||
+    previous.unit.kind !== next.unit.kind ||
+    previous.unit.key !== next.unit.key
+  ) {
+    return false;
+  }
+  if ("revision" in previous.unit || "revision" in next.unit) {
+    return (
+      "revision" in previous.unit &&
+      "revision" in next.unit &&
+      previous.unit.revision === next.unit.revision
+    );
+  }
+  if (
+    previous.unit.kind === "permission_resolved" &&
+    next.unit.kind === "permission_resolved"
+  ) {
+    return (
+      previous.unit.decision === next.unit.decision &&
+      previous.unit.tool_name === next.unit.tool_name
+    );
+  }
+  return true;
 });
 
 function ProviderCompactionBoundary({

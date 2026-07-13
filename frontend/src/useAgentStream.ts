@@ -2,6 +2,7 @@ import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 
 import { getTranscriptChunk } from "./api";
 import type { ContextEntry } from "./api";
+import { mergeEvents } from "./mergeEvents";
 
 export type AgentEvent = {
   seq: number;
@@ -92,14 +93,6 @@ function isAgentEvent(value: unknown): value is AgentEvent {
     typeof event.type === "string" &&
     typeof event.ts === "string"
   );
-}
-
-function mergeEvents(existing: AgentEvent[], incoming: AgentEvent[]): AgentEvent[] {
-  if (incoming.length === 0) return existing;
-  const bySeq = new Map<number, AgentEvent>();
-  for (const event of existing) bySeq.set(event.seq, event);
-  for (const event of incoming) bySeq.set(event.seq, event);
-  return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
 }
 
 export function useAgentStream(
