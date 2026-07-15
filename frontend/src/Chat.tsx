@@ -71,6 +71,7 @@ import {
 import { FolderPickerDialog } from "./FolderPickerDialog";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
+import { ProviderAuthPrompt } from "./ProviderAuthPrompt";
 import {
   coerceProviderOptionsForModel,
   modelPickerOptions,
@@ -239,6 +240,9 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     loadOlder,
     history,
     pendingPermissions,
+    providerAuthRequirement,
+    providerAuthAwaitingInput,
+    confirmProviderAuth,
   } = useAgentStream(chatSlug, { resource: "chats" });
 
   async function refresh() {
@@ -403,7 +407,8 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   const grounding = resolveGrounding(chat.grounding, projects, works);
   const workingFolder = resolveWorkingFolder(chat);
   const providerLabel = providerLabelFor(chat.provider);
-  const composerDisabled = streamStatus !== "connected";
+  const composerDisabled =
+    streamStatus !== "connected" || providerAuthRequirement !== null;
 
   return (
     <div className="shell-v3 narrow-left chat-v3">
@@ -514,6 +519,12 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
           />
         )}
         <div className="chat-composer-wrap">
+          {providerAuthRequirement && (
+            <ProviderAuthPrompt
+              requirement={providerAuthRequirement}
+              onConfirm={confirmProviderAuth}
+            />
+          )}
           {pendingPermissions.length > 0 && (
             <PermissionApprovalDialog
               pendingPermissions={pendingPermissions}
@@ -567,12 +578,16 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               <span className="spacer" />
               <LiveEffortSelect
                 events={events}
-                disabled={composerDisabled || streamActive}
+                disabled={
+                  composerDisabled || providerAuthAwaitingInput || streamActive
+                }
                 onChange={sendSessionConfig}
               />
               <LiveFastModeSelect
                 events={events}
-                disabled={composerDisabled || streamActive}
+                disabled={
+                  composerDisabled || providerAuthAwaitingInput || streamActive
+                }
                 onChange={sendSessionConfig}
               />
               {!chat.promoted_to_work_slug && (
@@ -662,6 +677,9 @@ export function ChatTile({
     loadOlder,
     history,
     pendingPermissions,
+    providerAuthRequirement,
+    providerAuthAwaitingInput,
+    confirmProviderAuth,
   } = useAgentStream(chatSlug, { resource: "chats" });
 
   useEffect(() => {
@@ -909,7 +927,8 @@ export function ChatTile({
     ? resolveGrounding(chat.grounding, projects, works)
     : { kind: "none" as const, label: "Loading", sub: "" };
   const showGrounding = grounding.kind !== "work";
-  const composerDisabled = !chat || streamStatus !== "connected";
+  const composerDisabled =
+    !chat || streamStatus !== "connected" || providerAuthRequirement !== null;
   const dotStatus = error
     ? "error"
     : streamActive
@@ -1107,6 +1126,12 @@ export function ChatTile({
             onDecide={sendPermission}
           />
         )}
+        {providerAuthRequirement && (
+          <ProviderAuthPrompt
+            requirement={providerAuthRequirement}
+            onConfirm={confirmProviderAuth}
+          />
+        )}
         <form
           className={`composer chat-tile-composer${activityPhase ? " is-working" : ""}`}
           data-ctx-tone={composerTone}
@@ -1173,12 +1198,16 @@ export function ChatTile({
           <div className="composer-actions">
             <LiveEffortSelect
               events={events}
-              disabled={composerDisabled || streamActive}
+              disabled={
+                composerDisabled || providerAuthAwaitingInput || streamActive
+              }
               onChange={sendSessionConfig}
             />
             <LiveFastModeSelect
               events={events}
-              disabled={composerDisabled || streamActive}
+              disabled={
+                composerDisabled || providerAuthAwaitingInput || streamActive
+              }
               onChange={sendSessionConfig}
             />
             <span className="spacer" />

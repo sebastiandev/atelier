@@ -80,6 +80,8 @@ _RECOVERY_PROMPT = (
 )
 _MAX_RECOVERY_ATTEMPTS_PER_TURN = 8
 _ACP_STDIO_BUFFER_LIMIT_BYTES = 50 * 1024 * 1024
+_AUTHENTICATION_REQUIRED_MESSAGE = "Authentication required"
+_AUTHENTICATION_REQUIRED_CODE = "authentication_required"
 
 # Atelier decision → acceptable ACP option kinds, most-specific first.
 _DECISION_KINDS: dict[PermissionDecisionValue, tuple[str, ...]] = {
@@ -128,6 +130,7 @@ class AcpAdapter:
         argv: Sequence[str],
         *,
         model_label: str | None = None,
+        authentication_recovery_command: str | None = None,
         connect_factory: Any = None,
     ) -> None:
         """``connect_factory`` is the test seam: an async callable
@@ -136,6 +139,7 @@ class AcpAdapter:
         self._config = config
         self._argv = tuple(argv)
         self._model_label = model_label
+        self._authentication_recovery_command = authentication_recovery_command
         self._connect_factory = connect_factory
         self._proc: asyncio.subprocess.Process | None = None
         self._conn: AcpConnection | None = None
@@ -746,8 +750,27 @@ class AcpAdapter:
             except Exception as e:
                 for event in self._mapper.flush_turn():
                     await self._outgoing.put(event)
-                await self._outgoing.put(Error(ts=_now(), message=str(e)))
-                if _is_terminal_connection_error(e):
+                authentication_required = (
+                    self._authentication_recovery_command is not None
+                    and str(e) == _AUTHENTICATION_REQUIRED_MESSAGE
+                )
+                await self._outgoing.put(
+                    Error(
+                        ts=_now(),
+                        message=str(e),
+                        code=(
+                            _AUTHENTICATION_REQUIRED_CODE
+                            if authentication_required
+                            else None
+                        ),
+                        recovery_command=(
+                            self._authentication_recovery_command
+                            if authentication_required
+                            else None
+                        ),
+                    )
+                )
+                if authentication_required or _is_terminal_connection_error(e):
                     self._terminal_error = e
                     await self._outgoing.put(_SHUTDOWN)
                     return

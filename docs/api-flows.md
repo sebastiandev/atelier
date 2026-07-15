@@ -565,6 +565,8 @@ adapter.events()                          supervisor._run_agent
 
 All three adapters use the same outgoing-queue + pump pattern so provider-side callbacks/bridges can interleave events with the provider message stream without blocking. Claude uses `can_use_tool`; Amp gates Bash through the bridge; Codex uses `codex app-server` JSON-RPC approval requests and maps them into Atelier `PermissionRequest` frames. Codex's notification stream is a three-state lifecycle per item (`item/started` → `item/agentMessage/delta` / `item/reasoning/summaryTextDelta` → `item/completed`), wrapped by `turn/started` and `turn/completed` frames the adapter maps onto `StatusChange`/`TurnMetrics`. See `docs/backend.md` → "Tool permissions: the can_use_tool callback flow", "Tool permissions for Amp: the delegate-bridge", and "Tool permissions for Codex: app-server approval callbacks".
 
+For either agent or chat streams, a Claude ACP prompt error matching exactly `Authentication required` emits `{type:"error", code:"authentication_required", recovery_command:"claude auth login"}` and ends the adapter pump (`infrastructure/agents/acp/adapter.py:751`). The supervisor's existing pump-end eviction closes the websocket for retry and rebuilds the provider lazily; confirmation in the browser sends no frame, provider controls remain disabled, and only the next manual `input` starts the replacement process.
+
 ---
 
 ## `POST /api/agents/{slug}/detach`

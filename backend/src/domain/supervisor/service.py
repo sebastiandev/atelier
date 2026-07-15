@@ -950,6 +950,7 @@ def _merge_replay_windows(
 # old transcripts round-trip and old frontend builds never see unknown
 # keys on events they already render.
 _OMIT_WHEN_NONE: dict[str, tuple[str, ...]] = {
+    "error": ("code", "recovery_command"),
     "tool_call": ("kind", "title", "locations"),
     "tool_call_update": ("status", "title", "kind", "locations"),
     "tool_result": ("diff",),

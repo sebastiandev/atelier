@@ -10,6 +10,7 @@ and old frontend builds never see keys they don't know.
 from datetime import UTC, datetime
 
 from src.domain.agents import (
+    Error,
     ModeChange,
     PermissionRequest,
     PlanUpdate,
@@ -22,6 +23,31 @@ from src.domain.supervisor.service import _event_to_dict
 
 UTC_NOW = datetime(2026, 6, 11, 9, 0, tzinfo=UTC)
 ISO_NOW = UTC_NOW.isoformat()
+
+
+def test_legacy_error_shape_is_unchanged() -> None:
+    event = Error(ts=UTC_NOW, message="provider rejected turn")
+    assert _event_to_dict(event) == {
+        "type": "error",
+        "ts": ISO_NOW,
+        "message": "provider rejected turn",
+    }
+
+
+def test_enriched_error_includes_recovery_fields() -> None:
+    event = Error(
+        ts=UTC_NOW,
+        message="Authentication required",
+        code="authentication_required",
+        recovery_command="claude auth login",
+    )
+    assert _event_to_dict(event) == {
+        "type": "error",
+        "ts": ISO_NOW,
+        "message": "Authentication required",
+        "code": "authentication_required",
+        "recovery_command": "claude auth login",
+    }
 
 
 def test_legacy_tool_call_shape_is_unchanged() -> None:

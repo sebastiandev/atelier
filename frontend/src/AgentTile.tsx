@@ -48,6 +48,7 @@ import {
 } from "./pasteImages";
 import { shortenPath } from "./pathFormat";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
+import { ProviderAuthPrompt } from "./ProviderAuthPrompt";
 import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
 import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
@@ -180,6 +181,9 @@ export function AgentTile({
     history,
     pendingPermissions,
     pendingHandoff,
+    providerAuthRequirement,
+    providerAuthAwaitingInput,
+    confirmProviderAuth,
   } = useAgentStream(agentSlug, {
     initialReplayLimit: AGENT_INITIAL_REPLAY_LIMIT,
   });
@@ -916,7 +920,8 @@ export function AgentTile({
   // Send only works when the WS is OPEN — otherwise sendInput silently
   // no-ops. Disable the composer for every non-connected state so the
   // user never thinks a click landed.
-  const composerDisabled = status !== "connected";
+  const composerDisabled =
+    status !== "connected" || providerAuthRequirement !== null;
   const sendDisabled = composerDisabled || compacting;
   const sessionModelValue = liveSessionModelValue;
   const sessionModelLabel =
@@ -928,7 +933,10 @@ export function AgentTile({
     sessionModelValue !== null &&
     sessionModelConfig.choices.length > 0;
   const sessionModelDisabled =
-    composerDisabled || isCurrentlyActive || compactionBlocked;
+    composerDisabled ||
+    providerAuthAwaitingInput ||
+    isCurrentlyActive ||
+    compactionBlocked;
   const sessionEffortDisabled = sessionModelDisabled;
   const sessionFastModeDisabled = sessionModelDisabled;
   const sessionModelTitle = sessionModelLabel
@@ -1395,6 +1403,12 @@ export function AgentTile({
                 setHandoffSwitching(false);
               }
             }}
+          />
+        )}
+        {providerAuthRequirement && (
+          <ProviderAuthPrompt
+            requirement={providerAuthRequirement}
+            onConfirm={confirmProviderAuth}
           />
         )}
         <form

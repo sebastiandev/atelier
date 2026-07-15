@@ -159,7 +159,12 @@ class FakeConnection:
         return [kw for n, kw in self.calls if n == name]
 
 
-def _build(config: Any = None, **fake_kw: Any) -> tuple[AcpAdapter, FakeConnection]:
+def _build(
+    config: Any = None,
+    *,
+    authentication_recovery_command: str | None = None,
+    **fake_kw: Any,
+) -> tuple[AcpAdapter, FakeConnection]:
     fake = FakeConnection(**fake_kw)
 
     async def factory(adapter: AcpAdapter) -> FakeConnection:
@@ -170,6 +175,7 @@ def _build(config: Any = None, **fake_kw: Any) -> tuple[AcpAdapter, FakeConnecti
         config or _config(),
         argv=("fake-agent",),
         model_label="test-model",
+        authentication_recovery_command=authentication_recovery_command,
         connect_factory=factory,
     )
     return adapter, fake
@@ -512,6 +518,35 @@ def test_refusal_stop_reason_surfaces_error() -> None:
     asyncio.run(scenario())
 
 
+def test_authentication_required_prompt_terminates_with_recovery_metadata() -> None:
+    async def scenario() -> None:
+        async def auth_prompt(fake: FakeConnection, session_id: str) -> Any:
+            raise RuntimeError("Authentication required")
+
+        adapter, _fake = _build(
+            authentication_recovery_command="claude auth login",
+            prompt_script=[auth_prompt],
+        )
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        await adapter.send_input("go")
+        events = [event async for event in adapter.events()]
+
+        (error,) = [event for event in events if isinstance(event, Error)]
+        assert error.message == "Authentication required"
+        assert error.code == "authentication_required"
+        assert error.recovery_command == "claude auth login"
+        assert not any(
+            isinstance(event, StatusChange) and event.status == "idle"
+            for event in events
+        )
+        with pytest.raises(RuntimeError, match="Authentication required"):
+            await adapter.send_input("again")
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
 def test_connection_closed_prompt_terminates_event_stream() -> None:
     async def scenario() -> None:
         async def closed_prompt(fake: FakeConnection, session_id: str) -> Any:
@@ -662,12 +697,24 @@ def test_restored_session_connection_loop_falls_back_to_fresh_session() -> None:
     asyncio.run(scenario())
 
 
-def test_non_connection_prompt_error_keeps_event_stream_open() -> None:
+@pytest.mark.parametrize(
+    ("message", "recovery_command"),
+    [
+        ("Authentication required ", "claude auth login"),
+        ("Authentication required", None),
+    ],
+)
+def test_unconfigured_or_non_exact_auth_error_keeps_event_stream_open(
+    message: str, recovery_command: str | None
+) -> None:
     async def scenario() -> None:
         async def bad_turn(fake: FakeConnection, session_id: str) -> Any:
-            raise RuntimeError("provider rejected turn")
+            raise RuntimeError(message)
 
-        adapter, _fake = _build(prompt_script=[bad_turn, None])
+        adapter, _fake = _build(
+            authentication_recovery_command=recovery_command,
+            prompt_script=[bad_turn, None],
+        )
         await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
 
         events: list[Any] = []
@@ -679,7 +726,10 @@ def test_non_connection_prompt_error_keeps_event_stream_open() -> None:
                 break
 
         assert any(
-            isinstance(e, Error) and e.message == "provider rejected turn"
+            isinstance(e, Error)
+            and e.message == message
+            and e.code is None
+            and e.recovery_command is None
             for e in events
         )
 

@@ -4256,6 +4256,62 @@ h5.md-h {
   }
 }
 
+/* Provider authentication recovery ------------------------------------- */
+
+.provider-auth-prompt {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 0.5rem 1rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid color-mix(in oklch, var(--warn) 45%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--warn) 8%, var(--bg-1));
+}
+
+.chat-composer-wrap .provider-auth-prompt {
+  max-width: 720px;
+  margin: 0 auto 0.5rem;
+}
+
+.provider-auth-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0.55rem;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.provider-auth-copy strong {
+  color: var(--fg);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.provider-auth-copy code {
+  padding: 2px 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+@media (max-width: 680px) {
+  .provider-auth-prompt,
+  .provider-auth-copy {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .provider-auth-prompt .btn {
+    align-self: flex-end;
+  }
+}
+
 /* Handoff prompt — Amp auto-handoff offer. Sits in the same slot as the
    permission prompts (above the composer); shares the alert-card look
    but uses a neutral accent so it doesn't read as a security warning. */

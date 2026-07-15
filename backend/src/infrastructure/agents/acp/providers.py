@@ -40,7 +40,12 @@ OPENCODE_ARGV: tuple[str, ...] = ("opencode", "acp")
 
 @build_adapter.register
 def _build_claude_acp(config: ClaudeAcpAgentConfig, settings: Settings) -> AgentAdapter:
-    return AcpAdapter(config, CLAUDE_ACP_ARGV, model_label=config.model.value)
+    return AcpAdapter(
+        config,
+        CLAUDE_ACP_ARGV,
+        model_label=config.model.value,
+        authentication_recovery_command="claude auth login",
+    )
 
 
 @build_adapter.register

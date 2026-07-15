@@ -215,11 +215,18 @@ class ArtifactMarker:
 
 @dataclass(frozen=True, kw_only=True)
 class Error:
-    """Adapter or upstream SDK signalled an error."""
+    """Adapter or upstream SDK signalled an error.
+
+    ``code`` and ``recovery_command`` are optional recovery metadata for
+    errors the user can resolve outside Atelier. The serializer omits both
+    when unset so existing adapters keep their legacy wire shape.
+    """
 
     type: Literal["error"] = "error"
     ts: datetime
     message: str
+    code: str | None = None
+    recovery_command: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)

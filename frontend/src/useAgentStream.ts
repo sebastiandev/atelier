@@ -3,6 +3,7 @@ import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { getTranscriptChunk } from "./api";
 import type { ContextEntry } from "./api";
 import { mergeEvents } from "./mergeEvents";
+import { deriveProviderAuthRequirement } from "./providerAuth";
 
 export type AgentEvent = {
   seq: number;
@@ -105,6 +106,8 @@ export function useAgentStream(
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [history, setHistory] = useState<StreamHistoryState>(initialHistoryState);
+  const [confirmedProviderAuthSeq, setConfirmedProviderAuthSeq] = useState(0);
+  const [providerAuthAwaitingInput, setProviderAuthAwaitingInput] = useState(false);
   const historyRef = useRef<StreamHistoryState>(initialHistoryState());
   const wsRef = useRef<WebSocket | null>(null);
   const lastSeqRef = useRef(0);
@@ -182,6 +185,8 @@ export function useAgentStream(
     setEvents([]);
     setStatus("connecting");
     setHistoryState(initialHistoryState());
+    setConfirmedProviderAuthSeq(0);
+    setProviderAuthAwaitingInput(false);
     lastSeqRef.current = 0;
     clientEventOrdinalRef.current = 0;
     retryAttemptRef.current = 0;
@@ -326,6 +331,7 @@ export function useAgentStream(
       const frame: Record<string, unknown> = { type: "input", text };
       if (contexts && contexts.length > 0) frame.contexts = contexts;
       ws.send(JSON.stringify(frame));
+      setProviderAuthAwaitingInput(false);
     }
   }
 
@@ -411,6 +417,18 @@ export function useAgentStream(
     return latest;
   }, [events]);
 
+  const providerAuthRequirement = useMemo(
+    () => deriveProviderAuthRequirement(events, confirmedProviderAuthSeq),
+    [events, confirmedProviderAuthSeq],
+  );
+
+  function confirmProviderAuth() {
+    if (providerAuthRequirement) {
+      setConfirmedProviderAuthSeq(providerAuthRequirement.seq);
+      setProviderAuthAwaitingInput(true);
+    }
+  }
+
   return {
     events,
     status,
@@ -423,5 +441,8 @@ export function useAgentStream(
     history,
     pendingPermissions,
     pendingHandoff,
+    providerAuthRequirement,
+    providerAuthAwaitingInput,
+    confirmProviderAuth,
   };
 }
