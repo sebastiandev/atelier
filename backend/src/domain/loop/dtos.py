@@ -22,6 +22,17 @@ class LoopStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class LoopRunStatus(StrEnum):
+    """Aggregate execution status shared by Loop and Planning projections."""
+
+    RUNNING = "running"
+    NEEDS_ATTENTION = "needs_attention"
+    WAITING_APPROVAL = "waiting_approval"
+    BLOCKED = "blocked"
+    COMPLETED_PENDING_REVIEW = "completed_pending_review"
+    ACCEPTED = "accepted"
+
+
 class LoopStepStatus(StrEnum):
     """Durable lifecycle state for one stage in a loop run."""
 
@@ -32,6 +43,7 @@ class LoopStepStatus(StrEnum):
     CHANGES_REQUESTED = "changes_requested"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    SKIPPED = "skipped"
 
 
 class LoopTargetKind(StrEnum):
@@ -41,17 +53,21 @@ class LoopTargetKind(StrEnum):
     OBJECTIVE = "objective"
 
 
-class LoopReportSource(StrEnum):
-    MCP_TOOL = "mcp_tool"
-    TRANSCRIPT_MARKDOWN = "transcript_markdown"
-    MANUAL = "manual"
+class LoopRunKind(StrEnum):
+    """Why an objective run was started."""
+
+    INITIAL = "initial"
+    AMEND = "amend"
+    VERIFY = "verify"
 
 
-class LoopAssessmentStatus(StrEnum):
-    PASS = "pass"
-    NEEDS_AGENT = "needs_agent"
-    BLOCKED_USER = "blocked_user"
-    FAIL = "fail"
+class LoopFailureKind(StrEnum):
+    """Machine-readable cause of a terminal loop failure."""
+
+    PROVIDER_RUNTIME = "provider_runtime"
+    TIMEOUT = "timeout"
+    INVALID_REPORT = "invalid_report"
+    STAGE_OUTCOME = "stage_outcome"
 
 
 class LoopDefinitionScope(StrEnum):
@@ -69,6 +85,14 @@ class LoopStepKind(StrEnum):
     AGENT_REVIEW = "agent_review"
     DETERMINISTIC_CHECK = "deterministic_check"
     USER_APPROVAL = "user_approval"
+    PR = "pr"
+
+
+class StageDefinitionScope(StrEnum):
+    """Where a reusable standalone stage definition is owned."""
+
+    BUILTIN = "builtin"
+    REPOSITORY = "repo"
 
 
 class LoopPermission(StrEnum):
@@ -96,7 +120,17 @@ class LoopContextKind(StrEnum):
     PREVIOUS_REPORT = "previous_report"
     FILES = "files"
     FOLDER = "folder"
+    NOTE = "note"
     SHARED_CONTEXT = "shared_context"
+
+
+class LoopBriefContextKind(StrEnum):
+    """Adhoc context kinds accepted from a Work's run brief."""
+
+    FILE = "file"
+    FOLDER = "folder"
+    URL = "url"
+    NOTE = "note"
 
 
 class LoopOutcome(StrEnum):
@@ -108,6 +142,20 @@ class LoopOutcome(StrEnum):
     FAILED = "failed"
 
 
+class LoopReviewGateMode(StrEnum):
+    """Who decides whether review findings return to implementation."""
+
+    AUTOMATIC = "automatic"
+    HUMAN_CHECK = "human_check"
+
+
+class LoopReviewDecisionKind(StrEnum):
+    """A human decision made at a held review gate."""
+
+    SEND_BACK = "send_back"
+    APPROVE_AS_IS = "approve_as_is"
+
+
 class LoopFindingSeverity(StrEnum):
     """Severity assigned by an independent review stage."""
 
@@ -115,6 +163,15 @@ class LoopFindingSeverity(StrEnum):
     MEDIUM = "medium"
     LOW = "low"
     RESOLVED = "resolved"
+
+
+@dataclass(frozen=True)
+class LoopReviewDecision:
+    """The findings and instruction selected at one held review occurrence."""
+
+    decision: LoopReviewDecisionKind
+    enforced_findings: tuple[int, ...] = ()
+    instruction: str = ""
 
 
 @dataclass(frozen=True)
@@ -200,6 +257,92 @@ class LoopAgentPolicy:
     provider: str | None = None
     model: str | None = None
     effort: str | None = None
+    fast: bool | None = None
+    approved_command_prefixes: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class LoopBriefAgent:
+    """Per-run execution overrides for one agent-backed stage."""
+
+    provider: str | None = None
+    model: str | None = None
+    options: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class LoopReviewGate:
+    """Definition-owned policy for one changes-requested return edge."""
+
+    mode: LoopReviewGateMode = LoopReviewGateMode.AUTOMATIC
+    max_passes: int = 3
+    locked: bool = False
+
+
+@dataclass(frozen=True)
+class LoopPrConfig:
+    """Create-PR inputs persisted with a reusable stage or run snapshot."""
+
+    name_template: str = "{goal} - {work-id}"
+    description_mode: str = "automatic"
+    description_instructions: str = ""
+    manual_body: str = ""
+    status: str = "draft"
+    base_branch: str = "master"
+    branch_name: str | None = None
+
+
+@dataclass(frozen=True)
+class StageDefinitionRef:
+    """Revision provenance for one reusable stage linked into a loop."""
+
+    definition_id: str
+    revision: str
+
+
+@dataclass(frozen=True)
+class StageOverrides:
+    """Sparse loop-local changes layered over one reusable stage definition."""
+
+    name: str | None = None
+    instructions: str | None = None
+    context: tuple[LoopContextReference, ...] | None = None
+    agent: LoopAgentPolicy | None = None
+    report_contract: str | None = None
+    retry: LoopRetryPolicy | None = None
+    check_adapter: str | None = None
+    check_command: tuple[str, ...] | None = None
+    note_required: bool | None = None
+    review_gate: LoopReviewGate | None = None
+    pr_config: LoopPrConfig | None = None
+
+
+@dataclass(frozen=True)
+class LoopBriefContext:
+    """One Work-owned context reference attached to a stage brief."""
+
+    kind: LoopBriefContextKind
+    value: str
+
+
+@dataclass(frozen=True)
+class LoopStageBrief:
+    """Work-owned notes, context, and execution overrides for one stage."""
+
+    stage_id: str
+    note: str = ""
+    context: tuple[LoopBriefContext, ...] = ()
+    agent: LoopBriefAgent | None = None
+    review_gate: LoopReviewGateMode | None = None
+    approved_command_prefixes: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class LoopBrief:
+    """Task-specific input saved on a Work and pinned by each run."""
+
+    goal: str
+    stages: tuple[LoopStageBrief, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -225,6 +368,32 @@ class LoopStepDefinition:
     transitions: dict[LoopOutcome, str | None] = field(default_factory=dict)
     check_adapter: str | None = None
     check_command: tuple[str, ...] = ()
+    note_required: bool | None = None
+    review_gate: LoopReviewGate | None = None
+    pr_config: LoopPrConfig | None = None
+    stage_ref: StageDefinitionRef | None = None
+    overrides: StageOverrides | None = None
+
+
+@dataclass(frozen=True)
+class StageDefinition:
+    """A reusable loop-independent stage and its declared outcomes."""
+
+    definition_id: str
+    name: str
+    stage: LoopStepDefinition
+    outcomes: tuple[LoopOutcome, ...]
+    description: str = ""
+    scope: StageDefinitionScope = StageDefinitionScope.BUILTIN
+    revision: str = ""
+    forked_from: str | None = None
+    used_by: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+
+    @property
+    def valid(self) -> bool:
+        """Return whether standalone-stage validation succeeded."""
+        return not self.errors
 
 
 @dataclass(frozen=True)
@@ -241,19 +410,6 @@ class LoopRun:
     launch_packet_ref: str | None = None
     latest_report_id: str | None = None
     latest_assessment_id: str | None = None
-
-
-@dataclass(frozen=True)
-class LoopReport:
-    """Structured report submitted by an agent, tool, transcript, or user."""
-
-    report_id: str
-    loop_run_id: str
-    source: LoopReportSource
-    fields: dict[str, str]
-    submitted_at: str
-    submitted_by: str | None = None
-    raw_ref: str | None = None
 
 
 @dataclass(frozen=True)
@@ -308,6 +464,7 @@ class LoopCheckRequest:
     workdir: Path
     argv: tuple[str, ...]
     timeout_seconds: float
+    changed_files: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -320,23 +477,12 @@ class LoopCheckResult:
     timed_out: bool = False
 
 
-@dataclass(frozen=True)
-class LoopAssessment:
-    """Backend decision about whether a loop report is complete enough."""
-
-    assessment_id: str
-    loop_run_id: str
-    status: LoopAssessmentStatus
-    findings: list[str] = field(default_factory=list)
-    next_prompt: str = ""
-    created_at: str = ""
-    assessor: str = "deterministic"
-
-
 __all__ = [
     "LoopAgentPolicy",
-    "LoopAssessment",
-    "LoopAssessmentStatus",
+    "LoopBrief",
+    "LoopBriefAgent",
+    "LoopBriefContext",
+    "LoopBriefContextKind",
     "LoopChangedFile",
     "LoopCheckRequest",
     "LoopCheckResult",
@@ -351,17 +497,25 @@ __all__ = [
     "LoopFindingSeverity",
     "LoopOutcome",
     "LoopPermission",
-    "LoopReport",
+    "LoopPrConfig",
     "LoopReportField",
     "LoopReportSchema",
-    "LoopReportSource",
     "LoopRetryPolicy",
+    "LoopReviewGate",
+    "LoopReviewGateMode",
     "LoopRun",
+    "LoopRunKind",
+    "LoopRunStatus",
     "LoopSessionPolicy",
+    "LoopStageBrief",
     "LoopStageReport",
     "LoopStatus",
     "LoopStepDefinition",
     "LoopStepKind",
     "LoopStepStatus",
     "LoopTargetKind",
+    "StageDefinition",
+    "StageDefinitionRef",
+    "StageDefinitionScope",
+    "StageOverrides",
 ]

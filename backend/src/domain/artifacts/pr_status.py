@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
+from src.domain.artifacts.models import PrStatus
 from src.domain.artifacts.status import PR_STATUSES
 
 
@@ -98,7 +99,121 @@ class PrStateFetcher(Protocol):
 
     async def __call__(
         self, ref: PrRef, *, if_none_match: str | None = None
-    ) -> "FetchedPrState | None": ...
+    ) -> FetchedPrState | None: ...
+
+
+PrCheckState = Literal["none", "pending", "passed", "failed"]
+PrReviewState = Literal["none", "pending", "approved", "changes_requested"]
+PrCommentKind = Literal["conversation", "review"]
+
+
+@dataclass(frozen=True)
+class PrCheckSummary:
+    """Aggregate state and counts for a pull request's checks."""
+
+    state: PrCheckState
+    total: int
+    passed: int
+    failed: int
+    pending: int
+
+
+@dataclass(frozen=True)
+class PrComment:
+    """A PR conversation or inline review comment.
+
+    ``reply_target_id`` is the provider-owned PR or review-thread node
+    used by the gateway to post a contextual reply.
+    """
+
+    id: str
+    author: str
+    location: str | None
+    body: str
+    created_at: str
+    url: str
+    kind: PrCommentKind
+    reply_target_id: str
+    is_viewer: bool = False
+
+
+@dataclass(frozen=True)
+class PrLifecycle:
+    """Remote lifecycle snapshot used by the Create PR stage."""
+
+    status: PrStatus
+    checks: PrCheckSummary
+    review_state: PrReviewState
+    comments: tuple[PrComment, ...]
+    title: str = ""
+    head_branch: str = ""
+    base_branch: str = ""
+
+
+@dataclass(frozen=True)
+class FetchedPrLifecycle:
+    """Conditional lifecycle fetch result.
+
+    ``lifecycle`` is absent when ``not_modified`` is true.
+    """
+
+    lifecycle: PrLifecycle | None
+    etag: str | None
+    not_modified: bool
+
+
+class PrLifecycleGateway(Protocol):
+    """Read a PR lifecycle and reply to one of its comments."""
+
+    async def fetch(
+        self,
+        ref: PrRef,
+        *,
+        if_none_match: str | None = None,
+        force: bool = False,
+    ) -> FetchedPrLifecycle | None: ...
+
+    async def reply(self, ref: PrRef, comment: PrComment, body: str) -> PrComment | None: ...
+
+
+async def fetch_pr_lifecycle(
+    gateway: PrLifecycleGateway,
+    ref: PrRef,
+    *,
+    if_none_match: str | None = None,
+    force: bool = False,
+) -> FetchedPrLifecycle | None:
+    """Fetch the latest PR lifecycle through its provider gateway.
+
+    Preconditions: ``ref`` identifies a positive pull-request number.
+    Postconditions: a forced request bypasses any supplied cache validator.
+    """
+    if ref.number <= 0:
+        raise ValueError("pull-request number must be positive")
+    return await gateway.fetch(
+        ref,
+        if_none_match=None if force else if_none_match,
+        force=force,
+    )
+
+
+async def reply_to_pr_comment(
+    gateway: PrLifecycleGateway,
+    ref: PrRef,
+    comment: PrComment,
+    body: str,
+) -> PrComment | None:
+    """Post a contextual reply through the provider gateway.
+
+    Preconditions: ``body`` contains non-whitespace text and the comment has
+    a provider reply target. Postconditions: the original comment is unchanged.
+    """
+    reply = body.strip()
+    if not reply:
+        raise ValueError("reply body must not be empty")
+    if not comment.reply_target_id:
+        raise ValueError("comment has no reply target")
+    return await gateway.reply(ref, comment, reply)
 
 
 def is_terminal_pr_status(status: str) -> bool:
@@ -113,9 +228,19 @@ def is_terminal_pr_status(status: str) -> bool:
 
 __all__ = [
     "PR_STATUSES",
+    "FetchedPrLifecycle",
     "FetchedPrState",
+    "PrCheckState",
+    "PrCheckSummary",
+    "PrComment",
+    "PrCommentKind",
+    "PrLifecycle",
+    "PrLifecycleGateway",
     "PrRef",
+    "PrReviewState",
     "PrStateFetcher",
+    "fetch_pr_lifecycle",
     "is_terminal_pr_status",
     "parse_pr_url",
+    "reply_to_pr_comment",
 ]

@@ -36,6 +36,7 @@ class ResumeAgentRequest:
 
     work_slug: str
     agent_slug: str
+    fresh_session: bool = False
 
 
 class AgentNotFound(ValueError):
@@ -77,7 +78,7 @@ async def resume_agent(
 
     workdir = worktree_manager.ensure(
         work_slug=req.work_slug,
-        agent_slug=req.agent_slug,
+        agent_slug=agent.worktree_slug or req.agent_slug,
         source=agent.folder,
     )
 
@@ -86,7 +87,7 @@ async def resume_agent(
         provisioner=share_provisioner,
         project_slug=record.work.project_slug,
         work_slug=req.work_slug,
-        agent_slug=req.agent_slug,
+        agent_slug=agent.worktree_slug or req.agent_slug,
     )
 
     common = CommonAgentConfig(
@@ -107,7 +108,7 @@ async def resume_agent(
         workdir=common.workdir,
         model=agent.model,
         system_prompt=common.system_prompt,
-        session_id=agent.session_id,
+        session_id=None if req.fresh_session else agent.session_id,
     )
 
     if agent.status == AgentStatus.DETACHED:
@@ -169,7 +170,7 @@ async def catch_up_cli_events(
         return False
     workdir = worktree_manager.ensure(
         work_slug=work_slug,
-        agent_slug=agent_slug,
+        agent_slug=agent.worktree_slug or agent_slug,
         source=agent.folder,
     )
     await asyncio.to_thread(

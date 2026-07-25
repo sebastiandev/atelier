@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from src.infrastructure.git.branches import list_branches
+from src.infrastructure.git.branches import branch_state, list_branches
 
 router = APIRouter()
 
@@ -21,6 +21,9 @@ router = APIRouter()
 class BranchListing(BaseModel):
     path: str
     branches: list[str]
+    is_git_repo: bool
+    branch: str | None = None
+    detached: bool
 
 
 @router.get("/git/branches", response_model=BranchListing)
@@ -30,4 +33,11 @@ def git_branches(path: str = Query(min_length=1)) -> BranchListing:
         raise HTTPException(
             status_code=400, detail="path must be absolute (or start with ~)"
         )
-    return BranchListing(path=str(expanded), branches=list_branches(expanded))
+    state = branch_state(expanded)
+    return BranchListing(
+        path=str(expanded),
+        branches=list_branches(expanded),
+        is_git_repo=state.is_git_repo,
+        branch=state.branch,
+        detached=state.detached,
+    )

@@ -19,12 +19,16 @@ import {
   deriveActivityPhase,
   groupEvents,
   isAgentActive,
+  isTurnOpen,
   latestEventSeq,
   labelForSessionConfigValue,
   latestSessionConfigOption,
   latestSessionConfigOptionByIds,
   latestMetrics,
+  SessionFastToggle,
+  StalledRuntimeBanner,
   sessionMetrics,
+  useStalledTurn,
 } from "./AgentTile";
 import {
   type ChatDetail,
@@ -49,6 +53,7 @@ import {
   listWorks,
   patchChat,
   promoteChat,
+  reconnectChat,
 } from "./api";
 import {
   ChatTileComposer,
@@ -89,6 +94,8 @@ import {
   useAgentStream,
 } from "./useAgentStream";
 
+const CHAT_COMPOSER_MAX_HEIGHT = 200;
+
 export function ChatView({ chatSlug }: { chatSlug: string }) {
   const [chat, setChat] = useState<ChatDetail | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -101,8 +108,19 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     useState<ChatCompactionDialogState | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastRuntimeSeqRef = useRef(0);
+  useAutosizeTextarea(textareaRef, draft);
   const { byName: providersByName } = useProviderDescriptors();
+  const linkedWorkSlug =
+    chat?.promoted_to_work_slug ??
+    (chat?.grounding?.kind === "work" ? chat.grounding.ref : null);
+  const readOnly = Boolean(
+    linkedWorkSlug &&
+      works.some(
+        (work) => work.slug === linkedWorkSlug && work.status !== "active",
+      ),
+  );
   const {
     events,
     status: streamStatus,
@@ -112,7 +130,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     sendSessionConfig,
     sendSessionConfigRefresh,
     pendingPermissions,
-  } = useAgentStream(chatSlug, { resource: "chats" });
+  } = useAgentStream(chatSlug, { resource: "chats", readOnly });
 
   async function refresh() {
     try {
@@ -159,6 +177,8 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   const displayEvents = useMemo(() => chatDisplayEvents(events), [events]);
   const runtimeUnits = useMemo(() => groupEvents(displayEvents), [displayEvents]);
   const isActive = isAgentActive(events);
+  const turnOpen = useMemo(() => isTurnOpen(events), [events]);
+  const stalled = useStalledTurn(events, turnOpen);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const activityPhase = useMemo(
@@ -210,7 +230,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   );
 
   function send() {
-    if (compacting) return;
+    if (readOnly || compacting) return;
     const body = draft.trim();
     if (!body || !chat) return;
     sendInput(body);
@@ -218,7 +238,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   }
 
   async function compactCurrentChat() {
-    if (!chat || compacting || isActive) return;
+    if (readOnly || !chat || compacting || isActive) return;
     setCompacting(true);
     setCompactDialog((current) =>
       current
@@ -258,8 +278,9 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   const grounding = resolveGrounding(chat.grounding, projects, works);
   const workingFolder = resolveWorkingFolder(chat);
   const providerLabel = providerLabelFor(chat.provider);
+  const discussionOnly = chat.discussion_only === true;
   const composerDisabled =
-    streamStatus !== "connected" || compacting || compactDialog !== null;
+    readOnly || streamStatus !== "connected" || compacting || compactDialog !== null;
 
   return (
     <div className="shell-v3 narrow-left chat-v3 has-topbar">
@@ -273,7 +294,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
       />
       <aside className="shell-left chat-rail">
         <div className="chat-hero">
-          <div className="kind-line"><ChatIcon size={11} /> exploratory chat · {chat.slug}</div>
+          <div className="kind-line"><ChatIcon size={11} /> {discussionOnly ? "run discussion" : "exploratory chat"} · {chat.slug}</div>
           <div className="title">{chat.title}</div>
         </div>
         <div className="v3-rule flush" />
@@ -293,7 +314,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             <span className="cm-prov">{providerLabel}</span>
             <span className="cm-model mono">{displayModel}</span>
           </div>
-          <div className="chat-rail-action">
+          {(chat.promoted_to_work_slug || (!discussionOnly && !readOnly)) && <div className="chat-rail-action">
             {chat.promoted_to_work_slug ? (
               <a className="btn" href={`/works/${chat.promoted_to_work_slug}`}>
                 <SparkIcon size={12} /> Open {chat.promoted_to_work_slug}
@@ -307,11 +328,12 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               {chat.promoted_to_work_slug ? "this chat seeded a work unit" : "turn this thread into a tracked work unit"}
             </div>
             {compactError && <div className="form-error compact">{compactError}</div>}
-          </div>
+          </div>}
         </div>
       </aside>
 
       <main className="shell-right chat-right">
+        {discussionOnly && <DiscussionOnlyNotice />}
         <div className="chat-stream" ref={streamRef}>
           <div className="chat-reading">
             <div className="chat-opening">
@@ -342,7 +364,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             activityPhase={activityPhase}
             context={contextSnapshot}
             compacting={compacting}
-            onCompact={() =>
+            onCompact={readOnly ? undefined : () =>
               setCompactDialog({
                 phase: "confirm",
                 context: contextSnapshot,
@@ -353,7 +375,12 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
           />
         )}
         <div className="chat-composer-wrap">
-          {pendingPermissions.length > 0 && (
+          <StalledRuntimeBanner
+            title="Chat appears stalled"
+            visible={!readOnly && stalled}
+            onReconnect={() => reconnectChat(chat.slug)}
+          />
+          {!readOnly && !discussionOnly && pendingPermissions.length > 0 && (
             <PermissionApprovalDialog
               pendingPermissions={pendingPermissions}
               onDecide={sendPermission}
@@ -362,6 +389,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
           <div className="chat-composer">
             <ChatContextGauge context={contextSnapshot} />
             <textarea
+              ref={textareaRef}
               rows={1}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -375,7 +403,11 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
                   sendStop();
                 }
               }}
-              placeholder={`Message ${displayModel}...`}
+              placeholder={
+                readOnly
+                  ? "Work completed - reopen to continue"
+                  : `Message ${displayModel}...`
+              }
               disabled={composerDisabled}
             />
             <div className="row">
@@ -393,8 +425,14 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
                 disabled={composerDisabled || isActive}
                 onChange={sendSessionConfig}
               />
+              <SessionFastToggle
+                events={events}
+                disabled={composerDisabled || isActive}
+                onChange={sendSessionConfig}
+                fallbackValue={chat?.options?.["fast-mode"]}
+              />
               <span className="spacer" />
-              {!chat.promoted_to_work_slug && (
+              {!readOnly && !discussionOnly && !chat.promoted_to_work_slug && (
                 <button className="btn sm" onClick={() => setPromoteOpen(true)}>
                   <SparkIcon size={11} /> Start work
                 </button>
@@ -411,7 +449,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
         </div>
       </main>
 
-      {promoteOpen && (
+      {!readOnly && promoteOpen && !discussionOnly && (
         <PromoteChatModal
           chat={chat}
           projects={projects}
@@ -448,6 +486,7 @@ export function ChatTile({
   onOpenPlan,
   openPlanLabel = "Open plan",
   openPlanDisabled = false,
+  readOnly = false,
 }: {
   chatSlug: string;
   chatSummary?: ChatSummary;
@@ -463,6 +502,7 @@ export function ChatTile({
   onOpenPlan?: () => void;
   openPlanLabel?: string;
   openPlanDisabled?: boolean;
+  readOnly?: boolean;
 }) {
   const [chat, setChat] = useState<ChatDetail | null>(null);
   const [draft, setDraft] = useState("");
@@ -485,6 +525,7 @@ export function ChatTile({
   const mentionOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const lastSummarySeqRef = useRef(0);
+  useAutosizeTextarea(textareaRef, draft);
   const dragHandle = useDragHandle();
   const { byName: providersByName } = useProviderDescriptors();
   const {
@@ -496,7 +537,7 @@ export function ChatTile({
     sendSessionConfig,
     sendSessionConfigRefresh,
     pendingPermissions,
-  } = useAgentStream(chatSlug, { resource: "chats" });
+  } = useAgentStream(chatSlug, { resource: "chats", readOnly });
 
   useEffect(() => {
     let cancelled = false;
@@ -543,6 +584,7 @@ export function ChatTile({
         current.updated_at === chatSummary.updated_at &&
         current.working_directory === chatSummary.working_directory &&
         current.promoted_to_work_slug === chatSummary.promoted_to_work_slug &&
+        Boolean(current.discussion_only) === Boolean(chatSummary.discussion_only) &&
         sameReadiness
       ) {
         return current;
@@ -555,6 +597,7 @@ export function ChatTile({
         grounding: chatSummary.grounding,
         working_directory: chatSummary.working_directory,
         promoted_to_work_slug: chatSummary.promoted_to_work_slug,
+        discussion_only: chatSummary.discussion_only,
         planning_readiness: chatSummary.planning_readiness,
       };
     });
@@ -580,6 +623,8 @@ export function ChatTile({
   const displayEvents = useMemo(() => chatDisplayEvents(events), [events]);
   const runtimeUnits = useMemo(() => groupEvents(displayEvents), [displayEvents]);
   const isActive = isAgentActive(events);
+  const turnOpen = useMemo(() => isTurnOpen(events), [events]);
+  const stalled = useStalledTurn(events, turnOpen);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const activityPhase = useMemo(
@@ -697,7 +742,7 @@ export function ChatTile({
   });
 
   function send() {
-    if (compacting) return;
+    if (readOnly || compacting) return;
     if (!chat) return;
     const body = draft.trim();
     if (!body) return;
@@ -747,7 +792,7 @@ export function ChatTile({
   }
 
   async function startAgent() {
-    if (!chat || !onStartAgent) return;
+    if (readOnly || !chat || chat.discussion_only || !onStartAgent) return;
     setStartingAgent(true);
     try {
       await onStartAgent(chat);
@@ -760,7 +805,7 @@ export function ChatTile({
   }
 
   async function compactCurrentChat() {
-    if (!chat || compacting || isActive) return;
+    if (readOnly || !chat || compacting || isActive) return;
     setCompacting(true);
     setCompactDialog((current) =>
       current
@@ -787,7 +832,7 @@ export function ChatTile({
   }
 
   function startRename() {
-    if (!chat) return;
+    if (readOnly || !chat) return;
     setDraftTitle(chat.title);
     setRenameError(null);
     setEditingTitle(true);
@@ -824,8 +869,9 @@ export function ChatTile({
     ? resolveGrounding(chat.grounding, projects, works)
     : { kind: "none" as const, label: "Loading", sub: "" };
   const showGrounding = grounding.kind !== "work";
+  const discussionOnly = chat?.discussion_only === true;
   const composerDisabled =
-    !chat || streamStatus !== "connected" || compacting || compactDialog !== null;
+    readOnly || !chat || streamStatus !== "connected" || compacting || compactDialog !== null;
   const dotStatus = error
     ? "error"
     : isActive
@@ -926,8 +972,8 @@ export function ChatTile({
               />
             ) : (
               <h2
-                title="Double-click to rename"
-                style={{ cursor: chat ? "text" : undefined }}
+                title={readOnly ? undefined : "Double-click to rename"}
+                style={{ cursor: !readOnly && chat ? "text" : undefined }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   startRename();
@@ -1001,7 +1047,7 @@ export function ChatTile({
               {hint}
             </span>
             <div className="tile-controls">
-              {onStartAgent && (
+              {!readOnly && onStartAgent && !discussionOnly && (
                 <button
                   type="button"
                   className="btn icon sm"
@@ -1039,6 +1085,7 @@ export function ChatTile({
       }
     >
         {error && <div className="tile-banner">{error}</div>}
+        {discussionOnly && <DiscussionOnlyNotice compact />}
         <ChatTileTranscript
           ref={streamRef}
           className={planningPresentation ? "planning-chat-transcript" : undefined}
@@ -1117,7 +1164,7 @@ export function ChatTile({
             activityPhase={activityPhase}
             context={contextSnapshot}
             compacting={compacting}
-            onCompact={() =>
+            onCompact={readOnly ? undefined : () =>
               setCompactDialog({
                 phase: "confirm",
                 context: contextSnapshot,
@@ -1127,12 +1174,17 @@ export function ChatTile({
             compactTitle="Compact this chat context"
           />
         )}
-        {pendingPermissions.length > 0 && (
+        {!readOnly && !discussionOnly && pendingPermissions.length > 0 && (
           <PermissionApprovalDialog
             pendingPermissions={pendingPermissions}
             onDecide={sendPermission}
           />
         )}
+        <StalledRuntimeBanner
+          title="Chat appears stalled"
+          visible={!readOnly && stalled}
+          onReconnect={() => reconnectChat(chatSlug)}
+        />
         <ChatTileComposer
           className={activityPhase ? "is-working" : undefined}
           data-ctx-tone={composerTone}
@@ -1237,7 +1289,9 @@ export function ChatTile({
               }
             }}
             placeholder={
-              chat
+              readOnly
+                ? "Work completed - reopen to continue"
+                : chat
                 ? streamStatus === "connected"
                   ? collapsePlanningHistory
                     ? "Ask Planning to revise the plan - use @ for plan files"
@@ -1330,6 +1384,12 @@ export function ChatTile({
               disabled={composerDisabled || isActive}
               onChange={sendSessionConfig}
             />
+            <SessionFastToggle
+              events={events}
+              disabled={composerDisabled || isActive}
+              onChange={sendSessionConfig}
+              fallbackValue={chat?.options?.["fast-mode"]}
+            />
             <span className="spacer" />
             <button
               type="submit"
@@ -1395,6 +1455,9 @@ export function ChatComposer({
   works,
   presetGrounding,
   presetWorkingDirectory,
+  presetProvider,
+  presetModel,
+  presetOptions,
   hideGrounding = false,
   linkProjects,
   linkWorks,
@@ -1406,6 +1469,9 @@ export function ChatComposer({
   works: WorkSummary[];
   presetGrounding?: ChatGrounding | null;
   presetWorkingDirectory?: string | null;
+  presetProvider?: string;
+  presetModel?: string;
+  presetOptions?: Record<string, string>;
   hideGrounding?: boolean;
   linkProjects?: ProjectSummary[];
   linkWorks?: WorkSummary[];
@@ -1431,11 +1497,20 @@ export function ChatComposer({
     listProviders()
       .then((rows) => {
         setProviders(rows);
-        const first = rows[0];
-        if (first) {
-          setProvider(first.name);
-          setModel(first.primary_field.default);
-          setProviderOptions(providerDefaults(first, first.primary_field.default));
+        const selected =
+          presetProvider
+            ? rows.find((candidate) => candidate.name === presetProvider)
+            : rows[0];
+        if (selected) {
+          const selectedModel = presetModel ?? selected.primary_field.default;
+          setProvider(selected.name);
+          setModel(selectedModel);
+          setProviderOptions({
+            ...providerDefaults(selected, selectedModel),
+            ...(presetOptions ?? {}),
+          });
+        } else if (presetProvider) {
+          setError(`Provider ${presetProvider} is not available.`);
         }
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -1490,12 +1565,12 @@ export function ChatComposer({
   }, [provider]);
 
   async function start() {
-    const first_message = message.trim();
-    if (!provider || !model || !first_message) return;
+    const question = message.trim();
+    if (!provider || !model || !question) return;
     const payload: CreateChatPayload = {
       provider,
       model,
-      first_message,
+      first_message: question,
       grounding,
       working_directory: workingDirectory,
       options: providerOptionsPayload(providerObj, model, providerOptions),
@@ -1522,10 +1597,18 @@ export function ChatComposer({
         }
       }}
     >
-      <div className="chat-bar" role="dialog" aria-label="New chat">
+      <div
+        className="chat-bar"
+        role="dialog"
+        aria-label="New chat"
+      >
         <div className="cb-head">
-          <span className="cb-tag"><ChatIcon size={12} /> new chat</span>
-          <span className="cb-hint">a quick exploratory conversation</span>
+          <span className="cb-tag">
+            <ChatIcon size={12} /> new chat
+          </span>
+          <span className="cb-hint">
+            a quick exploratory conversation
+          </span>
           <span className="esc-tag">esc</span>
         </div>
         <textarea
@@ -1636,11 +1719,29 @@ export function ChatComposer({
           </div>
           <span className="spacer" />
           {error && <span className="form-error compact">{error}</span>}
-          <button className="btn primary sm" disabled={!message.trim() || !provider || !model} onClick={() => void start()}>
-            Start chat <span className="kbd" style={{ marginLeft: 4 }}>⌘↵</span>
+          <button
+            className="btn primary sm"
+            disabled={
+              !message.trim() ||
+              !provider ||
+              !model
+            }
+            onClick={() => void start()}
+          >
+            Start chat{" "}
+            <span className="kbd" style={{ marginLeft: 4 }}>⌘↵</span>
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DiscussionOnlyNotice({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={`chat-discussion-warning${compact ? " compact" : ""}`} role="note">
+      <ChatIcon size={12} />
+      <span><strong>Discussion only.</strong> The loop remains authoritative. Use the run view for changes.</span>
     </div>
   );
 }
@@ -1951,7 +2052,7 @@ export function DeleteChatDialog({
   return (
     <div className="scrim" onClick={() => !submitting && onClose()}>
       <div
-        className="modal modal-sm"
+        className="modal modal-confirm"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -2014,10 +2115,10 @@ export function ContextDocModal({
 
   return (
     <div className="scrim" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal context-doc-modal">
+      <div className="modal context-doc-modal" role="dialog" aria-modal="true" aria-labelledby="context-doc-title">
         <div className="modal-hd">
           <div>
-            <h3><DocIcon size={13} /> {folder.name}/{folder.context_filename}</h3>
+            <h3 id="context-doc-title"><DocIcon size={13} /> {folder.name}/{folder.context_filename}</h3>
             <div className="sub">Shared context for this work, written when the chat was promoted.</div>
           </div>
           <button className="btn icon" onClick={onClose}>×</button>
@@ -2072,10 +2173,10 @@ function PromoteChatModal({
 
   return (
     <div className="scrim" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal promote-summary-modal">
+      <div className="modal promote-summary-modal" role="dialog" aria-modal="true" aria-labelledby="promote-chat-title">
         <div className="modal-hd">
           <div>
-            <h3><SparkIcon size={13} /> Start work from this chat</h3>
+            <h3 id="promote-chat-title"><SparkIcon size={13} /> Start work from this chat</h3>
             <div className="sub">Promote this conversation into a tracked work unit.</div>
           </div>
           <button className="btn icon" onClick={onClose}>×</button>
@@ -2394,6 +2495,20 @@ function ChatContextGauge({ context }: { context: ContextSnapshot | null }) {
       </span>
     </div>
   );
+}
+
+function useAutosizeTextarea(
+  ref: React.RefObject<HTMLTextAreaElement>,
+  value: string,
+) {
+  useEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const height = textarea.scrollHeight;
+    textarea.style.height = `${Math.min(height, CHAT_COMPOSER_MAX_HEIGHT)}px`;
+    textarea.style.overflowY = height > CHAT_COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
+  }, [ref, value]);
 }
 
 type ChatCompactionDialogPhase = "confirm" | "compacting" | "success" | "error";

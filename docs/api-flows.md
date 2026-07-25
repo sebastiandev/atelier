@@ -155,13 +155,15 @@ Browser ──► Router (chats.py)
                 ├─► ChatStore.create_chat(req)
                 │       ├─► repo.add_chat(chat)       ← assigns CHT-NNN
                 │       ├─► files.write_chat_json(...)
-                │       └─► files.append_transcript_event(first user message)
+                │       └─► files.append_transcript_event(first user message, when supplied)
                 └─► returns ChatDetail
 ```
 
-Create-chat records only the modal's first user message plus optional Project/Work link (`grounding`), optional provider cwd (`working_directory`), and any non-default provider permission/mode options. The provider turn starts when the chat websocket opens and `chats/connect.py` claims that first prompt (see [WS `/api/chats/{slug}/stream`](#ws-apichatsslugstream)). `POST /api/chats/{slug}/messages` remains as a compatibility append route for older clients; the current frontend sends follow-up turns over the websocket.
+Create-chat normally records the modal's first user message plus optional Project/Work link (`grounding`), optional provider cwd (`working_directory`), and any non-default provider permission/mode options. An explicit title allows `first_message` to be omitted. Run discussions use that idle form, set the top-level `discussion_only` marker, and store selected-stage data in optional `context_seed`; neither field is a provider option and legacy values remain valid. Ordinary chats submit the claimed first prompt when their websocket opens. A discussion websocket starts only an idle, read-only provider session; the first turn occurs when the user sends a visible message. `POST /api/chats/{slug}/messages` remains as a compatibility append route for older clients; the current frontend sends follow-up turns over the websocket.
 
 ---
+
+Run-stage discussion creation also accepts an optional `discussion_key`. Repeating `POST /api/chats` with the same key returns the existing chat and provider session, so **Discuss in chat** is stable across clicks and reloads.
 
 ## WS `/api/chats/{slug}/stream`
 
@@ -185,6 +187,10 @@ Browser ──► WS Router (application/ws/chats.py)
 ```
 
 Inbound frames mirror the agent stream for the chat-safe subset: `input` writes a `user_input` line and forwards to the adapter, `stop` writes `user_stop` and calls `adapter.stop_turn()`, and `permission` resolves any pending provider permission. Context attachment frames are rejected with a `client_error` frame because chats do not own agent context folders. The separate `chat_supervisor` writes to `~/Atelier/chats/<CHT>/transcript.ndjson` through `FsChatTranscriptLog` and persists provider session ids to `chats.session_id`. If `working_directory` is set it is used as cwd/writable root; otherwise Work/Project links use their Atelier metadata folders, while legacy folder-grounded chats use that folder as cwd. For the reserved Planning chat, completed assistant messages are also scanned by `commands.planning.mark_ready`; the first exact `atelier_planning_ready` marker persists `chat.options.planning_readiness` and appends a `planning_readiness` stream event.
+
+`POST /api/chats/{slug}/reconnect` stops only that chat's provider runtime. Its active websocket is kicked and follows the normal reconnect/resume path; the persisted user message is never resent automatically. A reconnect after a lost mid-turn runtime appends a visible interruption error and `idle` so replay cannot remain stuck on `thinking`.
+
+`POST /api/agents/{slug}/reconnect` provides the same recovery for manual agent tiles. It closes a still-active transcript turn as interrupted, stops only that agent runtime, and lets the existing websocket rebuild it without replaying input.
 
 ---
 
@@ -323,7 +329,7 @@ Browser ──► GET /plan
                     └─► re-index source Markdown into WorkPlanView
 ```
 
-Planning source docs live in the user-selected working folder/repo. The selected framework must be initialized in that folder before Planning starts; missing setup returns 409 with the recommended command. The frontend asks before setup; No stops the flow, Yes creates a normal visible setup chat that runs in the selected folder and streams tool output/permissions through the existing chat runtime. Prompt construction is backend-owned through `domain/prompts/build.py`. The Planning chat is read/discovery-oriented before materialization and must emit `{"atelier_planning_ready":{"ready":true,"summary":"..."}}` before the UI enables source-plan creation. Starting the Planning chat persists a SQL PlanningSession for the Work with root/framework/profile/provider/model/options and the framework output folder. Creating the source plan is a single `POST /plan` call: the request identifies the Planning chat/session, while the backend loads PlanningSession, starts or reuses an internal write-capable `Planning materializer` chat, schedules the materializer in the background, and returns the current materialization status immediately. The background materializer lets the selected framework write files under its framework output folder. Defaults are backend-owned (for example BMAD uses `_bmad-output/<WRK>/`), but Planning setup may persist `artifact_root_path` to use a root-relative folder such as `bmad/<WRK>` or an absolute folder inside the selected work root. `.atelier/planning/<WRK>/` is reserved for Atelier-owned planning state such as `manifest.json`, not framework source docs. `GET /plan/materialization-status` returns `idle`, `running`, `waiting_permission`, `stalled`, `failed`, or `complete` from persisted files/transcript state plus the latest transcript event type/summary so the UI can show whether the materializer is still working, paused, silent, or ready to resume. Materialization asks the framework for a complete reviewable set now: framework-level grouping docs plus all known executable stories, tasks, spikes, bugs, hotfixes, or follow-up items, not placeholders that require another scoping pass before implementation. The public request/manifest never carries Markdown `content`; artifacts are tracked by `path`, `title`, `artifact_kind`, `executable`, and path-based `dependencies`, with paths relative to the framework output folder. `GET /plan` returns both `planning_path` (Atelier state) and `artifact_root_path` (framework source docs). Materialization runs with repo write access while the backend denies permission prompts that look like HTTP/browser access, package installs, or remote fetches; Codex workspace-write also disables network access in its sandbox configuration. After materialization, the same right-dock `Planning` chat reconnects in revision mode against the source-backed planning folder; runtime config upgrades read-only discovery options to provider write-capable revision options while keeping cwd/writable roots on `artifact_root_path`. The backend seeds that runtime prompt with a manifest-derived document index so `@relative/path.md` mentions refer to plan files. `GET` re-indexes the latest source files and prefers manifest artifact metadata, with legacy/path scanning for older plans and out-of-band Markdown files. Missing PlanningSession maps to 404 until the user starts Planning.
+Planning source docs live in the user-selected working folder/repo. The selected framework must be initialized in that folder before Planning starts; missing setup returns 409 with the recommended command. The frontend asks before setup; No stops the flow, Yes creates a normal visible setup chat that runs in the selected folder and streams tool output/permissions through the existing chat runtime. Prompt construction is backend-owned through `domain/prompts/build.py`. The Planning chat is read/discovery-oriented before materialization and must emit `{"atelier_planning_ready":{"ready":true,"summary":"..."}}` before the UI enables source-plan creation. Starting the Planning chat persists a SQL PlanningSession for the Work with root/framework/profile/provider/model/options and the framework output folder. Creating the source plan is a single `POST /plan` call: the request identifies the Planning chat/session, while the backend loads PlanningSession, starts or reuses an internal write-capable `Planning materializer` chat, schedules the materializer in the background, and returns the current materialization status immediately. The background materializer lets the selected framework write files under its framework output folder. Defaults are backend-owned (for example BMAD uses `_bmad-output/<WRK>/`), but Planning setup may persist `artifact_root_path` to use a root-relative folder such as `bmad/<WRK>` or an absolute folder inside the selected work root. Folder and file names are treated only as paths; `PlanningSession.framework` remains authoritative even when a path contains another framework's name. `.atelier/planning/<WRK>/` is reserved for Atelier-owned planning state such as `manifest.json`, not framework source docs. `GET /plan/materialization-status` returns `idle`, `running`, `waiting_permission`, `stalled`, `failed`, or `complete`, the five latest meaningful transcript activities, and every unresolved tool permission. `POST /plan/materialization-permission` forwards an explicit allow/deny decision to the active internal runtime; materialization never decides tool approvals automatically. Materialization polls the durable transcript using the shared provider-turn observer: one quiet minute surfaces `stalled` without injecting input, actual idle may receive at most two report-only prompts, and one confirmed connection close or missing runtime gets a fresh-session recovery seeded with the original materialization brief. These rules and prompts stay in the Planning materialization command; the shared observer and chat runtime contain no Planning decisions. Explicit Retry replaces a still-running stale task before starting that fresh session. Materialization asks the framework for a complete reviewable set now: framework-level grouping docs plus all known executable stories, tasks, spikes, bugs, hotfixes, or follow-up items, not placeholders that require another scoping pass before implementation. The public request/manifest never carries Markdown `content`; artifacts are tracked by `path`, `title`, `artifact_kind`, `executable`, and path-based `dependencies`, with paths relative to the framework output folder. `GET /plan` returns both `planning_path` (Atelier state) and `artifact_root_path` (framework source docs). After materialization, the same right-dock `Planning` chat reconnects in revision mode against the source-backed planning folder; runtime config upgrades read-only discovery options to provider write-capable revision options while keeping cwd/writable roots on `artifact_root_path`. The backend seeds that runtime prompt with a manifest-derived document index so `@relative/path.md` mentions refer to plan files. `GET` re-indexes the latest source files and prefers manifest artifact metadata, with legacy/path scanning for older plans and out-of-band Markdown files. Missing PlanningSession maps to 404 until the user starts Planning.
 
 Artifact endpoints:
 
@@ -331,39 +337,34 @@ Artifact endpoints:
 - `PUT /api/works/{slug}/plan/artifacts/{id}` writes reviewer-approved Markdown when `expected_hash` matches the current source hash; stale hashes return 409. If the plan already has an approved baseline, this also updates that file's approved hash so a user-authored save does not require a second plan approval click.
 - `POST /api/works/{slug}/plan/finish` remains for legacy conversing manifests; the current materialization path returns `planned`.
 - `POST /api/works/{slug}/plan/approve` stores the current source hashes as the approved plan state; approved non-executable source docs satisfy dependencies, while executable artifacts still require a completed/accepted run before dependent work can launch.
-- `POST /api/works/{slug}/plan/artifacts/{id}/runs` accepts a loop definition id/revision, snapshots it, validates required context, creates the first stage agent from the persisted Planning setup, stores SQL + manifest projections, and schedules the leased background monitor.
-- `GET /api/works/{slug}/plan/artifacts/{id}/runs` and `/runs/{run}` return run state for the UI.
-- `POST /api/works/{slug}/plan/artifacts/{id}/runs/{run}/resume` is valid only for `blocked_user`; it sends the blocker-resolution prompt and schedules monitoring again.
+- `POST /api/works/{slug}/plan/artifacts/{id}/runs` accepts a loop definition id/revision plus an optional `brief_note`, snapshots the definition and note, validates required context, creates the first stage agent from the persisted Planning setup, stores SQL + manifest projections, and schedules the leased background monitor. The same additive `brief_note` is returned on run reads; older requests and stored runs default it to an empty string.
+- `GET /api/works/{slug}/plan/artifacts/{id}/runs` and `/runs/{run}` return run state for the UI. `loop_stages[].reports` is an additive immutable history of completed occurrences; clients use `pass_number` and `recorded_at` to render backward transitions without replacing earlier output.
+- `POST /api/works/{slug}/plan/artifacts/{id}/runs/{run}/resume` resumes `blocked_user` by default; optional `retry_failed=true` gives a failed current stage one more attempt in the same run and worktree, using a fresh agent/transcript for agent-backed stages. When the current pass came from PR feedback, retry re-seeds its durable selected comments and user instructions. A held review gate instead accepts `gate_decision=send_back|approve_as_is`, selected `enforced_findings` indexes, and an optional `resolution_note`. Human decisions are retained on that review occurrence as optional `review_decision` metadata, so later stage views can show the selected findings and instruction; automatic transitions omit it. All paths schedule monitoring again.
 - `POST /api/works/{slug}/plan/artifacts/{id}/runs/{run}/request-changes` is valid only while awaiting approval and returns to the configured write stage/session.
 - `POST /api/works/{slug}/plan/artifacts/{id}/runs/{run}/accept` accepts only completed/reviewable runs and writes `summaries/{id}-{run}.md`.
-- `POST /api/works/{slug}/plan/artifacts/{id}/runs/{run}/cleanup` is valid only after acceptance and removes all run-owned stage agents/worktrees before persisting `cleaned`.
-- Background artifact runs submit structured fields through a single-line `atelier_loop_report` JSON marker in the agent transcript, with optional `proposed_source` for full-document source proposals. Complete reports become `completed_pending_review`; incomplete reports auto-continue until the retry limit, then become `failed`; reported blockers become `blocked`.
+- `POST /api/works/{slug}/plan/artifacts/{id}/runs/{run}/cleanup` remains for older clients. It releases any surviving provider runtime and records cleanup without deleting agents, transcripts, or workspaces; acceptance already performs that release.
+- Background artifact runs use the shared loop monitor and submit a single-line `atelier_loop_step_report` JSON marker. The report carries the configured outcome plus summary, findings, changed files, criteria coverage, validation evidence, divergences, skipped scope, blocker, and artifact references. Invalid reports receive bounded repair prompts; `blocked_user` pauses for input, and configured transitions determine the next stage or final approval.
 - `POST /api/works/{slug}/plan/artifacts/{id}/proposals` stores a full-document proposed source update; `/proposals/{proposal}/accept|reject` applies or rejects it with source-hash protection.
 - `POST /api/works/{slug}/plan/artifacts/{id}/tracking` attaches Jira/PR/blocker metadata to the artifact. Blocker links participate in launch gating.
 - `POST /api/works/{slug}/plan/artifacts/{id}/bugs` creates a source-backed `bugs/bug-NNN.md` from a review finding and links it back to the source artifact.
 
 Loop definitions use one canonical resource:
 
+- Agent policies and Work stage briefs may add nullable `approved_command_prefixes`. The first agent stage supplies the inherited default; an explicit later-stage or brief list replaces it. Missing fields preserve the existing prompt-on-request behavior.
 - `GET|POST /api/loops` lists the visible catalog or creates a reusable/Work-owned definition. `work_slug` includes that Work's overlay; `root_path` adds legacy repository definitions for existing installs.
 - `GET|PUT|PATCH|DELETE /api/loops/{id}` reads, revision-safely updates, or deletes a definition. `scope=work|repo` disambiguates ownership when needed.
 - `POST /api/loops/{id}/fork` creates an editable reusable copy; `POST /api/loops/{id}/reveal` opens its owning folder.
-- Existing `/api/works/{slug}/loop-definitions*` routes remain compatibility aliases. New clients must use `/api/loops`.
+- Existing `/api/works/{slug}/loop-definitions*` routes remain compatibility aliases. New clients must use `/api/loops`. Review stages may add an optional `review_gate={mode,max_passes,locked}`; stage briefs may add an unlocked per-run `review_gate` mode override.
 - Reusable definitions live in `<workspace-root>/.atelier/loops`; private overlays live in `<workspace-root>/works/<slug>/.atelier/loops`. Launch resolution prefers the Work overlay, then library, built-in, and legacy repository. Runs persist the full resolved definition snapshot.
+- `GET|POST /api/stages` lists or creates reusable stage definitions; `GET|PUT|PATCH|DELETE /api/stages/{id}` reads or revision-safely mutates one, and `POST /api/stages/{id}/reveal` opens its storage folder. Definitions live in `<workspace-root>/.atelier/stages/<id>/`; linked loop stages keep source revision provenance plus sparse local overrides, while old inline stages remain compatible.
 
-The consolidated frontend also defines backend follow-up contracts. They are
-intentionally typed in `frontend/src/api.ts` but are not implemented by the
-backend yet:
+Standalone Loop mode launches a freeform objective with `POST /api/works/{slug}/runs` and lists/polls with `GET /api/works/{slug}/runs[/{run}]`. `GET|PUT /api/works/{slug}/loop-brief` reads or saves the latest editable Work draft; the launch body may include that brief, and the resulting run response pins it with the definition revision. A brief contains the goal plus agent-stage notes, adhoc file/folder/URL/note references, and optional provider/model/options overrides. Missing brief fields remain compatible with older clients; required slots are enforced only for an explicit Loop-mode brief. The launch body also carries the root, definition id/revision, and parent provider/model/options; unlike Planning, these parent values come directly from the user and selected template. An optional `source_run_id` retains that terminal run's exact workspace while the new run pins the currently selected definition id/revision, which is how Edit loop starts from saved edits without losing implementation changes. The backend stores the objective in the shared SQL loop index and runs it through the Loop-owned staged monitor. Planning is a separate adapter over that engine, not an engine dependency. Both modes therefore expose the same `stages[].reports` occurrence history, legal transitions, and structured report contract through `/resume`, `/retry-stage`, `/request-changes`, and `/accept`; standalone mode also owns `/cancel`, `/cleanup`, and `/rerun`. Acceptance and cancellation release run-owned provider runtimes while preserving agent records, transcripts, and workspaces; `/cleanup` is a compatibility alias that repeats the release and records a timestamp without deleting them. Five minutes without transcript activity sets `waiting_report` while a live provider keeps running. A missing/lazy runtime or provider `Connection closed` error reconnects the same stage and sends one continuation per stage attempt without changing its worktree or attempt count. A permission request expired by reconnect is denied fail-closed and receives one automatic continuation keyed to that request; an explicit user denial does not. The pinned stage `timeout_minutes` counts active time from the latest stage prompt, excluding permission waits, and fails/stops the stage without deleting its workspace. `POST .../retry-stage` gives a failed current stage one more attempt in the same run and kept workspace, using a new agent/transcript for agent-backed stages. `/rerun` creates a new run in the same checkout. An optional body `{kind:"amend",note:"..."}` re-enters the task stage with required feedback; `{kind:"verify"}` skips task stages and enters the first review/check, returning 422 when none exists. A missing body preserves the legacy initial rerun behavior. Each stage gets its own agent/provider session; new Loop works establish the Work-owned `worktrees/loop` checkout, while follow-ups retain the exact source workspace (including a legacy `agt-*` checkout) rather than copying or resetting it. `/rerun` uses the source run's immutable definition snapshot and seeds the new run with its summary/findings. Definition context remains fixed per stage; brief context is additive and pinned per run.
 
-- Standalone Loop mode launches a freeform objective with
-  `POST /api/works/{slug}/runs` and lists/polls with
-  `GET /api/works/{slug}/runs[/{run}]`. The launch body carries goal, root,
-  definition id/revision and parent provider/model/options. Context is defined
-  per stage in the Work-owned or reusable definition.
-  Actions are `/resume`, `/request-changes`, `/accept`, `/pull-request`, and
-  `/rerun`. The Work should persist `mode="loop"` so later navigation returns
-  to this surface without the initial query seed. Chat discussion reuses the
-  existing chat endpoint with Work grounding and the run workspace as cwd;
-  editor opening remains client-side through the configured editor URL.
+Create PR uses the same additive endpoints in both run surfaces: standalone `/api/works/{slug}/runs/{run}/create-pr|pr-feedback|pr-refresh`, and Planning `/api/works/{slug}/plan/artifacts/{id}/runs/{run}/create-pr|pr-feedback|pr-refresh`. `create-pr` appends and schedules a Work-local PR stage only when the accepted run has no PR stage. `pr-feedback` accepts selected `{comment_id,instruction}` rows plus a free instruction and starts another pass through the configured changes-requested edge; review-thread selections must identify the latest unaddressed external comment, while implementation receives the root and reply context. A failed PR stage also accepts a non-empty instruction with no selected comments for its **Send to Implement** recovery. `pr-refresh?force=true` bypasses the saved ETag; ordinary/background refreshes remain conditional. Responses return the updated run/detail with additive `pr`, `pr_comments`, pass number, and per-report `push_at`, `pr`, `addressed_comments`, and `feedback_instruction` fields; new comment rows may include additive `reply_target_id` and `is_viewer` fields. Source-based follow-up runs inherit stable `pr`, `pr_config`, and `pr_comments` state so the PR stage updates the existing PR. Existing clients and stored runs may omit all of these fields.
+
+Run transcripts stay on the existing agent websocket and are rendered read-only. Starting a run discussion uses the existing `POST /api/chats` flow with Work grounding, the run worktree as `working_directory`, the stage provider/model/options, no first message, and the selected stage report as hidden `context_seed`. The backend forces the provider's read-only/plan posture and does not provision a new worktree. The shared run surface opens the created `ChatTile` in its right dock; model, effort, and a compatible Fast session option remain adjustable without exposing permission controls.
+
+The consolidated frontend also defines these remaining backend follow-up contracts:
 - New Agent sends `workspace_mode="isolated"|"shared"`. Isolated keeps the
   current worktree behavior; shared must run against the selected repository
   folder without creating a worktree. The create-agent request and command do
@@ -380,6 +381,8 @@ contract; they must not introduce frontend prompt composition or a second
 state machine.
 
 ---
+
+A Create PR report may return `changes_requested` with actionable findings and failing-check evidence. That outcome follows the pinned stage's configured backward edge and increments the pass before Implementation starts; Create PR itself may only apply mechanical lint/format repairs and minimal behavior-preserving type corrections, never code or test changes intended to repair a failing test.
 
 ## `PATCH /api/works/{slug}`
 
@@ -447,27 +450,23 @@ Body: ``{"project_slug": "PRJ-NNN" | null}``. ``null`` re-parents to Loose (a fi
 
 ---
 
-## `POST /api/works/{slug}/complete`
+## `GET /api/works/{slug}/completion` and `POST /api/works/{slug}/complete`
 
 ```
-Browser ──► Router (works.py) ──► commands.complete.execute(workstore, supervisor, worktrees, req)
-                                       │
-                                       ├─► WorkStore.get_work(slug)             ← 404 WorkNotFound
-                                       ├─► validate status == "active"          ← 409 WorkNotActive
-                                       ├─► WorkStore.list_agents_for_work(slug)
-                                       ├─► for each agent:
-                                       │     await supervisor.stop_agent(slug)  ← idempotent
-                                       ├─► for each agent:
-                                       │     worktree_manager.remove(work_slug, agent_slug)
-                                       │                              ╔════════════╗
-                                       │                              ║ git worktree║
-                                       │                              ╚════════════╝
-                                       └─► WorkStore.update_work(status="completed")
-                                       returns CompleteWorkResult{work_slug, agent_count}
-                                  Router formats CompleteWorkResponse
+Browser ──► GET /completion ──► commands.complete.preview(workstore, runs, worktrees, slug)
+                                  ├─► list agents and owned git worktrees
+                                  └─► return clean/dirty/inspectable state
+
+Browser ──► POST /complete ──► commands.complete.execute(workstore, supervisors, worktrees, req)
+                                 ├─► require active Work with no active runs       ← 409
+                                 ├─► if remove_workspaces:
+                                 │     require every worktree inspectable + clean ← 409
+                                 ├─► WorkStore.update_work(status="completed")
+                                 ├─► stop agent + linked-chat provider runtimes
+                                 └─► optionally remove the clean worktrees
 ```
 
-Status flips **last** so a crash mid-cleanup doesn't leave the work parading as "completed" while supervisor tasks or worktrees still hang on. Both `stop_agent` and `worktree.remove` are idempotent — replays after a partial run are safe. **Preserved**: `~/Atelier/works/<slug>/` (transcripts, agent.json, brief.md, handoff docs). **Removed**: per-agent git worktrees (scratch space). The completed work stays reachable through the Completed filter / project page.
+The POST body is optional; omitted or `{"remove_workspaces":false}` archives the Work without removing workspaces. `{"remove_workspaces":true}` is all-or-nothing and accepted only when every owned git worktree is inspectable and has no non-symlink changes; removing a mounted shared-folder or development-artifact symlink never follows or deletes its target. Dirty or uninspectable state returns 409 before runtime shutdown or status mutation, and active Loop/Planning runs also return 409. After validation, status flips first as the reconnect barrier; the command then stops agent and Work-linked chat runtimes before optional clean-workspace removal. Agent records, transcripts, briefs, and handoff documents are always preserved. Completed Works remain inspectable through replay-only agent/chat streams, but cannot accept input or start agents or runs until `POST /api/works/{slug}/reopen` restores active status. `GET /api/agents/{agent_slug}` supplies the stored agent metadata needed by the standalone read-only transcript view.
 
 ---
 
@@ -510,7 +509,8 @@ commands.start.execute(workstore, worktree_manager, settings, req)
    │       └─► writes agents/<slug>/context/<files>.md
    │       └─► writes agents/<slug>/context.md  (index)
    │       returns abs_path | None
-   ├─► WorktreeManager.ensure(work, agent, source, base_ref="master", branch_name=req.branch_name)
+   ├─► WorktreeManager.ensure(work, agent, source, base_ref="HEAD", branch_name=req.branch_name)
+   │     └─► fetch origin/HEAD and pin its commit when origin exists
    │       └─► branch_name=None  → `git worktree add --detach ... master`  (default)
    │       └─► branch_name="x"   → `git worktree add -b x ... master` with self-heal-on-collision
    │       └─► non-git folder    → returns folder unchanged

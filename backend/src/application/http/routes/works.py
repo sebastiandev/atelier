@@ -8,9 +8,10 @@ that lives behind the WorkStore port.
 import asyncio
 import logging
 import subprocess
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
@@ -20,12 +21,17 @@ from src.application.http.schemas import (
     ChatDetail,
     ChatGroundingSchema,
     ChatMessageSchema,
+    CompleteWorkPreviewResponse,
+    CompleteWorkRequestBody,
     CompleteWorkResponse,
+    CompletionWorkspaceResponse,
     ContextSchema,
     CreatePlanArtifactProposalRequest,
     CreatePlanBugRequest,
+    CreatePrStageRequest,
     HandoffSummary,
     LinkPlanArtifactTrackingRequest,
+    LoopBriefSchema,
     MoveWorkRequest,
     NewHandoffRequest,
     NewWorkRequest,
@@ -34,6 +40,8 @@ from src.application.http.schemas import (
     PlanArtifactProposalResponse,
     PlanArtifactResponse,
     PlanArtifactRunResponse,
+    PlanLoopChangedFileResponse,
+    PlanLoopStageRunResponse,
     PlanMaterializationStatusResponse,
     PlanningChatReadinessResponse,
     PlanningFrameworkStatusRequest,
@@ -41,10 +49,14 @@ from src.application.http.schemas import (
     PlanOverviewResponse,
     PlanTrackingLinkResponse,
     RequestPlanRunChangesRequest,
+    RerunWorkLoopRunRequest,
+    ResolvePlanMaterializationPermissionRequest,
     ResumePlanArtifactRunRequest,
+    SendPrFeedbackRequest,
     StartPlanArtifactRunRequest,
     StartPlanningChatRequest,
     StartPlanningSetupChatRequest,
+    StartWorkLoopRunRequest,
     StartWorkPlanRequest,
     StartWorkPlanResponse,
     UpdatePlanArtifactRequest,
@@ -52,6 +64,7 @@ from src.application.http.schemas import (
     WorkChatContextFolderSummary,
     WorkChatRef,
     WorkDetail,
+    WorkLoopRunResponse,
     WorkPlanResponse,
     WorkSummary,
 )
@@ -62,12 +75,14 @@ from src.domain.agents.handoffs import (
 )
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.chatstore import ChatRecord, ChatStore
+from src.domain.commands.loops import objective_runs
 from src.domain.commands.planning import (
     accept_run as planning_accept_run,
 )
 from src.domain.commands.planning import (
     approve as planning_approve,
 )
+from src.domain.commands.planning import cancel_run as planning_cancel_run
 from src.domain.commands.planning import (
     create_bug as planning_create_bug,
 )
@@ -98,11 +113,15 @@ from src.domain.commands.planning import (
 from src.domain.commands.planning import (
     materialize as planning_materialize,
 )
+from src.domain.commands.planning import pr_runs as planning_pr_runs
 from src.domain.commands.planning import (
     propose_update as planning_propose_update,
 )
 from src.domain.commands.planning import (
     request_run_changes as planning_request_run_changes,
+)
+from src.domain.commands.planning import (
+    resolve_materialization_permission as planning_resolve_materialization_permission,
 )
 from src.domain.commands.planning import (
     resolve_proposal as planning_resolve_proposal,
@@ -141,6 +160,19 @@ from src.domain.commands.works import (
 )
 from src.domain.commands.works.list_artifacts import ArtifactView
 from src.domain.connections import ConnectionStore
+from src.domain.loop import actions as loop_actions
+from src.domain.loop import lifecycle, pr_lifecycle, pr_review
+from src.domain.loop.briefs import brief_snapshot, optional_brief_from_snapshot
+from src.domain.loop.dtos import (
+    LoopBrief,
+    LoopBriefAgent,
+    LoopBriefContext,
+    LoopReviewGateMode,
+    LoopRunKind,
+    LoopStageBrief,
+    LoopStatus,
+)
+from src.domain.loop.models import LoopRunRecord
 from src.domain.loop.ports import (
     LoopCheckRunner,
     LoopContextResolver,
@@ -148,6 +180,7 @@ from src.domain.loop.ports import (
     LoopDefinitionRepository,
     LoopRunRepository,
 )
+from src.domain.loop.snapshots import definition_snapshot
 from src.domain.models import Chat, ChatMessage, Context, Handoff, Work
 from src.domain.planning.dtos import (
     PlanArtifactDetail,
@@ -156,6 +189,7 @@ from src.domain.planning.dtos import (
     PlanArtifactSummary,
     PlanningFrameworkStatus,
     PlanOverview,
+    PlanRunStatus,
     PlanTrackingLink,
     WorkPlanView,
 )
@@ -269,24 +303,16 @@ def get_share_provisioner(request: Request) -> ShareProvisioner:
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
 PlanningFilesDep = Annotated[PlanningFiles, Depends(get_planningfiles)]
-PlanningSessionsDep = Annotated[
-    PlanningSessionRepository, Depends(get_planning_sessions)
-]
-LoopDefinitionsDep = Annotated[
-    LoopDefinitionRepository, Depends(get_loop_definitions)
-]
+PlanningSessionsDep = Annotated[PlanningSessionRepository, Depends(get_planning_sessions)]
+LoopDefinitionsDep = Annotated[LoopDefinitionRepository, Depends(get_loop_definitions)]
 LoopDefinitionLocationsDep = Annotated[
     LoopDefinitionLocations, Depends(get_loop_definition_locations)
 ]
 ConnectionStoreDep = Annotated[ConnectionStore, Depends(get_connection_store)]
-AgentAdapterFactoryDep = Annotated[
-    AgentAdapterFactory, Depends(get_agent_adapter_factory)
-]
+AgentAdapterFactoryDep = Annotated[AgentAdapterFactory, Depends(get_agent_adapter_factory)]
 LoopCheckRunnerDep = Annotated[LoopCheckRunner, Depends(get_loop_check_runner)]
 LoopRunRepositoryDep = Annotated[LoopRunRepository, Depends(get_loop_run_repository)]
-LoopContextResolverDep = Annotated[
-    LoopContextResolver, Depends(get_loop_context_resolver)
-]
+LoopContextResolverDep = Annotated[LoopContextResolver, Depends(get_loop_context_resolver)]
 ChatStoreDep = Annotated[ChatStore, Depends(get_chatstore)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
@@ -299,16 +325,11 @@ ShareProvisionerDep = Annotated[ShareProvisioner, Depends(get_share_provisioner)
 
 
 @router.get("/works", response_model=list[WorkSummary])
-def list_works_endpoint(
-    workstore: WorkStoreDep, settings: SettingsDep
-) -> list[WorkSummary]:
+def list_works_endpoint(workstore: WorkStoreDep, settings: SettingsDep) -> list[WorkSummary]:
     works = list_all.execute(workstore)
     counts = workstore.count_children_by_work_id()
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
-    return [
-        _to_summary(w, paths, counts.get(w.id) if w.id is not None else None)
-        for w in works
-    ]
+    return [_to_summary(w, paths, counts.get(w.id) if w.id is not None else None) for w in works]
 
 
 @router.post("/works", response_model=WorkDetail, status_code=status.HTTP_201_CREATED)
@@ -329,13 +350,684 @@ def create_work_endpoint(
 
 
 @router.get("/works/{work_slug}", response_model=WorkDetail)
-def get_work_endpoint(
-    work_slug: str, workstore: WorkStoreDep, settings: SettingsDep
-) -> WorkDetail:
+def get_work_endpoint(work_slug: str, workstore: WorkStoreDep, settings: SettingsDep) -> WorkDetail:
     record = get.execute(workstore, work_slug)
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"work not found: {work_slug}")
     return _to_detail(record, WorkspacePaths(workspace_root=settings.workspace_root))
+
+
+@router.get("/works/{work_slug}/runs", response_model=list[WorkLoopRunResponse])
+def list_work_loop_runs_endpoint(
+    work_slug: str,
+    loop_runs: LoopRunRepositoryDep,
+) -> list[WorkLoopRunResponse]:
+    """List durable standalone Loop runs for one Work."""
+    return [_to_work_loop_run(record) for record in objective_runs.list_runs(loop_runs, work_slug)]
+
+
+@router.get("/works/{work_slug}/loop-brief", response_model=LoopBriefSchema | None)
+def get_work_loop_brief_endpoint(
+    work_slug: str,
+    workstore: WorkStoreDep,
+) -> LoopBriefSchema | None:
+    """Return the latest editable Loop brief saved on one Work."""
+    try:
+        brief = objective_runs.get_work_brief(workstore, work_slug)
+    except objective_runs.WorkNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _to_loop_brief_schema(brief) if brief is not None else None
+
+
+@router.put("/works/{work_slug}/loop-brief", response_model=LoopBriefSchema)
+def save_work_loop_brief_endpoint(
+    work_slug: str,
+    payload: LoopBriefSchema,
+    workstore: WorkStoreDep,
+) -> LoopBriefSchema:
+    """Save task input on the Work without changing its loop definition."""
+    try:
+        brief = objective_runs.save_work_brief(
+            workstore,
+            work_slug,
+            _to_loop_brief(payload),
+        )
+    except objective_runs.WorkNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return _to_loop_brief_schema(brief)
+
+
+@router.get("/works/{work_slug}/runs/{run_id}", response_model=WorkLoopRunResponse)
+def get_work_loop_run_endpoint(
+    work_slug: str,
+    run_id: str,
+    loop_runs: LoopRunRepositoryDep,
+) -> WorkLoopRunResponse:
+    """Return one durable standalone Loop run."""
+    try:
+        record = objective_runs.get_run(
+            loop_runs,
+            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        )
+    except objective_runs.ObjectiveRunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/pr-refresh",
+    response_model=WorkLoopRunResponse,
+)
+async def refresh_work_loop_pr_endpoint(
+    request: Request,
+    work_slug: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    force: bool = False,
+) -> WorkLoopRunResponse:
+    """Synchronize one standalone run's pull-request lifecycle."""
+    poller = getattr(request.app.state, "pr_status_poller", None)
+    gateway = poller.lifecycle_gateway() if poller is not None else None
+    if gateway is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="pull-request lifecycle service is unavailable",
+        )
+    try:
+        record = await objective_runs.refresh_pr(
+            workstore,
+            loop_runs,
+            gateway,
+            objective_runs.RefreshObjectivePrRequest(
+                work_slug=work_slug,
+                run_id=run_id,
+                force=force,
+            ),
+        )
+    except (objective_runs.ObjectiveRunNotFound, objective_runs.WorkNotFound) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except pr_review.PrReviewUnavailable as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs",
+    response_model=WorkLoopRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_work_loop_run_endpoint(
+    request: Request,
+    work_slug: str,
+    payload: StartWorkLoopRunRequest,
+    workstore: WorkStoreDep,
+    loop_definitions: LoopDefinitionsDep,
+    loop_locations: LoopDefinitionLocationsDep,
+    loop_runs: LoopRunRepositoryDep,
+    context_resolver: LoopContextResolverDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> WorkLoopRunResponse:
+    """Start a standalone Loop run and schedule its monitor."""
+    try:
+        record = await objective_runs.start_run(
+            workstore,
+            loop_definitions,
+            loop_locations,
+            loop_runs,
+            context_resolver,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            settings,
+            objective_runs.StartObjectiveRunRequest(
+                work_slug=work_slug,
+                goal=payload.goal,
+                root_path=payload.root_path,
+                loop_definition_id=payload.loop_definition_id,
+                loop_revision=payload.loop_revision,
+                provider=payload.provider,
+                model=payload.model,
+                options=dict(payload.options),
+                brief=_to_loop_brief(payload.brief) if payload.brief is not None else None,
+                source_run_id=payload.source_run_id,
+            ),
+        )
+    except (
+        objective_runs.WorkNotFound,
+        objective_runs.ObjectiveRunNotFound,
+        objective_runs.LoopDefinitionNotFound,
+    ) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except objective_runs.LoopDefinitionConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except objective_runs.WorkNotActive as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (
+        objective_runs.AgentFolderMissing,
+        objective_runs.InvalidProviderConfig,
+        objective_runs.LoopContextMissing,
+        objective_runs.LoopDefinitionInvalid,
+        ValueError,
+    ) as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except AgentTerminated as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    _ensure_objective_run_monitor_task(
+        request,
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        objective_runs.ObjectiveRunRequest(work_slug, str(record.state["id"])),
+    )
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/resume",
+    response_model=WorkLoopRunResponse,
+)
+async def resume_work_loop_run_endpoint(
+    request: Request,
+    work_slug: str,
+    run_id: str,
+    payload: ResumePlanArtifactRunRequest,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> WorkLoopRunResponse:
+    """Resume one blocker-paused standalone Loop run."""
+    try:
+        record = await objective_runs.resume_run(
+            workstore,
+            loop_runs,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            settings,
+            objective_runs.ResumeObjectiveRunRequest(
+                work_slug,
+                run_id,
+                payload.resolution_note,
+                gate_decision=payload.gate_decision,
+                enforced_findings=tuple(payload.enforced_findings),
+            ),
+        )
+    except objective_runs.ObjectiveRunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    _ensure_objective_run_monitor_task(
+        request,
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+    )
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/retry-stage",
+    response_model=WorkLoopRunResponse,
+)
+async def retry_work_loop_run_stage_endpoint(
+    request: Request,
+    work_slug: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> WorkLoopRunResponse:
+    """Retry one failed standalone Loop stage in place."""
+    try:
+        record = await objective_runs.retry_stage(
+            workstore,
+            loop_runs,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            settings,
+            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        )
+    except objective_runs.ObjectiveRunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except AgentTerminated as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    _ensure_objective_run_monitor_task(
+        request,
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+    )
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/request-changes",
+    response_model=WorkLoopRunResponse,
+)
+async def request_work_loop_run_changes_endpoint(
+    request: Request,
+    work_slug: str,
+    run_id: str,
+    payload: RequestPlanRunChangesRequest,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> WorkLoopRunResponse:
+    """Return an objective run to its configured write stage."""
+    try:
+        record = await objective_runs.request_changes(
+            workstore,
+            loop_runs,
+            supervisor,
+            worktree_manager,
+            sharestore,
+            share_provisioner,
+            settings,
+            objective_runs.RequestObjectiveChangesRequest(
+                work_slug,
+                run_id,
+                payload.note,
+            ),
+        )
+    except objective_runs.ObjectiveRunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    _ensure_objective_run_monitor_task(
+        request,
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+    )
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/accept",
+    response_model=WorkLoopRunResponse,
+)
+async def accept_work_loop_run_endpoint(
+    request: Request,
+    work_slug: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> WorkLoopRunResponse:
+    """Accept one completed standalone Loop run."""
+    try:
+        record = await objective_runs.accept_run(
+            workstore,
+            loop_runs,
+            supervisor,
+            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        )
+    except objective_runs.ObjectiveRunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if record.status not in {LoopStatus.ACCEPTED, LoopStatus.CLEANED}:
+        _ensure_objective_run_monitor_task(
+            request,
+            workstore,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            check_runner,
+            loop_runs,
+            settings,
+            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        )
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/create-pr",
+    response_model=WorkLoopRunResponse,
+)
+async def create_work_loop_pr_stage_endpoint(
+    request: Request,
+    work_slug: str,
+    run_id: str,
+    payload: CreatePrStageRequest,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> WorkLoopRunResponse:
+    """Add and launch a Work-local Create PR stage."""
+    try:
+        record = objective_runs.create_pr_stage(
+            workstore,
+            loop_runs,
+            objective_runs.CreateObjectivePrRequest(
+                work_slug=work_slug,
+                run_id=run_id,
+                setup=pr_lifecycle.PrSetup(**payload.model_dump()),
+            ),
+        )
+    except (objective_runs.ObjectiveRunNotFound, objective_runs.WorkNotFound) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    _ensure_objective_run_monitor_task(
+        request,
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+    )
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/pr-feedback",
+    response_model=WorkLoopRunResponse,
+)
+async def send_work_loop_pr_feedback_endpoint(
+    request: Request,
+    work_slug: str,
+    run_id: str,
+    payload: SendPrFeedbackRequest,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> WorkLoopRunResponse:
+    """Start another pass from selected pull-request feedback."""
+    try:
+        record = objective_runs.send_pr_feedback(
+            workstore,
+            loop_runs,
+            objective_runs.SendObjectivePrFeedbackRequest(
+                work_slug=work_slug,
+                run_id=run_id,
+                comments=tuple(
+                    pr_lifecycle.PrFeedbackItem(
+                        comment_id=item.comment_id,
+                        instruction=item.instruction,
+                    )
+                    for item in payload.comments
+                ),
+                instruction=payload.instruction,
+            ),
+        )
+    except (objective_runs.ObjectiveRunNotFound, objective_runs.WorkNotFound) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    _ensure_objective_run_monitor_task(
+        request,
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+    )
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/cancel",
+    response_model=WorkLoopRunResponse,
+)
+async def cancel_work_loop_run_endpoint(
+    work_slug: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+) -> WorkLoopRunResponse:
+    """Cancel one active standalone Loop run."""
+    try:
+        record = await objective_runs.cancel_run(
+            workstore,
+            loop_runs,
+            supervisor,
+            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        )
+    except objective_runs.ObjectiveRunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/cleanup",
+    response_model=WorkLoopRunResponse,
+)
+async def cleanup_work_loop_run_endpoint(
+    work_slug: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+) -> WorkLoopRunResponse:
+    """Deprecated compatibility alias that releases provider runtimes."""
+    try:
+        record = await objective_runs.clean_run(
+            workstore,
+            loop_runs,
+            supervisor,
+            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        )
+    except objective_runs.ObjectiveRunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/rerun",
+    response_model=WorkLoopRunResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def rerun_work_loop_run_endpoint(
+    request: Request,
+    work_slug: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    loop_definitions: LoopDefinitionsDep,
+    loop_locations: LoopDefinitionLocationsDep,
+    loop_runs: LoopRunRepositoryDep,
+    context_resolver: LoopContextResolverDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+    payload: RerunWorkLoopRunRequest | None = None,
+) -> WorkLoopRunResponse:
+    """Start another run from a terminal run's kept workspace."""
+    try:
+        record = await objective_runs.rerun(
+            workstore,
+            loop_definitions,
+            loop_locations,
+            loop_runs,
+            context_resolver,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            settings,
+            objective_runs.RerunObjectiveRunRequest(
+                work_slug,
+                run_id,
+                LoopRunKind(payload.kind) if payload is not None else LoopRunKind.INITIAL,
+                payload.note if payload is not None else "",
+            ),
+        )
+    except objective_runs.ObjectiveRunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except objective_runs.LoopDefinitionConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except AgentTerminated as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    new_run_id = str(record.state["id"])
+    _ensure_objective_run_monitor_task(
+        request,
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        objective_runs.ObjectiveRunRequest(work_slug, new_run_id),
+    )
+    return _to_work_loop_run(record)
 
 
 @router.post(
@@ -349,9 +1041,7 @@ def planning_framework_status_endpoint(
 ) -> PlanningFrameworkStatusResponse:
     if workstore.get_work(work_slug) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"work not found: {work_slug}")
-    return _to_framework_status(
-        check_framework_status(payload.framework, payload.root_path)
-    )
+    return _to_framework_status(check_framework_status(payload.framework, payload.root_path))
 
 
 @router.post("/works/{work_slug}/planning-chat", response_model=ChatDetail)
@@ -383,9 +1073,7 @@ def start_planning_chat_endpoint(
     except planning_start_chat.PlanningFrameworkNotReady as e:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     except ValueError as e:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-        ) from e
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     return _to_chat_detail(record)
 
 
@@ -407,17 +1095,13 @@ def start_planning_setup_chat_endpoint(
     )
     try:
         planning_setup_chat.validate_provider_config(req)
-        record, _framework_status = planning_setup_chat.execute(
-            workstore, chatstore, req
-        )
+        record, _framework_status = planning_setup_chat.execute(workstore, chatstore, req)
     except planning_setup_chat.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except planning_setup_chat.PlanningFrameworkAlreadyReady as e:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     except ValueError as e:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-        ) from e
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     return _to_chat_detail(record)
 
 
@@ -446,9 +1130,7 @@ async def start_work_plan_endpoint(
         planning_chat_slug=payload.planning_chat_slug,
     )
     try:
-        req = planning_materialize.resolve_from_planning_session(
-            planning_sessions, req
-        )
+        req = planning_materialize.resolve_from_planning_session(planning_sessions, req)
     except planning_materialize.PlanningSessionNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     if (
@@ -475,9 +1157,7 @@ async def start_work_plan_endpoint(
     )
     try:
         planning_materialization_chat.validate_provider_config(chat_req)
-        record, _status = planning_materialization_chat.execute(
-            workstore, chatstore, chat_req
-        )
+        record, _status = planning_materialization_chat.execute(workstore, chatstore, chat_req)
         if record.chat.slug is None:
             raise ValueError("materialization chat has no slug")
         plan = await planning_materialize.try_finalize_existing(
@@ -497,7 +1177,10 @@ async def start_work_plan_endpoint(
                     )
                 ),
             )
-        _ensure_plan_materialization_task(
+        materialization_view = planning_materialization_status.execute(
+            workstore, chatstore, planningfiles, work_slug
+        )
+        await _ensure_plan_materialization_task(
             request,
             workstore,
             chatstore,
@@ -507,10 +1190,9 @@ async def start_work_plan_endpoint(
             chat_supervisor,
             settings,
             req,
+            replace_existing=materialization_view.state in {"stalled", "failed"},
         )
-        return _to_start_work_plan_response(
-            workstore, chatstore, planningfiles, work_slug
-        )
+        return _to_start_work_plan_response(workstore, chatstore, planningfiles, work_slug)
     except (
         planning_submit_materialization.WorkNotFound,
         planning_materialization_chat.WorkNotFound,
@@ -525,12 +1207,10 @@ async def start_work_plan_endpoint(
         planning_submit_materialization.InvalidPlanMaterialization,
         ValueError,
     ) as e:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-        ) from e
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
 
 
-def _ensure_plan_materialization_task(
+async def _ensure_plan_materialization_task(
     request: Request,
     workstore: WorkStore,
     chatstore: ChatStore,
@@ -540,7 +1220,10 @@ def _ensure_plan_materialization_task(
     chat_supervisor: AgentSupervisorService,
     settings: Settings,
     req: planning_materialize.MaterializePlanRequest,
+    *,
+    replace_existing: bool,
 ) -> None:
+    """Schedule materialization, replacing a stalled task on explicit retry."""
     key = f"{req.work_slug}:{req.root_path}"
     tasks = getattr(request.app.state, "planning_materialization_tasks", None)
     if tasks is None:
@@ -548,7 +1231,15 @@ def _ensure_plan_materialization_task(
         request.app.state.planning_materialization_tasks = tasks
     existing = tasks.get(key)
     if existing is not None and not existing.done():
-        return
+        if not replace_existing:
+            return
+        existing.cancel()
+        try:
+            await existing
+        except asyncio.CancelledError:
+            pass
+    if replace_existing:
+        req = replace(req, fresh_session=replace_existing)
     task = asyncio.create_task(
         planning_materialize.execute(
             workstore,
@@ -565,7 +1256,8 @@ def _ensure_plan_materialization_task(
     tasks[key] = task
 
     def _clear(done: asyncio.Task[WorkPlanView]) -> None:
-        tasks.pop(key, None)
+        if tasks.get(key) is done:
+            tasks.pop(key, None)
         try:
             done.result()
         except asyncio.CancelledError:
@@ -605,6 +1297,8 @@ def _ensure_plan_run_monitor_task(
     existing = tasks.get(key)
     if existing is not None and not existing.done():
         return
+    poller = getattr(request.app.state, "pr_status_poller", None)
+    pr_gateway = poller.lifecycle_gateway() if poller is not None else None
     task = asyncio.create_task(
         planning_run_monitor.execute(
             workstore,
@@ -619,6 +1313,7 @@ def _ensure_plan_run_monitor_task(
             loop_runs,
             settings,
             req,
+            pr_gateway=pr_gateway,
         ),
         name=f"planning-run-{req.work_slug}-{req.artifact_id}-{req.run_id}",
     )
@@ -641,6 +1336,67 @@ def _ensure_plan_run_monitor_task(
     task.add_done_callback(_clear)
 
 
+def _ensure_objective_run_monitor_task(
+    request: Request,
+    workstore: WorkStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    loop_runs: LoopRunRepository,
+    settings: Settings,
+    req: objective_runs.ObjectiveRunRequest,
+) -> None:
+    """Schedule one objective monitor unless that monitor is already active."""
+    key = f"{req.work_slug}:objective:{req.run_id}"
+    tasks = getattr(request.app.state, "planning_run_monitor_tasks", None)
+    if tasks is None:
+        tasks = {}
+        request.app.state.planning_run_monitor_tasks = tasks
+    existing = tasks.get(key)
+    if existing is not None and not existing.done():
+        return
+    poller = getattr(request.app.state, "pr_status_poller", None)
+    pr_gateway = poller.lifecycle_gateway() if poller is not None else None
+    task = asyncio.create_task(
+        objective_runs.monitor_run(
+            workstore,
+            loop_runs,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            check_runner,
+            settings,
+            req,
+            pr_gateway=pr_gateway,
+        ),
+        name=f"objective-run-{req.work_slug}-{req.run_id}",
+    )
+    tasks[key] = task
+
+    def _clear(done: asyncio.Task[LoopRunRecord]) -> None:
+        """Remove the finished monitor and log unexpected failures."""
+        tasks.pop(key, None)
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            _log.exception(
+                "objective run monitor failed for %s %s",
+                req.work_slug,
+                req.run_id,
+            )
+
+    task.add_done_callback(_clear)
+
+
 def _to_start_work_plan_response(
     workstore: WorkStore,
     chatstore: ChatStore,
@@ -653,16 +1409,12 @@ def _to_start_work_plan_response(
     plan = None
     if materialization.state == "complete":
         try:
-            plan = _to_plan_response(
-                planning_get.execute(workstore, planningfiles, work_slug)
-            )
+            plan = _to_plan_response(planning_get.execute(workstore, planningfiles, work_slug))
         except (planning_get.WorkNotFound, planning_get.PlanNotFound):
             plan = None
     return StartWorkPlanResponse(
         plan=plan,
-        materialization_status=_to_plan_materialization_status_response(
-            materialization
-        ),
+        materialization_status=_to_plan_materialization_status_response(materialization),
     )
 
 
@@ -696,6 +1448,36 @@ def get_work_plan_materialization_status_endpoint(
     except planning_materialization_status.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     return _to_plan_materialization_status_response(view)
+
+
+@router.post(
+    "/works/{work_slug}/plan/materialization-permission",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def resolve_work_plan_materialization_permission_endpoint(
+    work_slug: str,
+    payload: ResolvePlanMaterializationPermissionRequest,
+    workstore: WorkStoreDep,
+    chatstore: ChatStoreDep,
+    chat_supervisor: ChatSupervisorDep,
+) -> None:
+    try:
+        await planning_resolve_materialization_permission.execute(
+            workstore,
+            chatstore,
+            chat_supervisor,
+            planning_resolve_materialization_permission.ResolveMaterializationPermissionRequest(
+                work_slug=work_slug,
+                request_id=payload.request_id,
+                decision=payload.decision,
+            ),
+        )
+    except planning_resolve_materialization_permission.WorkNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except planning_resolve_materialization_permission.PermissionNotFound as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except planning_resolve_materialization_permission.MaterializerNotRunning as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.post("/works/{work_slug}/plan/approve", response_model=WorkPlanResponse)
@@ -735,15 +1517,60 @@ def get_work_plan_artifact_endpoint(
     planningfiles: PlanningFilesDep,
 ) -> PlanArtifactDetailResponse:
     try:
-        detail = planning_get.artifact(
-            workstore, planningfiles, work_slug, artifact_id
-        )
+        detail = planning_get.artifact(workstore, planningfiles, work_slug, artifact_id)
     except (
         planning_get.WorkNotFound,
         planning_get.PlanNotFound,
         planning_get.ArtifactNotFound,
     ) as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/pr-refresh",
+    response_model=PlanArtifactDetailResponse,
+)
+async def refresh_work_plan_pr_endpoint(
+    request: Request,
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
+    force: bool = False,
+) -> PlanArtifactDetailResponse:
+    """Synchronize one Planning run's pull-request lifecycle."""
+    poller = getattr(request.app.state, "pr_status_poller", None)
+    gateway = poller.lifecycle_gateway() if poller is not None else None
+    if gateway is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="pull-request lifecycle service is unavailable",
+        )
+    try:
+        detail = await planning_pr_runs.refresh(
+            workstore,
+            planningfiles,
+            loop_runs,
+            gateway,
+            planning_pr_runs.RefreshPlanningPrRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                force=force,
+            ),
+        )
+    except (
+        planning_pr_runs.WorkNotFound,
+        planning_pr_runs.PlanArtifactNotFound,
+        planning_pr_runs.PlanArtifactRunNotFound,
+        planning_pr_runs.PlanningNotStarted,
+    ) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except pr_review.PrReviewUnavailable as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return _to_plan_detail_response(detail)
 
 
@@ -924,6 +1751,7 @@ async def start_work_plan_artifact_run_endpoint(
                 agent_slug=payload.agent_slug,
                 loop_definition_id=payload.loop_definition_id,
                 loop_revision=payload.loop_revision,
+                brief_note=payload.brief_note,
             ),
         )
     except (
@@ -935,6 +1763,8 @@ async def start_work_plan_artifact_run_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except planning_start_run.LoopDefinitionNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except planning_start_run.WorkNotActive as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     except (
         planning_start_run.PlanArtifactNotExecutable,
         planning_start_run.LoopDefinitionConflict,
@@ -943,9 +1773,7 @@ async def start_work_plan_artifact_run_endpoint(
         planning_start_run.AgentFolderMissing,
         planning_start_run.InvalidProviderConfig,
     ) as e:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-        ) from e
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except AgentTerminated as e:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     run = detail.artifact.runs[-1]
@@ -1059,14 +1887,19 @@ async def resume_work_plan_artifact_run_endpoint(
             loop_runs,
             supervisor,
             worktree_manager,
+            connection_store,
             sharestore,
             share_provisioner,
+            adapter_factory,
             settings,
             planning_resume_run.ResumeArtifactRunRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
                 run_id=run_id,
                 resolution_note=payload.resolution_note,
+                retry_failed=payload.retry_failed,
+                gate_decision=payload.gate_decision,
+                enforced_findings=tuple(payload.enforced_findings),
             ),
         )
     except (
@@ -1081,9 +1914,7 @@ async def resume_work_plan_artifact_run_endpoint(
         planning_resume_run.PlanArtifactNotExecutable,
         planning_resume_run.PlanArtifactRunNotResumable,
     ) as e:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-        ) from e
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except AgentTerminated as e:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     _ensure_plan_run_monitor_task(
@@ -1156,9 +1987,7 @@ async def request_work_plan_run_changes_endpoint(
     ) as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except planning_request_run_changes.PlanArtifactRunNotChangeable as exc:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
-        ) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     _ensure_plan_run_monitor_task(
         request,
         workstore,
@@ -1185,7 +2014,8 @@ async def request_work_plan_run_changes_endpoint(
     "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/accept",
     response_model=PlanArtifactDetailResponse,
 )
-def accept_work_plan_artifact_run_endpoint(
+async def accept_work_plan_artifact_run_endpoint(
+    request: Request,
     work_slug: str,
     artifact_id: str,
     run_id: str,
@@ -1193,12 +2023,21 @@ def accept_work_plan_artifact_run_endpoint(
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
     loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
 ) -> PlanArtifactDetailResponse:
     try:
-        detail = planning_accept_run.execute(
+        detail = await planning_accept_run.execute(
             workstore,
             planningfiles,
             loop_runs,
+            supervisor,
             planning_accept_run.AcceptArtifactRunRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
@@ -1223,9 +2062,214 @@ def accept_work_plan_artifact_run_endpoint(
         planning_accept_run.PlanArtifactNotExecutable,
         planning_accept_run.PlanArtifactRunNotAcceptable,
     ) as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
+    run = next((item for item in detail.artifact.runs if item.id == run_id), None)
+    if run is not None and run.status == PlanRunStatus.RUNNING:
+        _ensure_plan_run_monitor_task(
+            request,
+            workstore,
+            planningfiles,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            check_runner,
+            loop_runs,
+            settings,
+            planning_run_monitor.MonitorArtifactRunRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+            ),
+        )
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/create-pr",
+    response_model=PlanArtifactDetailResponse,
+)
+async def create_work_plan_pr_stage_endpoint(
+    request: Request,
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    payload: CreatePrStageRequest,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> PlanArtifactDetailResponse:
+    """Add and launch a Work-local Create PR stage for Planning."""
+    try:
+        detail = planning_pr_runs.create_stage(
+            workstore,
+            planningfiles,
+            loop_runs,
+            planning_pr_runs.CreatePlanningPrRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                setup=pr_lifecycle.PrSetup(**payload.model_dump()),
+            ),
+        )
+    except (
+        planning_pr_runs.WorkNotFound,
+        planning_pr_runs.PlanArtifactNotFound,
+        planning_pr_runs.PlanArtifactRunNotFound,
+        planning_pr_runs.PlanningNotStarted,
+    ) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-        ) from e
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    _ensure_plan_run_monitor_task(
+        request,
+        workstore,
+        planningfiles,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        planning_run_monitor.MonitorArtifactRunRequest(
+            work_slug=work_slug,
+            artifact_id=artifact_id,
+            run_id=run_id,
+        ),
+    )
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/pr-feedback",
+    response_model=PlanArtifactDetailResponse,
+)
+async def send_work_plan_pr_feedback_endpoint(
+    request: Request,
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    payload: SendPrFeedbackRequest,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> PlanArtifactDetailResponse:
+    """Start another Planning pass from selected PR feedback."""
+    try:
+        detail = planning_pr_runs.send_feedback(
+            workstore,
+            planningfiles,
+            loop_runs,
+            planning_pr_runs.SendPlanningPrFeedbackRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                comments=tuple(
+                    pr_lifecycle.PrFeedbackItem(
+                        comment_id=item.comment_id,
+                        instruction=item.instruction,
+                    )
+                    for item in payload.comments
+                ),
+                instruction=payload.instruction,
+            ),
+        )
+    except (
+        planning_pr_runs.WorkNotFound,
+        planning_pr_runs.PlanArtifactNotFound,
+        planning_pr_runs.PlanArtifactRunNotFound,
+        planning_pr_runs.PlanningNotStarted,
+    ) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    _ensure_plan_run_monitor_task(
+        request,
+        workstore,
+        planningfiles,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        planning_run_monitor.MonitorArtifactRunRequest(
+            work_slug=work_slug,
+            artifact_id=artifact_id,
+            run_id=run_id,
+        ),
+    )
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/cancel",
+    response_model=PlanArtifactDetailResponse,
+)
+async def cancel_work_plan_artifact_run_endpoint(
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+) -> PlanArtifactDetailResponse:
+    """Cancel one active Planning artifact run."""
+    try:
+        detail = await planning_cancel_run.execute(
+            workstore,
+            planningfiles,
+            loop_runs,
+            supervisor,
+            planning_cancel_run.CancelArtifactRunRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+            ),
+        )
+    except (
+        planning_cancel_run.WorkNotFound,
+        planning_cancel_run.PlanArtifactNotFound,
+        planning_cancel_run.PlanArtifactRunNotFound,
+        planning_cancel_run.PlanningNotStarted,
+    ) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except lifecycle.LoopRunNotCancellable as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     return _to_plan_detail_response(detail)
 
 
@@ -1241,7 +2285,6 @@ async def mark_work_plan_run_cleaned_endpoint(
     planningfiles: PlanningFilesDep,
     loop_runs: LoopRunRepositoryDep,
     supervisor: SupervisorDep,
-    worktree_manager: WorktreeDep,
 ) -> PlanArtifactDetailResponse:
     try:
         detail = await planning_mark_run_cleaned.execute(
@@ -1249,7 +2292,6 @@ async def mark_work_plan_run_cleaned_endpoint(
             planningfiles,
             loop_runs,
             supervisor,
-            worktree_manager,
             planning_mark_run_cleaned.MarkArtifactRunCleanedRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
@@ -1350,7 +2392,13 @@ def list_work_artifacts_endpoint(
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
 
     def _resolve_worktree(work: str, agent: str) -> Path | None:
-        candidate = paths.worktree_dir(work, agent)
+        record = next(
+            (item for item in workstore.list_agents_for_work(work) if item.slug == agent),
+            None,
+        )
+        candidate = paths.worktree_dir(
+            work, record.worktree_slug if record and record.worktree_slug else agent
+        )
         return candidate if candidate.exists() else None
 
     def _resolve_share_roots(project_slug: str) -> list[Path]:
@@ -1406,27 +2454,21 @@ def create_handoff_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     agents = workstore.list_agents_for_work(work_slug)
     agent_slug_by_id = {a.id: a.slug for a in agents if a.id is not None}
-    return _to_handoff_summary(
-        handoff, agent_slug_by_id, source_slug=payload.source_agent_slug
-    )
+    return _to_handoff_summary(handoff, agent_slug_by_id, source_slug=payload.source_agent_slug)
 
 
 @router.get(
     "/works/{work_slug}/handoffs",
     response_model=list[HandoffSummary],
 )
-def list_work_handoffs_endpoint(
-    work_slug: str, workstore: WorkStoreDep
-) -> list[HandoffSummary]:
+def list_work_handoffs_endpoint(work_slug: str, workstore: WorkStoreDep) -> list[HandoffSummary]:
     try:
         handoffs = workstore.list_handoffs_for_work(work_slug)
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     agents = workstore.list_agents_for_work(work_slug)
     agent_slug_by_id = {a.id: a.slug for a in agents if a.id is not None}
-    return [
-        _to_handoff_summary(h, agent_slug_by_id) for h in handoffs
-    ]
+    return [_to_handoff_summary(h, agent_slug_by_id) for h in handoffs]
 
 
 @router.patch("/works/{work_slug}", response_model=WorkDetail)
@@ -1473,42 +2515,86 @@ def move_work_to_project_endpoint(
     except move_to_project.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except move_to_project.ProjectNotFound as e:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
-        ) from e
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     return _to_detail(record, WorkspacePaths(workspace_root=settings.workspace_root))
+
+
+@router.get("/works/{work_slug}/completion", response_model=CompleteWorkPreviewResponse)
+def preview_work_completion_endpoint(
+    work_slug: str,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    worktree_manager: WorktreeDep,
+) -> CompleteWorkPreviewResponse:
+    """Preview completion blockers and managed workspace state."""
+    try:
+        result = complete.preview(workstore, loop_runs, worktree_manager, work_slug)
+    except complete.WorkNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return CompleteWorkPreviewResponse(
+        work_slug=result.work_slug,
+        agent_count=result.agent_count,
+        active_run_count=result.active_run_count,
+        workspaces=[
+            CompletionWorkspaceResponse(
+                owner=state.workdir.name,
+                path=str(state.workdir),
+                is_git_repo=state.is_git_repo,
+                branch=state.branch,
+                head=state.head,
+                changed_files=list(state.changed_files),
+                untracked_files=list(state.untracked_files),
+                removable=complete.workspace_is_removable(state),
+                error=state.error,
+            )
+            for state in result.workspaces
+        ],
+    )
 
 
 @router.post("/works/{work_slug}/complete", response_model=CompleteWorkResponse)
 async def complete_work_endpoint(
     work_slug: str,
     workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
     supervisor: SupervisorDep,
+    chatstore: ChatStoreDep,
+    chat_supervisor: ChatSupervisorDep,
     worktree_manager: WorktreeDep,
+    payload: CompleteWorkRequestBody | None = None,
 ) -> CompleteWorkResponse:
-    """Mark a Work as completed: stop running agents, remove their git
-    worktrees, flip the Work's status to ``completed``. Transcripts and
-    the work folder under ``~/Atelier/works/<slug>/`` are preserved."""
+    """Stop provider runtimes and archive a Work, preserving history."""
     try:
         result = await complete.execute(
             workstore,
+            loop_runs,
             supervisor,
+            chatstore,
+            chat_supervisor,
             worktree_manager,
-            complete.CompleteWorkRequest(work_slug=work_slug),
+            complete.CompleteWorkRequest(
+                work_slug=work_slug,
+                remove_workspaces=payload.remove_workspaces if payload else False,
+            ),
         )
     except complete.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    except complete.WorkNotActive as e:
+    except (
+        complete.WorkHasActiveRuns,
+        complete.WorkNotActive,
+        complete.WorkspaceNotClean,
+    ) as e:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     return CompleteWorkResponse(
-        work_slug=result.work_slug, agent_count=result.agent_count
+        work_slug=result.work_slug,
+        agent_count=result.agent_count,
+        workspace_count=result.workspace_count,
+        workspaces_removed=result.workspaces_removed,
     )
 
 
 @router.post("/works/{work_slug}/reveal", status_code=status.HTTP_204_NO_CONTENT)
-def reveal_work_endpoint(
-    work_slug: str, workstore: WorkStoreDep, settings: SettingsDep
-) -> None:
+def reveal_work_endpoint(work_slug: str, workstore: WorkStoreDep, settings: SettingsDep) -> None:
     """Open the work's atelier folder in the OS file browser. Slug → path
     is server-computed (defends against arbitrary path injection) and the
     work must exist (so we don't pop a Finder window for a typo)."""
@@ -1538,9 +2624,7 @@ def get_work_chat_context_doc_endpoint(
     workstore: WorkStoreDep,
 ) -> WorkChatContextDocResponse:
     try:
-        result = workstore.read_work_chat_context_doc(
-            work_slug, folder_name, filename
-        )
+        result = workstore.read_work_chat_context_doc(work_slug, folder_name, filename)
     except ValueError as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     if result is None:
@@ -1563,6 +2647,7 @@ def _to_create_request(payload: NewWorkRequest) -> CreateWorkRequest:
         description=payload.description,
         contexts=[_to_domain_context(c) for c in payload.contexts],
         project_slug=payload.project_slug,
+        mode=payload.mode,
         from_chat=(
             WorkChatProvenance(
                 chat_slug=payload.from_chat.slug,
@@ -1591,6 +2676,7 @@ def _to_update_request(work_slug: str, payload: PatchWorkRequest) -> UpdateWorkR
         name=payload.name,
         description=payload.description,
         status=payload.status,
+        mode=payload.mode,
         contexts=(
             [_to_domain_context(c) for c in payload.contexts]
             if payload.contexts is not None
@@ -1621,6 +2707,7 @@ def _to_summary(
         created_at=work.created_at,
         atelier_path=str(paths.work_dir(slug)),
         project_slug=work.project_slug,
+        mode=work.mode,
         agent_count=(counts or {}).get("agents", 0),
         artifact_count=(counts or {}).get("artifacts", 0),
         from_chat=(
@@ -1662,9 +2749,7 @@ def _to_handoff_summary(
     # request's source_agent_slug too because the agent might have been
     # deleted by the time we resolve (defensive — the workstore would
     # have errored earlier if the source were truly missing).
-    resolved_source = (
-        agent_slug_by_id.get(handoff.source_agent_id) or source_slug or ""
-    )
+    resolved_source = agent_slug_by_id.get(handoff.source_agent_id) or source_slug or ""
     target_slug = (
         agent_slug_by_id.get(handoff.target_agent_id)
         if handoff.target_agent_id is not None
@@ -1690,7 +2775,7 @@ def _to_handoff_summary(
 
 def _to_chat_detail(record: ChatRecord) -> ChatDetail:
     chat = record.chat
-    summary = {
+    summary: dict[str, Any] = {
         "slug": _require_chat_slug(chat),
         "title": chat.title,
         "provider": chat.provider,
@@ -1706,9 +2791,7 @@ def _to_chat_detail(record: ChatRecord) -> ChatDetail:
         "updated_at": chat.updated_at,
         "promoted_to_work_slug": chat.promoted_to_work_slug,
         "message_count": len(record.transcript),
-        "planning_readiness": _planning_readiness_to_schema(
-            planning_readiness_from_record(record)
-        ),
+        "planning_readiness": _planning_readiness_to_schema(planning_readiness_from_record(record)),
     }
     return ChatDetail(
         **summary,
@@ -1798,6 +2881,25 @@ def _to_plan_materialization_status_response(
         last_event_summary=view.last_event_summary,
         message=view.message,
         tool_name=view.tool_name,
+        recent_activity=[
+            {
+                "kind": item.kind,
+                "text": item.text,
+                "ts": item.ts,
+            }
+            for item in view.recent_activity
+        ],
+        pending_permissions=[
+            {
+                "request_id": item.request_id,
+                "tool_name": item.tool_name,
+                "tool_input": item.tool_input,
+                "ts": item.ts,
+                "seq": item.seq,
+                "options": list(item.options),
+            }
+            for item in view.pending_permissions
+        ],
     )
 
 
@@ -1862,6 +2964,7 @@ def _to_plan_run(run: PlanArtifactRun) -> PlanArtifactRunResponse:
         decisions=run.decisions,
         changes=run.changes,
         validation_evidence=run.validation_evidence,
+        brief_note=run.brief_note,
         loop_status=run.loop_status,
         loop_status_reason=run.loop_status_reason,
         loop_attempt=run.loop_attempt,
@@ -1869,56 +2972,273 @@ def _to_plan_run(run: PlanArtifactRun) -> PlanArtifactRunResponse:
         loop_definition_id=run.loop_definition_id,
         loop_definition_name=run.loop_definition_name,
         loop_definition_revision=run.loop_definition_revision,
+        loop_definition=(
+            definition_snapshot(run.loop_definition) if run.loop_definition is not None else None
+        ),
         loop_current_stage_id=run.loop_current_stage_id,
         loop_stages=[
-            {
-                "id": stage.id,
-                "name": stage.name,
-                "kind": stage.kind,
-                "status": stage.status,
-                "attempt": stage.attempt,
-                "max_attempts": stage.max_attempts,
-                "agent_slug": stage.agent_slug,
-                "permissions": stage.permissions,
-                "session": stage.session,
-                "summary": stage.summary,
-                "findings": stage.findings,
-                "changes": stage.changes,
-                "validation_evidence": stage.validation_evidence,
-                "divergences": stage.divergences,
-                "skipped_scope": stage.skipped_scope,
-                "blocker": stage.blocker,
-                "artifact_refs": stage.artifact_refs,
-                "finding_details": [
-                    {
-                        "text": finding.text,
-                        "severity": finding.severity,
-                        "location": finding.location,
-                    }
-                    for finding in stage.finding_details
-                ],
-                "criteria_coverage": [
-                    {
-                        "text": criterion.text,
-                        "met": criterion.met,
-                        "note": criterion.note,
-                    }
-                    for criterion in stage.criteria_coverage
-                ],
-                "changed_files": [
-                    {
-                        "path": changed.path,
-                        "additions": changed.additions,
-                        "deletions": changed.deletions,
-                    }
-                    for changed in stage.changed_files
-                ],
-                "resolved_context": stage.resolved_context,
-                "context_warnings": stage.context_warnings,
-            }
+            PlanLoopStageRunResponse.model_validate(
+                {
+                    "id": stage.id,
+                    "name": stage.name,
+                    "kind": stage.kind,
+                    "status": stage.status,
+                    "attempt": stage.attempt,
+                    "max_attempts": stage.max_attempts,
+                    "agent_slug": stage.agent_slug,
+                    "permissions": stage.permissions,
+                    "session": stage.session,
+                    "summary": stage.summary,
+                    "findings": stage.findings,
+                    "changes": stage.changes,
+                    "validation_evidence": stage.validation_evidence,
+                    "divergences": stage.divergences,
+                    "skipped_scope": stage.skipped_scope,
+                    "blocker": stage.blocker,
+                    "artifact_refs": stage.artifact_refs,
+                    "finding_details": [
+                        {
+                            "text": finding.text,
+                            "severity": finding.severity,
+                            "location": finding.location,
+                        }
+                        for finding in stage.finding_details
+                    ],
+                    "criteria_coverage": [
+                        {
+                            "text": criterion.text,
+                            "met": criterion.met,
+                            "note": criterion.note,
+                        }
+                        for criterion in stage.criteria_coverage
+                    ],
+                    "changed_files": [
+                        {
+                            "path": changed.path,
+                            "additions": changed.additions,
+                            "deletions": changed.deletions,
+                        }
+                        for changed in stage.changed_files
+                    ],
+                    "resolved_context": stage.resolved_context,
+                    "context_warnings": stage.context_warnings,
+                    "reports": [
+                        {
+                            "outcome": report.outcome,
+                            "pass_number": report.pass_number,
+                            "agent_slug": report.agent_slug,
+                            "summary": report.summary,
+                            "findings": report.findings,
+                            "changes": report.changes,
+                            "validation_evidence": report.validation_evidence,
+                            "divergences": report.divergences,
+                            "skipped_scope": report.skipped_scope,
+                            "blocker": report.blocker,
+                            "artifact_refs": report.artifact_refs,
+                            "finding_details": [
+                                {
+                                    "text": finding.text,
+                                    "severity": finding.severity,
+                                    "location": finding.location,
+                                }
+                                for finding in report.finding_details
+                            ],
+                            "criteria_coverage": [
+                                {
+                                    "text": criterion.text,
+                                    "met": criterion.met,
+                                    "note": criterion.note,
+                                }
+                                for criterion in report.criteria_coverage
+                            ],
+                            "changed_files": [
+                                {
+                                    "path": changed.path,
+                                    "additions": changed.additions,
+                                    "deletions": changed.deletions,
+                                }
+                                for changed in report.changed_files
+                            ],
+                            "seq": report.seq,
+                            "recorded_at": report.recorded_at,
+                            "review_decision": (
+                                {
+                                    "decision": report.review_decision.decision,
+                                    "enforced_findings": report.review_decision.enforced_findings,
+                                    "instruction": report.review_decision.instruction,
+                                }
+                                if report.review_decision is not None
+                                else None
+                            ),
+                            "push_at": report.push_at,
+                            "pr": report.pr,
+                            "addressed_comments": report.addressed_comments,
+                            "feedback_instruction": report.feedback_instruction,
+                        }
+                        for report in stage.reports
+                    ],
+                    "push_at": stage.push_at,
+                    "pr": stage.pr,
+                    "addressed_comments": stage.addressed_comments,
+                    "feedback_instruction": stage.feedback_instruction,
+                    "approved_command_prefixes": stage.approved_command_prefixes,
+                }
+            )
             for stage in run.loop_stages
         ],
+        loop_review_gate=run.loop_review_gate,
+        waived_findings_count=run.waived_findings_count,
+        loop_pass_number=run.loop_pass_number,
+        loop_passes=run.loop_passes,
+        pr=run.pr,
+        pr_comments=run.pr_comments,
     )
+
+
+def _to_work_loop_run(record: LoopRunRecord) -> WorkLoopRunResponse:
+    """Project one durable objective record onto its REST response."""
+    state = record.state
+    raw_loop = state.get("loop")
+    loop: dict[str, Any] = raw_loop if isinstance(raw_loop, dict) else {}
+    stages: list[PlanLoopStageRunResponse] = []
+    raw_stages = loop.get("stages")
+    if isinstance(raw_stages, list):
+        for row in raw_stages:
+            if not isinstance(row, dict):
+                continue
+            try:
+                stages.append(PlanLoopStageRunResponse.model_validate(row))
+            except ValueError:
+                continue
+    changed_by_path = {changed.path: changed for stage in stages for changed in stage.changed_files}
+    evidence = list(
+        dict.fromkeys(
+            stage.validation_evidence for stage in stages if stage.validation_evidence.strip()
+        )
+    )
+    finished_at = record.completed_at or datetime.now(UTC)
+    elapsed = max(0.0, (finished_at - record.started_at).total_seconds())
+    raw_options = state.get("options")
+    options = (
+        {str(key): str(value) for key, value in raw_options.items()}
+        if isinstance(raw_options, dict)
+        else {}
+    )
+    raw_cost = state.get("cost_usd")
+    raw_number = state.get("number")
+    raw_kind = state.get("run_kind")
+    try:
+        run_kind = LoopRunKind(raw_kind) if isinstance(raw_kind, str) else LoopRunKind.INITIAL
+    except ValueError:
+        run_kind = LoopRunKind.INITIAL
+    raw_status = loop.get("status")
+    try:
+        loop_status = LoopStatus(raw_status) if isinstance(raw_status, str) else record.status
+    except ValueError:
+        loop_status = record.status
+    definition = loop.get("definition_snapshot")
+    brief = optional_brief_from_snapshot(state.get("brief"))
+    return WorkLoopRunResponse(
+        id=str(state.get("id") or record.plan_run_id or record.run_key),
+        number=raw_number if isinstance(raw_number, int) else 0,
+        goal=record.target_ref,
+        status=loop_status,
+        status_reason=str(loop.get("status_reason") or ""),
+        loop_definition_id=str(loop.get("definition_id") or record.definition_id),
+        loop_definition_name=str(loop.get("definition_name") or ""),
+        loop_definition_revision=str(loop.get("definition_revision") or record.definition_revision),
+        loop_definition=definition if isinstance(definition, dict) else None,
+        current_stage_id=str(loop.get("current_stage_id") or "") or None,
+        stages=stages,
+        root_path=str(state.get("root_path") or ""),
+        workspace_path=str(state.get("workspace_path") or ""),
+        provider=str(state.get("provider") or ""),
+        model=str(state.get("model") or ""),
+        options=options,
+        started_at=str(state.get("started_at") or record.started_at.isoformat()),
+        completed_at=(
+            str(state["completed_at"])
+            if state.get("completed_at")
+            else record.completed_at.isoformat()
+            if record.completed_at is not None
+            else None
+        ),
+        accepted_at=(record.accepted_at.isoformat() if record.accepted_at is not None else None),
+        cancelled_at=(record.cancelled_at.isoformat() if record.cancelled_at is not None else None),
+        cleanup_at=(record.cleanup_at.isoformat() if record.cleanup_at is not None else None),
+        elapsed_seconds=elapsed,
+        cost_usd=float(raw_cost) if isinstance(raw_cost, int | float) else None,
+        summary=str(state.get("summary") or ""),
+        changed_files=[
+            PlanLoopChangedFileResponse(
+                path=changed.path,
+                additions=changed.additions,
+                deletions=changed.deletions,
+            )
+            for changed in changed_by_path.values()
+        ],
+        evidence=evidence,
+        source_run_id=(str(state["source_run_id"]) if state.get("source_run_id") else None),
+        run_kind=run_kind,
+        seed_label=str(state.get("seed_label") or ""),
+        brief=_to_loop_brief_schema(brief) if brief is not None else None,
+        review_gate=(
+            dict(loop["review_gate"]) if isinstance(loop.get("review_gate"), dict) else None
+        ),
+        waived_findings_count=len(
+            [item for item in loop.get("waived_findings", []) if isinstance(item, str)]
+            if isinstance(loop.get("waived_findings"), list)
+            else []
+        ),
+        pass_number=max(1, loop_actions.int_or_default(loop.get("pass_number"), 1)),
+        passes=[dict(item) for item in loop.get("passes", []) if isinstance(item, dict)]
+        if isinstance(loop.get("passes"), list)
+        else [],
+        pr=(dict(loop["pr"]) if isinstance(loop.get("pr"), dict) else None),
+        pr_comments=[dict(item) for item in loop.get("pr_comments", []) if isinstance(item, dict)]
+        if isinstance(loop.get("pr_comments"), list)
+        else [],
+    )
+
+
+def _to_loop_brief(payload: LoopBriefSchema) -> LoopBrief:
+    """Map one validated HTTP brief into framework-free domain values."""
+    return LoopBrief(
+        goal=payload.goal,
+        stages=tuple(
+            LoopStageBrief(
+                stage_id=stage.stage_id,
+                note=stage.note,
+                context=tuple(
+                    LoopBriefContext(kind=context.kind, value=context.value)
+                    for context in stage.context
+                ),
+                agent=(
+                    LoopBriefAgent(
+                        provider=stage.agent.provider,
+                        model=stage.agent.model,
+                        options=dict(stage.agent.options),
+                    )
+                    if stage.agent is not None
+                    else None
+                ),
+                review_gate=(
+                    LoopReviewGateMode(stage.review_gate) if stage.review_gate is not None else None
+                ),
+                approved_command_prefixes=(
+                    tuple(stage.approved_command_prefixes)
+                    if stage.approved_command_prefixes is not None
+                    else None
+                ),
+            )
+            for stage in payload.stages
+        ),
+    )
+
+
+def _to_loop_brief_schema(brief: LoopBrief) -> LoopBriefSchema:
+    """Map the canonical domain brief into its shared REST shape."""
+    return LoopBriefSchema.model_validate(brief_snapshot(brief))
 
 
 def _to_plan_proposal(

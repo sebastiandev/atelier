@@ -76,6 +76,12 @@ belongs in the rail (`Planning`, `Loop`, etc.), and a rail must not repeat the
 wordmark or breadcrumbs. Dense tile toolbars remain local because they control
 a tool rather than identify the route.
 
+Actions live where their result appears. The topbar owns navigation plus Work
+and full-view lifecycle only: **Mark done/Reopen**, the Work-canvas **New
+agent**, and editor **Close/Save**. Collection creation stays beside its own
+tabs or heading (**Create loop**, **New stage**), while object actions stay on
+their card, row, or aside. A dismissible dock never owns a collection create.
+
 Breadcrumbs are navigation, not decoration. The Atelier wordmark is the root
 link, so do not add a `workspace` crumb. Every routed or stateful ancestor is
 clickable; only the current leaf is plain text with `aria-current="page"`.
@@ -117,7 +123,7 @@ in-app mode pickers.
 - **Chat view** follows `shell-v3 narrow-left`: grounding and model in the rail, centered transcript in the main column. It consumes the runtime websocket stream and reuses the AgentTile transcript units and metrics bar so message, tool, compaction, and context-progress treatment stays consistent with agents.
 - **Work chat tiles** use the agent-tile frame but not agent persona colors. Anything with `data-chat="true"` sets `--p-color` / `--p-soft` from the fixed chat token family (`--chat-color`, `--chat-soft`, `--chat-line`). Chat tiles expose maximize, close, and start-agent-from-chat controls, but never IDE, console, reveal-worktree, detach, persona controls, or a duplicate header compact button. Work-grounded chat tiles do not repeat the current work as a grounding pill.
 - **Chat compaction** is fixed-accent, not persona/project colored. Compact actions are neutral local controls; `context_compacted` uses the shared AgentTile compaction boundary with a chat summary loader. Provider-side auto compaction uses the softer informational boundary and never shows a summary action.
-- **Work hero actions** keep the Work action labeled but neutral (`Mark done` / `Reopen` via `.work-hero .pills .btn`) and make secondary chat/move actions icon-only 28px buttons (`.btn.icon.sm`) with tooltips. Keep the colored primary treatment for canvas-level creation actions such as `New agent`.
+- **Work lifecycle actions** stay labeled but neutral (**Mark done** / **Reopen**) and occupy the same Work-level action position in Manual, Planning, and Loop headers. The completion dialog leads with the archive outcome, shows retained agents and each workspace state, and defaults to keeping every workspace. Workspace removal is an explicit secondary option available only when all listed git worktrees are inspectable and clean. Completed Works render as read-only history; do not show creation, start, retry, or mutation controls until reopened. Secondary chat/move actions remain icon-only 28px buttons (`.btn.icon.sm`) with tooltips.
 - **Work rail scrolling** keeps Shared folders, Active agents, Chats, and Artifacts as separate scroll bodies when they overflow. Rail scrollbars use a subtle neutral thumb from the current theme rather than browser defaults or project/persona accents. The Artifacts header can open a compact local filter for title, slug, type, status, source, and path metadata.
 - **Promotion** uses the summary modal shape (`.promote-summary-modal`) with the chat provenance card at the top. The modal is about confirming the work seed, not choosing promotion modes.
 - **Context docs** use a document viewer modal (`.context-doc-modal`) with the generated `context.md` rendered as simple headings, bullets, and paragraphs, plus a direct link back to the source chat.
@@ -134,9 +140,80 @@ warn, review = review-magenta, deterministic check = good, human approval =
 info. Selector, library, editor, Planning artifact runs, and standalone Loop
 mode all consume the same definition and stage components. A selected stage
 highlights its existing connector; selection never changes connector width or
-layout. Run-level provider/context overrides do not mutate the definition;
+layout. Run-stage spines show immutable execution occurrences: a backward
+transition keeps the review verdict, adds a return arrow, and appends the
+re-entered stage as pass 2 (then pass 3, and so on). Occurrences are selectable
+and the strip wraps by whole arrow-plus-stage units when it needs another row.
+Read-only criterion results use a filled good tick or danger cross; native
+checkboxes remain reserved for choices the user can still change.
+Run-level provider/context overrides do not mutate the definition;
 editing stages or transitions opens the structure editor and forks a built-in
-to the repository.
+to the repository. Run actions reflect backend-owned lifecycle transitions:
+active runs expose cancel, and runs with a retained workspace expose editor
+beside transcript. Acceptance and cancellation release provider runtimes while
+retaining agents, transcripts, and workspaces, so there is no per-run cleanup
+action. Create PR is either a configured `pr` stage or a one-off action on an
+accepted run's terminal result; never show it on a historical stage or when the
+pinned loop already owns that stage. The compact modal derives its title from
+the goal, groups automatic/manual description controls, keeps status/base and
+execution inheritance inline, and calls out detached HEAD before launch. PR
+status and comments stay inside the latest PR occurrence, while
+older pass occurrences remain read-only. Planning and
+Loop mode use the same run surface and run rail below the app header. The
+right dock owns pinned loop configuration, transcript inspection, and
+conversation-only run discussion.
+
+The Settings loop and stage libraries use the full content width. Standalone
+and loop-local stage editors keep instructions, stage-specific inputs, injected
+inputs, and compact file/folder/note context in the main column; execution
+defaults, permissions, and advanced policy stay in the right dock. Outcome
+capabilities appear there as compact semantic rows; they are not a declared-
+outcome checklist and never expose graph destinations. Outcome destinations
+remain a loop-editor concern. **Start blank** opens that same
+editor. **Keep local** returns an inline loop stage,
+while **Save to library** persists it and returns a linked revision.
+Provider permission blockers use the shared inline approval card and switch the
+run status badge to the warning tone until answered.
+Five minutes without transcript activity uses that same warning tone and an
+inline status card; it is not styled as a failure while the runtime is live.
+Run discussion is a separate Work chat in the same worktree, visibly read-only,
+with the loop identified as the authoritative place where work continues. It
+opens directly in the run dock with no launch modal or automatic user turn.
+Provider-published model, effort, and Fast controls may change conversation
+quality or speed; Fast is always a switch in agent/chat composers and prelaunch
+execution controls when the provider exposes it. Permission posture stays
+locked and is never rendered in discussion chats.
+
+Approved command prefixes use compact mono rows plus one add row. The structure
+inspector labels template/default/inherited origin; expanded setup uses the same
+control with `this work` and **Reset to inherit** source actions.
+
+Loop setup keeps reusable and task-specific input visually distinct. Template
+instructions, pinned values, and definition context share one recessed
+`--bg-1` **From the loop** group. Quiet execution and gate controls remain on
+the card's `--bg-2`; the Work brief is the brightest zone, with an accent
+**For this work** label and `--bg-3` inputs. Each card has at most one **Save
+into loop** promotion row at the bottom of that editable zone. The first agent brief shows
+the full execution controls; later agent briefs show inheritance until the user
+creates a `run override`. Required empty notes use the warn tone and disable
+Start inline; optional empty notes never open a confirmation modal. Planning
+uses the same vocabulary but renders its story and report contract as read-only
+`injected` rows and offers only an optional per-story note.
+
+Review return edges are visible structure, not inspector-only configuration.
+Draw a dashed return label plus a compact `automatic · max n` or `human check`
+chip anywhere the loop is summarized. The editor uses two always-visible radio
+rows under the changes-requested transition; setup uses a compact select and
+labels a per-run choice `run override`. A held gate uses the warn tone and a
+single decision card with finding checkboxes, optional instruction, Send back,
+and primary Approve as is. Unchecked findings remain legible at reduced opacity.
+
+Accepted Loop results use one compact follow-up card, not a generic rerun
+button. Amend expands a required feedback textarea and returns to the task
+stage; Verify enters the first review or deterministic check and marks earlier
+task chips `skipped`. Verify is unavailable when a definition has no such
+stage. Run rows retain the `initial`, `amend`, or `verify` kind and short seed
+label so repeated passes remain distinguishable.
 
 ## Shape and cards
 
@@ -211,6 +288,12 @@ pattern (agent count, artifact count, …):
 Mono + `--fg-3` keeps badges visually subordinate to the title and
 description. Always show the number even when zero — consistency reads
 better than conditional empty states on a glanceable card.
+
+## Agent Tile Focus
+
+On the Manual canvas, persona color identifies the focused agent rather than
+decorating every open tile. Inactive agent tiles use `--line-soft` on their top
+edge; `.canvas-cell.focused` restores `--p-color` and the existing focus ring.
 
 ## Agent Composer Status
 

@@ -54,4 +54,16 @@ class LoopStepRunRecord:
     lease_expires_at: datetime | None = None
 
 
-__all__ = ["LoopRunRecord", "LoopStepRunRecord"]
+@dataclass(kw_only=True)
+class LoopRunTarget:
+    """Target metadata plus mutable execution state consumed by loop actions."""
+
+    work_slug: str
+    run_id: str
+    target_id: str
+    title: str
+    source_ref: str
+    run: dict[str, Any]
+
+
+__all__ = ["LoopRunRecord", "LoopRunTarget", "LoopStepRunRecord"]

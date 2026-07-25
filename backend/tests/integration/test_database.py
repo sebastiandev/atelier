@@ -1,7 +1,7 @@
 """Database initialization, schema migrations, and SQLite pragmas."""
 
 import pytest
-from sqlalchemy import Engine, inspect, select
+from sqlalchemy import Engine, inspect, select, text
 
 from src.infrastructure.database import (
     CURRENT_SCHEMA_VERSION,
@@ -56,6 +56,78 @@ def test_v17_upgrade_adds_loop_run_tables(isolated_engine: Engine) -> None:
     with isolated_engine.connect() as conn:
         version = conn.execute(select(schema_version_table.c.version)).scalar_one()
     assert version == CURRENT_SCHEMA_VERSION
+
+
+def test_v18_upgrade_adds_nullable_work_mode(isolated_engine: Engine) -> None:
+    with isolated_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE works DROP COLUMN mode"))
+        conn.execute(schema_version_table.update().values(version=18))
+
+    initialize_database(isolated_engine)
+
+    columns = {column["name"] for column in inspect(isolated_engine).get_columns("works")}
+
+    assert "mode" in columns
+
+
+def test_v19_upgrade_adds_nullable_agent_worktree_slug(
+    isolated_engine: Engine,
+) -> None:
+    with isolated_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE agents DROP COLUMN worktree_slug"))
+        conn.execute(schema_version_table.update().values(version=19))
+
+    initialize_database(isolated_engine)
+
+    columns = {
+        column["name"] for column in inspect(isolated_engine).get_columns("agents")
+    }
+    assert "worktree_slug" in columns
+
+
+def test_v20_upgrade_adds_nullable_chat_discussion_only(
+    isolated_engine: Engine,
+) -> None:
+    with isolated_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE chats DROP COLUMN discussion_only"))
+        conn.execute(schema_version_table.update().values(version=20))
+
+    initialize_database(isolated_engine)
+
+    columns = {
+        column["name"] for column in inspect(isolated_engine).get_columns("chats")
+    }
+    assert "discussion_only" in columns
+
+
+def test_v21_upgrade_adds_nullable_chat_context_seed(
+    isolated_engine: Engine,
+) -> None:
+    with isolated_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE chats DROP COLUMN context_seed"))
+        conn.execute(schema_version_table.update().values(version=21))
+
+    initialize_database(isolated_engine)
+
+    columns = {
+        column["name"] for column in inspect(isolated_engine).get_columns("chats")
+    }
+    assert "context_seed" in columns
+
+
+def test_v22_upgrade_adds_nullable_chat_discussion_key(
+    isolated_engine: Engine,
+) -> None:
+    with isolated_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE chats DROP COLUMN discussion_key"))
+        conn.execute(schema_version_table.update().values(version=22))
+
+    initialize_database(isolated_engine)
+
+    columns = {
+        column["name"] for column in inspect(isolated_engine).get_columns("chats")
+    }
+    assert "discussion_key" in columns
 
 
 def test_initialize_rejects_unknown_schema_version(isolated_engine: Engine) -> None:

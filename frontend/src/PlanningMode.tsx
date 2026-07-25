@@ -2,28 +2,31 @@ import {
   type CSSProperties,
   type ReactNode,
   useEffect,
-  useId,
   useMemo,
   useState,
 } from "react";
 
 import {
+  type AgentSummary,
   type ChatSummary,
   type LoopStatus,
   type PlanArtifact,
   type PlanArtifactDetail,
+  type PlanArtifactRun,
   type PlanMaterializationStatus,
-  type PlanningProfile,
+  type PrConfig,
+  type PrFeedbackPayload,
   type ProviderDescriptor,
   type ProjectSummary,
   type WorkDetail,
   type WorkPlan,
   type WorkSummary,
+  resolveWorkPlanMaterializationPermission,
 } from "./api";
 import { ChatTile } from "./Chat";
+import { CreatePrDialog } from "./CreatePrDialog";
 import {
   AgentIcon,
-  BoltIcon,
   BranchIcon,
   BugIcon,
   ChatIcon,
@@ -31,20 +34,24 @@ import {
   ChevronRightIcon,
   DocIcon,
   EyeIcon,
-  FolderIcon,
   LoopIcon,
-  MoveIcon,
-  SlidersIcon,
   SparkIcon,
 } from "./Icons";
 import { PaneResizeHandle } from "./PaneResizeHandle";
-import { LoopRunView } from "./LoopRunView";
+import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
+import {
+  type RunDock,
+  LoopRunView,
+  RunRail,
+  planningRunData,
+} from "./LoopRunView";
 import {
   coerceProviderOptionsForModel,
   modelPickerOptions,
   optionLabel,
   providerDefaults,
   providerEffortOption,
+  providerFastOption,
   providerPermissionOption,
   useProviderDescriptors,
 } from "./providerDescriptors";
@@ -58,19 +65,20 @@ import {
   useLayoutStore,
 } from "./state/layout";
 import {
-  PLANNING_FRAMEWORKS,
-  PLANNING_PROFILES,
   type PlanningAgentConfig,
   type PlanningFrameworkId,
   planningFrameworkDefinition,
-  planningProfileDefinition,
 } from "./planningSetup";
+import type {
+  PendingPermission,
+  PermissionDecision,
+} from "./useAgentStream";
 
 export type PlanningView =
   | { kind: "overview" }
   | { kind: "epic"; id: string }
   | { kind: "artifact"; id: string }
-  | { kind: "run"; id: string }
+  | { kind: "run"; id: string; runId?: string }
   | { kind: "source"; id: string }
   | { kind: "accept" };
 
@@ -78,6 +86,7 @@ export type PlanOverviewTab = "summary" | "blocking" | "completed" | "pending";
 
 type PlanningModeProps = {
   work: WorkDetail;
+  workAction?: ReactNode;
   project: ProjectSummary | null;
   plan: WorkPlan | null;
   materializationStatus: PlanMaterializationStatus | null;
@@ -85,34 +94,19 @@ type PlanningModeProps = {
   planningChatSummary: ChatSummary | null;
   planningChatProjects: ProjectSummary[];
   planningChatWorks: WorkSummary[];
+  runAgents: AgentSummary[];
   selectedDetail: PlanArtifactDetail | null;
   draft: string;
   error: string | null;
-  loading: boolean;
   saving: boolean;
   view: PlanningView;
   overviewTab: PlanOverviewTab;
   chatOpen: boolean;
-  initialRoot: string | null;
-  artifactRootPath: string;
-  prompt: string;
-  profile: PlanningProfile;
   framework: PlanningFrameworkId;
-  agentConfig: PlanningAgentConfig | null;
-  onPromptChange: (value: string) => void;
-  onProfileChange: (value: PlanningProfile) => void;
-  onFrameworkChange: (value: PlanningFrameworkId) => void;
-  onArtifactRootPathChange: (value: string) => void;
-  onAgentConfigChange: (value: PlanningAgentConfig) => void;
   onOverviewTab: (tab: PlanOverviewTab) => void;
   onView: (view: PlanningView) => void;
-  onChooseRoot: () => void;
-  onClearRoot: () => void;
-  onStart: () => void;
   onCreateSourcePlan: () => void;
   onFinishConversation: () => void;
-  onManual: () => void;
-  onLoop: () => void;
   onDraftChange: (value: string) => void;
   onSave: () => void;
   onReset: () => void;
@@ -123,13 +117,32 @@ type PlanningModeProps = {
     artifact: PlanArtifact,
     runId: string,
     agentSlug: string,
+    retryFailed?: boolean,
+    resolutionNote?: string,
+    gateDecision?: "send_back" | "approve_as_is",
+    enforcedFindings?: number[],
   ) => void;
-  onCleanupRun: (artifact: PlanArtifact, runId: string) => void;
   onApproveRun: (artifact: PlanArtifact, runId: string) => Promise<void>;
+  onCancelRun: (artifact: PlanArtifact, runId: string) => Promise<void>;
   onRequestRunChanges: (
     artifact: PlanArtifact,
     runId: string,
     note: string,
+  ) => Promise<void>;
+  onCreateRunPr: (
+    artifact: PlanArtifact,
+    runId: string,
+    setup: PrConfig,
+  ) => Promise<void>;
+  onSendRunPrFeedback: (
+    artifact: PlanArtifact,
+    runId: string,
+    payload: PrFeedbackPayload,
+  ) => Promise<void>;
+  onRefreshRunPr: (
+    artifact: PlanArtifact,
+    runId: string,
+    force?: boolean,
   ) => Promise<void>;
   onChatOpen: (open: boolean) => void;
   onPlanningChatUpdated: (chat: ChatSummary) => void;
@@ -159,32 +172,9 @@ type PlanEpic = {
 
 const PRIMARY_EPIC_ID = "EPIC-01";
 
-const MODE_CARDS = [
-  {
-    id: "manual",
-    glyph: "agent",
-    tag: "current",
-    title: "Manual",
-    desc: "Launch and steer agents by hand on a shared canvas.",
-  },
-  {
-    id: "planning",
-    glyph: "planning",
-    tag: "BMAD",
-    title: "Planning",
-    desc: "Describe the idea; BMAD writes source docs and a plan you launch agents from.",
-  },
-  {
-    id: "loop",
-    glyph: "loop",
-    tag: "new",
-    title: "Loop",
-    desc: "Run toward a verifiable goal with memory until it is met.",
-  },
-] as const;
-
 export function PlanningMode({
   work,
+  workAction,
   project,
   plan,
   materializationStatus,
@@ -192,34 +182,19 @@ export function PlanningMode({
   planningChatSummary,
   planningChatProjects,
   planningChatWorks,
+  runAgents,
   selectedDetail,
   draft,
   error,
-  loading,
   saving,
   view,
   overviewTab,
   chatOpen,
-  initialRoot,
-  artifactRootPath,
-  prompt,
-  profile,
   framework,
-  agentConfig,
-  onPromptChange,
-  onProfileChange,
-  onFrameworkChange,
-  onArtifactRootPathChange,
-  onAgentConfigChange,
   onOverviewTab,
   onView,
-  onChooseRoot,
-  onClearRoot,
-  onStart,
   onCreateSourcePlan,
   onFinishConversation,
-  onManual,
-  onLoop,
   onDraftChange,
   onSave,
   onReset,
@@ -227,12 +202,16 @@ export function PlanningMode({
   onCreateBug,
   onLaunch,
   onResolveLoopBlocker,
-  onCleanupRun,
   onApproveRun,
+  onCancelRun,
   onRequestRunChanges,
+  onCreateRunPr,
+  onSendRunPrFeedback,
+  onRefreshRunPr,
   onChatOpen,
   onPlanningChatUpdated,
 }: PlanningModeProps) {
+  const readOnly = work.status !== "active";
   const tree = useMemo(() => splitPlan(plan), [plan]);
   const counts = useMemo(() => planCounts(tree.executable), [tree.executable]);
   const activeId = "id" in view ? view.id : null;
@@ -246,13 +225,22 @@ export function PlanningMode({
   const planningDockWidth = useLayoutStore((s) => s.planningDockWidth);
   const setPlanningDockWidth = useLayoutStore((s) => s.setPlanningDockWidth);
   const [bugDialogOpen, setBugDialogOpen] = useState(false);
+  const [runDock, setRunDock] = useState<RunDock>(null);
+  const selectedRun = view.kind === "run"
+    ? selectedDetail?.artifact.runs.find((run) => run.id === view.runId)
+      ?? selectedDetail?.artifact.runs.at(-1)
+      ?? null
+    : null;
+  const selectedRunData = selectedRun && selectedDetail
+    ? planningRunData(selectedDetail.artifact, selectedRun)
+    : null;
   const planningStyle: CSSProperties = {
     ["--pm-rail-width" as string]: `${planningRailWidth}px`,
     ["--pm-dock-width" as string]: `${planningDockWidth}px`,
     ["--shell-left-width" as string]: `${planningRailWidth}px`,
   };
   const hasPlanningChat = planningChatSlug !== null;
-  const showChatDock = chatOpen && hasPlanningChat;
+  const showChatDock = !readOnly && chatOpen && hasPlanningChat && view.kind !== "run";
   const planningReady = Boolean(planningChatSummary?.planning_readiness?.ready);
   const planReferences = plan?.artifacts ?? [];
   const materializerActive = materializationStatus?.state === "running";
@@ -277,7 +265,7 @@ export function PlanningMode({
     ...(project
       ? [{ href: `/projects/${project.slug}`, hue: project.color, label: project.name }]
       : []),
-    { href: `/works/${work.slug}?mode=planning`, label: work.slug },
+    { href: `/works/${work.slug}`, label: work.slug },
   ];
   if (!plan || plan.phase === "conversing") {
     planningCrumbs.push({ label: "planning" });
@@ -290,7 +278,7 @@ export function PlanningMode({
     if (view.kind === "artifact") planningCrumbs.push({ label: artifactIndex });
     if (view.kind === "run") {
       planningCrumbs.push({ label: artifactIndex, onClick: () => onView({ kind: "artifact", id: view.id }) });
-      planningCrumbs.push({ label: "run" });
+      planningCrumbs.push({ label: `run ${selectedRunData?.number ?? ""}`.trim() });
     }
     if (view.kind === "accept") planningCrumbs.push({ label: "approve plan" });
   }
@@ -305,6 +293,7 @@ export function PlanningMode({
   const topbar = (
     <ShellTopbar
       crumbs={planningCrumbs}
+      primaryAction={workAction}
       view={topbarView}
     />
   );
@@ -326,8 +315,9 @@ export function PlanningMode({
           {materializerVisible && materializationStatus ? (
             <PlanningMaterializationStage
               framework={planningFrameworkDefinition(framework).name}
+              workSlug={work.slug}
               status={materializationStatus}
-              actionDisabled={sourcePlanBusy}
+              actionDisabled={sourcePlanBusy || readOnly}
               actionLabel={sourcePlanLabel}
               onAction={onCreateSourcePlan}
             />
@@ -338,7 +328,7 @@ export function PlanningMode({
               projects={planningChatProjects}
               works={planningChatWorks}
               planReferences={planReferences}
-              onOpenPlan={showSourcePlanAction ? onCreateSourcePlan : undefined}
+              onOpenPlan={!readOnly && showSourcePlanAction ? onCreateSourcePlan : undefined}
               openPlanLabel={sourcePlanLabel}
               openPlanDisabled={sourcePlanBusy}
               onChatUpdated={onPlanningChatUpdated}
@@ -369,9 +359,9 @@ export function PlanningMode({
             projects={planningChatProjects}
             works={planningChatWorks}
             planReferences={planReferences}
-            onOpenPlan={onFinishConversation}
+            onOpenPlan={readOnly ? undefined : onFinishConversation}
             openPlanLabel={saving ? "Opening plan..." : "Open plan overview"}
-            openPlanDisabled={saving}
+            openPlanDisabled={saving || readOnly}
             onChatUpdated={onPlanningChatUpdated}
           />
         </main>
@@ -379,51 +369,36 @@ export function PlanningMode({
     );
   }
 
-  if (!plan) {
-    return (
-      <div className="planning-mode empty-only has-topbar" style={planningStyle}>
-        {topbar}
-        <PlanEmpty
-          work={work}
-          loading={loading}
-          error={error}
-          initialRoot={initialRoot}
-          artifactRootPath={artifactRootPath}
-          prompt={prompt}
-          profile={profile}
-          framework={framework}
-          agentConfig={agentConfig}
-          onPromptChange={onPromptChange}
-          onProfileChange={onProfileChange}
-          onFrameworkChange={onFrameworkChange}
-          onArtifactRootPathChange={onArtifactRootPathChange}
-          onAgentConfigChange={onAgentConfigChange}
-          onChooseRoot={onChooseRoot}
-          onClearRoot={onClearRoot}
-          onStart={onStart}
-          onManual={onManual}
-          onLoop={onLoop}
-        />
-      </div>
-    );
-  }
+  if (!plan) return null;
 
   return (
     <div className={"planning-mode has-topbar" + (showChatDock ? " with-dock" : "")} style={planningStyle}>
       {topbar}
-      <PlanRail
-        work={work}
-        plan={plan}
-        tree={tree}
-        counts={counts}
-        activeId={activeId}
-        railWidth={planningRailWidth}
-        onEpic={(id) => onView({ kind: "epic", id })}
-        onArtifact={(id) => onView({ kind: "artifact", id })}
-        onSource={(id) => onView({ kind: "source", id })}
-        onCreateBug={() => setBugDialogOpen(true)}
-      />
-      <main className="pm-main">
+      {view.kind === "run" && selectedDetail && selectedRun && selectedRunData ? (
+        <PlanningRunRail
+          artifact={selectedDetail.artifact}
+          railWidth={planningRailWidth}
+          run={selectedRun}
+          onBack={() => onView({ kind: "artifact", id: selectedDetail.artifact.id })}
+          onRun={(runId) => onView({ kind: "run", id: selectedDetail.artifact.id, runId })}
+          onViewLoop={() => setRunDock({ kind: "loop", stageId: selectedRun.loop_current_stage_id || null })}
+        />
+      ) : (
+        <PlanRail
+          work={work}
+          plan={plan}
+          tree={tree}
+          counts={counts}
+          activeId={activeId}
+          railWidth={planningRailWidth}
+          onEpic={(id) => onView({ kind: "epic", id })}
+          onArtifact={(id) => onView({ kind: "artifact", id })}
+          onSource={(id) => onView({ kind: "source", id })}
+          readOnly={readOnly}
+          onCreateBug={() => setBugDialogOpen(true)}
+        />
+      )}
+      <main className={`pm-main${view.kind === "run" ? " run-host" : ""}`}>
         {error && <div className="pm-error">{error}</div>}
         {view.kind === "overview" && (
           <PlanOverview
@@ -441,7 +416,7 @@ export function PlanningMode({
           <EpicDetail
             epic={epic}
             plan={plan}
-            saving={saving}
+            saving={saving || readOnly}
             onArtifact={(id) => onView({ kind: "artifact", id })}
             onApprovePlan={onApprovePlan}
           />
@@ -452,14 +427,18 @@ export function PlanningMode({
             artifact={artifact}
             detail={selectedDetail}
             draft={draft}
-            saving={saving}
+            saving={saving || readOnly}
+            readOnly={readOnly}
             onDraftChange={onDraftChange}
             onSave={onSave}
             onReset={onReset}
             onResolveLoopBlocker={onResolveLoopBlocker}
-            onCleanupRun={onCleanupRun}
-            onOpenRun={() => {
-              if (artifact) onView({ kind: "run", id: artifact.id });
+            onApproveRun={onApproveRun}
+            onRequestRunChanges={onRequestRunChanges}
+            onCreateRunPr={onCreateRunPr}
+            runAgents={runAgents}
+            onOpenRun={(runId) => {
+              if (artifact) onView({ kind: "run", id: artifact.id, runId });
             }}
             onLaunch={onLaunch}
             onEpic={() => onView({ kind: "epic", id: PRIMARY_EPIC_ID })}
@@ -467,37 +446,78 @@ export function PlanningMode({
           />
         )}
         {view.kind === "run" && artifact && selectedDetail && (
-          selectedDetail.artifact.runs.at(-1) ? (
+          selectedRun ? (
             <LoopRunView
               artifact={selectedDetail.artifact}
-              run={selectedDetail.artifact.runs.at(-1)!}
-              saving={saving}
-              onResolveBlocker={(agentSlug) =>
+              run={selectedRun}
+              busy={saving || readOnly}
+              chatProjects={planningChatProjects}
+              chatWorks={planningChatWorks}
+              readOnly={readOnly}
+              dock={runDock}
+              workSlug={work.slug}
+              onBack={() => onView({ kind: "artifact", id: selectedDetail.artifact.id })}
+              onDock={setRunDock}
+              onResolveBlocker={(note, agentSlug) =>
                 onResolveLoopBlocker(
                   selectedDetail.artifact,
-                  selectedDetail.artifact.runs.at(-1)!.id,
+                  selectedRun.id,
                   agentSlug,
+                  false,
+                  note,
+                )
+              }
+              onRetry={(agentSlug) =>
+                onResolveLoopBlocker(
+                  selectedDetail.artifact,
+                  selectedRun.id,
+                  agentSlug,
+                  true,
+                )
+              }
+              onResolveReviewGate={(decision, enforcedFindings, instruction) =>
+                onResolveLoopBlocker(
+                  selectedDetail.artifact,
+                  selectedRun.id,
+                  selectedRun.agent_slug,
+                  false,
+                  instruction,
+                  decision,
+                  enforcedFindings,
                 )
               }
               onRequestChanges={(note) =>
                 onRequestRunChanges(
                   selectedDetail.artifact,
-                  selectedDetail.artifact.runs.at(-1)!.id,
+                  selectedRun.id,
                   note,
                 )
               }
+              onRerun={() => onLaunch(selectedDetail)}
               onApprove={() =>
                 onApproveRun(
                   selectedDetail.artifact,
-                  selectedDetail.artifact.runs.at(-1)!.id,
+                  selectedRun.id,
                 )
               }
-              onCleanup={() =>
-                onCleanupRun(
+              onCancel={() =>
+                onCancelRun(
                   selectedDetail.artifact,
-                  selectedDetail.artifact.runs.at(-1)!.id,
+                  selectedRun.id,
                 )
               }
+              onSendPrFeedback={(comments, instruction) =>
+                onSendRunPrFeedback(
+                  selectedDetail.artifact,
+                  selectedRun.id,
+                  { comments, instruction },
+                )
+              }
+              onRefreshPr={(force) => onRefreshRunPr(
+                selectedDetail.artifact,
+                selectedRun.id,
+                force,
+              )}
             />
           ) : <div className="pm-loading">No loop run recorded yet.</div>
         )}
@@ -506,7 +526,8 @@ export function PlanningMode({
             artifact={source}
             detail={selectedDetail}
             draft={draft}
-            saving={saving}
+            saving={saving || readOnly}
+            readOnly={readOnly}
             onDraftChange={onDraftChange}
             onSave={onSave}
             onReset={onReset}
@@ -514,7 +535,7 @@ export function PlanningMode({
           />
         )}
         {view.kind === "accept" && (
-          <ApprovePlan plan={plan} counts={counts} saving={saving} onBack={() => onView({ kind: "overview" })} onApprove={onApprovePlan} />
+          <ApprovePlan plan={plan} counts={counts} saving={saving || readOnly} onBack={() => onView({ kind: "overview" })} onApprove={onApprovePlan} />
         )}
       </main>
       {showChatDock ? (
@@ -541,12 +562,12 @@ export function PlanningMode({
             onUpdated={onPlanningChatUpdated}
           />
         </aside>
-      ) : hasPlanningChat ? (
+      ) : !readOnly && hasPlanningChat && view.kind !== "run" ? (
         <button className="pm-float-chat" onClick={() => onChatOpen(true)} title="Open plan chat" aria-label="Open plan chat">
           <ChatIcon size={18} />
         </button>
       ) : null}
-      {bugDialogOpen && (
+      {!readOnly && bugDialogOpen && (
         <PlanBugDialog
           targets={tree.executable}
           defaultArtifactId={
@@ -559,238 +580,6 @@ export function PlanningMode({
           }}
         />
       )}
-    </div>
-  );
-}
-
-function PlanEmpty({
-  work,
-  loading,
-  error,
-  initialRoot,
-  artifactRootPath,
-  prompt,
-  profile,
-  framework,
-  agentConfig,
-  onPromptChange,
-  onProfileChange,
-  onFrameworkChange,
-  onArtifactRootPathChange,
-  onAgentConfigChange,
-  onChooseRoot,
-  onClearRoot,
-  onStart,
-  onManual,
-  onLoop,
-}: {
-  work: WorkDetail;
-  loading: boolean;
-  error: string | null;
-  initialRoot: string | null;
-  artifactRootPath: string;
-  prompt: string;
-  profile: PlanningProfile;
-  framework: PlanningFrameworkId;
-  agentConfig: PlanningAgentConfig | null;
-  onPromptChange: (value: string) => void;
-  onProfileChange: (value: PlanningProfile) => void;
-  onFrameworkChange: (value: PlanningFrameworkId) => void;
-  onArtifactRootPathChange: (value: string) => void;
-  onAgentConfigChange: (value: PlanningAgentConfig) => void;
-  onChooseRoot: () => void;
-  onClearRoot: () => void;
-  onStart: () => void;
-  onManual: () => void;
-  onLoop: () => void;
-}) {
-  const [mode, setMode] = useState<(typeof MODE_CARDS)[number]["id"]>("planning");
-  const promptId = useId();
-  const selectedFramework = planningFrameworkDefinition(framework);
-  const selectedProfile = planningProfileDefinition(profile);
-  return (
-    <div className="pm-empty-stage themed-scrollbar">
-      <section className="pm-empty-card">
-        <div className="pm-empty-kicker">
-          <SparkIcon size={13} /> {work.slug} · new work · nothing here yet
-        </div>
-        <h1>How do you want to work on this?</h1>
-        <p>
-          An empty work is not an execution workspace yet. Pick how it should run: plan it, loop it toward a goal,
-          or launch agents by hand.
-        </p>
-        <div className="pm-mode-cards">
-          {MODE_CARDS.map((card) => (
-            <button
-              key={card.id}
-              className={"pm-mode-card" + (mode === card.id ? " active" : "")}
-              onClick={() => setMode(card.id)}
-              type="button"
-            >
-              <span className="pm-mode-check"><CheckIcon size={14} /></span>
-              <span className="pm-mode-top">
-                <span className="pm-mode-glyph">{renderModeIcon(card.glyph, 17)}</span>
-                <span className="pm-mode-tag">{card.tag}</span>
-              </span>
-              <span className="pm-mode-name">{card.title}</span>
-              <span className="pm-mode-desc">{card.desc}</span>
-            </button>
-          ))}
-        </div>
-        {mode === "planning" && (
-          <div className="pm-empty-prompt">
-            <div className="pm-empty-prompt-head">
-              <div className="pm-empty-prompt-title">
-                <DocIcon size={12} /> Plan setup
-              </div>
-              <label className="pm-framework-select" title={selectedFramework.desc}>
-                <span>Framework</span>
-                <select
-                  value={framework}
-                  onChange={(event) =>
-                    onFrameworkChange(event.target.value as PlanningFrameworkId)
-                  }
-                >
-                  {PLANNING_FRAMEWORKS.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="pm-profile-pick">
-              <div className="pm-profile-grid">
-                {PLANNING_PROFILES.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={"pm-profile-chip" + (profile === item.id ? " active" : "")}
-                    onClick={() => onProfileChange(item.id)}
-                  >
-                    <span className="pm-profile-ico">
-                      {renderProfileIcon(item.icon, 14)}
-                    </span>
-                    <span className="pm-profile-name">{item.name}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="pm-profile-detail">
-                <span className={`pm-profile-depth d-${selectedProfile.depth}`}>
-                  {selectedProfile.depth}
-                </span>
-                <span className="pm-profile-desc">{selectedProfile.desc}</span>
-                <span className="pm-profile-artifacts">
-                  {selectedProfile.artifacts}
-                </span>
-              </div>
-            </div>
-
-            <div className={"pm-root-row" + (initialRoot ? " set" : "")}>
-              <span className="pm-root-icon">
-                <FolderIcon size={15} />
-              </span>
-              <span className="pm-root-label">Work folder</span>
-              <span className={"pm-root-value" + (initialRoot ? "" : " is-empty")}>
-                {initialRoot ?? "Choose a repository or project root"}
-              </span>
-              {initialRoot && (
-                <button
-                  className="pm-root-clear"
-                  type="button"
-                  onClick={onClearRoot}
-                  disabled={loading}
-                  title="Clear"
-                  aria-label="Clear work folder"
-                >
-                  ×
-                </button>
-              )}
-              <button
-                className="btn sm"
-                type="button"
-                onClick={onChooseRoot}
-                disabled={loading}
-              >
-                {initialRoot ? "Change" : "Choose"}
-              </button>
-            </div>
-
-            <div className="pm-root-row pm-artifact-root-row">
-              <span className="pm-root-icon">
-                <FolderIcon size={15} />
-              </span>
-              <span className="pm-root-label">Plan files</span>
-              <input
-                className="pm-root-input"
-                value={artifactRootPath}
-                onChange={(event) => onArtifactRootPathChange(event.target.value)}
-                disabled={loading}
-                aria-label="Plan files folder"
-                title="Folder for framework source files, relative to the work folder"
-              />
-            </div>
-
-            <div className="pm-empty-divider" />
-
-            <div className="pm-agent-cfg">
-              <span className="pm-agent-cfg-label">Plan chat</span>
-              <PlanningAgentControls
-                value={agentConfig}
-                onChange={onAgentConfigChange}
-              />
-            </div>
-
-            <div className="pm-empty-divider" />
-
-            <label className="pm-empty-prompt-title" htmlFor={promptId}>
-              <ChatIcon size={12} /> Describe the idea, problem, or outcome
-            </label>
-            <textarea
-              id={promptId}
-              value={prompt}
-              onChange={(event) => onPromptChange(event.target.value)}
-              placeholder="Describe the idea, problem, constraints, or outcome you want BMAD to plan…"
-            />
-            <div className="pm-empty-row">
-              <span className="pm-empty-hint">
-                {!initialRoot ? (
-                  <>
-                    <FolderIcon size={11} /> Choose a work folder to continue.
-                  </>
-                ) : (
-                  <>
-                    {selectedFramework.name} will draft a{" "}
-                    <b>{selectedProfile.depth}</b> plan: {selectedProfile.artifacts}.
-                  </>
-                )}
-              </span>
-              <span className="pm-empty-spacer" />
-              <button className="btn primary lg" onClick={onStart} disabled={loading || !initialRoot}>
-                <SparkIcon size={12} /> {loading ? "Starting…" : "Plan this work"}
-              </button>
-            </div>
-          </div>
-        )}
-        {mode === "manual" && (
-          <div className="pm-empty-prompt">
-            <div className="pm-empty-row">
-              <span className="pm-empty-hint">Open the normal agent canvas and steer agents directly.</span>
-              <button className="btn" onClick={onManual}>Open canvas <ChevronRightIcon size={12} /></button>
-            </div>
-          </div>
-        )}
-        {mode === "loop" && (
-          <div className="pm-empty-prompt">
-            <div className="pm-empty-row">
-              <span className="pm-empty-hint">Use the description as the goal and choose the loop and run parameters next.</span>
-              <button className="btn primary" onClick={onLoop}>Set up loop <ChevronRightIcon size={12} /></button>
-            </div>
-          </div>
-        )}
-        {error && <div className="pm-error">{error}</div>}
-      </section>
     </div>
   );
 }
@@ -820,6 +609,7 @@ export function PlanningAgentControls({
         : {};
   const permissionOption = provider ? providerPermissionOption(provider) : null;
   const effortOption = provider ? providerEffortOption(provider, model) : null;
+  const fastOption = provider ? providerFastOption(provider) : null;
 
   useEffect(() => {
     if (!providers.length) return;
@@ -943,6 +733,20 @@ export function PlanningAgentControls({
           <span aria-hidden>▾</span>
         </label>
       )}
+      {fastOption && (
+        <label className="pm-fast-toggle" title={fastOption.field.label}>
+          <input
+            type="checkbox"
+            aria-label={fastOption.field.label}
+            checked={(currentOptions[fastOption.key] ?? fastOption.field.default) === "on"}
+            onChange={(event) =>
+              changeOption(fastOption.key, event.target.checked ? "on" : "off")
+            }
+          />
+          <span aria-hidden />
+          Fast
+        </label>
+      )}
       {permissionOption && (
         <label className="pm-mini-select" title={permissionOption.field.label}>
           <EyeIcon size={10} />
@@ -977,28 +781,6 @@ function shallowEqualRecord(
   const rightKeys = Object.keys(right);
   if (leftKeys.length !== rightKeys.length) return false;
   return leftKeys.every((key) => left[key] === right[key]);
-}
-
-function renderModeIcon(
-  icon: (typeof MODE_CARDS)[number]["glyph"],
-  size: number,
-): ReactNode {
-  if (icon === "agent") return <AgentIcon size={size} />;
-  if (icon === "loop") return <BranchIcon size={size} />;
-  return <DocIcon size={size} />;
-}
-
-function renderProfileIcon(
-  icon: (typeof PLANNING_PROFILES)[number]["icon"],
-  size: number,
-): ReactNode {
-  if (icon === "bug") return <BugIcon size={size} />;
-  if (icon === "bolt") return <BoltIcon size={size} />;
-  if (icon === "branch") return <BranchIcon size={size} />;
-  if (icon === "move") return <MoveIcon size={size} />;
-  if (icon === "artifact") return <DocIcon size={size} />;
-  if (icon === "settings") return <SlidersIcon size={size} />;
-  return <SparkIcon size={size} />;
 }
 
 function PlanningStarterRail({
@@ -1179,12 +961,14 @@ function sourcePlanActionLabel({
 
 function PlanningMaterializationStage({
   framework,
+  workSlug,
   status,
   actionDisabled,
   actionLabel,
   onAction,
 }: {
   framework: string;
+  workSlug: string;
   status: PlanMaterializationStatus;
   actionDisabled: boolean;
   actionLabel: string;
@@ -1195,6 +979,10 @@ function PlanningMaterializationStage({
   const waitingPermission = status.state === "waiting_permission";
   const blocked = status.state === "stalled" || status.state === "failed";
   const activity = materializationActivityCopy(status);
+  const recentActivity = status.recent_activity ?? [];
+  const pendingPermissions = (status.pending_permissions ?? []) as PendingPermission[];
+  const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [permissionAttempt, setPermissionAttempt] = useState(0);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -1202,6 +990,19 @@ function PlanningMaterializationStage({
     }, 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  function decidePermission(requestId: string, decision: PermissionDecision) {
+    setPermissionError(null);
+    void resolveWorkPlanMaterializationPermission(
+      workSlug,
+      requestId,
+      decision,
+    ).catch((reason) => {
+      setPermissionError(reason instanceof Error ? reason.message : String(reason));
+      setPermissionAttempt((current) => current + 1);
+    });
+    return true;
+  }
 
   return (
     <div className="pm-materialize-stage themed-scrollbar">
@@ -1234,28 +1035,39 @@ function PlanningMaterializationStage({
           </div>
         )}
 
-        {waitingPermission && (
-          <div className="pm-matz-callout">
-            <strong>Waiting for write approval</strong>
-            <span>
-              {status.tool_name ? `${status.tool_name}: ` : ""}
-              {status.message || "The materializer paused for permission."}
-            </span>
-            <button
-              type="button"
-              className="btn primary sm"
-              disabled={actionDisabled}
-              onClick={onAction}
-            >
-              <SlidersIcon size={12} /> {actionLabel}
-            </button>
+        {recentActivity.length > 0 && (
+          <div className="pm-matz-feed" aria-live="polite">
+            <div className="pm-matz-feed-title">Latest activity</div>
+            {recentActivity.map((item, index) => (
+              <div
+                className="pm-matz-feed-row"
+                key={`${item.ts ?? "activity"}:${item.kind}:${index}`}
+              >
+                <span aria-hidden />
+                <div>
+                  <strong>{materializationActivityLabel(item.kind)}</strong>
+                  <p>{item.text}</p>
+                </div>
+              </div>
+            ))}
           </div>
+        )}
+
+        {waitingPermission && pendingPermissions.length > 0 && (
+          <>
+            <PermissionApprovalDialog
+              key={`${pendingPermissions.map((item) => item.request_id).join(":")}:${permissionAttempt}`}
+              pendingPermissions={pendingPermissions}
+              onDecide={decidePermission}
+            />
+            {permissionError && <div className="pm-error">{permissionError}</div>}
+          </>
         )}
 
         {blocked && (
           <div className="pm-matz-callout">
             <strong>
-              {status.state === "failed" ? "Materializer failed" : "Materializer stopped"}
+              {status.state === "failed" ? "Materializer failed" : "No recent activity"}
             </strong>
             <span>{status.message || "No source-plan report was found yet."}</span>
             <button
@@ -1271,8 +1083,8 @@ function PlanningMaterializationStage({
 
         <div className={`pm-matz-foot${slow ? " slow" : ""}`}>
           {slow
-            ? "This can take a minute for larger scopes - still working. You can keep chatting; the plan opens automatically when it's ready."
-            : "Working on it. You can keep chatting; the plan opens automatically when it's ready."}
+            ? "This can take a minute for larger scopes - still working. The plan opens automatically when it's ready."
+            : "Working on it. The plan opens automatically when it's ready."}
         </div>
       </div>
     </div>
@@ -1283,6 +1095,18 @@ function materializationActivityCopy(status: PlanMaterializationStatus): string 
   if (status.last_event_summary) return status.last_event_summary;
   if (status.message && status.state === "running") return status.message;
   return "";
+}
+
+function materializationActivityLabel(kind: string): string {
+  if (kind === "tool_call") return "Tool";
+  if (kind === "tool_result") return "Tool completed";
+  if (kind === "thinking_complete") return "Reasoning";
+  if (kind === "message_complete") return "Update";
+  if (kind === "permission_request") return "Approval needed";
+  if (kind === "permission_decision") return "Approval";
+  if (kind === "user_input") return "Supervisor";
+  if (kind === "error") return "Error";
+  return "Activity";
 }
 
 function formatElapsed(seconds: number): string {
@@ -1360,6 +1184,52 @@ function PlanningChatCanvas({
   );
 }
 
+function PlanningRunRail({
+  artifact,
+  railWidth,
+  run,
+  onBack,
+  onRun,
+  onViewLoop,
+}: {
+  artifact: PlanArtifact;
+  railWidth: number;
+  run: PlanArtifactRun;
+  onBack: () => void;
+  onRun: (runId: string) => void;
+  onViewLoop: () => void;
+}) {
+  const setPlanningRailWidth = useLayoutStore((state) => state.setPlanningRailWidth);
+  return (
+    <div className="pm-run-rail-host">
+      <RunRail
+        anchor={(
+          <button type="button" className="pm-run-story-anchor" onClick={onBack}>
+            <span>← Story · {artifact.id}</span>
+            <strong>{artifact.title}</strong>
+            <em>{artifact.kind} · {artifact.readiness.replaceAll("_", " ")}</em>
+          </button>
+        )}
+        definition={run.loop_definition ?? null}
+        definitionMeta="pinned for selected run"
+        runs={artifact.runs.map((item) => planningRunData(artifact, item))}
+        selectedRunId={run.id}
+        onRun={onRun}
+        onViewLoop={onViewLoop}
+      />
+      <PaneResizeHandle
+        defaultValue={296}
+        edge="right"
+        label="Resize run rail"
+        max={PLANNING_RAIL_MAX}
+        min={PLANNING_RAIL_MIN}
+        value={railWidth}
+        onChange={setPlanningRailWidth}
+      />
+    </div>
+  );
+}
+
 function PlanRail({
   work,
   plan,
@@ -1370,6 +1240,7 @@ function PlanRail({
   onEpic,
   onArtifact,
   onSource,
+  readOnly,
   onCreateBug,
 }: {
   work: WorkDetail;
@@ -1381,6 +1252,7 @@ function PlanRail({
   onEpic: (id: string) => void;
   onArtifact: (id: string) => void;
   onSource: (id: string) => void;
+  readOnly: boolean;
   onCreateBug: () => void;
 }) {
   const [open, setOpen] = useState(true);
@@ -1502,7 +1374,7 @@ function PlanRail({
         <button
           className="btn ghost sm"
           type="button"
-          disabled={tree.executable.length === 0}
+          disabled={readOnly || tree.executable.length === 0}
           onClick={onCreateBug}
         >
           <BugIcon size={11} /> Add bug
@@ -1923,12 +1795,16 @@ function ArtifactDetail({
   artifact,
   detail,
   draft,
+  readOnly,
   saving,
   onDraftChange,
   onSave,
   onReset,
   onResolveLoopBlocker,
-  onCleanupRun,
+  onApproveRun,
+  onRequestRunChanges,
+  onCreateRunPr,
+  runAgents,
   onOpenRun,
   onLaunch,
   onEpic,
@@ -1937,6 +1813,7 @@ function ArtifactDetail({
   artifact: PlanArtifact | null;
   detail: PlanArtifactDetail | null;
   draft: string;
+  readOnly: boolean;
   saving: boolean;
   onDraftChange: (value: string) => void;
   onSave: () => void;
@@ -1946,19 +1823,33 @@ function ArtifactDetail({
     runId: string,
     agentSlug: string,
   ) => void;
-  onCleanupRun: (artifact: PlanArtifact, runId: string) => void;
-  onOpenRun: () => void;
+  onApproveRun: (artifact: PlanArtifact, runId: string) => Promise<void>;
+  onRequestRunChanges: (artifact: PlanArtifact, runId: string, note: string) => Promise<void>;
+  onCreateRunPr: (artifact: PlanArtifact, runId: string, setup: PrConfig) => Promise<void>;
+  runAgents: AgentSummary[];
+  onOpenRun: (runId: string) => void;
   onLaunch: (detail: PlanArtifactDetail) => void;
   onEpic: () => void;
   onApprovePlan: () => void;
 }) {
+  const [requestingRunChanges, setRequestingRunChanges] = useState(false);
+  const [runChangeNote, setRunChangeNote] = useState("");
+  const [createPrOpen, setCreatePrOpen] = useState(false);
   if (!artifact) return <div className="pm-loading">Artifact not found.</div>;
   if (!detail) return <div className="pm-loading">Loading source…</div>;
   const status = uiStatus(detail.artifact);
-  const editable = status === "draft" || status === "ready" || status === "blocked";
+  const editable = !readOnly && (status === "draft" || status === "ready" || status === "blocked");
   const dirty = draft !== detail.content;
   const latestRun = detail.artifact.runs.at(-1) ?? null;
+  const latestRunAgent = latestRun
+    ? runAgents.find((agent) => agent.slug === latestRun.agent_slug) ?? null
+    : null;
   const latestLoopStatus = latestRun ? loopStatus(latestRun) : null;
+  const latestRunData = latestRun ? planningRunData(detail.artifact, latestRun) : null;
+  const latestRunReviewable = latestLoopStatus === "completed" || latestLoopStatus === "awaiting_approval";
+  const latestRunCanCreatePr = latestLoopStatus === "accepted"
+    && !latestRun?.pr
+    && !latestRun?.loop_definition?.stages.some((stage) => stage.kind === "pr");
   const pullRequests = detail.artifact.tracking.filter((link) => link.kind === "pr");
   const approvalBlocker = detail.artifact.launch_blockers.find((blocker) =>
     blocker.toLowerCase().startsWith("approve "),
@@ -2018,14 +1909,14 @@ function ArtifactDetail({
           </div>
         </article>
         <aside className="pm-art-aside">
-          {detail.artifact.kind === "story" && (
+          {detail.artifact.executable && (
             <InspectorPanel title="Start work">
               <button
-                className="btn primary sm pm-start-work"
-                disabled={!detail.artifact.launchable}
+                className={`btn sm pm-start-work${latestRun ? ` status ${loopStatusTone(latestLoopStatus)}` : " primary"}`}
+                disabled={readOnly || !detail.artifact.launchable || latestRun !== null}
                 onClick={() => onLaunch(detail)}
               >
-                <LoopIcon size={12} /> Start work
+                <LoopIcon size={12} /> {latestRun ? loopStatusLabel(latestLoopStatus) : "Start work"}
               </button>
             </InspectorPanel>
           )}
@@ -2037,57 +1928,77 @@ function ArtifactDetail({
           <InspectorPanel title="Latest run">
             {latestRun ? (
               <>
-                <button className="btn primary sm pm-open-run" onClick={onOpenRun}>
-                  <LoopIcon size={12} /> Open staged run
+                <button className="pm-latest-run-card" type="button" onClick={() => onOpenRun(latestRun.id)}>
+                  <span className="pm-latest-run-head">
+                    <span className={`pm-latest-run-status ${loopStatusTone(latestLoopStatus)}`}>
+                      {loopStatusActive(latestLoopStatus) && <i />}
+                      {loopStatusLabel(latestLoopStatus)}
+                    </span>
+                    <em>open run ▸</em>
+                  </span>
+                  <strong>run {latestRunData?.number ?? 1} · {latestRun.loop_definition_name || latestRun.loop_definition_id || "Loop"}</strong>
+                  <span className="pm-latest-run-meta">rev {latestRun.loop_definition_revision || "legacy"} · {latestRun.agent_slug}</span>
+                  {(latestRun.loop_status_reason || latestRun.summary) && (
+                    <span className="pm-latest-run-note">{latestRun.loop_status_reason || latestRun.summary}</span>
+                  )}
                 </button>
-                <Kv label="Agent" value={latestRun.agent_slug} />
-                <Kv
-                  label="Loop"
-                  value={loopStatusLabel(latestLoopStatus)}
-                  tone={loopStatusTone(latestLoopStatus)}
-                />
-                {latestRun.loop_status_reason && (
-                  <div className="pm-panel-note">{latestRun.loop_status_reason}</div>
-                )}
                 {latestRun.loop_latest_assessment.length > 0 && (
                   <div className="pm-panel-note">
                     {latestRun.loop_latest_assessment.join(" ")}
                   </div>
                 )}
-                {latestRun.cleanup_at ? (
-                  <Kv label="Cleanup" value="done" tone="good" />
-                ) : (
-                  <Kv label="Cleanup" value="pending" />
+                {requestingRunChanges && latestRunReviewable && (
+                  <div className="pm-latest-run-request">
+                    <textarea
+                      value={runChangeNote}
+                      onChange={(event) => setRunChangeNote(event.target.value)}
+                      placeholder="Describe what needs to change…"
+                      autoFocus
+                    />
+                    <div>
+                      <button className="btn ghost sm" type="button" onClick={() => setRequestingRunChanges(false)}>Cancel</button>
+                      <button
+                        className="btn warn sm"
+                        type="button"
+                        disabled={saving || !runChangeNote.trim()}
+                        onClick={async () => {
+                          try {
+                            await onRequestRunChanges(
+                              detail.artifact,
+                              latestRun.id,
+                              runChangeNote.trim(),
+                            );
+                          } catch {
+                            return;
+                          }
+                          setRunChangeNote("");
+                          setRequestingRunChanges(false);
+                        }}
+                      >
+                        Send &amp; re-run
+                      </button>
+                    </div>
+                  </div>
                 )}
                 <div className="pm-inline-actions">
                   {latestLoopStatus === "blocked_user" && (
                     <button
                       className="btn primary sm"
                       disabled={saving}
-                      onClick={() =>
-                        onResolveLoopBlocker(
-                          detail.artifact,
-                          latestRun.id,
-                          latestRun.agent_slug,
-                        )
-                      }
+                      onClick={() => latestRun.loop_review_gate ? onOpenRun(latestRun.id) : onResolveLoopBlocker(detail.artifact, latestRun.id, latestRun.agent_slug)}
                     >
-                      Mark resolved
+                      {latestRun.loop_review_gate ? "Review findings" : "Mark resolved"}
                     </button>
                   )}
-                  <button
-                    className="btn sm"
-                    disabled={
-                      saving ||
-                      latestRun.status !== "accepted" ||
-                      latestRun.cleanup_at !== null
-                    }
-                    onClick={() =>
-                      onCleanupRun(detail.artifact, latestRun.id)
-                    }
-                  >
-                    Clean up
-                  </button>
+                  {latestRunReviewable && !requestingRunChanges && (
+                    <>
+                      <button className="btn ghost sm" disabled={saving} onClick={() => setRequestingRunChanges(true)}>Request changes</button>
+                      <button className="btn primary sm" disabled={saving} onClick={() => void onApproveRun(detail.artifact, latestRun.id)}><CheckIcon size={11} /> Approve result</button>
+                    </>
+                  )}
+                  {latestRunCanCreatePr && (
+                    <button className="btn primary sm" disabled={saving} onClick={() => setCreatePrOpen(true)}><BranchIcon size={11} /> Create PR</button>
+                  )}
                 </div>
               </>
             ) : (
@@ -2109,6 +2020,25 @@ function ArtifactDetail({
           )}
         </aside>
       </div>
+      {createPrOpen && latestRun && (
+        <CreatePrDialog
+          goal={detail.artifact.title}
+          runLabel={latestRun.id.replace("-", " ")}
+          inheritedAgent={latestRunAgent ? {
+            provider: latestRunAgent.provider,
+            model: latestRunAgent.model,
+            options: Object.fromEntries(Object.entries(latestRunAgent.options ?? {}).filter(
+              (entry): entry is [string, string] => typeof entry[1] === "string",
+            )),
+          } : null}
+          workspacePath={latestRunAgent?.worktree_path || latestRunAgent?.folder || ""}
+          onClose={() => setCreatePrOpen(false)}
+          onCreate={async (setup) => {
+            await onCreateRunPr(detail.artifact, latestRun.id, setup);
+            setCreatePrOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -2117,6 +2047,7 @@ function SourceDoc({
   artifact,
   detail,
   draft,
+  readOnly,
   saving,
   onDraftChange,
   onSave,
@@ -2126,6 +2057,7 @@ function SourceDoc({
   artifact: PlanArtifact | null;
   detail: PlanArtifactDetail | null;
   draft: string;
+  readOnly: boolean;
   saving: boolean;
   onDraftChange: (value: string) => void;
   onSave: () => void;
@@ -2142,7 +2074,9 @@ function SourceDoc({
         <h1>{artifact.title}</h1>
         <div className="pm-meta-row">
           <span>{artifact.source_ref}</span>
-          <span className="pm-edit-state editable">editable</span>
+          <span className={readOnly ? "pm-edit-state" : "pm-edit-state editable"}>
+            {readOnly ? "read-only" : "editable"}
+          </span>
         </div>
         {artifact.status === "changed" && (
           <div className="pm-doc-banner">
@@ -2157,6 +2091,7 @@ function SourceDoc({
           className="pm-doc-editor source"
           value={draft}
           onChange={onDraftChange}
+          readOnly={readOnly}
         />
         <div className="pm-doc-actions">
           <button className="btn primary" onClick={onSave} disabled={!dirty || saving}>Save source</button>
@@ -2303,12 +2238,29 @@ function loopStatusLabel(status: LoopStatus | null): string {
   return status.replaceAll("_", " ");
 }
 
-function loopStatusTone(status: LoopStatus | null): "good" | "warn" | "danger" {
-  if (status === "completed" || status === "accepted" || status === "cleaned") return "good";
+function loopStatusTone(status: LoopStatus | null): "good" | "info" | "warn" | "danger" {
+  if (status === "accepted" || status === "cleaned") return "good";
+  if (
+    status === "completed" ||
+    status === "awaiting_approval" ||
+    status === "pending" ||
+    status === "running" ||
+    status === "waiting_report" ||
+    status === "assessing" ||
+    status === "needs_agent"
+  ) return "info";
   if (status === "blocked_user" || status === "failed" || status === "cancelled") {
     return "danger";
   }
   return "warn";
+}
+
+function loopStatusActive(status: LoopStatus | null): boolean {
+  return status === "pending" ||
+    status === "running" ||
+    status === "waiting_report" ||
+    status === "assessing" ||
+    status === "needs_agent";
 }
 
 function TreeStatus({ status }: { status: PlanUiStatus }) {

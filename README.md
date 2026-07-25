@@ -45,6 +45,7 @@ cd atelier
 ```
 
 Frontend serves at `http://127.0.0.1:4173`, backend API at `http://127.0.0.1:8001`.
+Use alternate ports with `./scripts/dev.sh --fe 4183 --be 8011`.
 
 ## Install as a desktop app (PWA)
 

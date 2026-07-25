@@ -11,7 +11,7 @@ import json
 import re
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.domain.agents import SPECS, CommonAgentConfig
 from src.domain.chatstore.dtos import ChatGrounding, ChatRecord, CreateChatRequest
@@ -36,6 +36,9 @@ from src.domain.planning.prompts import PlanningMaterializationPrompt
 from src.domain.planning.service import PlanningNotStarted, PlanningService
 from src.domain.prompts import build_prompt
 from src.domain.workstore.ports import WorkStore
+
+if TYPE_CHECKING:
+    from src.domain.supervisor import AgentSupervisorService
 
 _MATERIALIZER_TITLE = "Planning materializer"
 _REPORT_RE = re.compile(
@@ -242,6 +245,20 @@ def validate_materialization_provider_config(
     )
 
 
+async def reset_materializer_runtime(
+    chatstore: ChatStore,
+    supervisor: AgentSupervisorService,
+    chat_slug: str,
+) -> None:
+    """Reset one materializer to a fresh provider session.
+
+    Preconditions: ``chat_slug`` identifies a stored materializer chat.
+    Postconditions: its runtime is stopped and its generated files and transcript remain.
+    """
+    await supervisor.stop_agent(chat_slug)
+    chatstore.clear_chat_session_id(chat_slug)
+
+
 def finalize_materialization_report(
     workstore: WorkStore,
     chatstore: ChatStore,
@@ -295,7 +312,7 @@ def materialization_options(provider: Provider, options: dict[str, Any]) -> dict
         next_options["sandbox"] = "workspace-write"
         next_options["approval_mode"] = "on-request"
     elif provider == "codex-acp":
-        next_options["mode"] = "auto"
+        next_options["mode"] = "agent"
     elif provider == "claude-code":
         next_options["permission_mode"] = "acceptEdits"
     elif provider == "claude-acp":

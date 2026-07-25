@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from src.domain.artifacts.models import PrArtifact
+from src.domain.loop.dtos import LoopBrief
 from src.domain.models import Agent, AgentStatus, Artifact, Context, Handoff, Work
 from src.domain.workstore.dtos import (
     AddAgentRequest,
@@ -53,6 +54,10 @@ class WorkStore(Protocol):
         ...
 
     def update_work(self, req: UpdateWorkRequest) -> WorkRecord: ...
+
+    def save_loop_brief(self, work_slug: str, brief: LoopBrief) -> WorkRecord:
+        """Persist the latest editable loop brief in canonical ``work.json``."""
+        ...
 
     def ensure_work_chat_context(
         self, req: EnsureWorkChatContextRequest

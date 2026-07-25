@@ -1,0 +1,1771 @@
+"""Monitor and advance a modern multi-stage loop run."""
+
+from __future__ import annotations
+
+import asyncio
+import shlex
+from copy import deepcopy
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
+
+from src.domain.agents.launch import AgentLaunchRequest, launch_agent
+from src.domain.agents.ports import AgentAdapterFactory
+from src.domain.agents.turn_monitor import observe_turn
+from src.domain.connections import ConnectionStore
+from src.domain.loop import actions, briefs, pr_lifecycle
+from src.domain.loop import runtime as _loop_runtime
+from src.domain.loop.agent_policy import resolve_stage_agent_config
+from src.domain.loop.dtos import (
+    LoopCheckRequest,
+    LoopCheckResult,
+    LoopContextKind,
+    LoopFailureKind,
+    LoopOutcome,
+    LoopPermission,
+    LoopReviewGateMode,
+    LoopRunStatus,
+    LoopStageReport,
+    LoopStatus,
+    LoopStepKind,
+    LoopStepStatus,
+)
+from src.domain.loop.models import LoopRunTarget
+from src.domain.loop.ports import (
+    LoopCheckRunner,
+    LoopRunRepository,
+    LoopRunStateStore,
+)
+from src.domain.loop.prompts import (
+    PrStagePrompt,
+    ReviewStagePrompt,
+    TaskStagePrompt,
+    build_stage_prompt,
+    stage_inactivity_recovery_prompt,
+    stage_report_repair_prompt,
+)
+from src.domain.loop.reports import extract_latest_stage_report
+from src.domain.loop.snapshots import definition_from_snapshot
+from src.domain.loop.transitions import (
+    LoopTransitionInvalid,
+    stage_by_id,
+    transition_destination,
+)
+from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
+from src.domain.workstore.ports import WorkStore
+from src.domain.worktrees import WorktreeManager
+
+if TYPE_CHECKING:
+    from src.domain.loop.dtos import LoopDefinition, LoopStepDefinition
+    from src.domain.supervisor import AgentSupervisorService
+
+
+class AgentNotFound(ValueError):
+    """The active stage agent does not belong to the Work."""
+
+
+class WorkNotFound(ValueError):
+    """The Work owning the loop run does not exist."""
+
+
+_INACTIVITY_WARNING_SECONDS = 5 * 60
+_RUNTIME_RELEASE_STATUSES = {
+    LoopStatus.ACCEPTED.value,
+    LoopStatus.AWAITING_APPROVAL.value,
+    LoopStatus.BLOCKED_USER.value,
+    LoopStatus.FAILED.value,
+}
+
+
+def _stage_recovery_prompt(
+    workstore: WorkStore,
+    *,
+    work_slug: str,
+    agent_slug: str,
+    stage: LoopStepDefinition,
+) -> str:
+    """Build recovery guidance with the stage agent's original request."""
+    original_request = ""
+    for event in workstore.read_transcript_from_cursor(work_slug, agent_slug, 0):
+        text = event.get("text")
+        if event.get("type") == "user_input" and isinstance(text, str) and text.strip():
+            original_request = text
+            break
+    return stage_inactivity_recovery_prompt(stage, original_request)
+
+
+class LoopRunNotFound(ValueError):
+    """The requested loop run target does not exist."""
+
+
+@dataclass(frozen=True)
+class MonitorLoopRunRequest:
+    """Action input for monitoring one loop run."""
+
+    work_slug: str
+    run_id: str
+    poll_interval_seconds: float = 0.5
+    idle_timeout_seconds: float | None = None
+    worker_id: str = field(default_factory=lambda: f"worker-{uuid4().hex}")
+
+
+async def execute(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    loop_runs: LoopRunRepository,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+) -> LoopRunTarget:
+    """Claim and monitor one persisted run until it reaches a pause state.
+
+    Preconditions: Work, target, pinned definition, and active stage agent exist.
+    Postconditions: every consumed report is saved before the next stage starts.
+    """
+    target, _run, loop = _load_active_run(workstore, store, req)
+    run_key = actions.str_or_none(loop.get("loop_run_id"))
+    leased = run_key is not None and loop_runs.get(req.work_slug, run_key) is not None
+    while (
+        leased
+        and run_key is not None
+        and not loop_runs.claim(req.work_slug, run_key, req.worker_id, _lease_expiry())
+    ):
+        await asyncio.sleep(req.poll_interval_seconds)
+        target, run, _loop = _load_active_run(workstore, store, req)
+        if actions.run_status(run) != LoopRunStatus.RUNNING:
+            return target
+    try:
+        result = await _execute_claimed(
+            workstore,
+            store,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            check_runner,
+            loop_runs,
+            settings,
+            req,
+            run_key if leased else None,
+        )
+        result_loop = actions.dict_or_empty(result.run.get("loop"))
+        if result_loop.get("status") in _RUNTIME_RELEASE_STATUSES:
+            await _loop_runtime.release_run_agents(
+                workstore,
+                supervisor,
+                work_slug=req.work_slug,
+                run=result.run,
+                loop=result_loop,
+            )
+        return result
+    finally:
+        if leased and run_key is not None:
+            loop_runs.release(req.work_slug, run_key, req.worker_id)
+
+
+async def _execute_claimed(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    loop_runs: LoopRunRepository,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    lease_run_key: str | None,
+) -> LoopRunTarget:
+    """Advance one run until it pauses, fails, or awaits approval.
+
+    Preconditions: Work, artifact, run, and active stage agent exist.
+    Postconditions: every consumed report is persisted before the next stage is
+    launched; invalid reports receive bounded automatic repair prompts.
+    """
+    idle_for = 0.0
+    while True:
+        target, run, loop = _load_active_run(workstore, store, req)
+        if lease_run_key is not None and not loop_runs.claim(
+            req.work_slug,
+            lease_run_key,
+            req.worker_id,
+            _lease_expiry(),
+        ):
+            return target
+        if actions.run_status(run) != LoopRunStatus.RUNNING:
+            return target
+        definition = definition_from_snapshot(loop.get("definition_snapshot"))
+        if isinstance(loop.get("approval_decision"), dict):
+            target = await _apply_approval_decision(
+                workstore,
+                store,
+                supervisor,
+                worktree_manager,
+                connection_store,
+                sharestore,
+                share_provisioner,
+                adapter_factory,
+                check_runner,
+                settings,
+                req,
+                target,
+                run,
+                loop,
+                definition,
+            )
+            if actions.run_status(target.run) != LoopRunStatus.RUNNING:
+                return target
+            continue
+        if isinstance(loop.get("pr_feedback_decision"), dict):
+            target = await _apply_pr_feedback_decision(
+                workstore,
+                store,
+                supervisor,
+                worktree_manager,
+                connection_store,
+                sharestore,
+                share_provisioner,
+                adapter_factory,
+                check_runner,
+                settings,
+                req,
+                target,
+                run,
+                loop,
+                definition,
+            )
+            if actions.run_status(target.run) != LoopRunStatus.RUNNING:
+                return target
+            continue
+        if isinstance(loop.get("review_gate_decision"), dict):
+            target = await _apply_review_gate_decision(
+                workstore,
+                store,
+                supervisor,
+                worktree_manager,
+                connection_store,
+                sharestore,
+                share_provisioner,
+                adapter_factory,
+                check_runner,
+                settings,
+                req,
+                target,
+                run,
+                loop,
+                definition,
+            )
+            if actions.run_status(target.run) != LoopRunStatus.RUNNING:
+                return target
+            continue
+        current_id = actions.str_or_empty(loop.get("current_stage_id"))
+        current_stage = stage_by_id(definition, current_id)
+        if current_stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
+            current_row = _stage_row(loop, current_id)
+            if current_row is None:
+                raise LoopTransitionInvalid(f"loop stage state not found: {current_id}")
+            target = await _run_check_stage(
+                workstore,
+                store,
+                supervisor,
+                worktree_manager,
+                connection_store,
+                sharestore,
+                share_provisioner,
+                adapter_factory,
+                check_runner,
+                settings,
+                req,
+                target,
+                run,
+                loop,
+                definition,
+                current_stage,
+                current_row,
+            )
+            if actions.run_status(target.run) != LoopRunStatus.RUNNING:
+                return target
+            continue
+        agent_slug = _active_agent_slug(run, loop)
+        if workstore.get_work_slug_for_agent(agent_slug) != req.work_slug:
+            raise AgentNotFound(f"agent not found on work: {agent_slug}")
+        cursor = actions.int_or_default(loop.get("last_checked_seq"), 0)
+        events = list(workstore.read_transcript_from_cursor(req.work_slug, agent_slug, cursor))
+        observation = observe_turn(events, datetime.now(UTC))
+        latest_seq = _latest_seq(events, cursor)
+        current_row = _stage_row(loop, current_stage.step_id)
+        brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
+        approved_prefixes = briefs.resolved_approved_command_prefixes(
+            definition,
+            brief,
+            current_stage,
+        )
+        if current_row is not None:
+            learned_prefixes = tuple(actions.str_list(current_row.get("approved_command_prefixes")))
+            approved_prefixes = tuple(dict.fromkeys((*approved_prefixes, *learned_prefixes)))
+            if _capture_user_approved_prefixes(events, current_row):
+                run["loop"] = loop
+                _write_run(store, target)
+        if current_row is not None and await _auto_approve_permissions(
+            supervisor,
+            agent_slug,
+            events,
+            approved_prefixes,
+            current_row,
+        ):
+            run["loop"] = loop
+            _write_run(store, target)
+        runtime_error = observation.terminal_error
+        if runtime_error is not None:
+            current = actions.str_or_empty(loop.get("current_stage_id"))
+            current_row = _stage_row(loop, current) if current else None
+            if (
+                current_stage is not None
+                and current_row is not None
+                and actions.claim_connection_recovery(current_row, runtime_error)
+            ):
+                try:
+                    await _loop_runtime.send_loop_prompt(
+                        workstore,
+                        supervisor,
+                        worktree_manager,
+                        sharestore,
+                        share_provisioner,
+                        settings,
+                        work_slug=req.work_slug,
+                        agent_slug=agent_slug,
+                        prompt=_stage_recovery_prompt(
+                            workstore,
+                            work_slug=req.work_slug,
+                            agent_slug=agent_slug,
+                            stage=current_stage,
+                        ),
+                    )
+                except Exception as exc:
+                    current_row["status"] = LoopStepStatus.FAILED.value
+                    reason = f"{current_stage.name} could not reconnect: {exc}"
+                    _fail_run(
+                        run,
+                        loop,
+                        reason,
+                        [reason],
+                        failure_kind=LoopFailureKind.PROVIDER_RUNTIME,
+                    )
+                    _write_run(store, target)
+                    await supervisor.stop_agent(agent_slug)
+                    return target
+                loop["last_checked_seq"] = latest_seq
+                loop["status"] = LoopStatus.RUNNING.value
+                loop["status_reason"] = (
+                    f"{current_stage.name} continued after the provider connection closed."
+                )
+                run["loop"] = loop
+                _write_run(store, target)
+                continue
+            if current_row is not None:
+                current_row["status"] = LoopStepStatus.FAILED.value
+            loop["last_checked_seq"] = latest_seq
+            reason = f"Agent runtime failed: {runtime_error}"
+            _fail_run(
+                run,
+                loop,
+                reason,
+                [reason],
+                failure_kind=LoopFailureKind.PROVIDER_RUNTIME,
+            )
+            _write_run(store, target)
+            return target
+
+        if current_stage is not None:
+            current_row = _stage_row(loop, current_stage.step_id)
+            if current_row is not None and actions.claim_stale_permission_recovery(
+                current_row, events
+            ):
+                try:
+                    await _loop_runtime.send_loop_prompt(
+                        workstore,
+                        supervisor,
+                        worktree_manager,
+                        sharestore,
+                        share_provisioner,
+                        settings,
+                        work_slug=req.work_slug,
+                        agent_slug=agent_slug,
+                        prompt=_stage_recovery_prompt(
+                            workstore,
+                            work_slug=req.work_slug,
+                            agent_slug=agent_slug,
+                            stage=current_stage,
+                        ),
+                    )
+                except Exception as exc:
+                    current_row["status"] = LoopStepStatus.FAILED.value
+                    reason = f"{current_stage.name} could not reconnect: {exc}"
+                    _fail_run(
+                        run,
+                        loop,
+                        reason,
+                        [reason],
+                        failure_kind=LoopFailureKind.PROVIDER_RUNTIME,
+                    )
+                    _write_run(store, target)
+                    await supervisor.stop_agent(agent_slug)
+                    return target
+                loop["last_checked_seq"] = latest_seq
+                loop["status"] = LoopStatus.RUNNING.value
+                loop["status_reason"] = (
+                    f"{current_stage.name} continued after its permission request "
+                    "expired during reconnect."
+                )
+                run["loop"] = loop
+                _write_run(store, target)
+                continue
+
+            last_activity_at = observation.last_activity_at
+            now = datetime.now(UTC)
+            elapsed_seconds = observation.elapsed_seconds
+            waiting_permission = observation.waiting_permission
+            timeout_seconds = current_stage.retry.timeout_minutes * 60
+            if elapsed_seconds is not None and elapsed_seconds >= timeout_seconds:
+                current_row = _stage_row(loop, current_stage.step_id)
+                if current_row is not None:
+                    current_row["status"] = LoopStepStatus.FAILED.value
+                reason = (
+                    f"{current_stage.name} timed out after "
+                    f"{current_stage.retry.timeout_minutes} minutes without completing."
+                )
+                loop["last_checked_seq"] = latest_seq
+                _fail_run(
+                    run,
+                    loop,
+                    reason,
+                    [reason],
+                    failure_kind=LoopFailureKind.TIMEOUT,
+                )
+                _write_run(store, target)
+                await supervisor.stop_agent(agent_slug)
+                return target
+
+            inactive = (
+                not waiting_permission
+                and last_activity_at is not None
+                and (now - last_activity_at).total_seconds() >= _INACTIVITY_WARNING_SECONDS
+            )
+            if inactive:
+                current_row = _stage_row(loop, current_stage.step_id)
+                attempt = actions.int_or_default(
+                    current_row.get("attempt") if current_row else None, 1
+                )
+                runtime_missing = not supervisor.is_registered(
+                    agent_slug
+                ) or supervisor.is_lazy_registered(agent_slug)
+                recovered_attempt = actions.int_or_default(
+                    current_row.get("recovered_attempt") if current_row else None, 0
+                )
+                if current_row is not None and recovered_attempt != attempt:
+                    try:
+                        await _loop_runtime.send_loop_prompt(
+                            workstore,
+                            supervisor,
+                            worktree_manager,
+                            sharestore,
+                            share_provisioner,
+                            settings,
+                            work_slug=req.work_slug,
+                            agent_slug=agent_slug,
+                            prompt=_stage_recovery_prompt(
+                                workstore,
+                                work_slug=req.work_slug,
+                                agent_slug=agent_slug,
+                                stage=current_stage,
+                            ),
+                            fresh_session=not runtime_missing,
+                        )
+                    except Exception as exc:
+                        current_row["status"] = LoopStepStatus.FAILED.value
+                        reason = f"{current_stage.name} could not reconnect: {exc}"
+                        _fail_run(
+                            run,
+                            loop,
+                            reason,
+                            [reason],
+                            failure_kind=LoopFailureKind.PROVIDER_RUNTIME,
+                        )
+                        _write_run(store, target)
+                        await supervisor.stop_agent(agent_slug)
+                        return target
+                    current_row["recovered_attempt"] = attempt
+                    loop["status"] = LoopStatus.RUNNING.value
+                    loop["status_reason"] = (
+                        f"{current_stage.name} reconnected after 5 minutes without agent activity."
+                    )
+                    run["loop"] = loop
+                    _write_run(store, target)
+                    continue
+
+                reason = (
+                    f"No agent activity for 5 minutes. {current_stage.name} is "
+                    f"still running and will time out after "
+                    f"{current_stage.retry.timeout_minutes} minutes."
+                )
+                if (
+                    loop.get("status") != LoopStatus.WAITING_REPORT.value
+                    or loop.get("status_reason") != reason
+                ):
+                    loop["status"] = LoopStatus.WAITING_REPORT.value
+                    loop["status_reason"] = reason
+                    run["loop"] = loop
+                    _write_run(store, target)
+            elif loop.get("status") == LoopStatus.WAITING_REPORT.value:
+                loop["status"] = LoopStatus.RUNNING.value
+                loop["status_reason"] = f"{current_stage.name} is running."
+                run["loop"] = loop
+                _write_run(store, target)
+
+        if not observation.finished:
+            if _idle_expired(req, idle_for):
+                return target
+            await asyncio.sleep(req.poll_interval_seconds)
+            idle_for += req.poll_interval_seconds
+            continue
+
+        extracted_stage = extract_latest_stage_report(events)
+        if extracted_stage is None:
+            _store_cursor_if_advanced(store, target, run, loop, latest_seq, cursor)
+            if _idle_expired(req, idle_for):
+                return target
+            await asyncio.sleep(req.poll_interval_seconds)
+            idle_for += req.poll_interval_seconds
+            continue
+        stage_report, report_seq = extracted_stage
+        target = await _apply_stage_report(
+            workstore,
+            store,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            check_runner,
+            settings,
+            req,
+            target,
+            agent_slug,
+            stage_report,
+            report_seq,
+        )
+
+        idle_for = 0.0
+        if actions.run_status(target.run) != LoopRunStatus.RUNNING:
+            return target
+
+
+def _load_active_run(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    req: MonitorLoopRunRequest,
+) -> tuple[LoopRunTarget, dict[str, Any], dict[str, Any]]:
+    if workstore.get_work(req.work_slug) is None:
+        raise WorkNotFound(f"work not found: {req.work_slug}")
+    target = store.load(req.work_slug, req.run_id)
+    if target is None:
+        raise LoopRunNotFound(f"loop run not found: {req.run_id}")
+    return target, target.run, actions.dict_or_empty(target.run.get("loop"))
+
+
+def _active_agent_slug(run: dict[str, Any], loop: dict[str, Any]) -> str:
+    current = actions.str_or_empty(loop.get("current_stage_id"))
+    stage = _stage_row(loop, current) if current else None
+    return (
+        actions.str_or_empty(stage.get("agent_slug"))
+        if stage
+        else actions.str_or_empty(run.get("agent_slug"))
+    )
+
+
+async def _auto_approve_permissions(
+    supervisor: AgentSupervisorService,
+    agent_slug: str,
+    events: list[dict[str, Any]],
+    approved_prefixes: tuple[str, ...],
+    stage_row: dict[str, Any],
+) -> bool:
+    """Resolve configured command permissions observed by the loop monitor.
+
+    Preconditions: events belong to the active stage agent and prefixes are the
+    pinned effective policy. Postconditions: each matching pending request is
+    allowed once; unmatched and non-command permissions remain user-controlled.
+    """
+    if not approved_prefixes or not supervisor.is_registered(agent_slug):
+        return False
+    decided = {
+        request_id
+        for event in events
+        if event.get("type") == "permission_decision"
+        and isinstance((request_id := event.get("request_id")), str)
+    }
+    handled = set(actions.str_list(stage_row.get("auto_approved_permission_ids")))
+    changed = False
+    for event in events:
+        request_id = event.get("request_id")
+        if (
+            not isinstance(request_id, str)
+            or request_id in handled
+            or request_id in decided
+            or not actions.permission_request_matches_approved_prefix(event, approved_prefixes)
+        ):
+            continue
+        await supervisor.resolve_permission(agent_slug, request_id, "allow")
+        handled.add(request_id)
+        changed = True
+    if changed:
+        stage_row["auto_approved_permission_ids"] = sorted(handled)
+    return changed
+
+
+def _capture_user_approved_prefixes(
+    events: list[dict[str, Any]],
+    stage_row: dict[str, Any],
+) -> bool:
+    """Persist command prefixes explicitly approved for the active run stage.
+
+    Preconditions: events belong to one stage occurrence. Postconditions:
+    every safe ``allow_always`` command prefix is available to fresh sessions
+    of this stage; existing configured prefixes are preserved.
+    """
+    requests = {
+        request_id: event
+        for event in events
+        if event.get("type") == "permission_request"
+        and isinstance((request_id := event.get("request_id")), str)
+    }
+    prefixes = actions.str_list(stage_row.get("approved_command_prefixes"))
+    changed = False
+    for event in events:
+        request_id = event.get("request_id")
+        if event.get("type") != "permission_decision" or event.get("decision") != "allow_always":
+            continue
+        request = requests.get(request_id) if isinstance(request_id, str) else None
+        prefix = actions.approved_command_prefix_from_request(request or {})
+        if prefix and prefix not in prefixes:
+            prefixes.append(prefix)
+            changed = True
+    if changed:
+        stage_row["approved_command_prefixes"] = prefixes
+    return changed
+
+
+async def _apply_stage_report(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    agent_slug: str,
+    report: LoopStageReport | None,
+    report_seq: int,
+) -> LoopRunTarget:
+    target, run, loop = _load_active_run(workstore, store, req)
+    definition = definition_from_snapshot(loop.get("definition_snapshot"))
+    current_id = actions.str_or_empty(loop.get("current_stage_id"))
+    stage = stage_by_id(definition, current_id)
+    stage_row = _stage_row(loop, current_id)
+    if stage_row is None:
+        raise LoopTransitionInvalid(f"loop stage state not found: {current_id}")
+
+    problem = _stage_report_problem(stage, report)
+    if problem:
+        return await _repair_stage_report(
+            workstore,
+            store,
+            supervisor,
+            worktree_manager,
+            sharestore,
+            share_provisioner,
+            settings,
+            req,
+            target,
+            run,
+            loop,
+            stage,
+            stage_row,
+            agent_slug,
+            report_seq,
+            problem,
+        )
+    assert report is not None
+    if stage.kind.value == "pr" and report.outcome == LoopOutcome.PASS:
+        try:
+            pr_lifecycle.capture_completion(
+                workstore,
+                target,
+                stage_row,
+                report.artifact_refs,
+            )
+        except pr_lifecycle.PrStageInvalid as exc:
+            return await _repair_stage_report(
+                workstore,
+                store,
+                supervisor,
+                worktree_manager,
+                sharestore,
+                share_provisioner,
+                settings,
+                req,
+                target,
+                run,
+                loop,
+                stage,
+                stage_row,
+                agent_slug,
+                report_seq,
+                str(exc),
+            )
+    _record_stage_report(loop, stage_row, report, report_seq)
+    loop["last_checked_seq"] = report_seq
+    loop["findings"] = list(report.findings)
+    _copy_report_to_run(run, report)
+    return await _advance_after_stage_report(
+        workstore,
+        store,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        settings,
+        req,
+        target,
+        run,
+        loop,
+        definition,
+        current_id,
+        stage_row,
+        report,
+    )
+
+
+async def _advance_after_stage_report(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    definition: LoopDefinition,
+    current_id: str,
+    stage_row: dict[str, Any],
+    report: LoopStageReport,
+    *,
+    bypass_review_gate: bool = False,
+    pass_already_started: bool = False,
+    resolution_note: str = "",
+) -> LoopRunTarget:
+    """Persist one stage outcome and enter its configured destination."""
+    if report.outcome == LoopOutcome.BLOCKED_USER:
+        stage_row["status"] = LoopStepStatus.BLOCKED_USER.value
+        run["status"] = LoopRunStatus.BLOCKED.value
+        run["completed_at"] = actions.now_iso()
+        loop["status"] = LoopStatus.BLOCKED_USER.value
+        loop["status_reason"] = report.blocker
+        run["loop"] = loop
+        _write_run(store, target)
+        return target
+
+    if (
+        not bypass_review_gate
+        and report.outcome == LoopOutcome.CHANGES_REQUESTED
+        and _hold_at_review_gate(store, target, run, loop, definition, stage_row, report)
+    ):
+        return target
+
+    destination = transition_destination(definition, current_id, report.outcome)
+    stage_row["status"] = (
+        LoopStepStatus.CHANGES_REQUESTED.value
+        if report.outcome == LoopOutcome.CHANGES_REQUESTED
+        else LoopStepStatus.FAILED.value
+        if report.outcome == LoopOutcome.FAILED
+        else LoopStepStatus.PASSED.value
+    )
+    if destination == "pause":
+        _fail_run(run, loop, "Loop paused without a user blocker.", [])
+        _write_run(store, target)
+        return target
+    if destination == "fail":
+        _fail_run(run, loop, report.summary, list(report.findings))
+        _write_run(store, target)
+        return target
+    if destination == "complete":
+        if stage_by_id(definition, current_id).kind.value == "pr":
+            _complete_pr(run, loop, current_id)
+        else:
+            _await_approval(run, loop, current_id=None)
+        _write_run(store, target)
+        return target
+
+    next_stage = stage_by_id(definition, destination)
+    next_row = _stage_row(loop, next_stage.step_id)
+    if next_row is None:
+        raise LoopTransitionInvalid(f"loop stage state not found: {destination}")
+    stage_ids = [stage.step_id for stage in definition.stages]
+    if not pass_already_started and stage_ids.index(destination) <= stage_ids.index(current_id):
+        actions.start_next_pass(loop)
+    if next_stage.kind == LoopStepKind.USER_APPROVAL:
+        next_row["status"] = LoopStepStatus.PENDING.value
+        _await_approval(run, loop, current_id=next_stage.step_id)
+        _write_run(store, target)
+        return target
+    if next_stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
+        return await _run_check_stage(
+            workstore,
+            store,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            check_runner,
+            settings,
+            req,
+            target,
+            run,
+            loop,
+            definition,
+            next_stage,
+            next_row,
+        )
+
+    next_agent = await _launch_or_resume_stage_agent(
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        req,
+        target,
+        definition,
+        next_stage,
+        next_row,
+        loop,
+    )
+    cursor = _loop_runtime.last_transcript_seq(
+        workstore, work_slug=req.work_slug, agent_slug=next_agent
+    )
+    await _send_stage_prompt(
+        workstore,
+        supervisor,
+        worktree_manager,
+        sharestore,
+        share_provisioner,
+        settings,
+        req,
+        target,
+        next_stage,
+        next_row,
+        next_agent,
+        report,
+        resolution_note=resolution_note,
+    )
+    next_row["status"] = LoopStepStatus.RUNNING.value
+    next_row["attempt"] = actions.int_or_default(next_row.get("attempt"), 0) + 1
+    next_row["agent_slug"] = next_agent
+    _record_owned_agent(loop, next_agent)
+    if (
+        next_stage.kind == LoopStepKind.AGENT_TASK
+        and next_stage.agent is not None
+        and next_stage.agent.permissions != LoopPermission.READ
+    ):
+        loop["source_agent_slug"] = next_agent
+    loop["current_stage_id"] = next_stage.step_id
+    loop["last_checked_seq"] = cursor
+    loop["status"] = LoopStatus.RUNNING.value
+    loop["status_reason"] = f"{next_stage.name} is running."
+    run["status"] = LoopRunStatus.RUNNING.value
+    run["completed_at"] = None
+    run["loop"] = loop
+    _write_run(store, target)
+    return target
+
+
+async def _run_check_stage(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    definition: LoopDefinition,
+    stage: LoopStepDefinition,
+    stage_row: dict[str, Any],
+) -> LoopRunTarget:
+    """Run one configured check and immediately advance from its result."""
+    source_slug = _write_stage_agent_slug(definition, loop)
+    source = next(
+        (
+            agent
+            for agent in workstore.list_agents_for_work(req.work_slug)
+            if agent.slug == source_slug
+        ),
+        None,
+    )
+    if source is None:
+        raise AgentNotFound(f"source agent not found on work: {source_slug}")
+    workdir = worktree_manager.ensure(
+        req.work_slug,
+        source.worktree_slug or source_slug,
+        source.folder,
+    )
+    stage_row["status"] = LoopStepStatus.RUNNING.value
+    stage_row["attempt"] = actions.int_or_default(stage_row.get("attempt"), 0) + 1
+    loop["current_stage_id"] = stage.step_id
+    loop["status"] = LoopStatus.RUNNING.value
+    loop["status_reason"] = f"{stage.name} is running."
+    run["loop"] = loop
+    _write_run(store, target)
+    try:
+        workspace = worktree_manager.describe_state(workdir)
+        result = await check_runner.run(
+            LoopCheckRequest(
+                workdir=workdir,
+                argv=stage.check_command,
+                timeout_seconds=float(stage.retry.timeout_minutes * 60),
+                changed_files=(
+                    *workspace.changed_files,
+                    *workspace.untracked_files,
+                ),
+            )
+        )
+    except (OSError, ValueError) as exc:
+        result = LoopCheckResult(exit_code=None, stderr=str(exc))
+    report = _check_report(stage, result)
+    _record_stage_report(
+        loop,
+        stage_row,
+        report,
+        actions.int_or_default(loop.get("last_checked_seq"), 0),
+    )
+    loop["findings"] = list(report.findings)
+    _copy_report_to_run(run, report)
+    return await _advance_after_stage_report(
+        workstore,
+        store,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        settings,
+        req,
+        target,
+        run,
+        loop,
+        definition,
+        stage.step_id,
+        stage_row,
+        report,
+    )
+
+
+def _check_report(
+    stage: LoopStepDefinition,
+    result: LoopCheckResult,
+) -> LoopStageReport:
+    """Convert one process result into the common loop report contract."""
+    passed = result.exit_code == 0 and not result.timed_out
+    can_request_changes = bool(stage.transitions.get(LoopOutcome.CHANGES_REQUESTED))
+    outcome = (
+        LoopOutcome.PASS
+        if passed
+        else LoopOutcome.CHANGES_REQUESTED
+        if can_request_changes and not result.timed_out
+        else LoopOutcome.FAILED
+    )
+    status = "timed out" if result.timed_out else f"exited {result.exit_code}"
+    evidence = [f"$ {shlex.join(stage.check_command)}", status]
+    if result.stdout.strip():
+        evidence.append(result.stdout.strip())
+    if result.stderr.strip():
+        evidence.append(result.stderr.strip())
+    return LoopStageReport(
+        outcome=outcome,
+        summary=f"{stage.name} {'passed' if passed else 'failed'} ({status}).",
+        findings=() if passed else (f"{stage.name} {status}.",),
+        changes="None.",
+        validation_evidence="\n".join(evidence),
+        divergences="None.",
+        skipped_scope="None.",
+        blocker="None.",
+    )
+
+
+def _stage_report_problem(stage: LoopStepDefinition, report: LoopStageReport | None) -> str:
+    if report is None:
+        return "Missing or invalid atelier_loop_step_report."
+    if report.outcome == LoopOutcome.BLOCKED_USER and _explicit_none(report.blocker):
+        return "A blocked_user report needs a concrete blocker."
+    if stage.kind == LoopStepKind.AGENT_TASK and report.outcome == LoopOutcome.CHANGES_REQUESTED:
+        return "Implementation stages cannot request changes from themselves."
+    if stage.kind.value == "pr" and report.outcome == LoopOutcome.CHANGES_REQUESTED:
+        if not report.findings:
+            return "Create PR changes_requested needs actionable findings."
+        if not report.validation_evidence.strip():
+            return "Create PR changes_requested needs failing-check evidence."
+    if stage.kind == LoopStepKind.AGENT_TASK or stage.kind.value == "pr":
+        if report.outcome == LoopOutcome.PASS and not report.validation_evidence.strip():
+            return "A passing implementation report needs validation evidence."
+    if (
+        stage.kind == LoopStepKind.AGENT_REVIEW
+        and report.outcome == LoopOutcome.CHANGES_REQUESTED
+        and not report.findings
+    ):
+        return "A changes-requested review needs actionable findings."
+    return ""
+
+
+async def _repair_stage_report(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    stage: LoopStepDefinition,
+    stage_row: dict[str, Any],
+    agent_slug: str,
+    report_seq: int,
+    problem: str,
+) -> LoopRunTarget:
+    attempts = actions.int_or_default(stage_row.get("attempt"), 1)
+    if attempts >= stage.retry.max_attempts:
+        stage_row["status"] = LoopStepStatus.FAILED.value
+        _fail_run(
+            run,
+            loop,
+            problem,
+            [problem],
+            failure_kind=LoopFailureKind.INVALID_REPORT,
+        )
+        _write_run(store, target)
+        return target
+    await _loop_runtime.send_loop_prompt(
+        workstore,
+        supervisor,
+        worktree_manager,
+        sharestore,
+        share_provisioner,
+        settings,
+        work_slug=req.work_slug,
+        agent_slug=agent_slug,
+        prompt=stage_report_repair_prompt(stage),
+    )
+    stage_row["attempt"] = attempts + 1
+    loop["attempt"] = actions.int_or_default(loop.get("attempt"), 1) + 1
+    loop["last_checked_seq"] = report_seq
+    loop["status_reason"] = problem
+    run["loop"] = loop
+    _write_run(store, target)
+    return target
+
+
+async def _launch_or_resume_stage_agent(
+    workstore: WorkStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    definition: LoopDefinition,
+    stage: LoopStepDefinition,
+    stage_row: dict[str, Any],
+    loop: dict[str, Any],
+) -> str:
+    if stage.agent is None:
+        raise LoopTransitionInvalid(f"agent policy missing for stage: {stage.step_id}")
+    existing = actions.str_or_none(stage_row.get("agent_slug"))
+    if stage.agent.session.value == "reuse" and existing:
+        return existing
+
+    agents = {
+        agent.slug: agent
+        for agent in workstore.list_agents_for_work(req.work_slug)
+        if agent.slug is not None
+    }
+    source_slug = _write_stage_agent_slug(definition, loop)
+    source = agents.get(source_slug)
+    if source is None:
+        raise AgentNotFound(f"source agent not found on work: {source_slug}")
+    brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
+    stage_input = briefs.stage_brief(brief, stage.step_id)
+    provider, model, options = resolve_stage_agent_config(
+        stage.agent,
+        parent_provider=source.provider,
+        parent_model=source.model,
+        parent_options=dict(source.options or {}),
+        override=stage_input.agent if stage_input is not None else None,
+    )
+    launched = await launch_agent(
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        AgentLaunchRequest(
+            work_slug=req.work_slug,
+            name=f"{stage.name} · {target.target_id}",
+            persona="architect" if stage.kind == LoopStepKind.AGENT_REVIEW else "developer",
+            role=stage.instructions,
+            provider=provider,
+            model=model,
+            folder=source.folder,
+            options=options,
+            worktree_slug=source.worktree_slug or source_slug,
+            approved_command_prefixes=tuple(
+                dict.fromkeys(
+                    (
+                        *briefs.resolved_approved_command_prefixes(
+                            definition,
+                            brief,
+                            stage,
+                        ),
+                        *actions.str_list(stage_row.get("approved_command_prefixes")),
+                    )
+                )
+            ),
+        ),
+    )
+    if launched.slug is None:
+        raise RuntimeError("loop stage launch returned an agent without slug")
+    return launched.slug
+
+
+def _write_stage_agent_slug(definition: LoopDefinition, loop: dict[str, Any]) -> str:
+    source = actions.str_or_none(loop.get("source_agent_slug"))
+    if source:
+        return source
+    for stage in reversed(definition.stages):
+        if (
+            stage.kind != LoopStepKind.AGENT_TASK
+            or stage.agent is None
+            or stage.agent.permissions == LoopPermission.READ
+        ):
+            continue
+        row = _stage_row(loop, stage.step_id)
+        slug = actions.str_or_none(row.get("agent_slug")) if row else None
+        if slug:
+            return slug
+    return ""
+
+
+async def _send_stage_prompt(
+    workstore: WorkStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    stage: LoopStepDefinition,
+    stage_row: dict[str, Any],
+    agent_slug: str,
+    previous: LoopStageReport,
+    *,
+    resolution_note: str = "",
+) -> None:
+    prompt_type = (
+        ReviewStagePrompt
+        if stage.kind == LoopStepKind.AGENT_REVIEW
+        else PrStagePrompt
+        if stage.kind.value == "pr"
+        else TaskStagePrompt
+    )
+    if stage.kind.value == "pr":
+        pr_lifecycle.snapshot_stage_config(target, stage)
+        resolution_note = "\n\n".join(
+            value
+            for value in (resolution_note.strip(), pr_lifecycle.prompt_context(target.run))
+            if value
+        )
+    if previous.outcome == LoopOutcome.CHANGES_REQUESTED and not any(
+        item.kind == LoopContextKind.PREVIOUS_REPORT for item in stage.context
+    ):
+        resolution_note = "\n\n".join(
+            value
+            for value in (
+                _changes_requested_note(previous),
+                resolution_note.strip(),
+            )
+            if value
+        )
+    brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
+    brief_note, brief_context = briefs.prompt_values(brief, stage.step_id)
+    changed_files = actions.changed_file_prompt_lines(previous.changed_files)
+    if not changed_files:
+        changed_files = actions.latest_changed_file_prompt_lines(
+            actions.dict_or_empty(target.run.get("loop"))
+        )
+    workspace_diff = (
+        _loop_runtime.workspace_prompt_context(
+            workstore,
+            worktree_manager,
+            work_slug=req.work_slug,
+            agent_slug=agent_slug,
+        )
+        if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.context)
+        else ""
+    )
+    prompt = build_stage_prompt(
+        prompt_type(
+            run_id=req.run_id,
+            work_slug=req.work_slug,
+            artifact_id=target.target_id,
+            artifact_title=target.title,
+            source_ref=target.source_ref,
+            stage=stage,
+            previous_summary=previous.summary,
+            previous_findings=previous.findings,
+            previous_validation_evidence=previous.validation_evidence,
+            previous_changed_files=changed_files,
+            workspace_diff=workspace_diff,
+            resolution_note=resolution_note,
+            resolved_context=tuple(actions.str_list(stage_row.get("resolved_context"))),
+            context_warnings=tuple(actions.str_list(stage_row.get("context_warnings"))),
+            brief_note=brief_note,
+            brief_context=brief_context,
+        )
+    )
+    await _loop_runtime.send_loop_prompt(
+        workstore,
+        supervisor,
+        worktree_manager,
+        sharestore,
+        share_provisioner,
+        settings,
+        work_slug=req.work_slug,
+        agent_slug=agent_slug,
+        prompt=prompt,
+    )
+
+
+def _changes_requested_note(report: LoopStageReport) -> str:
+    """Return mandatory corrective input for a backward stage transition."""
+    lines = ["Required changes from the prior stage:", f"Summary: {report.summary}"]
+    if report.findings:
+        lines.extend(("Findings:", *(f"- {item}" for item in report.findings)))
+    if report.validation_evidence:
+        lines.extend(("Validation evidence:", report.validation_evidence))
+    return "\n".join(lines)
+
+
+def _hold_at_review_gate(
+    store: LoopRunStateStore,
+    target: LoopRunTarget,
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    definition: LoopDefinition,
+    stage_row: dict[str, Any],
+    report: LoopStageReport,
+) -> bool:
+    """Pause a review return edge when its resolved gate requires a human.
+
+    Preconditions: a validated changes-requested report is being advanced.
+    Postconditions: returns false for automatic routing with budget; otherwise
+    persists a blocked run containing the complete human decision input.
+    """
+    stage = stage_by_id(definition, actions.str_or_empty(stage_row.get("id")))
+    brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
+    gate, source = briefs.resolved_review_gate(stage, brief)
+    if gate is None:
+        return False
+    pass_counts = loop.setdefault("review_gate_passes", {})
+    pass_limits = loop.setdefault("review_gate_limits", {})
+    used = actions.int_or_default(
+        pass_counts.get(stage.step_id) if isinstance(pass_counts, dict) else None,
+        0,
+    )
+    limit = actions.int_or_default(
+        pass_limits.get(stage.step_id) if isinstance(pass_limits, dict) else None,
+        gate.max_passes,
+    )
+    if gate.mode == LoopReviewGateMode.AUTOMATIC and used < limit:
+        if isinstance(pass_counts, dict):
+            pass_counts[stage.step_id] = used + 1
+        return False
+
+    destination = transition_destination(
+        definition,
+        stage.step_id,
+        LoopOutcome.CHANGES_REQUESTED,
+    )
+    stage_row["status"] = LoopStepStatus.CHANGES_REQUESTED.value
+    loop["review_gate"] = {
+        "stage_id": stage.step_id,
+        "destination_id": destination,
+        "mode": gate.mode.value,
+        "source": source,
+        "max_passes": limit,
+        "passes_used": used,
+        "passes_spent": gate.mode == LoopReviewGateMode.AUTOMATIC,
+        "summary": report.summary,
+        "findings": list(report.findings),
+        "finding_details": [
+            {
+                "text": finding.text,
+                "severity": finding.severity.value,
+                "location": finding.location,
+            }
+            for finding in report.finding_details
+        ],
+    }
+    run["status"] = LoopRunStatus.BLOCKED.value
+    run["completed_at"] = actions.now_iso()
+    loop["status"] = LoopStatus.BLOCKED_USER.value
+    loop["status_reason"] = f"{stage.name} requested changes; the review gate is waiting for you."
+    run["loop"] = loop
+    _write_run(store, target)
+    return True
+
+
+async def _apply_approval_decision(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    definition: LoopDefinition,
+) -> LoopRunTarget:
+    """Advance one persisted approval through the configured pass edge.
+
+    Preconditions: lifecycle.accept stored an approval decision on a user stage.
+    Postconditions: the decision is recorded once and normal stage routing resumes.
+    """
+    decision = actions.dict_or_empty(loop.pop("approval_decision", None))
+    stage_id = actions.str_or_empty(loop.get("current_stage_id"))
+    stage_row = _stage_row(loop, stage_id)
+    if stage_row is None:
+        raise LoopTransitionInvalid(f"loop stage state not found: {stage_id}")
+    prior_summary = actions.str_or_empty(run.get("summary"))
+    approval_summary = actions.str_or_empty(decision.get("summary")) or "Approved by user."
+    report = LoopStageReport(
+        outcome=LoopOutcome.PASS,
+        summary=(f"{approval_summary}\n\n{prior_summary}" if prior_summary else approval_summary),
+        findings=tuple(actions.str_list(loop.get("findings"))),
+        changes=actions.str_or_empty(run.get("changes")),
+        validation_evidence=actions.str_or_empty(run.get("validation_evidence")),
+        divergences=actions.str_or_empty(run.get("divergences")),
+        skipped_scope=actions.str_or_empty(run.get("skipped_scope")),
+    )
+    _record_stage_report(
+        loop,
+        stage_row,
+        report,
+        actions.int_or_default(loop.get("last_checked_seq"), 0),
+    )
+    return await _advance_after_stage_report(
+        workstore,
+        store,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        settings,
+        req,
+        target,
+        run,
+        loop,
+        definition,
+        stage_id,
+        stage_row,
+        report,
+        bypass_review_gate=True,
+    )
+
+
+async def _apply_pr_feedback_decision(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    definition: LoopDefinition,
+) -> LoopRunTarget:
+    """Route one persisted PR feedback bundle back through implementation.
+
+    Preconditions: the PR stage has a changes-requested edge and a non-empty
+    feedback bundle. Postconditions: the decision is consumed once and the next
+    pass starts through normal fresh-session stage routing.
+    """
+    decision = actions.dict_or_empty(loop.pop("pr_feedback_decision", None))
+    stage_id = actions.str_or_empty(decision.get("stage_id"))
+    stage_row = _stage_row(loop, stage_id)
+    if stage_row is None:
+        raise LoopTransitionInvalid(f"loop stage state not found: {stage_id}")
+    summary = actions.str_or_empty(decision.get("summary"))
+    report = LoopStageReport(
+        outcome=LoopOutcome.CHANGES_REQUESTED,
+        summary=summary,
+        findings=(summary,) if summary else (),
+    )
+    return await _advance_after_stage_report(
+        workstore,
+        store,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        settings,
+        req,
+        target,
+        run,
+        loop,
+        definition,
+        stage_id,
+        stage_row,
+        report,
+        bypass_review_gate=True,
+        pass_already_started=True,
+        resolution_note=summary,
+    )
+
+
+async def _apply_review_gate_decision(
+    workstore: WorkStore,
+    store: LoopRunStateStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
+    check_runner: LoopCheckRunner,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    definition: LoopDefinition,
+) -> LoopRunTarget:
+    """Apply one persisted human gate decision through normal stage routing.
+
+    Preconditions: the run contains a gate and a validated pending decision.
+    Postconditions: waived findings are recorded and routing continues once.
+    """
+    gate = actions.dict_or_empty(loop.get("review_gate"))
+    decision = actions.dict_or_empty(loop.get("review_gate_decision"))
+    stage_id = actions.str_or_empty(gate.get("stage_id"))
+    stage_row = _stage_row(loop, stage_id)
+    if stage_row is None:
+        raise LoopTransitionInvalid(f"loop stage state not found: {stage_id}")
+    findings = actions.str_list(gate.get("findings"))
+    enforced = {
+        index
+        for index in decision.get("enforced_findings", [])
+        if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < len(findings)
+    }
+    choice = actions.str_or_empty(decision.get("decision"))
+    if choice == "approve_as_is":
+        enforced.clear()
+    waived = [finding for index, finding in enumerate(findings) if index not in enforced]
+    stored_waived = loop.setdefault("waived_findings", [])
+    if isinstance(stored_waived, list):
+        stored_waived.extend(waived)
+    reports = stage_row.get("reports")
+    if isinstance(reports, list) and reports and isinstance(reports[-1], dict):
+        reports[-1]["review_decision"] = {
+            "decision": choice,
+            "enforced_findings": sorted(enforced),
+            "instruction": actions.str_or_empty(decision.get("instruction")),
+        }
+    if choice == "send_back" and bool(gate.get("passes_spent")):
+        next_limit = actions.int_or_default(gate.get("passes_used"), 0) + 1
+        pass_counts = loop.setdefault("review_gate_passes", {})
+        pass_limits = loop.setdefault("review_gate_limits", {})
+        if isinstance(pass_counts, dict):
+            pass_counts[stage_id] = next_limit
+        if isinstance(pass_limits, dict):
+            pass_limits[stage_id] = next_limit
+    loop.pop("review_gate", None)
+    loop.pop("review_gate_decision", None)
+    report = LoopStageReport(
+        outcome=(LoopOutcome.PASS if choice == "approve_as_is" else LoopOutcome.CHANGES_REQUESTED),
+        summary=actions.str_or_empty(gate.get("summary")),
+        findings=tuple(findings[index] for index in sorted(enforced)),
+    )
+    return await _advance_after_stage_report(
+        workstore,
+        store,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        settings,
+        req,
+        target,
+        run,
+        loop,
+        definition,
+        stage_id,
+        stage_row,
+        report,
+        bypass_review_gate=True,
+        resolution_note=actions.str_or_empty(decision.get("instruction")),
+    )
+
+
+def _record_stage_report(
+    loop: dict[str, Any],
+    stage_row: dict[str, Any],
+    report: LoopStageReport,
+    report_seq: int,
+) -> None:
+    reports = stage_row.setdefault("reports", [])
+    pass_number = max(1, actions.int_or_default(loop.get("pass_number"), 1))
+    value = {
+        "outcome": report.outcome.value,
+        "pass_number": pass_number,
+        "agent_slug": actions.str_or_none(stage_row.get("agent_slug")),
+        "summary": report.summary,
+        "findings": list(report.findings),
+        "changes": report.changes,
+        "validation_evidence": report.validation_evidence,
+        "divergences": report.divergences,
+        "skipped_scope": report.skipped_scope,
+        "blocker": report.blocker,
+        "artifact_refs": list(report.artifact_refs),
+        "finding_details": [
+            {
+                "text": finding.text,
+                "severity": finding.severity.value,
+                "location": finding.location,
+            }
+            for finding in report.finding_details
+        ],
+        "criteria_coverage": [
+            {"text": criterion.text, "met": criterion.met, "note": criterion.note}
+            for criterion in report.criteria_coverage
+        ],
+        "changed_files": [
+            {
+                "path": changed.path,
+                "additions": changed.additions,
+                "deletions": changed.deletions,
+            }
+            for changed in report.changed_files
+        ],
+        "seq": report_seq,
+        "recorded_at": actions.now_iso(),
+        "push_at": actions.str_or_none(stage_row.get("push_at")),
+        "pr": deepcopy(stage_row["pr"]) if isinstance(stage_row.get("pr"), dict) else None,
+        "addressed_comments": [
+            dict(item) for item in stage_row.get("addressed_comments", []) if isinstance(item, dict)
+        ]
+        if isinstance(stage_row.get("addressed_comments"), list)
+        else [],
+        "feedback_instruction": actions.str_or_empty(stage_row.get("feedback_instruction")),
+    }
+    if isinstance(reports, list):
+        reports.append(value)
+    stage_row["summary"] = report.summary
+    stage_row["findings"] = list(report.findings)
+    stage_row["changes"] = report.changes
+    stage_row["validation_evidence"] = report.validation_evidence
+    stage_row["divergences"] = report.divergences
+    stage_row["skipped_scope"] = report.skipped_scope
+    stage_row["blocker"] = report.blocker
+    stage_row["artifact_refs"] = list(report.artifact_refs)
+    stage_row["finding_details"] = value["finding_details"]
+    stage_row["criteria_coverage"] = value["criteria_coverage"]
+    stage_row["changed_files"] = value["changed_files"]
+
+
+def _copy_report_to_run(run: dict[str, Any], report: LoopStageReport) -> None:
+    run["summary"] = report.summary
+    run["divergences"] = report.divergences
+    run["skipped_scope"] = report.skipped_scope
+    run["blockers"] = report.blocker
+    run["changes"] = report.changes
+    run["validation_evidence"] = report.validation_evidence
+
+
+def _await_approval(run: dict[str, Any], loop: dict[str, Any], *, current_id: str | None) -> None:
+    now = actions.now_iso()
+    run["status"] = LoopRunStatus.COMPLETED_PENDING_REVIEW.value
+    run["completed_at"] = now
+    loop["status"] = LoopStatus.AWAITING_APPROVAL.value
+    loop["status_reason"] = "All automatic stages passed; result approval is required."
+    loop["current_stage_id"] = current_id or ""
+    run["loop"] = loop
+
+
+def _complete_pr(run: dict[str, Any], loop: dict[str, Any], current_id: str) -> None:
+    """Finish an already-approved loop after its PR stage passes."""
+    now = actions.now_iso()
+    run["status"] = LoopRunStatus.ACCEPTED.value
+    run["completed_at"] = now
+    run["accepted_at"] = now
+    loop["status"] = LoopStatus.ACCEPTED.value
+    loop["status_reason"] = "Pull request updated; the loop pass is complete."
+    loop["current_stage_id"] = current_id
+    run["loop"] = loop
+
+
+def _fail_run(
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    reason: str,
+    findings: list[str],
+    *,
+    failure_kind: LoopFailureKind = LoopFailureKind.STAGE_OUTCOME,
+) -> None:
+    run["status"] = LoopRunStatus.BLOCKED.value
+    run["completed_at"] = actions.now_iso()
+    loop["status"] = LoopStatus.FAILED.value
+    loop["failure_kind"] = failure_kind.value
+    loop["status_reason"] = reason
+    loop["findings"] = findings
+    run["loop"] = loop
+
+
+def _stage_row(loop: dict[str, Any], step_id: str) -> dict[str, Any] | None:
+    rows = loop.get("stages")
+    if not isinstance(rows, list):
+        return None
+    return next(
+        (row for row in rows if isinstance(row, dict) and row.get("id") == step_id),
+        None,
+    )
+
+
+def _record_owned_agent(loop: dict[str, Any], agent_slug: str) -> None:
+    """Track a transient stage agent once for eventual run cleanup."""
+    raw = loop.setdefault("owned_agent_slugs", [])
+    if isinstance(raw, list) and agent_slug not in raw:
+        raw.append(agent_slug)
+
+
+def _explicit_none(value: str) -> bool:
+    return value.strip().lower() in {"", "none", "none.", "n/a", "not applicable"}
+
+
+def _write_run(
+    store: LoopRunStateStore,
+    target: LoopRunTarget,
+) -> None:
+    store.save(target)
+
+
+def _store_cursor_if_advanced(
+    store: LoopRunStateStore,
+    target: LoopRunTarget,
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    latest_seq: int,
+    cursor: int,
+) -> None:
+    if latest_seq <= cursor:
+        return
+    loop["last_checked_seq"] = latest_seq
+    run["loop"] = loop
+    _write_run(store, target)
+
+
+def _idle_expired(req: MonitorLoopRunRequest, idle_for: float) -> bool:
+    return req.idle_timeout_seconds is not None and idle_for >= req.idle_timeout_seconds
+
+
+def _lease_expiry() -> datetime:
+    """Return the next persisted monitor lease deadline."""
+    return datetime.now(UTC) + timedelta(seconds=60)
+
+
+def _latest_seq(events: list[dict[str, Any]], default: int) -> int:
+    seqs = [seq for event in events if isinstance((seq := event.get("seq")), int)]
+    return max(seqs, default=default)
+
+
+__all__ = [
+    "AgentNotFound",
+    "LoopRunNotFound",
+    "MonitorLoopRunRequest",
+    "WorkNotFound",
+    "execute",
+]

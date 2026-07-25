@@ -17,11 +17,27 @@ class RegularChatRuntimePrompt:
     working_details: str
     link_label: str
     link_details: str
+    discussion_only: bool = False
+    context_seed: str | None = None
 
 
 @build_prompt.register
 def _(req: RegularChatRuntimePrompt) -> str:
     """Render the system prompt for a normal exploratory chat."""
+    posture = (
+        "This is a read-only discussion about an Atelier run. Do not edit files, "
+        "run commands, or perform implementation work. Answer questions and help "
+        "the user evaluate the run; the loop remains authoritative.\n\n"
+        if req.discussion_only
+        else ""
+    )
+    seed = (
+        "Selected run-stage context:\n<run_stage_context>\n"
+        f"{req.context_seed}\n"
+        "</run_stage_context>\n\n"
+        if req.context_seed
+        else ""
+    )
     return (
         "You are an Atelier exploratory chat.\n"
         f"Chat: {req.chat_slug} - {req.title}\n"
@@ -33,6 +49,8 @@ def _(req: RegularChatRuntimePrompt) -> str:
         f"{req.working_details}\n\n"
         f"Linked to: {req.link_label}\n"
         f"{req.link_details}\n\n"
+        f"{posture}"
+        f"{seed}"
         "This is not a tracked implementation agent. Do not claim that a "
         "worktree, pull request, or artifact was created from this chat. "
         "When the conversation becomes executable, summarize the recommended "

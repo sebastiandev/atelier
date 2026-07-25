@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 
 from src.domain.artifacts.pr_status import (
+    PrComment,
     PrRef,
     is_terminal_pr_status,
     parse_pr_url,
+    reply_to_pr_comment,
 )
 
 
@@ -69,3 +71,20 @@ def test_is_terminal_for_merged_and_closed(status: str) -> None:
 @pytest.mark.parametrize("status", ["open", "draft", ""])
 def test_is_terminal_false_for_active_states(status: str) -> None:
     assert is_terminal_pr_status(status) is False
+
+
+@pytest.mark.anyio
+async def test_reply_action_rejects_empty_body() -> None:
+    """A blank reply never reaches the external provider boundary."""
+    comment = PrComment(
+        "id",
+        "author",
+        None,
+        "body",
+        "2026-07-20T10:00:00Z",
+        "url",
+        "conversation",
+        "target",
+    )
+    with pytest.raises(ValueError, match="must not be empty"):
+        await reply_to_pr_comment(object(), PrRef("github.com", "o", "r", 1), comment, "  ")  # type: ignore[arg-type]

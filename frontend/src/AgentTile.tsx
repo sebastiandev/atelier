@@ -33,6 +33,7 @@ import {
   type Persona,
   listConnections,
   patchAgent,
+  reconnectAgent,
   switchAgentThread,
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
@@ -63,6 +64,7 @@ const COMPACTION_NOTICE_PCT = 70;
 const COMPACTION_RECOMMENDED_PCT = 75;
 const COMPACTION_URGENT_PCT = 86;
 const COMPACTION_BLOCKED_PCT = 100;
+const RUNTIME_STALL_MS = 5 * 60 * 1000;
 
 export const EFFORT_SESSION_CONFIG_IDS = [
   "thinking_effort",
@@ -81,6 +83,8 @@ type AgentTileProps = {
   agentName?: string;
   provider?: string;
   model?: string;
+  /** Keep transcript/workspace inspection available while disabling provider mutations. */
+  readOnly?: boolean;
   onClose?: () => void;
   /** Hand the agent off to the user's terminal CLI. The supervisor's
    *  SDK process is stopped server-side; this callback is responsible
@@ -143,6 +147,7 @@ export function AgentTile({
   agentName,
   provider,
   model,
+  readOnly = false,
   onClose,
   onDetach,
   onHandoff,
@@ -163,7 +168,7 @@ export function AgentTile({
     sendSessionConfigRefresh,
     pendingPermissions,
     pendingHandoff,
-  } = useAgentStream(agentSlug);
+  } = useAgentStream(agentSlug, { readOnly });
   const [handoffSwitching, setHandoffSwitching] = useState(false);
   const [handoffError, setHandoffError] = useState<string | null>(null);
   // Reset transient switching/error state whenever the offer goes away
@@ -338,6 +343,8 @@ export function AgentTile({
     () => deriveActivityPhase(events, isAgentActive(events)),
     [events],
   );
+  const turnOpen = useMemo(() => isTurnOpen(events), [events]);
+  const stalled = useStalledTurn(events, turnOpen);
   // Debounce label swaps. Rapid event bursts inside a single turn
   // (tool_call → tool_result → message_delta in 200ms) would otherwise
   // strobe the phase text. The shimmer underneath keeps animating
@@ -441,7 +448,7 @@ export function AgentTile({
   ]);
 
   useEffect(() => {
-    if (!compactionBlocked) {
+    if (readOnly || !compactionBlocked) {
       setCompactionModalDismissed(false);
       setCompactionDialog((current) =>
         current?.level === "blocked" && current.phase !== "compacting"
@@ -464,6 +471,7 @@ export function AgentTile({
     compactionLevel,
     contextSnapshot,
     compactionModalDismissed,
+    readOnly,
   ]);
 
   useEffect(() => {
@@ -642,6 +650,7 @@ export function AgentTile({
   );
 
   function submit() {
+    if (readOnly) return;
     if (guardBlockedCompaction()) return;
     const text = draft.trim();
     if (!text) return;
@@ -755,7 +764,7 @@ export function AgentTile({
   // Send only works when the WS is OPEN — otherwise sendInput silently
   // no-ops. Disable the composer for every non-connected state so the
   // user never thinks a click landed.
-  const composerDisabled = status !== "connected";
+  const composerDisabled = readOnly || status !== "connected";
   const sendDisabled = composerDisabled || compacting;
   const sessionModelDisabled =
     composerDisabled || isCurrentlyActive || compactionBlocked;
@@ -784,7 +793,9 @@ export function AgentTile({
   const tileClass = `agent-tile mode-${mode}` + (maximized ? " maximized" : "");
   const title = agentName || agentSlug;
   const composerPlaceholder =
-    compactionBlocked
+    readOnly
+      ? "Work completed — reopen to continue"
+      : compactionBlocked
       ? "Compact or handoff before sending"
       : status === "stopped"
       ? "Agent unavailable"
@@ -1039,6 +1050,11 @@ export function AgentTile({
             This agent slug isn't known to the server. Close it to clear from the rail.
           </div>
         )}
+        <StalledRuntimeBanner
+          title="Agent appears stalled"
+          visible={!readOnly && stalled}
+          onReconnect={() => reconnectAgent(agentSlug)}
+        />
         <div className="transcript" ref={transcriptRef}>
           {olderEventCount > 0 && (
             <button
@@ -1062,10 +1078,10 @@ export function AgentTile({
             activityPhase={composerActivity}
             context={contextSnapshot}
             compacting={compacting}
-            onCompact={openCompactionModal}
+            onCompact={readOnly ? undefined : openCompactionModal}
           />
         )}
-        {pendingPermissions.length > 0 && (
+        {!readOnly && pendingPermissions.length > 0 && (
           <PermissionApprovalDialog
             pendingPermissions={pendingPermissions}
             onDecide={(requestId, decision) => {
@@ -1074,7 +1090,7 @@ export function AgentTile({
             }}
           />
         )}
-        {pendingHandoff && (
+        {!readOnly && pendingHandoff && (
           <HandoffPrompt
             threadId={pendingHandoff.new_thread_id}
             switching={handoffSwitching}
@@ -1163,6 +1179,7 @@ export function AgentTile({
               <button
                 type="button"
                 className="composer-tool composer-tool-icon"
+                disabled={readOnly}
                 onClick={(e) => {
                   if (guardBlockedCompactionEvent(e)) return;
                   setPickerOpen((o) => !o);
@@ -1229,6 +1246,11 @@ export function AgentTile({
                 </select>
               </label>
             )}
+            <SessionFastToggle
+              events={events}
+              disabled={sessionModelDisabled}
+              onChange={sendSessionConfig}
+            />
             <span className="spacer" />
             <button
               type="submit"
@@ -1240,7 +1262,7 @@ export function AgentTile({
           </div>
         </form>
       </div>
-      {compactionDialog && (
+      {!readOnly && compactionDialog && (
         <CompactionModal
           dialog={compactionDialog}
           canHandoff={Boolean(onHandoff)}
@@ -1751,6 +1773,110 @@ export function isAgentActive(events: AgentEvent[]): boolean {
   }
 }
 
+export function useStalledTurn(
+  events: AgentEvent[],
+  active: boolean,
+): boolean {
+  const [stalled, setStalled] = useState(false);
+
+  useEffect(() => {
+    setStalled(false);
+    if (!active) return;
+    const lastEventAt = Date.parse(events.at(-1)?.ts ?? "");
+    if (!Number.isFinite(lastEventAt)) return;
+    const remaining = lastEventAt + RUNTIME_STALL_MS - Date.now();
+    if (remaining <= 0) {
+      setStalled(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setStalled(true), remaining);
+    return () => window.clearTimeout(timer);
+  }, [active, events]);
+
+  return stalled;
+}
+
+export function isTurnOpen(events: AgentEvent[]): boolean {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (
+      event.type === "message_complete" ||
+      event.type === "turn_metrics" ||
+      event.type === "error" ||
+      event.type === "user_stop" ||
+      event.type === "permission_request"
+    ) {
+      return false;
+    }
+    if (event.type === "status_change") {
+      return event.status === "thinking" || event.status === "live";
+    }
+    if (
+      event.type === "user_input" ||
+      event.type === "message_delta" ||
+      event.type === "thinking_delta" ||
+      event.type === "thinking_complete" ||
+      event.type === "tool_call" ||
+      event.type === "tool_result"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function StalledRuntimeBanner({
+  title,
+  visible,
+  onReconnect,
+}: {
+  title: string;
+  visible: boolean;
+  onReconnect: () => Promise<void>;
+}) {
+  const [reconnecting, setReconnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (visible) return;
+    setReconnecting(false);
+    setError(null);
+  }, [visible]);
+
+  if (!visible) return null;
+
+  async function recover() {
+    setReconnecting(true);
+    setError(null);
+    try {
+      await onReconnect();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setReconnecting(false);
+    }
+  }
+
+  return (
+    <div className="chat-stalled-banner" role="status">
+      <div>
+        <strong>{title}</strong>
+        <span>
+          {error ??
+            "No activity for 5 minutes. Restart the runtime without resending your message."}
+        </span>
+      </div>
+      <button
+        type="button"
+        className="btn sm"
+        disabled={reconnecting}
+        onClick={() => void recover()}
+      >
+        {reconnecting ? "Reconnecting..." : "Reconnect runtime"}
+      </button>
+    </div>
+  );
+}
+
 function latestStatus(events: AgentEvent[]): string {
   // Walk from the tail. ``status_change`` is authoritative; ``turn_metrics``
   // implies idle as a fallback (per protocol it's emitted right before
@@ -1823,6 +1949,98 @@ export function latestSessionConfigOptionByIds(
     if (option !== null) return option;
   }
   return null;
+}
+
+export function latestFastSessionConfigOption(
+  events: AgentEvent[],
+): SessionConfigOption | null {
+  let configId: string | null = null;
+  for (const event of events) {
+    if (event.type !== "session_config_options" || !Array.isArray(event.options)) {
+      continue;
+    }
+    configId = event.options
+      .map(parseSessionConfigOption)
+      .find((option) => option !== null && isFastSessionConfigOption(option))
+      ?.id ?? null;
+  }
+  return configId ? latestSessionConfigOption(events, configId) : null;
+}
+
+export function SessionFastToggle({
+  events,
+  disabled,
+  onChange,
+  fallbackValue,
+}: {
+  events: AgentEvent[];
+  disabled: boolean;
+  onChange: (configId: string, value: string | boolean) => void;
+  fallbackValue?: unknown;
+}) {
+  const config = useMemo(
+    () =>
+      latestFastSessionConfigOption(events) ??
+      fallbackFastSessionConfigOption(fallbackValue),
+    [events, fallbackValue],
+  );
+  const values = config ? fastToggleValues(config) : null;
+  if (!config || !values) return null;
+  return (
+    <label
+      className="composer-fast-toggle"
+      title={`${config.name}: ${values.checked ? "On" : "Off"}`}
+    >
+      <input
+        type="checkbox"
+        checked={values.checked}
+        disabled={disabled}
+        onChange={(event) =>
+          onChange(config.id, event.target.checked ? values.on : values.off)
+        }
+      />
+      <span aria-hidden />
+      Fast
+    </label>
+  );
+}
+
+function fallbackFastSessionConfigOption(value: unknown): SessionConfigOption | null {
+  if (value !== "on" && value !== "off" && typeof value !== "boolean") return null;
+  return {
+    id: "fast-mode",
+    name: "Fast mode",
+    choices: [
+      { value: "off", name: "Off" },
+      { value: "on", name: "On" },
+    ],
+    currentValue: value,
+  };
+}
+
+function fastToggleValues(config: SessionConfigOption) {
+  if (typeof config.currentValue === "boolean") {
+    return { checked: config.currentValue, on: true, off: false };
+  }
+  const choices = config.choices.map((choice) => String(choice.value).toLowerCase());
+  const onIndex = choices.findIndex((value) =>
+    ["fast", "priority", "on", "true", "enabled"].includes(value),
+  );
+  const offIndex = choices.findIndex((value) =>
+    ["default", "standard", "off", "false", "disabled"].includes(value),
+  );
+  if (onIndex < 0 || offIndex < 0) return null;
+  const on = config.choices[onIndex].value;
+  const off = config.choices[offIndex].value;
+  return { checked: config.currentValue === on, on, off };
+}
+
+function isFastSessionConfigOption(option: SessionConfigOption): boolean {
+  const identity = `${option.id} ${option.name}`.toLowerCase();
+  if (/(^|[ _-])fast([ _-]?mode)?($|[ _-])/.test(identity)) return true;
+  return /service[ _-]?tier/.test(identity) && option.choices.some((choice) =>
+    ["fast", "priority"].includes(String(choice.value).toLowerCase()),
+  );
 }
 
 function parseSessionConfigOption(raw: unknown): SessionConfigOption | null {

@@ -2,11 +2,6 @@
 
 from dataclasses import dataclass
 
-from src.domain.commands.loops._root import (
-    WorkNotFound,
-    resolve_catalog_roots,
-    resolve_working_root,
-)
 from src.domain.loop.builtins import builtin_loop_definition
 from src.domain.loop.catalog import (
     LoopDefinitionRoots,
@@ -22,8 +17,16 @@ from src.domain.loop.definitions import (
     repository_copy,
 )
 from src.domain.loop.dtos import LoopDefinition, LoopDefinitionScope
-from src.domain.loop.ports import LoopDefinitionLocations, LoopDefinitionRepository
-from src.domain.planning.ports import PlanningSessionRepository
+from src.domain.loop.ports import (
+    LoopDefinitionLocations,
+    LoopDefinitionRepository,
+    LoopWorkingRootRepository,
+)
+from src.domain.loop.roots import (
+    WorkNotFound,
+    resolve_catalog_roots,
+    resolve_working_root,
+)
 from src.domain.workstore.ports import WorkStore
 
 
@@ -42,7 +45,7 @@ class ForkLoopDefinitionRequest:
 
 def execute(
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     repository: LoopDefinitionRepository,
     req: ForkLoopDefinitionRequest,
@@ -61,14 +64,14 @@ def execute(
         roots = LoopDefinitionRoots(
             library=resolve_working_root(
                 workstore,
-                planning_sessions,
+                work_roots,
                 req.work_slug,
             )
         )
     else:
         roots = resolve_catalog_roots(
             workstore,
-            planning_sessions,
+            work_roots,
             locations,
             work_slug=req.work_slug,
             root_path=req.root_path,

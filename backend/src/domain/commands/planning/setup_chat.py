@@ -135,7 +135,7 @@ def _setup_options(provider: Provider, options: dict[str, Any]) -> dict[str, Any
         next_options["sandbox"] = "workspace-write"
         next_options.setdefault("approval_mode", "on-request")
     elif provider == "codex-acp":
-        next_options["mode"] = "auto"
+        next_options["mode"] = "agent"
     elif provider == "claude-code":
         next_options["permission_mode"] = "default"
     elif provider == "claude-acp":

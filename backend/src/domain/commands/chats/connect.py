@@ -24,6 +24,7 @@ class ConnectChatRequest:
 
     chat_slug: str
     cursor: int = 0
+    read_only: bool = False
 
 
 @asynccontextmanager
@@ -52,6 +53,7 @@ async def execute(
         runtime.ConnectChatRuntimeRequest(
             chat_slug=req.chat_slug,
             cursor=req.cursor,
+            read_only=req.read_only,
         ),
     ) as sub:
         yield sub

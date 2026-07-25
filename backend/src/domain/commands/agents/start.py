@@ -10,6 +10,7 @@ from src.domain.agents.launch import (
     AgentLaunchRequest,
     InvalidProviderConfig,
     MountedProjectShares,
+    WorkNotActive,
     WorkNotFound,
     launch_agent,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "InvalidProviderConfig",
     "MountedProjectShares",
     "StartAgentRequest",
+    "WorkNotActive",
     "WorkNotFound",
     "execute",
 ]

@@ -118,7 +118,7 @@ export function Settings({ section }: { section: SettingsSection }) {
       </aside>
 
       <main className="shell-right settings-right">
-        <div className="settings-body">
+        <div className={`settings-body${section === "loops" ? " wide" : ""}`}>
           {section !== "loops" && (
             <div className="settings-section-hd">
               <h1>{currentSection.title}</h1>
@@ -307,7 +307,7 @@ function SettingsAbout() {
   const theme = useSettingsStore((s) => s.theme);
   const rows = useMemo(
     () => [
-      { label: "Atelier", value: "v3 — quiet shell" },
+      { label: "Atelier", value: "v4 — looping" },
       { label: "Theme", value: theme },
       { label: "Frontend", value: window.location.host },
       { label: "Backend", value: "/api on the same origin" },

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from src.domain.loop.ports import LoopWorkingRootRepository
 from src.domain.planning.models import PlanningSession
 
 
-class PlanningSessionRepository(Protocol):
+class PlanningSessionRepository(LoopWorkingRootRepository, Protocol):
     """SQL-side storage for one Work's planning setup."""
 
     def upsert_session(self, session: PlanningSession) -> PlanningSession:

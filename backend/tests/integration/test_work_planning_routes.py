@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-import threading
 import time
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -15,15 +13,14 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from src.domain.chats import runtime as chat_runtime
+from src.application.http.routes.works import get_chat_supervisor
 from src.domain.chatstore.dtos import ChatGrounding, CreateChatRequest
 from src.domain.commands.planning import (
     materialize,
     submit_materialization,
 )
-from src.domain.commands.planning import (
-    run_monitor as planning_run_monitor,
-)
+from src.domain.loop import monitor as loop_monitor
+from src.domain.loop import runtime as loop_runtime
 from src.domain.loop.builtins import builtin_loop_definition
 from src.domain.planning import materialization as planning_materialization
 from src.domain.planning.dtos import (
@@ -54,33 +51,68 @@ def _start_plan(client: TestClient, root: Path) -> dict[str, object]:
     return res.json()
 
 
-def _complete_report(summary: str = "Implemented the artifact.") -> dict[str, str]:
+def _complete_report(summary: str = "Implemented the artifact.") -> dict[str, object]:
     return {
+        "outcome": "pass",
         "summary": summary,
+        "findings": [],
         "divergences": "None.",
         "skipped_scope": "None.",
-        "blockers": "None.",
-        "decisions": "Used the planned approach.",
+        "blocker": "None.",
         "changes": "Updated the assigned artifact implementation.",
         "validation_evidence": "pytest passed",
+        "artifact_refs": [],
     }
 
 
-def _loop_report_text(fields: dict[str, str]) -> str:
-    return json.dumps({"atelier_loop_report": fields})
+def _loop_report_text(fields: dict[str, object]) -> str:
+    return json.dumps({"atelier_loop_step_report": fields})
+
+
+def _publish_agent_event(client: TestClient, agent_slug: str, payload: dict[str, object]) -> None:
+    portal = client.portal
+    assert portal is not None
+    published = portal.call(
+        client.app.state.supervisor.publish_external_event,
+        agent_slug,
+        payload,
+    )
+    if not published:
+        client.app.state.workstore.append_transcript_event_with_seq("WRK-001", agent_slug, payload)
+
+
+def _wait_for_scripted_agent(client: TestClient, agent_slug: str) -> None:
+    if not client.app.state.supervisor.is_registered(agent_slug):
+        return
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        events = client.app.state.workstore.read_transcript_from_cursor("WRK-001", agent_slug, 0)
+        if any(
+            event.get("type") == "status_change" and event.get("status") == "idle"
+            for event in events
+        ):
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"scripted agent did not become idle: {agent_slug}")
 
 
 def _append_agent_loop_report(
-    client: TestClient, agent_slug: str, fields: dict[str, str]
+    client: TestClient, agent_slug: str, fields: dict[str, object]
 ) -> None:
-    client.app.state.workstore.append_transcript_event_with_seq(
-        "WRK-001",
+    _wait_for_scripted_agent(client, agent_slug)
+    _publish_agent_event(
+        client,
         agent_slug,
         {
             "type": "message_complete",
-            "ts": "2026-06-29T00:00:00+00:00",
+            "ts": datetime.now(UTC).isoformat(),
             "text": _loop_report_text(fields),
         },
+    )
+    _publish_agent_event(
+        client,
+        agent_slug,
+        {"type": "status_change", "status": "idle"},
     )
 
 
@@ -93,12 +125,13 @@ def _append_stage_report(
     findings: list[str] | None = None,
     validation_evidence: str = "",
 ) -> None:
-    client.app.state.workstore.append_transcript_event_with_seq(
-        "WRK-001",
+    _wait_for_scripted_agent(client, agent_slug)
+    _publish_agent_event(
+        client,
         agent_slug,
         {
             "type": "message_complete",
-            "ts": "2026-07-11T00:00:00+00:00",
+            "ts": datetime.now(UTC).isoformat(),
             "text": json.dumps(
                 {
                     "atelier_loop_step_report": {
@@ -115,6 +148,11 @@ def _append_stage_report(
                 }
             ),
         },
+    )
+    _publish_agent_event(
+        client,
+        agent_slug,
+        {"type": "status_change", "status": "idle"},
     )
 
 
@@ -133,9 +171,7 @@ def _wait_run(
         res = client.get(f"/api/works/WRK-001/plan/artifacts/{artifact_id}/runs/{run_id}")
         assert res.status_code == 200, res.text
         last = res.json()
-        if last["status"] == status and (
-            loop_status is None or last["loop_status"] == loop_status
-        ):
+        if last["status"] == status and (loop_status is None or last["loop_status"] == loop_status):
             return last
         time.sleep(0.05)
     raise AssertionError(f"run {run_id} did not reach {status}/{loop_status}: {last}")
@@ -152,15 +188,11 @@ def _wait_stage(
     deadline = time.monotonic() + timeout
     last: dict[str, object] | None = None
     while time.monotonic() < deadline:
-        response = client.get(
-            f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}"
-        )
+        response = client.get(f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}")
         assert response.status_code == 200, response.text
         last = response.json()
         if last["loop_current_stage_id"] == stage_id:
-            stage = next(
-                item for item in last["loop_stages"] if item["id"] == stage_id
-            )
+            stage = next(item for item in last["loop_stages"] if item["id"] == stage_id)
             if stage["status"] == status:
                 return last
         time.sleep(0.05)
@@ -172,13 +204,33 @@ def _start_artifact_run(
     settings: Settings,
     artifact_id: str = "story-001",
 ) -> tuple[dict[str, object], str]:
-    agent = _create_agent(client, settings.workspace_root / "repo")
+    source_agent = _create_agent(client, settings.workspace_root / "repo")
     res = client.post(
         f"/api/works/WRK-001/plan/artifacts/{artifact_id}/runs",
-        json={"agent_slug": agent["slug"]},
+        json={"agent_slug": source_agent["slug"]},
     )
     assert res.status_code == 200, res.text
-    return agent, str(res.json()["artifact"]["runs"][0]["id"])
+    run = res.json()["artifact"]["runs"][0]
+    run_id = str(run["id"])
+    return _active_stage_agent(client, run_id, artifact_id=artifact_id), run_id
+
+
+def _active_stage_agent(
+    client: TestClient,
+    run_id: str,
+    *,
+    artifact_id: str = "story-001",
+) -> dict[str, object]:
+    """Return the fresh agent currently executing a Planning loop stage."""
+    run = client.get(f"/api/works/WRK-001/plan/artifacts/{artifact_id}/runs/{run_id}").json()
+    stage = next(item for item in run["loop_stages"] if item["id"] == run["loop_current_stage_id"])
+    agent_slug = stage["agent_slug"]
+    assert isinstance(agent_slug, str)
+    return next(
+        item
+        for item in client.get("/api/works/WRK-001/agents").json()
+        if item["slug"] == agent_slug
+    )
 
 
 def _complete_artifact_run(
@@ -195,7 +247,7 @@ def _complete_artifact_run(
         artifact_id,
         run_id,
         "completed_pending_review",
-        loop_status="completed",
+        loop_status="awaiting_approval",
     )
 
 
@@ -326,8 +378,7 @@ def test_start_plan_indexes_precreated_bmad_sources(
     assert not (test_settings.workspace_root / ".atelier" / "planning" / "WRK-001").exists()
     manifest = json.loads((planning_dir / "manifest.json").read_text())
     assert [
-        (item["path"], item["artifact_kind"], item["executable"])
-        for item in manifest["artifacts"]
+        (item["path"], item["artifact_kind"], item["executable"]) for item in manifest["artifacts"]
     ] == [
         ("intent.md", "brief", False),
         ("design-guide.md", "architecture", False),
@@ -524,9 +575,7 @@ def test_start_plan_indexes_precreated_files_without_content_payload(
     assert all("content" not in item for item in manifest["artifacts"])
 
 
-def test_start_plan_rejects_missing_files(
-    app_client: TestClient, test_settings: Settings
-) -> None:
+def test_start_plan_rejects_missing_files(app_client: TestClient, test_settings: Settings) -> None:
     _create_work(app_client)
     repo_root = test_settings.workspace_root / "repo"
     _mark_framework_ready(repo_root, "bmad")
@@ -850,7 +899,7 @@ def test_materializer_config_mismatch_creates_new_chat(
     assert record.chat.provider == "codex-acp"
     assert record.chat.model == "gpt-5.5"
     assert record.chat.options["reasoning_effort"] == "xhigh"
-    assert record.chat.options["mode"] == "auto"
+    assert record.chat.options["mode"] == "agent"
 
 
 def test_start_plan_requires_planning_session(
@@ -894,7 +943,7 @@ def test_start_plan_rejects_artifact_root_outside_work_folder(
     assert "invalid framework output folder" in finalized.text
 
 
-def test_materializer_denies_network_permissions_and_retries(
+def test_materializer_retries_incomplete_turn(
     app_client: TestClient, test_settings: Settings, monkeypatch: Any
 ) -> None:
     _create_work(app_client)
@@ -902,24 +951,35 @@ def test_materializer_denies_network_permissions_and_retries(
     _mark_framework_ready(repo_root, "bmad")
     artifact_dir = _artifact_root(repo_root)
     _create_planning_session(app_client, repo_root)
-    fake_supervisor = _FakeMaterializerSupervisor()
+    chatstore = app_client.app.state.chatstore
+    fake_supervisor = _FakeMaterializerSupervisor(chatstore)
+    ensure_calls = 0
 
-    @asynccontextmanager
-    async def fake_connect(*args: Any, **_kwargs: Any) -> Any:
-        req = args[-1]
-        assert isinstance(req, chat_runtime.ConnectChatRuntimeRequest)
-        yield _FakeMaterializerSubscription(
-            app_client.app.state.chatstore,
-            req.chat_slug,
-            artifact_dir,
-        )
+    async def fake_ensure(*args: Any, **kwargs: Any) -> bool:
+        nonlocal ensure_calls
+        ensure_calls += 1
+        assert "Planning materializer" in kwargs["system_prompt_override"]
+        assert "selected framework is BMAD" in kwargs["system_prompt_override"]
+        chat_slug = args[-1]
+        if ensure_calls == 1:
+            chatstore.append_transcript_event_with_seq(
+                chat_slug,
+                {
+                    "type": "status_change",
+                    "status": "idle",
+                    "ts": "2026-06-29T00:00:00+00:00",
+                },
+            )
+        else:
+            _write_materializer_report(chatstore, chat_slug, artifact_dir)
+        return True
 
-    monkeypatch.setattr(materialize.chat_runtime, "connect_chat", fake_connect)
+    monkeypatch.setattr(materialize.chat_runtime, "ensure_chat_runtime", fake_ensure)
 
     view = asyncio.run(
         materialize.execute(
             app_client.app.state.workstore,
-            app_client.app.state.chatstore,
+            chatstore,
             app_client.app.state.projectstore,
             app_client.app.state.planningfiles,
             app_client.app.state.planning_sessions,
@@ -939,12 +999,166 @@ def test_materializer_denies_network_permissions_and_retries(
 
     assert view.phase == "planned"
     assert {artifact.id for artifact in view.artifacts} == {"story-001"}
-    assert fake_supervisor.permissions == [("mat-perm-1", "deny")]
+    assert fake_supervisor.permissions == []
     assert len(fake_supervisor.inputs) == 1
     assert "atelier_plan_materialization" in fake_supervisor.inputs[0]
+    assert "Do not restart planning, scan the repository" in fake_supervisor.inputs[0]
 
 
-def test_materializer_resume_answers_pending_safe_permission(
+def test_failed_materializer_retry_starts_fresh_provider_session(
+    app_client: TestClient, test_settings: Settings, monkeypatch: Any
+) -> None:
+    _create_work(app_client)
+    repo_root = test_settings.workspace_root / "repo"
+    _mark_framework_ready(repo_root, "bmad")
+    artifact_dir = _artifact_root(repo_root)
+    _create_planning_session(app_client, repo_root)
+    chat_slug = _create_materializer_chat(app_client, repo_root)
+    chatstore = app_client.app.state.chatstore
+    chatstore.set_chat_session_id(chat_slug, "dead-provider-session")
+    chatstore.append_transcript_event_with_seq(
+        chat_slug,
+        {
+            "type": "error",
+            "ts": "2026-06-29T00:00:00+00:00",
+            "message": "Connection closed",
+        },
+    )
+    fake_supervisor = _FakeMaterializerSupervisor(chatstore)
+
+    async def fake_ensure(*args: Any, **_kwargs: Any) -> bool:
+        requested_slug = args[-1]
+        assert chatstore.get_chat(requested_slug).chat.session_id is None
+        _write_materializer_report(chatstore, requested_slug, artifact_dir)
+        return True
+
+    monkeypatch.setattr(materialize.chat_runtime, "ensure_chat_runtime", fake_ensure)
+
+    view = asyncio.run(
+        materialize.execute(
+            app_client.app.state.workstore,
+            chatstore,
+            app_client.app.state.projectstore,
+            app_client.app.state.planningfiles,
+            app_client.app.state.planning_sessions,
+            fake_supervisor,
+            test_settings,
+            materialize.MaterializePlanRequest(
+                work_slug="WRK-001",
+                fresh_session=True,
+            ),
+        )
+    )
+
+    assert view.phase == "planned"
+    assert fake_supervisor.stopped == [chat_slug]
+    assert len(fake_supervisor.inputs) == 1
+    assert "authoritative" in fake_supervisor.inputs[0]
+    assert "original_materialization_brief" in fake_supervisor.inputs[0]
+
+
+def test_quiet_materializer_does_not_receive_automatic_input(
+    app_client: TestClient, test_settings: Settings, monkeypatch: Any
+) -> None:
+    _create_work(app_client)
+    repo_root = test_settings.workspace_root / "repo"
+    _mark_framework_ready(repo_root, "bmad")
+    _create_planning_session(app_client, repo_root)
+    fake_supervisor = _FakeMaterializerSupervisor(app_client.app.state.chatstore)
+
+    async def fake_ensure(*_args: Any, **_kwargs: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(materialize.chat_runtime, "ensure_chat_runtime", fake_ensure)
+    monkeypatch.setattr(materialize, "_POLL_INTERVAL_SECONDS", 0.001)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            materialize.execute(
+                app_client.app.state.workstore,
+                app_client.app.state.chatstore,
+                app_client.app.state.projectstore,
+                app_client.app.state.planningfiles,
+                app_client.app.state.planning_sessions,
+                fake_supervisor,
+                test_settings,
+                materialize.MaterializePlanRequest(work_slug="WRK-001"),
+            )
+        )
+        await asyncio.sleep(0.01)
+        assert fake_supervisor.inputs == []
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+
+def test_connection_closed_materializer_recovers_once(
+    app_client: TestClient, test_settings: Settings, monkeypatch: Any
+) -> None:
+    _create_work(app_client)
+    repo_root = test_settings.workspace_root / "repo"
+    _mark_framework_ready(repo_root, "bmad")
+    artifact_dir = _artifact_root(repo_root)
+    _create_planning_session(app_client, repo_root)
+    chat_slug = _create_materializer_chat(app_client, repo_root)
+    chatstore = app_client.app.state.chatstore
+    chatstore.set_chat_session_id(chat_slug, "closed-provider-session")
+    fake_supervisor = _FakeMaterializerSupervisor(chatstore)
+    ensure_calls = 0
+
+    async def fake_ensure(*args: Any, **_kwargs: Any) -> bool:
+        nonlocal ensure_calls
+        ensure_calls += 1
+        requested_slug = args[-1]
+        if ensure_calls == 1:
+            chatstore.append_transcript_event_with_seq(
+                requested_slug,
+                {
+                    "type": "error",
+                    "ts": "2026-06-29T00:00:01+00:00",
+                    "message": "Connection closed",
+                },
+            )
+            chatstore.append_transcript_event_with_seq(
+                requested_slug,
+                {
+                    "type": "status_change",
+                    "ts": "2026-06-29T00:00:01+00:00",
+                    "status": "idle",
+                },
+            )
+        else:
+            assert chatstore.get_chat(requested_slug).chat.session_id is None
+            _write_materializer_report(chatstore, requested_slug, artifact_dir)
+        return True
+
+    monkeypatch.setattr(materialize.chat_runtime, "ensure_chat_runtime", fake_ensure)
+
+    view = asyncio.run(
+        materialize.execute(
+            app_client.app.state.workstore,
+            chatstore,
+            app_client.app.state.projectstore,
+            app_client.app.state.planningfiles,
+            app_client.app.state.planning_sessions,
+            fake_supervisor,
+            test_settings,
+            materialize.MaterializePlanRequest(work_slug="WRK-001"),
+        )
+    )
+
+    assert view.phase == "planned"
+    assert fake_supervisor.stopped == [chat_slug]
+    assert ensure_calls == 2
+    assert len(fake_supervisor.inputs) == 1
+    assert "fresh provider session" in fake_supervisor.inputs[0]
+
+
+def test_materializer_resume_does_not_auto_answer_pending_permission(
     app_client: TestClient, test_settings: Settings
 ) -> None:
     _create_work(app_client)
@@ -984,7 +1198,7 @@ def test_materializer_resume_answers_pending_safe_permission(
     )
 
     assert result is None
-    assert fake_supervisor.permissions == [("safe", "allow")]
+    assert fake_supervisor.permissions == []
 
 
 def test_finish_plan_moves_conversation_to_planned_phase(
@@ -1023,9 +1237,7 @@ def test_get_plan_returns_404_before_planning_starts(app_client: TestClient) -> 
     assert res.status_code == 404
 
 
-def test_update_artifact_persists_markdown(
-    app_client: TestClient, test_settings: Settings
-) -> None:
+def test_update_artifact_persists_markdown(app_client: TestClient, test_settings: Settings) -> None:
     _create_work(app_client)
     _start_plan(app_client, test_settings.workspace_root / "repo")
     detail = app_client.get("/api/works/WRK-001/plan/artifacts/story-001").json()
@@ -1064,9 +1276,7 @@ def test_update_artifact_updates_existing_approval_baseline(
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["artifact"]["status"] == "approved"
-    assert "Approve the latest source changes" not in " ".join(
-        body["artifact"]["launch_blockers"]
-    )
+    assert "Approve the latest source changes" not in " ".join(body["artifact"]["launch_blockers"])
     view = app_client.get("/api/works/WRK-001/plan").json()
     story = next(a for a in view["artifacts"] if a["id"] == "story-001")
     assert story["status"] == "approved"
@@ -1170,6 +1380,51 @@ Choose the right integration path.
     assert spike["readiness"] == "ready"
 
 
+def test_bug_semantic_sections_count_as_artifact_readiness(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    _create_work(app_client)
+    repo_root = test_settings.workspace_root / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _mark_framework_ready(repo_root, "bmad")
+    artifact_dir = _artifact_root(repo_root)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "bug-001.md").write_text(
+        """# Fix verified failure
+
+## Evidence
+
+The current implementation fails for concurrent callers.
+
+## Required Fix
+
+Isolate caller state and add focused regression coverage.
+
+## Acceptance Criteria
+
+- Concurrent callers do not leak state.
+"""
+    )
+    response = _submit_plan_metadata(
+        app_client,
+        repo_root,
+        "bmad",
+        "bugfix",
+        [
+            {
+                "path": "bug-001.md",
+                "title": "Fix verified failure",
+                "artifact_kind": "bug",
+                "executable": True,
+                "dependencies": [],
+            }
+        ],
+    )
+
+    bug = response.json()["artifacts"][0]
+    assert bug["readiness"] == "ready"
+
+
 def test_approved_source_doc_dependency_unblocks_launch(
     app_client: TestClient, test_settings: Settings
 ) -> None:
@@ -1185,9 +1440,9 @@ def test_approved_source_doc_dependency_unblocks_launch(
     draft = app_client.get("/api/works/WRK-001/plan").json()
     story = next(a for a in draft["artifacts"] if a["id"] == "story-001")
     assert story["launchable"] is False
-    assert "Dependency architecture is not complete or ready for review." in story[
-        "launch_blockers"
-    ]
+    assert (
+        "Dependency architecture is not complete or ready for review." in story["launch_blockers"]
+    )
 
     approve = app_client.post("/api/works/WRK-001/plan/approve")
     assert approve.status_code == 200, approve.text
@@ -1197,9 +1452,7 @@ def test_approved_source_doc_dependency_unblocks_launch(
     assert story["launch_blockers"] == []
 
 
-def test_accept_story_writes_summary(
-    app_client: TestClient, test_settings: Settings
-) -> None:
+def test_accept_story_writes_summary(app_client: TestClient, test_settings: Settings) -> None:
     _create_work(app_client)
     _start_plan(app_client, test_settings.workspace_root / "repo")
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
@@ -1210,6 +1463,13 @@ def test_accept_story_writes_summary(
         run_id,
         summary="Planner MVP accepted.",
     )
+    agent_slug = str(agent["slug"])
+    worktree = Path(str(agent["worktree_path"]))
+    transcript_before = list(
+        app_client.app.state.workstore.read_transcript_from_cursor("WRK-001", agent_slug, 0)
+    )
+    assert transcript_before
+    assert not app_client.app.state.supervisor.is_registered(agent_slug)
 
     res = app_client.post(
         f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/accept",
@@ -1221,6 +1481,17 @@ def test_accept_story_writes_summary(
     assert body["artifact"]["status"] == "accepted"
     summary = _planning_file(test_settings, f"summaries/story-001-{run_id}.md")
     assert "Planner MVP accepted." in summary.read_text()
+    assert not app_client.app.state.supervisor.is_registered(agent_slug)
+    assert agent_slug in {
+        str(item["slug"]) for item in app_client.get("/api/works/WRK-001/agents").json()
+    }
+    assert worktree.exists()
+    assert (
+        list(app_client.app.state.workstore.read_transcript_from_cursor("WRK-001", agent_slug, 0))[
+            : len(transcript_before)
+        ]
+        == transcript_before
+    )
 
 
 def test_artifact_run_report_and_acceptance_are_recorded(
@@ -1238,8 +1509,10 @@ def test_artifact_run_report_and_acceptance_are_recorded(
         summary="Implemented the source-backed planning path.",
     )
     assert run_state["status"] == "completed_pending_review"
-    assert run_state["loop_status"] == "completed"
-    assert run_state["loop_status_reason"] == "Report is complete and ready for review."
+    assert run_state["loop_status"] == "awaiting_approval"
+    assert run_state["loop_status_reason"] == (
+        "All automatic stages passed; result approval is required."
+    )
 
     accepted = app_client.post(
         f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/accept",
@@ -1259,106 +1532,7 @@ def test_artifact_run_report_and_acceptance_are_recorded(
     assert "pytest passed" in summary
 
 
-def test_artifact_run_full_loop_lifecycle(
-    app_client: TestClient, test_settings: Settings, monkeypatch: Any
-) -> None:
-    _create_work(app_client)
-    _start_plan(app_client, test_settings.workspace_root / "repo")
-    agent = _create_agent(app_client, test_settings.workspace_root / "repo")
-    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
-    started = app_client.post(
-        "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={"agent_slug": agent["slug"]},
-    )
-    assert started.status_code == 200, started.text
-    run_id = started.json()["artifact"]["runs"][0]["id"]
-    assert started.json()["artifact"]["runs"][0]["status"] == "running"
-
-    continue_started = threading.Event()
-    continue_release = threading.Event()
-    prompts: list[str] = []
-
-    async def fake_send_loop_prompt(*_args: Any, prompt: str, **_kwargs: Any) -> None:
-        prompts.append(prompt)
-        if "Continue the execution loop" in prompt and not continue_started.is_set():
-            continue_started.set()
-            await asyncio.to_thread(continue_release.wait, 4)
-
-    monkeypatch.setattr(
-        planning_run_monitor._loop_runtime,
-        "send_loop_prompt",
-        fake_send_loop_prompt,
-    )
-
-    _append_agent_loop_report(app_client, str(agent["slug"]), {"summary": "Started."})
-    assert continue_started.wait(4)
-    needs_agent = app_client.get(
-        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}"
-    )
-    assert needs_agent.status_code == 200, needs_agent.text
-    assert needs_agent.json()["status"] == "needs_attention"
-    assert needs_agent.json()["loop_status"] == "needs_agent"
-    continue_release.set()
-    running = _wait_run(app_client, "story-001", run_id, "running", loop_status="running")
-    assert running["loop_attempt"] == 2
-    assert any("atelier_loop_report" in prompt for prompt in prompts)
-
-    _append_agent_loop_report(
-        app_client,
-        str(agent["slug"]),
-        {
-            **_complete_report("Blocked."),
-            "blockers": "Need the user to choose an API contract.",
-        },
-    )
-    blocked = _wait_run(
-        app_client,
-        "story-001",
-        run_id,
-        "blocked",
-        loop_status="blocked_user",
-    )
-    assert blocked["loop_status_reason"] == (
-        "The agent reported a blocker that needs user input."
-    )
-
-    resumed = app_client.post(
-        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/resume",
-        json={"resolution_note": "Use the v2 API contract."},
-    )
-    assert resumed.status_code == 200, resumed.text
-    assert resumed.json()["artifact"]["runs"][0]["status"] == "running"
-    assert resumed.json()["artifact"]["runs"][0]["loop_status"] == "running"
-
-    _append_agent_loop_report(
-        app_client,
-        str(agent["slug"]),
-        _complete_report("Implemented after the blocker was resolved."),
-    )
-    completed = _wait_run(
-        app_client,
-        "story-001",
-        run_id,
-        "completed_pending_review",
-        loop_status="completed",
-    )
-    assert completed["summary"] == "Implemented after the blocker was resolved."
-
-    accepted = app_client.post(
-        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/accept",
-        json={"summary": "Reviewed and accepted."},
-    )
-    assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["artifact"]["runs"][0]["status"] == "accepted"
-
-    cleaned = app_client.post(
-        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/cleanup"
-    )
-    assert cleaned.status_code == 200, cleaned.text
-    assert cleaned.json()["artifact"]["runs"][0]["cleanup_at"] is not None
-
-
-def test_legacy_run_ignores_work_overlay_of_default_loop(
+def test_default_run_uses_builtin_loop_when_definition_is_omitted(
     app_client: TestClient,
     test_settings: Settings,
 ) -> None:
@@ -1415,7 +1589,7 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
         return reviewer_slugs.pop(0)
 
     monkeypatch.setattr(
-        planning_run_monitor,
+        loop_monitor,
         "_launch_or_resume_stage_agent",
         fake_launch_reviewer,
     )
@@ -1442,6 +1616,7 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
     )
     assert started.status_code == 200, started.text
     run_id = started.json()["artifact"]["runs"][0]["id"]
+    first_implementation = _active_stage_agent(app_client, run_id)
     active_records = app_client.app.state.loop_runs.list_active()
     assert len(active_records) == 1
     run_key = active_records[0].run_key
@@ -1450,15 +1625,13 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
 
     _append_stage_report(
         app_client,
-        str(implementation["slug"]),
+        str(first_implementation["slug"]),
         outcome="pass",
         summary="Implemented the first pass.",
         validation_evidence="pytest passed",
     )
     reviewing = _wait_stage(app_client, run_id, "code-review")
-    review_stage = next(
-        item for item in reviewing["loop_stages"] if item["id"] == "code-review"
-    )
+    review_stage = next(item for item in reviewing["loop_stages"] if item["id"] == "code-review")
     first_reviewer_slug = str(review_stage["agent_slug"])
 
     _append_stage_report(
@@ -1469,25 +1642,32 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
         findings=["Cover the empty-input case."],
     )
     implementing = _wait_stage(app_client, run_id, "implementation")
+    assert implementing["loop_pass_number"] == 2
     implementation_stage = next(
-        item
-        for item in implementing["loop_stages"]
-        if item["id"] == "implementation"
+        item for item in implementing["loop_stages"] if item["id"] == "implementation"
     )
     assert implementation_stage["attempt"] == 2
+    assert implementation_stage["reports"][0]["outcome"] == "pass"
+    assert implementation_stage["reports"][0]["summary"] == "Implemented the first pass."
+    review_history = next(
+        item for item in implementing["loop_stages"] if item["id"] == "code-review"
+    )["reports"]
+    assert review_history[0]["outcome"] == "changes_requested"
+    assert review_history[0]["summary"] == "One acceptance gap remains."
+    assert review_history[0]["pass_number"] == 1
+    assert review_history[0]["agent_slug"] == first_reviewer_slug
+    assert review_history[0]["review_decision"] is None
 
     _append_stage_report(
         app_client,
-        str(implementation["slug"]),
+        str(implementation_stage["agent_slug"]),
         outcome="pass",
         summary="Added the missing case.",
         validation_evidence="pytest passed",
     )
     reviewing_again = _wait_stage(app_client, run_id, "code-review")
     second_review_stage = next(
-        item
-        for item in reviewing_again["loop_stages"]
-        if item["id"] == "code-review"
+        item for item in reviewing_again["loop_stages"] if item["id"] == "code-review"
     )
     assert second_review_stage["agent_slug"] != first_reviewer_slug
 
@@ -1506,6 +1686,14 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
     )
     assert awaiting["loop_current_stage_id"] == "approval"
 
+    async def fake_send_loop_prompt(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    # This test drives reports directly into the durable transcript. The
+    # awaiting-approval lifecycle now releases the scripted runtime, so keep
+    # the remainder deterministic rather than letting a rebuilt stub answer.
+    monkeypatch.setattr(loop_runtime, "send_loop_prompt", fake_send_loop_prompt)
+
     changes = app_client.post(
         f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/request-changes",
         json={"note": "Clarify the validation evidence before approval."},
@@ -1514,21 +1702,24 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
     changed_run = changes.json()["artifact"]["runs"][0]
     assert changed_run["loop_current_stage_id"] == "implementation"
     assert changed_run["loop_status"] == "running"
+    assert changed_run["loop_pass_number"] == 3
 
     _append_stage_report(
         app_client,
-        str(implementation["slug"]),
+        str(
+            next(item for item in changed_run["loop_stages"] if item["id"] == "implementation")[
+                "agent_slug"
+            ]
+        ),
         outcome="pass",
         summary="Clarified the final validation evidence.",
         validation_evidence="pytest passed with the documented command",
     )
     final_review = _wait_stage(app_client, run_id, "code-review")
     final_reviewer_slug = str(
-        next(
-            item
-            for item in final_review["loop_stages"]
-            if item["id"] == "code-review"
-        )["agent_slug"]
+        next(item for item in final_review["loop_stages"] if item["id"] == "code-review")[
+            "agent_slug"
+        ]
     )
     _append_stage_report(
         app_client,
@@ -1553,9 +1744,7 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
     assert accepted_run["status"] == "accepted"
     assert accepted_run["loop_status"] == "accepted"
 
-    cleaned = app_client.post(
-        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/cleanup"
-    )
+    cleaned = app_client.post(f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/cleanup")
     assert cleaned.status_code == 200, cleaned.text
     cleaned_run = cleaned.json()["artifact"]["runs"][0]
     assert cleaned_run["loop_status"] == "cleaned"
@@ -1564,18 +1753,13 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
     assert stored is not None
     assert stored.status.value == "cleaned"
     assert stored.cleanup_at is not None
-    remaining = {
-        str(agent["slug"])
-        for agent in app_client.get("/api/works/WRK-001/agents").json()
-    }
-    assert not remaining.intersection(
-        {
-            str(implementation["slug"]),
-            str(reviewer_one["slug"]),
-            str(reviewer_two["slug"]),
-            str(reviewer_three["slug"]),
-        }
-    )
+    remaining = {str(agent["slug"]) for agent in app_client.get("/api/works/WRK-001/agents").json()}
+    assert {
+        str(implementation["slug"]),
+        str(reviewer_one["slug"]),
+        str(reviewer_two["slug"]),
+        str(reviewer_three["slug"]),
+    } <= remaining
 
 
 def test_custom_loop_executes_deterministic_check_stage(
@@ -1639,10 +1823,11 @@ def test_custom_loop_executes_deterministic_check_stage(
     )
     assert started.status_code == 200, started.text
     run_id = started.json()["artifact"]["runs"][0]["id"]
+    active_implementation = _active_stage_agent(app_client, run_id)
 
     _append_stage_report(
         app_client,
-        str(implementation["slug"]),
+        str(active_implementation["slug"]),
         outcome="pass",
         summary="Implementation ready for validation.",
         validation_evidence="unit tests passed",
@@ -1678,7 +1863,7 @@ def test_secure_loop_runs_code_and_security_review(
         return reviewer_slugs.pop(0)
 
     monkeypatch.setattr(
-        planning_run_monitor,
+        loop_monitor,
         "_launch_or_resume_stage_agent",
         fake_launch_reviewer,
     )
@@ -1694,17 +1879,16 @@ def test_secure_loop_runs_code_and_security_review(
     )
     assert started.status_code == 200, started.text
     run_id = started.json()["artifact"]["runs"][0]["id"]
+    active_implementation = _active_stage_agent(app_client, run_id)
     _append_stage_report(
         app_client,
-        str(implementation["slug"]),
+        str(active_implementation["slug"]),
         outcome="pass",
         summary="Implementation complete.",
         validation_evidence="pytest passed",
     )
     code_review = _wait_stage(app_client, run_id, "code-review")
-    code_stage = next(
-        stage for stage in code_review["loop_stages"] if stage["id"] == "code-review"
-    )
+    code_stage = next(stage for stage in code_review["loop_stages"] if stage["id"] == "code-review")
     assert code_stage["permissions"] == "read"
     _append_stage_report(
         app_client,
@@ -1714,9 +1898,7 @@ def test_secure_loop_runs_code_and_security_review(
     )
     security_review = _wait_stage(app_client, run_id, "security-review")
     security_stage = next(
-        stage
-        for stage in security_review["loop_stages"]
-        if stage["id"] == "security-review"
+        stage for stage in security_review["loop_stages"] if stage["id"] == "security-review"
     )
     assert security_stage["agent_slug"] != code_stage["agent_slug"]
     assert security_stage["permissions"] == "read"
@@ -1757,19 +1939,27 @@ def test_active_loop_recovers_after_backend_restart(
         )
         assert started.status_code == 200, started.text
         run_id = started.json()["artifact"]["runs"][0]["id"]
+        active_implementation = _active_stage_agent(first, run_id)
         assert len(first.app.state.loop_runs.list_active()) == 1
+
+    first.app.state.workstore.append_transcript_event_with_seq(
+        "WRK-001",
+        str(active_implementation["slug"]),
+        {
+            "type": "message_complete",
+            "text": _loop_report_text(_complete_report("Completed after restart.")),
+        },
+    )
+    first.app.state.workstore.append_transcript_event_with_seq(
+        "WRK-001",
+        str(active_implementation["slug"]),
+        {"type": "status_change", "status": "idle"},
+    )
 
     with TestClient(create_app(test_settings)) as restarted:
         active = restarted.app.state.loop_runs.list_active()
         assert len(active) == 1
         assert active[0].plan_run_id == run_id
-        _append_stage_report(
-            restarted,
-            str(implementation["slug"]),
-            outcome="pass",
-            summary="Completed after restart.",
-            validation_evidence="pytest passed",
-        )
         recovered = _wait_run(
             restarted,
             "story-001",
@@ -1867,6 +2057,9 @@ def test_selected_loop_launches_first_agent_from_planning_session(
     assert started.status_code == 200, started.text
     run = started.json()["artifact"]["runs"][0]
     assert run["loop_definition_id"] == "atelier-reviewed"
+    assert run["loop_definition"] == {
+        key: selected[key] for key in ("id", "name", "description", "scope", "revision", "stages")
+    }
     assert run["loop_current_stage_id"] == "implementation"
     assert run["agent_slug"]
     agents = app_client.get("/api/works/WRK-001/agents").json()
@@ -1875,6 +2068,55 @@ def test_selected_loop_launches_first_agent_from_planning_session(
     assert launched["model"] == "rush"
     stored = app_client.app.state.loop_runs.list_active()[0]
     assert stored.definition_snapshot["name"] == "Work reviewed"
+
+
+def test_selected_loop_pins_optional_planning_brief_note(
+    app_client: TestClient,
+    test_settings: Settings,
+) -> None:
+    _create_work(app_client)
+    root = test_settings.workspace_root / "repo"
+    _start_plan(app_client, root)
+    _create_planning_session(
+        app_client,
+        root,
+        provider="amp",
+        model="rush",
+        options={"permission_mode": "default"},
+    )
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    definition = app_client.get("/api/loops/atelier-reviewed").json()
+    note = "Keep the source-backed compatibility path intact."
+
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "loop_definition_id": definition["id"],
+            "loop_revision": definition["revision"],
+            "brief_note": note,
+        },
+    )
+
+    assert started.status_code == 200, started.text
+    run = started.json()["artifact"]["runs"][0]
+    assert run["brief_note"] == note
+    manifest = app_client.app.state.planningfiles.read_manifest("WRK-001")
+    assert manifest is not None
+    pinned = manifest["artifact_runs"]["story-001"][0]["brief"]
+    assert {stage["stage_id"]: stage["note"] for stage in pinned["stages"]} == {
+        "implementation": note,
+        "code-review": note,
+    }
+    prompts = [
+        event["text"]
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001",
+            run["agent_slug"],
+            0,
+        )
+        if event.get("type") == "user_input"
+    ]
+    assert any(note in prompt for prompt in prompts)
 
 
 def test_selected_loop_forks_supplied_agent_for_first_stage_override(
@@ -1933,6 +2175,7 @@ def test_selected_loop_preflight_remembers_reused_stage_config(
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     payload = app_client.get("/api/loops/atelier-reviewed").json()
     implementation = payload["stages"][0]
+    implementation["agent"]["session"] = "reuse"
     implementation["agent"]["model"] = "smart"
     implementation["transitions"]["pass"] = "second-implementation"
     second = json.loads(json.dumps(implementation))
@@ -2036,20 +2279,20 @@ def test_background_run_monitor_auto_continues_incomplete_report(
     )
     assert started.status_code == 200, started.text
     run_id = started.json()["artifact"]["runs"][0]["id"]
-    app_client.app.state.workstore.append_transcript_event_with_seq(
-        "WRK-001",
-        agent["slug"],
+    active_agent = _active_stage_agent(app_client, run_id)
+    _publish_agent_event(
+        app_client,
+        active_agent["slug"],
         {
             "type": "message_complete",
             "ts": "2026-06-29T00:00:00+00:00",
-            "text": json.dumps(
-                {
-                    "atelier_loop_report": {
-                        "summary": "Started the work.",
-                    }
-                }
-            ),
+            "text": json.dumps({"summary": "Started the work."}),
         },
+    )
+    _publish_agent_event(
+        app_client,
+        active_agent["slug"],
+        {"type": "status_change", "status": "idle"},
     )
 
     deadline = time.monotonic() + 4
@@ -2068,47 +2311,48 @@ def test_background_run_monitor_auto_continues_incomplete_report(
     user_inputs = [
         event["text"]
         for event in app_client.app.state.workstore.read_transcript_from_cursor(
-            "WRK-001", agent["slug"], 0
+            "WRK-001", active_agent["slug"], 0
         )
         if event.get("type") == "user_input"
     ]
-    assert (
-        "Continue the execution loop for planning artifact `story-001`"
-        in user_inputs[-1]
-    )
-    assert "Missing required report field: divergences." in user_inputs[-1]
-    assert "atelier_loop_report" in user_inputs[-1]
+    assert "valid report for stage `implementation`" in user_inputs[-1]
+    assert "atelier_loop_step_report" in user_inputs[-1]
     assert "validation_evidence" in user_inputs[-1]
 
 
-def test_artifact_run_fails_after_retry_limit(
+def test_failed_selected_loop_stage_retries_with_new_agent_in_same_worktree(
     app_client: TestClient, test_settings: Settings
 ) -> None:
     _create_work(app_client)
-    _start_plan(app_client, test_settings.workspace_root / "repo")
-    agent = _create_agent(app_client, test_settings.workspace_root / "repo")
+    root = test_settings.workspace_root / "repo"
+    _start_plan(app_client, root)
+    _create_planning_session(
+        app_client,
+        root,
+        provider="amp",
+        model="rush",
+        options={"permission_mode": "default"},
+    )
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    definition = builtin_loop_definition("atelier-fast")
+    assert definition is not None
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={"agent_slug": agent["slug"]},
+        json={
+            "loop_definition_id": definition.definition_id,
+            "loop_revision": definition.revision,
+        },
     )
     assert started.status_code == 200, started.text
-    run_id = started.json()["artifact"]["runs"][0]["id"]
-
-    _append_agent_loop_report(app_client, str(agent["slug"]), {"summary": "Started."})
-    running = _wait_run(
+    run = started.json()["artifact"]["runs"][0]
+    run_id = run["id"]
+    agent_slug = run["loop_stages"][0]["agent_slug"]
+    assert isinstance(agent_slug, str)
+    _wait_for_scripted_agent(app_client, agent_slug)
+    _publish_agent_event(
         app_client,
-        "story-001",
-        run_id,
-        "running",
-        loop_status="running",
-    )
-    assert running["loop_attempt"] == 2
-
-    _append_agent_loop_report(
-        app_client,
-        str(agent["slug"]),
-        {"summary": "Still missing most of the report."},
+        agent_slug,
+        {"type": "error", "message": "Provider stopped."},
     )
     failed = _wait_run(
         app_client,
@@ -2117,18 +2361,31 @@ def test_artifact_run_fails_after_retry_limit(
         "blocked",
         loop_status="failed",
     )
-
-    assert failed["loop_status_reason"] == (
-        "Loop retry limit reached before a complete report."
+    worktree = next(
+        item["worktree_path"]
+        for item in app_client.get("/api/works/WRK-001/agents").json()
+        if item["slug"] == agent_slug
     )
-    assert "Missing required report field: divergences." in failed[
-        "loop_latest_assessment"
-    ]
+
+    retried = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/resume",
+        json={"retry_failed": True},
+    )
+
+    assert retried.status_code == 200, retried.text
+    next_run = retried.json()["artifact"]["runs"][0]
+    assert next_run["id"] == failed["id"] == run_id
+    assert next_run["loop_status"] == "running"
+    retry_agent_slug = next_run["loop_stages"][0]["agent_slug"]
+    assert retry_agent_slug != agent_slug
+    assert next_run["loop_stages"][0]["attempt"] == 2
+    agents = app_client.get("/api/works/WRK-001/agents").json()
+    assert len(agents) == 2
+    retry_agent = next(item for item in agents if item["slug"] == retry_agent_slug)
+    assert retry_agent["worktree_path"] == worktree
 
 
-def test_resume_rejects_non_blocked_run(
-    app_client: TestClient, test_settings: Settings
-) -> None:
+def test_resume_rejects_non_blocked_run(app_client: TestClient, test_settings: Settings) -> None:
     _create_work(app_client)
     _start_plan(app_client, test_settings.workspace_root / "repo")
     agent = _create_agent(app_client, test_settings.workspace_root / "repo")
@@ -2161,7 +2418,8 @@ def test_blocker_artifact_report_blocks_for_user(
         str(agent["slug"]),
         {
             **_complete_report("Could not finish."),
-            "blockers": "Need the user to choose an API contract.",
+            "outcome": "blocked_user",
+            "blocker": "Need the user to choose an API contract.",
         },
     )
     run_state = _wait_run(
@@ -2174,12 +2432,7 @@ def test_blocker_artifact_report_blocks_for_user(
 
     assert run_state["status"] == "blocked"
     assert run_state["loop_status"] == "blocked_user"
-    assert run_state["loop_status_reason"] == (
-        "The agent reported a blocker that needs user input."
-    )
-    assert run_state["loop_latest_assessment"] == [
-        "Blocker reported: Need the user to choose an API contract."
-    ]
+    assert run_state["loop_status_reason"] == "Need the user to choose an API contract."
 
 
 def test_blocked_artifact_loop_resumes_when_user_marks_resolved(
@@ -2194,7 +2447,8 @@ def test_blocked_artifact_loop_resumes_when_user_marks_resolved(
         str(agent["slug"]),
         {
             **_complete_report("Could not finish."),
-            "blockers": "Need the user to choose an API contract.",
+            "outcome": "blocked_user",
+            "blocker": "Need the user to choose an API contract.",
         },
     )
     _wait_run(
@@ -2224,7 +2478,6 @@ def test_blocked_artifact_loop_resumes_when_user_marks_resolved(
         )
         if event.get("type") == "user_input"
     ]
-    assert "The user marked the reported blocker as resolved." in user_inputs[-1]
     assert "Use the v2 API contract." in user_inputs[-1]
 
 
@@ -2306,9 +2559,7 @@ Do the dependent work.
     story = next(a for a in blocked["artifacts"] if a["id"] == "story-002")
     assert story["launchable"] is False
     assert story["dependencies"] == ["story-001"]
-    assert story["launch_blockers"] == [
-        "Dependency story-001 is not complete or ready for review."
-    ]
+    assert story["launch_blockers"] == ["Dependency story-001 is not complete or ready for review."]
 
     agent, run_id = _start_artifact_run(app_client, test_settings)
     _complete_artifact_run(
@@ -2404,72 +2655,7 @@ def test_tracking_links_and_bug_findings_are_attached_to_artifact(
     assert "Found during review." in bug_doc
 
 
-def test_run_monitor_reads_latest_agent_transcript_and_marks_review(
-    app_client: TestClient, test_settings: Settings
-) -> None:
-    _create_work(app_client)
-    _start_plan(app_client, test_settings.workspace_root / "repo")
-    agent = _create_agent(app_client, test_settings.workspace_root / "repo")
-    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
-    run = app_client.post(
-        "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={"agent_slug": agent["slug"]},
-    )
-    assert run.status_code == 200, run.text
-    run_id = run.json()["artifact"]["runs"][0]["id"]
-    app_client.app.state.workstore.append_transcript_event_with_seq(
-        "WRK-001",
-        agent["slug"],
-        {
-            "type": "message_complete",
-            "ts": "2026-06-29T00:00:00+00:00",
-            "text": json.dumps(
-                {
-                    "atelier_loop_report": {
-                        "summary": "Implemented the artifact.",
-                        "divergences": "None.",
-                        "skipped_scope": "None.",
-                        "blockers": "None.",
-                        "decisions": "Used the existing plan.",
-                        "changes": "Updated the implementation.",
-                        "validation_evidence": "pytest passed",
-                        "proposed_source": (
-                            "# Story 001: Plan Planner\n\n"
-                            "## Scope\n\n"
-                            "Implemented from the report.\n\n"
-                            "## Acceptance Criteria\n\n"
-                            "- Report proposal is reviewable.\n\n"
-                            "## Dependencies\n\n"
-                            "- None\n"
-                        ),
-                    }
-                }
-            ),
-        },
-    )
-
-    run_state = _wait_run(
-        app_client,
-        "story-001",
-        run_id,
-        "completed_pending_review",
-        loop_status="completed",
-    )
-
-    assert run_state["status"] == "completed_pending_review"
-    assert run_state["loop_status"] == "completed"
-    assert run_state["summary"] == "Implemented the artifact."
-    assert run_state["validation_evidence"] == "pytest passed"
-    detail = app_client.get("/api/works/WRK-001/plan/artifacts/story-001")
-    assert detail.status_code == 200, detail.text
-    proposal = detail.json()["artifact"]["proposals"][0]
-    assert proposal["status"] == "pending"
-    assert "Implemented from the report." in proposal["proposed_content"]
-
-
-def test_artifact_run_cleanup_is_recorded(
-    app_client: TestClient, test_settings: Settings
-) -> None:
+def test_artifact_run_cleanup_is_recorded(app_client: TestClient, test_settings: Settings) -> None:
     _create_work(app_client)
     _start_plan(app_client, test_settings.workspace_root / "repo")
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
@@ -2480,13 +2666,57 @@ def test_artifact_run_cleanup_is_recorded(
         json={"summary": "Done."},
     )
     assert accepted.status_code == 200, accepted.text
-
-    cleaned = app_client.post(
-        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/cleanup"
+    agent_slug = str(agent["slug"])
+    worktree = Path(str(agent["worktree_path"]))
+    transcript_before = list(
+        app_client.app.state.workstore.read_transcript_from_cursor("WRK-001", agent_slug, 0)
     )
 
+    cleaned = app_client.post(f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/cleanup")
+
     assert cleaned.status_code == 200, cleaned.text
-    assert cleaned.json()["artifact"]["runs"][0]["cleanup_at"] is not None
+    cleaned_run = cleaned.json()["artifact"]["runs"][0]
+    assert cleaned_run["status"] == "accepted"
+    assert cleaned_run["loop_status"] == "cleaned"
+    assert cleaned_run["cleanup_at"] is not None
+    assert agent_slug in {
+        str(item["slug"]) for item in app_client.get("/api/works/WRK-001/agents").json()
+    }
+    assert worktree.exists()
+    assert (
+        list(app_client.app.state.workstore.read_transcript_from_cursor("WRK-001", agent_slug, 0))[
+            : len(transcript_before)
+        ]
+        == transcript_before
+    )
+
+
+def test_artifact_run_can_be_cancelled(
+    app_client: TestClient,
+    test_settings: Settings,
+) -> None:
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    agent, run_id = _start_artifact_run(app_client, test_settings)
+    workspace = Path(str(agent["worktree_path"]))
+
+    cancelled = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/cancel"
+    )
+
+    assert cancelled.status_code == 200, cancelled.text
+    run = cancelled.json()["artifact"]["runs"][0]
+    assert run["status"] == "needs_attention"
+    assert run["loop_status"] == "cancelled"
+    assert {stage["status"] for stage in run["loop_stages"]} == {"cancelled"}
+    assert workspace.exists()
+    stored = app_client.app.state.loop_runs.get(
+        "WRK-001",
+        f"loop-story-001-{run_id}",
+    )
+    assert stored is not None
+    assert stored.status.value == "cancelled"
 
 
 def test_plan_materialization_status_reports_pending_permission(
@@ -2519,6 +2749,28 @@ def test_plan_materialization_status_reports_pending_permission(
     assert data["last_event_summary"] == "Inspect files"
     assert data["message"] == "Inspect files"
     assert data["tool_name"] == "Bash"
+    assert len(data["pending_permissions"]) == 1
+    pending = data["pending_permissions"][0]
+    assert pending["request_id"] == "mat-perm-1"
+    assert pending["tool_name"] == "Bash"
+    assert pending["tool_input"] == {"command": "rg planning frontend/src"}
+    assert pending["ts"] == "2026-06-29T00:00:00+00:00"
+    assert pending["seq"] > 0
+    assert pending["options"] == []
+    assert data["recent_activity"][-1]["text"] == "Inspect files"
+
+    supervisor = _FakeMaterializerSupervisor()
+    app_client.app.dependency_overrides[get_chat_supervisor] = lambda: supervisor
+    try:
+        decision = app_client.post(
+            "/api/works/WRK-001/plan/materialization-permission",
+            json={"request_id": "mat-perm-1", "decision": "allow"},
+        )
+    finally:
+        app_client.app.dependency_overrides.pop(get_chat_supervisor, None)
+
+    assert decision.status_code == 204, decision.text
+    assert supervisor.permissions == [("mat-perm-1", "allow")]
 
 
 def _create_agent(client: TestClient, folder: Path) -> dict[str, object]:
@@ -2581,8 +2833,7 @@ def _create_planning_session(
             work_slug="WRK-001",
             planning_chat_slug=planning_chat_slug,
             root_path=str(root),
-            artifact_root_path=artifact_root_path
-            or artifact_root_rel_path(framework, "WRK-001"),
+            artifact_root_path=artifact_root_path or artifact_root_rel_path(framework, "WRK-001"),
             framework=framework,
             profile=profile,
             provider=provider,  # type: ignore[arg-type]
@@ -2597,70 +2848,70 @@ def _create_planning_session(
 class _FakeMaterializerSupervisor:
     """Capture materializer permissions and follow-up prompts."""
 
-    def __init__(self) -> None:
+    def __init__(self, chatstore: Any | None = None) -> None:
+        self._chatstore = chatstore
         self.permissions: list[tuple[str, str]] = []
         self.inputs: list[str] = []
+        self.stopped: list[str] = []
 
-    async def resolve_permission(
-        self, _chat_slug: str, request_id: str, decision: str
-    ) -> None:
+    def is_registered(self, _chat_slug: str) -> bool:
+        return True
+
+    def is_lazy_registered(self, _chat_slug: str) -> bool:
+        return False
+
+    async def resolve_permission(self, _chat_slug: str, request_id: str, decision: str) -> None:
         self.permissions.append((request_id, decision))
 
     async def send_input(
-        self, _chat_slug: str, text: str, *, record_user_input: bool = True
+        self, chat_slug: str, text: str, *, record_user_input: bool = True
     ) -> None:
         self.inputs.append(text)
+        if self._chatstore is not None and record_user_input:
+            self._chatstore.append_transcript_event_with_seq(
+                chat_slug,
+                {
+                    "type": "user_input",
+                    "ts": "2026-06-29T00:00:01+00:00",
+                    "text": text,
+                },
+            )
+
+    async def stop_agent(self, chat_slug: str) -> None:
+        self.stopped.append(chat_slug)
 
 
-class _FakeMaterializerSubscription:
-    """Emit a permission prompt, an incomplete turn, then a final report."""
-
-    def __init__(self, chatstore: Any, chat_slug: str, artifact_dir: Path) -> None:
-        self._chatstore = chatstore
-        self._chat_slug = chat_slug
-        self._artifact_dir = artifact_dir
-
-    def stream(self) -> Any:
-        return self._events()
-
-    async def _events(self) -> Any:
-        yield {
-            "type": "permission_request",
-            "request_id": "mat-perm-1",
-            "tool_name": "Bash",
-            "tool_input": {"command": "curl https://example.com/template.md"},
+def _write_materializer_report(
+    chatstore: Any,
+    chat_slug: str,
+    artifact_dir: Path,
+) -> None:
+    stories = artifact_dir / "stories"
+    stories.mkdir(parents=True, exist_ok=True)
+    (stories / "story-001.md").write_text(
+        "# Story 001\n\n## Acceptance Criteria\n\n- Plan exists.\n"
+    )
+    report = {
+        "atelier_plan_materialization": {
+            "artifacts": [
+                {
+                    "path": "stories/story-001.md",
+                    "title": "Story 001",
+                    "artifact_kind": "story",
+                    "executable": True,
+                    "dependencies": [],
+                }
+            ]
         }
-        yield {"type": "status_change", "status": "idle"}
-        self._write_reported_plan()
-        report = {
-            "atelier_plan_materialization": {
-                "artifacts": [
-                    {
-                        "path": "stories/story-001.md",
-                        "title": "Story 001",
-                        "artifact_kind": "story",
-                        "executable": True,
-                        "dependencies": [],
-                    }
-                ]
-            }
-        }
-        self._chatstore.append_transcript_event_with_seq(
-            self._chat_slug,
-            {
-                "type": "message_complete",
-                "ts": "2026-06-29T00:00:00+00:00",
-                "text": json.dumps(report),
-            },
-        )
-        yield {"type": "message_complete", "text": json.dumps(report)}
-
-    def _write_reported_plan(self) -> None:
-        stories = self._artifact_dir / "stories"
-        stories.mkdir(parents=True, exist_ok=True)
-        (stories / "story-001.md").write_text(
-            "# Story 001\n\n## Acceptance Criteria\n\n- Plan exists.\n"
-        )
+    }
+    chatstore.append_transcript_event_with_seq(
+        chat_slug,
+        {
+            "type": "message_complete",
+            "ts": "2026-06-29T00:00:02+00:00",
+            "text": json.dumps(report),
+        },
+    )
 
 
 def _planning_file(settings: Settings, rel_path: str) -> Path:

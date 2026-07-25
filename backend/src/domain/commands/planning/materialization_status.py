@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
+from src.domain.agents.turn_monitor import observe_turn, unresolved_permission_events
 from src.domain.chatstore.dtos import ChatRecord
 from src.domain.chatstore.ports import ChatStore
 from src.domain.planning.ports import PlanningFiles
@@ -20,11 +21,33 @@ MaterializationState = Literal[
     "complete",
     "failed",
 ]
-_STALE_AFTER = timedelta(minutes=6)
+_STALE_AFTER = timedelta(minutes=1)
 
 
 class WorkNotFound(ValueError):
     """The work_slug doesn't exist."""
+
+
+@dataclass(frozen=True)
+class MaterializationActivity:
+    """One compact, user-readable materializer transcript event."""
+
+    kind: str
+    text: str
+    ts: str | None = None
+
+
+@dataclass(frozen=True)
+class MaterializationPermission:
+    """One unresolved provider tool permission."""
+
+    request_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    title: str
+    ts: str
+    seq: int
+    options: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,6 +62,8 @@ class MaterializationStatus:
     last_event_summary: str = ""
     message: str = ""
     tool_name: str | None = None
+    recent_activity: tuple[MaterializationActivity, ...] = ()
+    pending_permissions: tuple[MaterializationPermission, ...] = ()
 
 
 def execute(
@@ -60,7 +85,7 @@ def execute(
             state="complete",
             message="Source plan is indexed.",
         )
-    record = _materializer_record(chatstore, work_slug)
+    record = materializer_record(chatstore, work_slug)
     if record is None or record.chat.slug is None:
         return MaterializationStatus(state="idle")
 
@@ -72,20 +97,36 @@ def execute(
             updated_at=record.chat.updated_at.isoformat(),
             message="Materializer chat has started.",
         )
-    pending = _pending_permission(events)
-    if pending is not None:
+    recent_activity = _recent_activity(events)
+    pending_permissions = unresolved_permissions(events)
+    if pending_permissions:
+        pending = pending_permissions[-1]
         return MaterializationStatus(
             state="waiting_permission",
             chat_slug=record.chat.slug,
-            updated_at=_event_time(pending) or record.chat.updated_at.isoformat(),
+            updated_at=pending.ts or record.chat.updated_at.isoformat(),
             last_seq=_event_seq(events[-1]),
-            last_event_type=_event_type(pending),
-            last_event_summary=_event_summary(pending),
-            message=pending.get("title") or "Waiting on a materializer permission.",
-            tool_name=_str(pending.get("tool_name")),
+            last_event_type="permission_request",
+            last_event_summary=pending.title or pending.tool_name,
+            message=pending.title or "Waiting on a materializer permission.",
+            tool_name=pending.tool_name,
+            recent_activity=recent_activity,
+            pending_permissions=pending_permissions,
         )
     last = events[-1]
-    if _is_stale(last):
+    observation = observe_turn(events, datetime.now(UTC))
+    if observation.terminal_error is not None:
+        return MaterializationStatus(
+            state="failed",
+            chat_slug=record.chat.slug,
+            updated_at=_event_time(last) or record.chat.updated_at.isoformat(),
+            last_seq=_event_seq(last),
+            last_event_type="error",
+            last_event_summary=_clip(observation.terminal_error),
+            message=observation.terminal_error,
+            recent_activity=recent_activity,
+        )
+    if observation.finished:
         return MaterializationStatus(
             state="stalled",
             chat_slug=record.chat.slug,
@@ -93,8 +134,24 @@ def execute(
             last_seq=_event_seq(last),
             last_event_type=_event_type(last),
             last_event_summary=_event_summary(last),
-            message="No materializer activity after the turn timeout.",
+            message="Materializer is idle but no source-plan report exists.",
             tool_name=_str(last.get("name") or last.get("tool_name")),
+            recent_activity=recent_activity,
+        )
+    if (
+        observation.last_activity_at is not None
+        and datetime.now(UTC) - observation.last_activity_at > _STALE_AFTER
+    ):
+        return MaterializationStatus(
+            state="stalled",
+            chat_slug=record.chat.slug,
+            updated_at=_event_time(last) or record.chat.updated_at.isoformat(),
+            last_seq=_event_seq(last),
+            last_event_type=_event_type(last),
+            last_event_summary=_event_summary(last),
+            message="No recent materializer activity. It may still be working.",
+            tool_name=_str(last.get("name") or last.get("tool_name")),
+            recent_activity=recent_activity,
         )
     state, message = _state_from_last_event(last)
     return MaterializationStatus(
@@ -106,10 +163,11 @@ def execute(
         last_event_summary=_event_summary(last),
         message=message,
         tool_name=_str(last.get("name") or last.get("tool_name")),
+        recent_activity=recent_activity,
     )
 
 
-def _materializer_record(
+def materializer_record(
     chatstore: ChatStore,
     work_slug: str,
 ) -> ChatRecord | None:
@@ -123,29 +181,79 @@ def _materializer_record(
     return rows[0] if rows else None
 
 
-def _pending_permission(events: list[dict[str, Any]]) -> dict[str, Any] | None:
-    decided: set[str] = set()
-    completed_tools: set[str] = set()
-    requests: list[dict[str, Any]] = []
+def unresolved_permissions(
+    events: list[dict[str, Any]],
+) -> tuple[MaterializationPermission, ...]:
+    """Return unresolved materializer permissions in transcript order."""
+    pending: list[MaterializationPermission] = []
+    for event in unresolved_permission_events(events):
+        request_id = event.get("request_id")
+        if not isinstance(request_id, str):
+            continue
+        pending.append(
+            MaterializationPermission(
+                request_id=request_id,
+                tool_name=_str(event.get("tool_name")) or "(unknown)",
+                tool_input=(
+                    dict(event["tool_input"])
+                    if isinstance(event.get("tool_input"), dict)
+                    else {}
+                ),
+                title=_str(event.get("title")),
+                ts=_event_time(event) or "",
+                seq=_event_seq(event) or 0,
+                options=tuple(
+                    dict(option)
+                    for option in event.get("options", [])
+                    if isinstance(option, dict)
+                    and all(
+                        isinstance(key, str) and isinstance(value, str)
+                        for key, value in option.items()
+                    )
+                ),
+            )
+        )
+    return tuple(pending)
+
+
+def _recent_activity(
+    events: list[dict[str, Any]],
+) -> tuple[MaterializationActivity, ...]:
+    tool_titles: dict[str, str] = {}
+    rows: list[MaterializationActivity] = []
     for event in events:
-        event_type = event.get("type")
-        request_id = event.get("request_id")
+        event_type = _event_type(event)
         tool_id = event.get("tool_id")
-        if event_type == "permission_decision" and isinstance(request_id, str):
-            decided.add(request_id)
-        elif event_type == "tool_result" and isinstance(tool_id, str):
-            completed_tools.add(tool_id)
+        if event_type == "tool_call":
+            text = _str(event.get("title")) or _str(event.get("name"))
+            if isinstance(tool_id, str):
+                tool_titles[tool_id] = text
+        elif event_type == "tool_result":
+            title = tool_titles.get(tool_id, "") if isinstance(tool_id, str) else ""
+            text = f"Completed: {title}" if title else "Tool completed"
+        elif event_type in {"thinking_complete", "message_complete", "error"}:
+            text = _str(event.get("text")) or _str(event.get("message"))
         elif event_type == "permission_request":
-            requests.append(event)
-    for event in reversed(requests):
-        request_id = event.get("request_id")
-        tool_id = event.get("tool_id")
-        if isinstance(request_id, str) and request_id in decided:
+            text = (
+                _str(event.get("title"))
+                or _str(event.get("tool_name"))
+                or "Permission requested"
+            )
+        elif event_type == "permission_decision":
+            text = f"Permission {_str(event.get('decision')) or 'answered'}"
+        elif event_type == "user_input":
+            text = "Asked the materializer to continue"
+        else:
             continue
-        if isinstance(tool_id, str) and tool_id in completed_tools:
-            continue
-        return event
-    return None
+        if text:
+            rows.append(
+                MaterializationActivity(
+                    kind=event_type or "activity",
+                    text=_clip(text, 180),
+                    ts=_event_time(event),
+                )
+            )
+    return tuple(rows[-5:])
 
 
 def _state_from_last_event(event: dict[str, Any]) -> tuple[MaterializationState, str]:
@@ -167,29 +275,9 @@ def _state_from_last_event(event: dict[str, Any]) -> tuple[MaterializationState,
     return "running", "Materializer is running."
 
 
-def _is_stale(event: dict[str, Any]) -> bool:
-    stamp = _event_datetime(event)
-    if stamp is None:
-        return False
-    return datetime.now(UTC) - stamp > _STALE_AFTER
-
-
 def _event_time(event: dict[str, Any]) -> str | None:
     stamp = event.get("ts") or event.get("created_at")
     return stamp if isinstance(stamp, str) else None
-
-
-def _event_datetime(event: dict[str, Any]) -> datetime | None:
-    raw = _event_time(event)
-    if raw is None:
-        return None
-    try:
-        parsed = datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def _event_seq(event: dict[str, Any]) -> int | None:

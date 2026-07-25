@@ -7,7 +7,7 @@ filesystem mutations stay under the workspace root.
 
 Layout (mirrors architecture):
 
-    <workspace_root>/works/<work_slug>/worktrees/<agent_slug>/
+    <workspace_root>/works/<work_slug>/worktrees/<worktree_slug>/
 
 If the source folder isn't a git repo (no ``.git`` and ``git rev-parse``
 fails), ``ensure`` returns the source folder directly — agents that
@@ -23,8 +23,10 @@ provisioning a fresh one.
 from __future__ import annotations
 
 import logging
+import shlex
 import shutil
 import subprocess
+from filecmp import cmp
 from pathlib import Path
 
 from src.domain.worktrees.ports import WorktreeProvisionFailed, WorktreeState
@@ -55,12 +57,36 @@ class GitWorktreeManager:
             # checkout — the caller is the start_agent path and a
             # double-launch is the sole way to hit this branch.
             return target
+        base_ref = self._fresh_base_ref(source, base_ref)
         # Make sure the parent dir exists so `git worktree add` doesn't
         # fail on the first agent in a brand-new work.
         target.parent.mkdir(parents=True, exist_ok=True)
         if branch_name is None:
             return self._add_detached(work_slug, agent_slug, source, target, base_ref)
         return self._add_branch(work_slug, agent_slug, source, target, base_ref, branch_name)
+
+    @staticmethod
+    def _fresh_base_ref(source: Path, base_ref: str) -> str:
+        """Resolve a fresh default checkout to the current remote HEAD."""
+        if base_ref != "HEAD":
+            return base_ref
+        try:
+            _run_git(source, "remote", "get-url", "origin")
+        except subprocess.CalledProcessError:
+            return base_ref
+        try:
+            _run_git(source, "fetch", "--quiet", "origin", "HEAD")
+            revision = _git_out(source, "rev-parse", "FETCH_HEAD")
+        except subprocess.CalledProcessError as exc:
+            raise WorktreeProvisionFailed(
+                f"git fetch origin HEAD failed for {source}: {_stderr(exc)}",
+                stderr=_stderr(exc),
+            ) from exc
+        if not revision:
+            raise WorktreeProvisionFailed(
+                f"git fetch origin HEAD did not resolve a revision for {source}"
+            )
+        return revision
 
     def _add_detached(
         self,
@@ -183,17 +209,29 @@ class GitWorktreeManager:
 
         branch = _git_out(workdir, "branch", "--show-current") or None
         head = _git_out(workdir, "rev-parse", "--short", "HEAD") or None
-        status = _git_stdout(workdir, "status", "--short")
+        raw_status = _git_stdout(workdir, "status", "--short")
+        source_root = _worktree_source_root(workdir)
+        status_lines: list[str] = []
         changed: list[str] = []
         untracked: list[str] = []
-        for line in status.splitlines():
+        for line in raw_status.splitlines():
             if not line:
                 continue
-            path = line[3:] if len(line) > 3 else line.strip()
+            raw_path = line[3:] if len(line) > 3 else line.strip()
+            parts = shlex.split(raw_path)
+            path = parts[-1] if parts else raw_path
+            if (workdir / path).is_symlink():
+                continue
+            if line.startswith("?? ") and _is_legacy_env_copy(
+                workdir, source_root, path
+            ):
+                continue
+            status_lines.append(line)
             if line.startswith("?? "):
                 untracked.append(path)
             else:
                 changed.append(path)
+        status = "\n".join(status_lines)
         return WorktreeState(
             workdir=workdir,
             is_git_repo=True,
@@ -202,6 +240,16 @@ class GitWorktreeManager:
             status=status,
             changed_files=tuple(changed),
             untracked_files=tuple(untracked),
+        )
+
+    def list_states(self, work_slug: str) -> tuple[WorktreeState, ...]:
+        root = self._paths.workspace_root / "works" / work_slug / "worktrees"
+        if not root.exists():
+            return ()
+        return tuple(
+            self.describe_state(path)
+            for path in sorted(root.iterdir(), key=lambda item: item.name)
+            if path.is_dir()
         )
 
     def sandbox_writable_roots(self, workdir: Path) -> tuple[Path, ...]:
@@ -281,7 +329,10 @@ class GitWorktreeManager:
         _symlink_devtime_artifacts(source, target)
         return target
 
-    def remove(self, work_slug: str, agent_slug: str) -> None:
+    def remove(
+        self, work_slug: str, agent_slug: str, *, force: bool = True
+    ) -> None:
+        """Remove a managed worktree without following filesystem symlinks."""
         target = self._worktree_path(work_slug, agent_slug)
         source = self._source_for(target) if target.exists() else None
         # If we only know the source via the live worktree, fish it out
@@ -299,6 +350,14 @@ class GitWorktreeManager:
                 self._delete_atelier_branch(source, work_slug, agent_slug)
                 return
         except subprocess.CalledProcessError as exc:
+            if not force:
+                state = self.describe_state(target)
+                if not state.is_git_repo or state.error is not None or state.status:
+                    raise WorktreeProvisionFailed(
+                        f"git worktree remove failed for {work_slug}/{agent_slug}: "
+                        f"{_stderr(exc)}",
+                        stderr=_stderr(exc),
+                    ) from exc
             _log.warning(
                 "git worktree remove failed for %s/%s: %s; trying --force",
                 work_slug,
@@ -402,11 +461,15 @@ def _overlay_working_state(src: Path, dst: Path) -> None:
     paths = [p for p in (modified + untracked).split("\0") if p]
     for rel in paths:
         src_file = src / rel
-        if not src_file.exists() or not src_file.is_file():
-            # Could be a file deleted in src's working tree (modified
-            # diff includes deletions) or a directory; skip both.
-            continue
         dst_file = dst / rel
+        if not src_file.exists():
+            if dst_file.is_file() or dst_file.is_symlink():
+                dst_file.unlink()
+            continue
+        if src_file.is_dir():
+            if dst_file.is_file() or dst_file.is_symlink():
+                dst_file.unlink()
+            continue
         dst_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_file, dst_file)
 
@@ -516,6 +579,35 @@ def _maybe_symlink_file(src: Path, link: Path) -> None:
     if link.exists() or link.is_symlink():
         return
     link.symlink_to(src, target_is_directory=False)
+
+
+def _worktree_source_root(workdir: Path) -> Path | None:
+    """Return the primary checkout that owns a linked worktree."""
+    common = Path(_git_out(workdir, "rev-parse", "--git-common-dir"))
+    common = common if common.is_absolute() else workdir / common
+    common = common.resolve()
+    return common.parent if common.name == ".git" else None
+
+
+def _is_legacy_env_copy(
+    workdir: Path,
+    source_root: Path | None,
+    relative_path: str,
+) -> bool:
+    """Return whether an untracked env file is an unchanged legacy mirror."""
+    path = Path(relative_path)
+    if (
+        source_root is None
+        or path.name not in _DEVTIME_ENV_FILES
+        or len(path.parts) > 2
+    ):
+        return False
+    source = source_root / path
+    copy = workdir / path
+    try:
+        return source.is_file() and copy.is_file() and cmp(source, copy, shallow=False)
+    except OSError:
+        return False
 
 
 def _is_git_repo(path: Path) -> bool:

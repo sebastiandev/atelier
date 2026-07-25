@@ -55,6 +55,9 @@ class SqlChatRepository:
                 existing.grounding_ref = chat.grounding_ref
                 existing.working_directory = chat.working_directory
                 existing.options = chat.options
+                existing.discussion_only = chat.discussion_only
+                existing.context_seed = chat.context_seed
+                existing.discussion_key = chat.discussion_key
                 existing.created_at = chat.created_at
                 existing.updated_at = chat.updated_at
                 existing.session_id = chat.session_id

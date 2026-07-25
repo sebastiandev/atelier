@@ -107,7 +107,7 @@ async def execute(
 
     workdir = worktree_manager.ensure(
         work_slug=work_slug,
-        agent_slug=req.agent_slug,
+        agent_slug=agent.worktree_slug or req.agent_slug,
         source=agent.folder,
     )
 
@@ -116,7 +116,7 @@ async def execute(
         provisioner=share_provisioner,
         project_slug=record.work.project_slug,
         work_slug=work_slug,
-        agent_slug=req.agent_slug,
+        agent_slug=agent.worktree_slug or req.agent_slug,
     )
     common = CommonAgentConfig(
         workdir=workdir,

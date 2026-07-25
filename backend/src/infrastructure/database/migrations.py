@@ -25,7 +25,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 18
+CURRENT_SCHEMA_VERSION = 23
 
 
 class SchemaMismatchError(RuntimeError):
@@ -224,6 +224,43 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
             # v17 → v18: persist generic loop runs and stage snapshots.
             # Both tables are pure-add and are created by metadata.create_all.
             existing = 18
+        if existing == 18:
+            # v18 → v19: persist a Work's selected execution mode. Nullable so
+            # existing Works keep the frontend's content-based fallback.
+            if not _has_column(conn, "works", "mode"):
+                conn.execute(text("ALTER TABLE works ADD COLUMN mode TEXT"))
+            existing = 19
+        if existing == 19:
+            # v19 → v20: let loop stage agents point at one stable,
+            # Work-owned checkout. NULL keeps legacy agents on their existing
+            # per-agent worktrees and the on-disk key remains optional.
+            if not _has_column(conn, "agents", "worktree_slug"):
+                conn.execute(
+                    text("ALTER TABLE agents ADD COLUMN worktree_slug TEXT")
+                )
+            existing = 20
+        if existing == 20:
+            # v20 → v21: persist whether an exploratory chat is a read-only
+            # run discussion. NULL keeps existing chats in their normal mode;
+            # chat.json also omits the additive marker unless it is true.
+            if not _has_column(conn, "chats", "discussion_only"):
+                conn.execute(
+                    text("ALTER TABLE chats ADD COLUMN discussion_only BOOLEAN")
+                )
+            existing = 21
+        if existing == 21:
+            # v21 -> v22: store hidden seed context for idle run discussions.
+            # NULL preserves every existing chat and the chat.json key is
+            # omitted unless a caller explicitly supplies a seed.
+            if not _has_column(conn, "chats", "context_seed"):
+                conn.execute(text("ALTER TABLE chats ADD COLUMN context_seed TEXT"))
+            existing = 22
+        if existing == 22:
+            # v22 -> v23: identify one reusable discussion per run stage. NULL
+            # preserves legacy chats and lets them keep their create-only behavior.
+            if not _has_column(conn, "chats", "discussion_key"):
+                conn.execute(text("ALTER TABLE chats ADD COLUMN discussion_key TEXT"))
+            existing = 23
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

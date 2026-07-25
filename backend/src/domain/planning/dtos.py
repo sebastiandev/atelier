@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from src.domain.loop.dtos import (
     LoopChangedFile,
     LoopCriterionCoverage,
+    LoopDefinition,
     LoopFinding,
+    LoopOutcome,
     LoopPermission,
-    LoopReportSource,
+    LoopReviewDecision,
+    LoopRunStatus,
     LoopSessionPolicy,
     LoopStatus,
     LoopStepKind,
@@ -40,13 +42,7 @@ PlanArtifactKind = Literal[
 PlanArtifactStatus = Literal["draft", "approved", "changed", "accepted"]
 PlanReadiness = Literal["ready", "needs_detail"]
 
-class PlanRunStatus(StrEnum):
-    RUNNING = "running"
-    NEEDS_ATTENTION = "needs_attention"
-    WAITING_APPROVAL = "waiting_approval"
-    BLOCKED = "blocked"
-    COMPLETED_PENDING_REVIEW = "completed_pending_review"
-    ACCEPTED = "accepted"
+PlanRunStatus = LoopRunStatus
 
 
 PlanProposalStatus = Literal["pending", "accepted", "rejected"]
@@ -109,23 +105,6 @@ class StartPlanArtifactRunRequest:
     agent_slug: str
     loop_definition_id: str | None = None
     loop_revision: str | None = None
-
-
-@dataclass(frozen=True)
-class SubmitPlanArtifactReportRequest:
-    """Structured completion report for an artifact agent run."""
-
-    artifact_id: str
-    run_id: str | None = None
-    agent_slug: str | None = None
-    summary: str = ""
-    divergences: str = ""
-    skipped_scope: str = ""
-    blockers: str = ""
-    decisions: str = ""
-    changes: str = ""
-    validation_evidence: str = ""
-    report_source: LoopReportSource = LoopReportSource.MANUAL
 
 
 @dataclass(frozen=True)
@@ -193,6 +172,7 @@ class PlanArtifactRun:
     decisions: str = ""
     changes: str = ""
     validation_evidence: str = ""
+    brief_note: str = ""
     loop_status: LoopStatus | None = None
     loop_status_reason: str = ""
     loop_attempt: int = 1
@@ -200,8 +180,15 @@ class PlanArtifactRun:
     loop_definition_id: str = ""
     loop_definition_name: str = ""
     loop_definition_revision: str = ""
+    loop_definition: LoopDefinition | None = None
     loop_current_stage_id: str = ""
     loop_stages: list[PlanLoopStageRun] = field(default_factory=list)
+    loop_review_gate: dict[str, Any] | None = None
+    waived_findings_count: int = 0
+    loop_pass_number: int = 1
+    loop_passes: list[dict[str, Any]] = field(default_factory=list)
+    pr: dict[str, Any] | None = None
+    pr_comments: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -230,6 +217,39 @@ class PlanLoopStageRun:
     changed_files: list[LoopChangedFile] = field(default_factory=list)
     resolved_context: list[str] = field(default_factory=list)
     context_warnings: list[str] = field(default_factory=list)
+    reports: list[PlanLoopStageReport] = field(default_factory=list)
+    push_at: str | None = None
+    pr: dict[str, Any] | None = None
+    addressed_comments: list[dict[str, Any]] = field(default_factory=list)
+    feedback_instruction: str = ""
+    approved_command_prefixes: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PlanLoopStageReport:
+    """Immutable output from one completed occurrence of a loop stage."""
+
+    outcome: LoopOutcome
+    pass_number: int = 1
+    agent_slug: str | None = None
+    summary: str = ""
+    findings: list[str] = field(default_factory=list)
+    changes: str = ""
+    validation_evidence: str = ""
+    divergences: str = ""
+    skipped_scope: str = ""
+    blocker: str = ""
+    artifact_refs: list[str] = field(default_factory=list)
+    finding_details: list[LoopFinding] = field(default_factory=list)
+    criteria_coverage: list[LoopCriterionCoverage] = field(default_factory=list)
+    changed_files: list[LoopChangedFile] = field(default_factory=list)
+    seq: int = 0
+    recorded_at: str = ""
+    review_decision: LoopReviewDecision | None = None
+    push_at: str | None = None
+    pr: dict[str, Any] | None = None
+    addressed_comments: list[dict[str, Any]] = field(default_factory=list)
+    feedback_instruction: str = ""
 
 
 @dataclass(frozen=True)
@@ -351,7 +371,6 @@ __all__ = [
     "PlanningProfile",
     "ResolvePlanArtifactProposalRequest",
     "StartPlanArtifactRunRequest",
-    "SubmitPlanArtifactReportRequest",
     "UpdatePlanArtifactRequest",
     "WorkPlanView",
 ]

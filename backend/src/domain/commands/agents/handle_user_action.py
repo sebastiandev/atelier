@@ -35,6 +35,10 @@ if TYPE_CHECKING:
     from src.domain.supervisor import AgentSupervisorService
 
 
+class WorkNotActive(ValueError):
+    """The agent's Work is archived and cannot accept input."""
+
+
 async def execute(
     supervisor: AgentSupervisorService,
     workstore: WorkStore,
@@ -42,6 +46,12 @@ async def execute(
     agent_slug: str,
     action: UserAction,
 ) -> None:
+    work_slug = workstore.get_work_slug_for_agent(agent_slug)
+    record = workstore.get_work(work_slug) if work_slug is not None else None
+    if record is not None and record.work.status != "active":
+        raise WorkNotActive(
+            f"work {work_slug} is {record.work.status}; reopen it to continue"
+        )
     match action:
         case SendInput(text=text, contexts=contexts):
             if contexts:
@@ -127,4 +137,4 @@ def _stored_option_key(
     return None
 
 
-__all__ = ["execute"]
+__all__ = ["WorkNotActive", "execute"]

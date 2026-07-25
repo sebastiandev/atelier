@@ -142,6 +142,9 @@ class CommonAgentConfig:
     # used by Codex so workspace-write agents can write project shared
     # folders whose symlink targets live outside the per-agent worktree.
     writable_roots: tuple[Path, ...] = ()
+    # Loop stages may pre-approve narrow command prefixes in provider-native
+    # policy. Empty for interactive agents and providers without this support.
+    approved_command_prefixes: tuple[str, ...] = ()
 
 
 DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob")
@@ -267,15 +270,15 @@ class ClaudeAcpModel(str, Enum):
     """Model choices exposed by the official ``claude-agent-acp`` wrapper.
 
     These are the wrapper's session-config-option *values* (captured live
-    2026-06-11, wrapper 0.44.0) — aliases resolved by the Claude Code
+    2026-07-24, wrapper 0.61.0) — aliases resolved by the Claude Code
     runtime, not API model ids. ``DEFAULT`` defers to the user's Claude
     CLI configuration (currently resolves to Opus 4.8 with 1M context).
     """
 
     DEFAULT = "default"
+    OPUS_1M = "opus[1m]"
     FABLE_5_1M = "claude-fable-5[1m]"
     SONNET = "sonnet"
-    SONNET_1M = "sonnet[1m]"
     HAIKU = "haiku"
 
 
@@ -309,6 +312,13 @@ class ClaudeAcpPermissionMode(str, Enum):
     PLAN = "plan"
     DONT_ASK = "dontAsk"
     BYPASS = "bypassPermissions"
+
+
+class ClaudeAcpFastMode(str, Enum):
+    """claude-agent-acp ``fast`` values."""
+
+    OFF = "off"
+    ON = "on"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -355,12 +365,14 @@ class ClaudeAcpAgentConfig(AcpAgentConfig):
     model: ClaudeAcpModel = ClaudeAcpModel.DEFAULT
     thinking_effort: ClaudeAcpEffort = ClaudeAcpEffort.DEFAULT
     permission_mode: ClaudeAcpPermissionMode = ClaudeAcpPermissionMode.DEFAULT
+    fast_mode: ClaudeAcpFastMode = ClaudeAcpFastMode.OFF
 
     def acp_config_values(self) -> tuple[tuple[str, str], ...]:
         return (
             ("model", self.model.value),
             ("effort", self.thinking_effort.value),
             ("mode", self.permission_mode.value),
+            ("fast", self.fast_mode.value),
         )
 
 
@@ -391,6 +403,13 @@ class CodexAcpEffort(str, Enum):
     ULTRA = "ultra"
 
 
+class CodexAcpFastMode(str, Enum):
+    """codex-acp ``fast-mode`` values."""
+
+    OFF = "off"
+    ON = "on"
+
+
 class CodexAcpMode(str, Enum):
     """codex-acp session modes (also mirrored as the ``mode`` config
     option). Collapses the bespoke adapter's independent sandbox +
@@ -401,11 +420,14 @@ class CodexAcpMode(str, Enum):
       network access or out-of-workspace edits. Matches the bespoke
       default (workspace-write + on-request) and is Atelier's default.
     - ``FULL_ACCESS`` — no approvals; use only for trusted runs.
+
+    The member names preserve Atelier's existing vocabulary; the values match
+    codex-acp 1.x's ``agent`` / ``agent-full-access`` protocol ids.
     """
 
     READ_ONLY = "read-only"
-    AUTO = "auto"
-    FULL_ACCESS = "full-access"
+    AUTO = "agent"
+    FULL_ACCESS = "agent-full-access"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -416,12 +438,14 @@ class CodexAcpAgentConfig(AcpAgentConfig):
 
     model: CodexAcpModel = CodexAcpModel.GPT_5_5
     reasoning_effort: CodexAcpEffort = CodexAcpEffort.MEDIUM
+    fast_mode: CodexAcpFastMode = CodexAcpFastMode.OFF
     mode: CodexAcpMode = CodexAcpMode.AUTO
 
     def acp_config_values(self) -> tuple[tuple[str, str], ...]:
         return (
             ("model", self.model.value),
             ("reasoning_effort", self.reasoning_effort.value),
+            ("fast-mode", self.fast_mode.value),
             ("mode", self.mode.value),
         )
 
@@ -475,6 +499,7 @@ __all__ = [
     "AmpPermissionMode",
     "ClaudeAcpAgentConfig",
     "ClaudeAcpEffort",
+    "ClaudeAcpFastMode",
     "ClaudeAcpModel",
     "ClaudeAcpPermissionMode",
     "ClaudeAgentConfig",
@@ -483,6 +508,7 @@ __all__ = [
     "ClaudePermissionMode",
     "CodexAcpAgentConfig",
     "CodexAcpEffort",
+    "CodexAcpFastMode",
     "CodexAcpMode",
     "CodexAcpModel",
     "CodexAgentConfig",

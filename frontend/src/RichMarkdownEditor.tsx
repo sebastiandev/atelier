@@ -133,14 +133,16 @@ export function RichMarkdownEditor({
 }
 
 function splitMarkdownSections(markdown: string): MarkdownSection[] {
+  const bodyStart = frontMatterEnd(markdown);
   const starts: number[] = [];
   const headingPattern = /^#{1,6}\s+\S.*$/gm;
+  headingPattern.lastIndex = bodyStart;
   let match: RegExpExecArray | null;
   while ((match = headingPattern.exec(markdown)) !== null) {
-    if (match.index > 0 && starts.length === 0) starts.push(0);
+    if (match.index > bodyStart && starts.length === 0) starts.push(bodyStart);
     starts.push(match.index);
   }
-  if (starts.length === 0) starts.push(0);
+  if (starts.length === 0) starts.push(bodyStart);
 
   const sections = starts.map((start, index) => {
     const end = starts[index + 1] ?? markdown.length;
@@ -154,7 +156,13 @@ function splitMarkdownSections(markdown: string): MarkdownSection[] {
     };
   });
 
-  return sections.filter((section) => section.text.length > 0 || markdown.length === 0);
+  return sections.filter(
+    (section) => section.text.length > 0 || markdown.length === bodyStart,
+  );
+}
+
+function frontMatterEnd(markdown: string): number {
+  return /^\uFEFF?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n(?:[ \t]*\r?\n)*|$)/.exec(markdown)?.[0].length ?? 0;
 }
 
 function sectionTitle(text: string, index: number): string {

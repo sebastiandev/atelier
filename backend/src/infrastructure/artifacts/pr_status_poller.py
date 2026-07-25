@@ -23,12 +23,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 
 import httpx
 
 from src.domain.commands.artifacts import refresh_pr_statuses
 from src.domain.workstore.ports import WorkStore
+from src.infrastructure.artifacts.github_pr_lifecycle import GitHubPrLifecycleGateway
 from src.infrastructure.artifacts.github_pr_status import GitHubPrStateFetcher
 
 _log = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ class PrStatusPoller:
             await self._client.aclose()
             self._client = None
 
-    async def refresh_now(self) -> "refresh_pr_statuses.RefreshResult | None":
+    async def refresh_now(self) -> refresh_pr_statuses.RefreshResult | None:
         """Out-of-band refresh triggered by the UI (work-view mount).
 
         Throttled to one run per ``throttle_seconds`` — concurrent
@@ -122,6 +122,12 @@ class PrStatusPoller:
                 )
             return result
 
+    def lifecycle_gateway(self) -> GitHubPrLifecycleGateway | None:
+        """Return a lifecycle gateway backed by the poller's shared client."""
+        if self._client is None:
+            return None
+        return GitHubPrLifecycleGateway(self._client)
+
     async def _loop(self) -> None:
         assert self._client is not None
         fetcher = GitHubPrStateFetcher(self._client)
@@ -137,7 +143,7 @@ class PrStatusPoller:
                     )
                     # Event set → we're shutting down.
                     return
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
 
                 async with self._refresh_lock:

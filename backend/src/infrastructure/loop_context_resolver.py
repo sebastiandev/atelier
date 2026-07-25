@@ -69,6 +69,8 @@ def _resolve_reference(
             for value in reference.paths
             if (path := (root / value).resolve()).is_dir() and _inside(root, path)
         )
+    if reference.kind == LoopContextKind.NOTE:
+        return (f"note: {reference.ref}",) if reference.ref else ()
     if reference.kind == LoopContextKind.SHARED_CONTEXT:
         return (
             (f"shared_context: {reference.ref}",)

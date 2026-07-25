@@ -1,9 +1,8 @@
-"""Shared working-root lookup for loop definition commands."""
+"""Working-root actions shared by loop definition commands."""
 
 from src.domain.loop.catalog import LoopDefinitionRoots
 from src.domain.loop.definitions import LoopRootUnavailable
-from src.domain.loop.ports import LoopDefinitionLocations
-from src.domain.planning.ports import PlanningSessionRepository
+from src.domain.loop.ports import LoopDefinitionLocations, LoopWorkingRootRepository
 from src.domain.workstore.ports import WorkStore
 
 
@@ -13,25 +12,25 @@ class WorkNotFound(ValueError):
 
 def resolve_working_root(
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     work_slug: str,
 ) -> str:
     """Resolve a Work's persisted repository root.
 
     Preconditions: the caller is operating on a Work-scoped loop resource.
-    Postconditions: returns the PlanningSession root without changing state.
+    Postconditions: returns the configured Work root without changing state.
     """
     if workstore.get_work(work_slug) is None:
         raise WorkNotFound(f"work not found: {work_slug}")
-    session = planning_sessions.get_by_work_slug(work_slug)
-    if session is None or not session.root_path:
+    root = work_roots.working_root_for_work(work_slug)
+    if not root:
         raise LoopRootUnavailable(f"loop working root is not configured: {work_slug}")
-    return session.root_path
+    return root
 
 
 def resolve_catalog_roots(
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     *,
     work_slug: str | None,
@@ -50,8 +49,7 @@ def resolve_catalog_roots(
             raise WorkNotFound(f"work not found: {work_slug}")
         work_root = locations.work_loop_root(work_slug)
         if legacy_root is None:
-            session = planning_sessions.get_by_work_slug(work_slug)
-            legacy_root = session.root_path if session and session.root_path else None
+            legacy_root = work_roots.working_root_for_work(work_slug)
     return LoopDefinitionRoots(
         library=locations.loop_library_root(),
         work=work_root,

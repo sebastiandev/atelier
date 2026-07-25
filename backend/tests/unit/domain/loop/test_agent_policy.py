@@ -2,8 +2,12 @@
 
 import pytest
 
-from src.domain.loop.agent_policy import apply_stage_agent_policy, resolve_stage_model
-from src.domain.loop.dtos import LoopAgentPolicy, LoopPermission
+from src.domain.loop.agent_policy import (
+    apply_stage_agent_policy,
+    resolve_stage_agent_config,
+    resolve_stage_model,
+)
+from src.domain.loop.dtos import LoopAgentPolicy, LoopBriefAgent, LoopPermission
 from src.domain.models import Provider
 
 
@@ -91,6 +95,42 @@ def test_explicit_effort_requires_provider_support() -> None:
             {"permission_mode": "default"},
             LoopAgentPolicy(effort="high"),
         )
+
+
+def test_codex_fast_mode_is_applied_before_stage_launch() -> None:
+    resolved = apply_stage_agent_policy(
+        "codex-acp",
+        {"reasoning_effort": "high"},
+        LoopAgentPolicy(fast=True),
+    )
+
+    assert resolved == {"reasoning_effort": "high", "fast-mode": "on"}
+
+
+def test_fast_mode_requires_provider_support() -> None:
+    with pytest.raises(ValueError, match="does not support fast mode"):
+        apply_stage_agent_policy(
+            "opencode",
+            {},
+            LoopAgentPolicy(fast=True),
+        )
+
+
+def test_run_provider_override_replaces_template_fast_mode() -> None:
+    provider, _, options = resolve_stage_agent_config(
+        LoopAgentPolicy(provider="codex-acp", fast=True),
+        parent_provider="codex-acp",
+        parent_model="gpt-5.5",
+        parent_options={"fast-mode": "on"},
+        override=LoopBriefAgent(
+            provider="claude-acp",
+            model="default",
+            options={"permission_mode": "default"},
+        ),
+    )
+
+    assert provider == "claude-acp"
+    assert "fast-mode" not in options
 
 
 def test_amp_read_permission_rejects_mutating_tools() -> None:

@@ -73,9 +73,10 @@ export type StreamResource = "agents" | "chats";
 
 export function useAgentStream(
   agentSlug: string,
-  options: { resource?: StreamResource } = {},
+  options: { resource?: StreamResource; readOnly?: boolean } = {},
 ) {
   const resource = options.resource ?? "agents";
+  const readOnly = options.readOnly ?? false;
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const wsRef = useRef<WebSocket | null>(null);
@@ -159,7 +160,8 @@ export function useAgentStream(
       const url =
         `${proto}//${window.location.host}` +
         `/api/${resource}/${agentSlug}/stream` +
-        `?cursor=${lastSeqRef.current}`;
+        `?cursor=${lastSeqRef.current}` +
+        (readOnly ? "&read_only=1" : "");
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
@@ -213,7 +215,7 @@ export function useAgentStream(
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [agentSlug, resource]);
+  }, [agentSlug, readOnly, resource]);
 
   function sendInput(text: string, contexts?: ContextEntry[]) {
     const ws = wsRef.current;

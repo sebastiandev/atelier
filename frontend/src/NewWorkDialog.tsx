@@ -39,10 +39,13 @@ export type NewWorkIntent =
 
 type Props = {
   onClose: () => void;
-  onCreate: (
+  onCreate?: (
     payload: CreateWorkPayload,
     intent: NewWorkIntent,
   ) => Promise<WorkDetail>;
+  work?: WorkDetail;
+  initialPlanningSeed?: PlanningStartSeed;
+  onPlan?: (seed: PlanningStartSeed) => Promise<void>;
   projects?: ProjectSummary[];
   // When opened from a project-scoped context, seed the picker. ``null``
   // is "Loose"; ``undefined`` leaves the picker free.
@@ -88,22 +91,35 @@ const NEW_WORK_TYPES = new Set(["feature", "bugfix", "refactor", "migration", "f
 export function NewWorkDialog({
   onClose,
   onCreate,
+  work,
+  initialPlanningSeed,
+  onPlan,
   projects = [],
   presetProjectSlug,
   lockProjectSlug = false,
 }: Props) {
-  const [title, setTitle] = useState("");
-  const [idea, setIdea] = useState("");
+  const planningExistingWork = work !== undefined;
+  const [title, setTitle] = useState(work?.name ?? "");
+  const [idea, setIdea] = useState(initialPlanningSeed?.idea ?? work?.description ?? "");
   const [projectSlug, setProjectSlug] = useState<string | null>(
-    presetProjectSlug ?? null,
+    presetProjectSlug ?? work?.project_slug ?? null,
   );
   const [mode, setMode] = useState<WorkMode>("planning");
-  const [framework, setFramework] = useState<PlanningFrameworkId>("bmad");
-  const [profile, setProfile] = useState("feature" as PlanningStartSeed["profile"]);
-  const [folder, setFolder] = useState("");
-  const [planDir, setPlanDir] = useState("");
-  const [planDirDefault, setPlanDirDefault] = useState(true);
-  const [agentConfig, setAgentConfig] = useState<PlanningAgentConfig | null>(null);
+  const [framework, setFramework] = useState<PlanningFrameworkId>(
+    initialPlanningSeed?.framework ?? "bmad",
+  );
+  const [profile, setProfile] = useState(
+    initialPlanningSeed?.profile ?? ("feature" as PlanningStartSeed["profile"]),
+  );
+  const [folder, setFolder] = useState(initialPlanningSeed?.folder ?? "");
+  const [planDir, setPlanDir] = useState(initialPlanningSeed?.planDir ?? "");
+  const [planDirDefault, setPlanDirDefault] = useState(
+    !initialPlanningSeed?.planDir ||
+      initialPlanningSeed.planDir === defaultPlanDir(initialPlanningSeed.folder),
+  );
+  const [agentConfig, setAgentConfig] = useState<PlanningAgentConfig | null>(
+    initialPlanningSeed?.agentConfig ?? null,
+  );
   const [loopDefinitions, setLoopDefinitions] = useState<LoopDefinition[] | null>(null);
   const [loopDefinitionId, setLoopDefinitionId] = useState("");
   const [loopQuery, setLoopQuery] = useState("");
@@ -123,27 +139,29 @@ export function NewWorkDialog({
   const hasTitle = title.trim().length > 0;
   const canSubmit =
     !submitting &&
-    ((mode === "manual" && hasTitle) ||
+    ((planningExistingWork && folder.trim().length > 0) ||
+      (mode === "manual" && hasTitle) ||
       ((mode === "planning" || mode === "loop") &&
         hasTitle &&
         folder.trim().length > 0 &&
         (mode !== "loop" || createLoop || loopDefinitionId.length > 0)));
 
   useEffect(() => {
-    titleRef.current?.focus();
+    if (!planningExistingWork) titleRef.current?.focus();
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, planningExistingWork]);
 
   useEffect(() => {
+    if (planningExistingWork) return;
     const inheritedFolder = selectedProject?.default_folder?.trim() ?? "";
     setFolder(inheritedFolder);
     setPlanDir(inheritedFolder ? defaultPlanDir(inheritedFolder) : "");
     setPlanDirDefault(true);
-  }, [selectedProject?.slug, selectedProject?.default_folder]);
+  }, [planningExistingWork, selectedProject?.slug, selectedProject?.default_folder]);
 
   useEffect(() => {
     if (mode !== "loop" || loopDefinitions !== null || loopError) return;
@@ -193,22 +211,37 @@ export function NewWorkDialog({
 
   async function submit() {
     if (!canSubmit) return;
+    const planningSeed: PlanningStartSeed = {
+      idea: idea.trim(),
+      framework,
+      profile,
+      folder,
+      planDir: planDir.trim() || null,
+      agentConfig,
+    };
+    if (planningExistingWork) {
+      if (!onPlan) return;
+      setSubmitting(true);
+      setError(null);
+      try {
+        await onPlan(planningSeed);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        setSubmitting(false);
+      }
+      return;
+    }
+    if (!onCreate) return;
     const payload: CreateWorkPayload = {
       name: title.trim(),
       description: idea.trim(),
       project_slug: projectSlug,
+      mode,
     };
     const intent: NewWorkIntent = mode === "planning"
       ? {
           mode: "planning",
-          seed: {
-            idea: idea.trim(),
-            framework,
-            profile,
-            folder,
-            planDir: planDir.trim() || null,
-            agentConfig,
-          },
+          seed: planningSeed,
         }
       : mode === "loop"
         ? {
@@ -234,7 +267,7 @@ export function NewWorkDialog({
   return (
     <div className="scrim" onClick={onClose}>
       <div
-        className={`modal nw-modal mode-${mode}`}
+        className={`modal nw-modal mode-${planningExistingWork ? "planning" : mode}`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -246,7 +279,8 @@ export function NewWorkDialog({
       >
         <div className="modal-hd">
           <div>
-            <h3>New work</h3>
+            <h3>{planningExistingWork ? "Plan this work" : "New work"}</h3>
+            {work && <p className="sub">{work.slug} · {work.name}</p>}
           </div>
           <button className="btn ghost icon sm" onClick={onClose} aria-label="Close">
             ×
@@ -262,6 +296,7 @@ export function NewWorkDialog({
                 className="nw-input"
                 placeholder="e.g. Port LPN to Kernel"
                 value={title}
+                readOnly={planningExistingWork}
                 onChange={(e) => setTitle(e.target.value)}
               />
             </label>
@@ -284,7 +319,7 @@ export function NewWorkDialog({
                     <FolderIcon size={11} />
                     <select
                       value={projectSlug ?? ""}
-                      disabled={lockProjectSlug}
+                      disabled={planningExistingWork || lockProjectSlug}
                       onChange={(e) => setProjectSlug(e.target.value || null)}
                     >
                       <option value="">Loose work</option>
@@ -307,6 +342,7 @@ export function NewWorkDialog({
               <button
                 key={card.id}
                 type="button"
+                disabled={planningExistingWork && card.id !== "planning"}
                 className={
                   "mode-card" +
                   (mode === card.id ? " active" : "")
@@ -323,7 +359,7 @@ export function NewWorkDialog({
             ))}
           </div>
 
-          {mode === "planning" ? (
+          {(planningExistingWork || mode === "planning") ? (
             <div className="empty-prompt">
               <div className="pm-empty-prompt-head">
                 <div className="ep-lbl">
@@ -490,7 +526,7 @@ export function NewWorkDialog({
             Cancel
           </button>
           <button className="btn primary" disabled={!canSubmit} onClick={submit}>
-            {primaryLabel(submitting)}
+            {primaryLabel(submitting, planningExistingWork)}
           </button>
         </div>
       </div>
@@ -570,7 +606,7 @@ function defaultPlanDir(folder: string): string {
   return folder ? `${folder.replace(/\/+$/, "")}/docs/plan` : "";
 }
 
-function primaryLabel(submitting: boolean): string {
-  if (submitting) return "Creating...";
-  return "Create work";
+function primaryLabel(submitting: boolean, planningExistingWork: boolean): string {
+  if (submitting) return planningExistingWork ? "Starting..." : "Creating...";
+  return planningExistingWork ? "Start planning" : "Create work";
 }

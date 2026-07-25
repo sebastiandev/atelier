@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from typing import Any
 
-from src.domain.agents import PermissionDecisionValue
+from src.domain.agents.turn_monitor import observe_turn
 from src.domain.chats import runtime as chat_runtime
+from src.domain.chatstore import ChatRecord
 from src.domain.chatstore.ports import ChatStore
 from src.domain.models import Provider
 from src.domain.planning import materialization
@@ -19,26 +20,19 @@ from src.domain.planning.dtos import (
     WorkPlanView,
 )
 from src.domain.planning.ports import PlanningFiles, PlanningSessionRepository
+from src.domain.planning.prompts import (
+    PlanningMaterializationRecoveryPrompt,
+    PlanningMaterializationReportPrompt,
+    PlanningMaterializerRuntimePrompt,
+)
 from src.domain.projectstore.ports import ProjectStore
+from src.domain.prompts import build_prompt
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import WorkStore
 
-_MAX_FOLLOW_UPS = 2
-_TURN_TIMEOUT_SECONDS = 300
-_WEB_TOOL_NAMES = ("web", "fetch", "browser", "http")
-_NETWORK_OR_INSTALL_COMMAND = re.compile(
-    r"("
-    r"https?://|"
-    r"\b(curl|wget|http|httpie|aria2c|lynx|w3m)\b|"
-    r"\b(npx|npm\s+(install|add|exec|create)|pnpm\s+(install|add|dlx|create)|"
-    r"yarn\s+(install|add|create|dlx)|bun\s+(install|add|x|create))\b|"
-    r"\b(pipx?\s+install|uv\s+(add|sync|pip\s+install|tool\s+install)|"
-    r"poetry\s+(add|install)|bundle\s+install|cargo\s+install|go\s+get)\b|"
-    r"\b(brew|apt-get|apt|dnf|yum|pacman)\s+install\b|"
-    r"\bgit\s+(clone|pull|fetch|submodule\s+update)\b"
-    r")",
-    re.IGNORECASE,
-)
+_MAX_IDLE_FOLLOW_UPS = 2
+_MAX_CONNECTION_RECOVERIES = 1
+_POLL_INTERVAL_SECONDS = 0.5
 
 
 class MaterializationIncomplete(ValueError):
@@ -70,6 +64,7 @@ class MaterializePlanRequest:
     options: dict[str, Any] = field(default_factory=dict)
     planning_chat_slug: str | None = None
     artifacts: tuple[PlanArtifactEntry, ...] = ()
+    fresh_session: bool = False
 
 
 async def execute(
@@ -136,90 +131,97 @@ async def execute(
     if chat_slug is None:
         raise RuntimeError("materialization chat has no slug")
 
-    await _resolve_pending_materializer_permission(chatstore, chat_supervisor, chat_slug)
     finalized = _try_finalize(workstore, chatstore, files, req, chat_slug)
     if finalized is not None:
         await _restart_planning_chat(chat_supervisor, req)
         return finalized
 
-    cursor = _last_transcript_seq(chatstore, chat_slug)
-    nudge_first = _has_materializer_activity(chatstore, chat_slug)
-    async with chat_runtime.connect_chat(
-        chatstore,
-        chat_supervisor,
-        workstore,
-        projectstore,
-        files,
-        settings,
-        chat_runtime.ConnectChatRuntimeRequest(chat_slug=chat_slug, cursor=cursor),
-    ) as subscription:
-        stream = subscription.stream()
-        for attempt in range(_MAX_FOLLOW_UPS + 1):
-            if nudge_first or attempt > 0:
-                await chat_supervisor.send_input(
-                    chat_slug,
-                    _follow_up_prompt(req),
-                )
-                nudge_first = False
-            iteration_result = await _wait_for_report_or_turn_end(
-                stream,
-                workstore,
-                chatstore,
-                files,
-                chat_supervisor,
-                req,
-                chat_slug,
+    if req.fresh_session:
+        await materialization.reset_materializer_runtime(
+            chatstore, chat_supervisor, chat_slug
+        )
+    recover_first = _has_materializer_activity(chatstore, chat_slug)
+    original_brief = _original_materialization_brief(record)
+    runtime_prompt = _runtime_prompt(req)
+    follow_ups = 0
+    recoveries = 0
+    while True:
+        active = await chat_runtime.ensure_chat_runtime(
+            chatstore,
+            chat_supervisor,
+            workstore,
+            projectstore,
+            files,
+            settings,
+            chat_slug,
+            system_prompt_override=runtime_prompt,
+        )
+        if not active:
+            raise MaterializationIncomplete("materializer Work is not active")
+        if recover_first:
+            await chat_supervisor.send_input(
+                chat_slug, _recovery_prompt(req, original_brief)
             )
-            if iteration_result is not None:
-                await _restart_planning_chat(chat_supervisor, req)
-                return iteration_result
+            recover_first = False
+        iteration_result, error = await _poll_for_report_or_turn_end(
+            workstore,
+            chatstore,
+            files,
+            chat_supervisor,
+            req,
+            chat_slug,
+        )
+        if iteration_result is not None:
+            await _restart_planning_chat(chat_supervisor, req)
+            return iteration_result
+        if error is not None:
+            recoverable = (
+                "connection closed" in error.casefold()
+                or "runtime is unavailable" in error.casefold()
+            )
+            if recoverable and recoveries < _MAX_CONNECTION_RECOVERIES:
+                recoveries += 1
+                await materialization.reset_materializer_runtime(
+                    chatstore, chat_supervisor, chat_slug
+                )
+                recover_first = True
+                continue
+            raise MaterializationIncomplete(error)
+        if follow_ups >= _MAX_IDLE_FOLLOW_UPS:
+            raise MaterializationIncomplete(
+                "planning materializer did not emit atelier_plan_materialization"
+            )
+        await chat_supervisor.send_input(chat_slug, _report_prompt(req))
+        follow_ups += 1
 
-    final_result = _try_finalize(workstore, chatstore, files, req, chat_slug)
-    if final_result is not None:
-        await _restart_planning_chat(chat_supervisor, req)
-        return final_result
-    raise MaterializationIncomplete(
-        "planning materializer did not emit atelier_plan_materialization"
-    )
 
-
-async def _wait_for_report_or_turn_end(
-    stream: Any,
+async def _poll_for_report_or_turn_end(
     workstore: WorkStore,
     chatstore: ChatStore,
     files: PlanningFiles,
     chat_supervisor: AgentSupervisorService,
     req: MaterializePlanRequest,
     chat_slug: str,
-) -> WorkPlanView | None:
-    """Wait for one materializer turn to finish or report a plan."""
-    deadline = asyncio.get_running_loop().time() + _TURN_TIMEOUT_SECONDS
+) -> tuple[WorkPlanView | None, str | None]:
+    """Poll durable transcript state until the current provider turn ends."""
+    events = list(chatstore.read_transcript_from_cursor(chat_slug, 0))
+    cursor = _last_event_seq(events)
     while True:
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            return None
-        try:
-            event = await asyncio.wait_for(anext(stream), timeout=remaining)
-        except StopAsyncIteration:
-            return _try_finalize(workstore, chatstore, files, req, chat_slug)
-        except TimeoutError:
-            return None
-        event_type = event.get("type")
-        if event_type == "message_complete":
-            plan = _try_finalize(workstore, chatstore, files, req, chat_slug)
-            if plan is not None:
-                return plan
-        if event_type == "permission_request":
-            await _resolve_materializer_permission(
-                chat_supervisor, chat_slug, event
-            )
-        if event_type == "error":
-            message = event.get("message")
-            raise MaterializationIncomplete(
-                str(message) if isinstance(message, str) else "materializer failed"
-            )
-        if event_type == "status_change" and event.get("status") == "idle":
-            return _try_finalize(workstore, chatstore, files, req, chat_slug)
+        plan = _try_finalize(workstore, chatstore, files, req, chat_slug)
+        if plan is not None:
+            return plan, None
+        observation = observe_turn(events, datetime.now(UTC))
+        if observation.terminal_error is not None:
+            return None, observation.terminal_error
+        if observation.finished:
+            return None, None
+        if not chat_supervisor.is_registered(chat_slug):
+            return None, "Materializer runtime is unavailable."
+        await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+        fresh = list(chatstore.read_transcript_from_cursor(chat_slug, cursor))
+        if fresh:
+            events.extend(fresh)
+            cursor = _last_event_seq(events)
 
 
 def _try_finalize(
@@ -247,8 +249,7 @@ def _try_finalize(
         return None
 
 
-def _last_transcript_seq(chatstore: ChatStore, chat_slug: str) -> int:
-    events = list(chatstore.read_transcript_from_cursor(chat_slug, 0))
+def _last_event_seq(events: list[dict[str, Any]]) -> int:
     if not events:
         return 0
     seq = events[-1].get("seq")
@@ -292,10 +293,6 @@ async def try_finalize_existing(
     plan = _try_finalize(workstore, chatstore, files, req, chat_slug)
     if plan is not None:
         await _restart_planning_chat(chat_supervisor, req)
-    else:
-        await _resolve_pending_materializer_permission(
-            chatstore, chat_supervisor, chat_slug
-        )
     return plan
 
 
@@ -343,100 +340,59 @@ async def _restart_planning_chat(
         await chat_supervisor.stop_agent(req.planning_chat_slug)
 
 
-async def _resolve_materializer_permission(
-    chat_supervisor: AgentSupervisorService, chat_slug: str, event: dict[str, Any]
-) -> None:
-    """Answer a materializer permission request with the local policy."""
-    request_id = event.get("request_id")
-    if not isinstance(request_id, str) or not request_id:
-        return
-    await chat_supervisor.resolve_permission(
-        chat_slug, request_id, _materializer_permission_decision(event)
-    )
-
-
-async def _resolve_pending_materializer_permission(
-    chatstore: ChatStore,
-    chat_supervisor: AgentSupervisorService,
-    chat_slug: str,
-) -> None:
-    """Answer the latest still-pending materializer permission, if any."""
-    pending = _pending_permission(list(chatstore.read_transcript_from_cursor(chat_slug, 0)))
-    if pending is not None:
-        await _resolve_materializer_permission(chat_supervisor, chat_slug, pending)
-
-
-def _pending_permission(events: list[dict[str, Any]]) -> dict[str, Any] | None:
-    decided: set[str] = set()
-    completed_tools: set[str] = set()
-    requests: list[dict[str, Any]] = []
-    for event in events:
-        event_type = event.get("type")
-        request_id = event.get("request_id")
-        tool_id = event.get("tool_id")
-        if event_type == "permission_decision" and isinstance(request_id, str):
-            decided.add(request_id)
-        elif event_type == "tool_result" and isinstance(tool_id, str):
-            completed_tools.add(tool_id)
-        elif event_type == "permission_request":
-            requests.append(event)
-    for event in reversed(requests):
-        request_id = event.get("request_id")
-        tool_id = event.get("tool_id")
-        if isinstance(request_id, str) and request_id in decided:
-            continue
-        if isinstance(tool_id, str) and tool_id in completed_tools:
-            continue
-        return event
-    return None
-
-
-def _materializer_permission_decision(event: dict[str, Any]) -> PermissionDecisionValue:
-    """Allow local planning work and deny network or install activity."""
-    tool_name = str(event.get("tool_name") or "").casefold()
-    tool_input = event.get("tool_input")
-    command = _shell_command(tool_input)
-    if any(part in tool_name for part in _WEB_TOOL_NAMES):
-        return "deny"
-    if command and _NETWORK_OR_INSTALL_COMMAND.search(command):
-        return "deny"
-    return "allow"
-
-
-def _shell_command(tool_input: Any) -> str:
-    """Extract a shell command string from canonical tool input."""
-    if not isinstance(tool_input, dict):
-        return ""
-    command = tool_input.get("command")
-    if isinstance(command, str):
-        return command
-    cmd = tool_input.get("cmd")
-    if isinstance(cmd, str):
-        return cmd
-    argv = tool_input.get("argv")
-    if isinstance(argv, list) and all(isinstance(item, str) for item in argv):
-        return " ".join(argv)
-    return ""
-
-
-def _follow_up_prompt(req: MaterializePlanRequest) -> str:
-    """Build the nudge sent when the materializer omits its report."""
+def _artifact_root(req: MaterializePlanRequest) -> str:
+    """Resolve the configured materialization output path."""
     if req.root_path is None or req.framework is None:
         raise ValueError("root_path and framework are required for materialization")
     artifact_root, _absolute_artifact_root = materialization.resolve_artifact_root(
         req.root_path, req.framework, req.work_slug, req.artifact_root_path
     )
-    return (
-        "Continue the Planning materialization. If any planning files are "
-        f"missing, finish writing them under `{artifact_root}/`. "
-        "Generate the complete reviewable set now: framework-level docs plus "
-        "all known executable stories, tasks, spikes, bugs, hotfixes, or "
-        "follow-up work items. Do not leave placeholders that require another "
-        "agent to scope the executable item before implementation. "
-        "Then emit exactly one single-line atelier_plan_materialization JSON "
-        "report with path, title, artifact_kind, executable, and dependencies "
-        "for every created Markdown artifact. Paths must be relative to that "
-        "framework output folder. Do not include Markdown content in the report."
+    return artifact_root
+
+
+def _runtime_prompt(req: MaterializePlanRequest) -> str:
+    """Build the materializer-owned provider system prompt."""
+    if req.root_path is None or req.framework is None:
+        raise ValueError("root_path and framework are required for materialization")
+    return build_prompt(
+        PlanningMaterializerRuntimePrompt(
+            framework=req.framework,
+            root_path=req.root_path,
+            artifact_root=_artifact_root(req),
+        )
+    )
+
+
+def _recovery_prompt(req: MaterializePlanRequest, original_brief: str) -> str:
+    """Build the full-context brief for a fresh recovery session."""
+    if req.framework is None:
+        raise ValueError("framework is required for materialization")
+    return build_prompt(
+        PlanningMaterializationRecoveryPrompt(
+            framework=req.framework,
+            artifact_root=_artifact_root(req),
+            original_brief=original_brief,
+        )
+    )
+
+
+def _report_prompt(req: MaterializePlanRequest) -> str:
+    """Build the bounded report-only nudge after a completed provider turn."""
+    if req.framework is None:
+        raise ValueError("framework is required for materialization")
+    return build_prompt(
+        PlanningMaterializationReportPrompt(
+            framework=req.framework,
+            artifact_root=_artifact_root(req),
+        )
+    )
+
+
+def _original_materialization_brief(record: ChatRecord) -> str:
+    """Return the persisted initial user brief for recovery sessions."""
+    return next(
+        (message.body for message in record.transcript if message.role == "user"),
+        "Materialize the source-backed plan and emit the required report.",
     )
 
 

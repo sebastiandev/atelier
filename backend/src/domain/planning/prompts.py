@@ -93,6 +93,32 @@ class PlanningMaterializationPrompt:
     planning_chat_excerpt: str
 
 
+@dataclass(frozen=True)
+class PlanningMaterializerRuntimePrompt:
+    """Inputs for a materializer provider's persistent system prompt."""
+
+    framework: PlanningFramework
+    root_path: str
+    artifact_root: str
+
+
+@dataclass(frozen=True)
+class PlanningMaterializationRecoveryPrompt:
+    """Inputs for resuming materialization in a fresh provider session."""
+
+    framework: PlanningFramework
+    artifact_root: str
+    original_brief: str
+
+
+@dataclass(frozen=True)
+class PlanningMaterializationReportPrompt:
+    """Inputs for requesting a missing report after materialization ends."""
+
+    framework: PlanningFramework
+    artifact_root: str
+
+
 @build_prompt.register
 def _(req: PlanningChatInitialPrompt) -> str:
     """Render the first visible user message for a Planning chat."""
@@ -127,6 +153,10 @@ def _(req: PlanningMaterializationPrompt) -> str:
         f"- Atelier state folder: {req.atelier_planning_path}",
         f"- Framework output folder: {req.artifact_root}",
         "",
+        f"{fw.label} is the authoritative framework for this run. Do not load, "
+        "invoke, or adopt conventions from another planning framework.",
+        "Folder and file names are paths only. In particular, the framework "
+        "output folder does not identify or change the selected framework.",
         "Use the selected planning framework's local roles, skills, templates, "
         "and conventions when they are available in this repo.",
         "Do not force a fixed Atelier document set. Let the framework shape "
@@ -178,6 +208,77 @@ def _(req: PlanningMaterializationPrompt) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+@build_prompt.register
+def _(req: PlanningMaterializerRuntimePrompt) -> str:
+    """Render the persistent system prompt for a Planning materializer."""
+    fw = framework_definition(req.framework)
+    return (
+        "You are Atelier's write-capable Planning materializer.\n"
+        f"The selected framework is {fw.label}; it is authoritative for this "
+        "entire run and every recovered provider session.\n"
+        "Never infer or switch planning frameworks from a directory or file "
+        "name. Planning folders and files are paths only.\n"
+        f"Repository root: {req.root_path}\n"
+        f"Planning output path: {req.artifact_root}\n\n"
+        "Follow the materialization brief supplied as user input. Preserve "
+        "valid files already written by an earlier session. Inventory the "
+        "planning output once, use targeted reads for concrete gaps, validate "
+        "the finished set once, and emit the required structured report. Do "
+        "not repeatedly audit the repository or reload unrelated framework "
+        "skills. Keep every tool result below 12,000 characters: use indexes, "
+        "headings, searches, and small file ranges instead of concatenating "
+        "whole planning documents."
+    )
+
+
+@build_prompt.register
+def _(req: PlanningMaterializationRecoveryPrompt) -> str:
+    """Render a complete recovery brief for a fresh provider session."""
+    fw = framework_definition(req.framework)
+    return (
+        "Resume an interrupted Atelier Planning materialization in this fresh "
+        "provider session.\n"
+        f"The selected framework is {fw.label}; it remains authoritative.\n"
+        f"The output folder `{req.artifact_root}` is only a path. Its name does "
+        "not select or imply a framework.\n"
+        "Treat files already present there as prior completed work. Inventory "
+        "that folder once, preserve valid content, and inspect only the sources "
+        "needed to close a specific remaining gap. Then perform one final "
+        "consistency check and emit the required report. Do not restart broad "
+        "discovery or repeat completed work.\n"
+        "Do not read framework skill files, AGENTS guidance, or other setup "
+        "instructions again; prior materialization sessions already loaded "
+        "them. The original brief below supplies task context, and its framework "
+        "asset instructions do not require another setup pass.\n"
+        "Keep every tool result below 12,000 characters. Read the output README "
+        "or index first; when it already enumerates a complete set and no "
+        "concrete gap is known, use that index to build the report without "
+        "concatenating full documents.\n\n"
+        "<original_materialization_brief>\n"
+        f"{req.original_brief.strip()}\n"
+        "</original_materialization_brief>"
+    )
+
+
+@build_prompt.register
+def _(req: PlanningMaterializationReportPrompt) -> str:
+    """Render the bounded nudge used when a completed turn omitted its report."""
+    fw = framework_definition(req.framework)
+    return (
+        "The materialization turn ended without its required "
+        "atelier_plan_materialization report.\n"
+        f"The selected framework remains {fw.label}. The output folder "
+        f"`{req.artifact_root}` is only a path and has no framework meaning.\n"
+        "Do not restart planning, scan the repository, or load framework "
+        "skills. Treat the planning files as finished. Inspect only the output "
+        "folder as needed to enumerate its Markdown artifacts, then emit "
+        "exactly one single-line atelier_plan_materialization JSON report with "
+        "path, title, artifact_kind, executable, and dependencies for every "
+        "artifact. Paths and dependencies must be relative to the output "
+        "folder. Do not include Markdown content."
+    )
 
 
 @build_prompt.register

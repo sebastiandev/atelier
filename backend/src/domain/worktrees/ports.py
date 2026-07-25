@@ -1,11 +1,11 @@
 """WorktreeManager port.
 
-A WorktreeManager provisions a per-agent working directory for adapter
-processes. When the work's `folder` is a git repo, the manager creates a
+A WorktreeManager provisions an isolated or shared working directory for
+adapter processes. When the work's `folder` is a git repo, the manager creates a
 ``git worktree add`` checkout under
-``<workspace_root>/works/<work_slug>/worktrees/<agent_slug>/`` so each
-agent gets its own branch + index without stepping on the user's main
-checkout. When the folder is *not* a git repo, the manager falls back to
+``<workspace_root>/works/<work_slug>/worktrees/<worktree_slug>/``. Normal
+agents use their own slug; loop stages may share a stable Work-owned slug.
+When the folder is *not* a git repo, the manager falls back to
 returning the folder itself: agents that don't need branch isolation
 keep working.
 
@@ -16,9 +16,12 @@ The seam stays narrow on purpose:
     returns the existing path.
   - ``is_detached(workdir)`` / ``describe_state(workdir)`` — read-only
     state for prompts and compaction summaries.
+  - ``list_states(work_slug)`` — inspect the Work-owned worktrees without
+    provisioning anything.
   - ``sandbox_writable_roots(workdir)`` — extra filesystem roots an
     adapter sandbox needs to mutate this worktree correctly.
-  - ``remove(work_slug, agent_slug)`` — tear down. Quiet on missing.
+  - ``remove(work_slug, agent_slug, force=True)`` — tear down. Quiet on missing;
+    callers protecting user changes can disable force.
   - ``sweep_orphans(work_slug, live_agent_slugs)`` — startup cleanup;
     removes worktrees under the work that don't appear in the live set.
 """
@@ -68,11 +71,12 @@ class WorktreeManager(Protocol):
         """Provision a per-agent worktree.
 
         ``branch_name`` is the optional name of a branch to create (or
-        attach to, if it already exists) on ``base_ref``. When ``None``
-        (the default), the worktree starts in **detached HEAD** — no
-        auto-named branch is created. The user/agent is expected to
-        ``git switch -c <name>`` before checking out anything else if
-        they want to keep the work.
+        attach to, if it already exists) on ``base_ref``. The default
+        ``HEAD`` base fetches and resolves ``origin/HEAD`` when available,
+        without changing the source checkout; repositories without an
+        ``origin`` use their local HEAD. When ``branch_name`` is ``None``,
+        the worktree starts detached. The user/agent can name it later via
+        ``git switch -c <name>``.
         """
         ...
 
@@ -88,6 +92,10 @@ class WorktreeManager(Protocol):
         Non-git folders are valid workdirs; implementations should return
         ``is_git_repo=False`` rather than raising.
         """
+        ...
+
+    def list_states(self, work_slug: str) -> tuple[WorktreeState, ...]:
+        """Return existing managed worktrees for one Work."""
         ...
 
     def sandbox_writable_roots(self, workdir: Path) -> tuple[Path, ...]:
@@ -118,6 +126,10 @@ class WorktreeManager(Protocol):
         copy (the simpler model — no branch concerns)."""
         ...
 
-    def remove(self, work_slug: str, agent_slug: str) -> None: ...
+    def remove(
+        self, work_slug: str, agent_slug: str, *, force: bool = True
+    ) -> None:
+        """Remove one managed worktree; ``force=False`` preserves dirty data."""
+        ...
 
     def sweep_orphans(self, work_slug: str, live_agent_slugs: set[str]) -> None: ...

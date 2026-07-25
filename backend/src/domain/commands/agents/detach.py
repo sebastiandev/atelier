@@ -106,7 +106,7 @@ async def execute(
     # running and where the agent's branch lives), not the source folder.
     workdir = worktree_manager.ensure(
         work_slug=work_slug,
-        agent_slug=req.agent_slug,
+        agent_slug=agent.worktree_slug or req.agent_slug,
         source=agent.folder,
     )
     # Stop the supervisor's SDK process before launching CLI. ``stop_agent``
@@ -129,7 +129,7 @@ async def execute(
             provisioner=share_provisioner,
             project_slug=project_slug,
             work_slug=work_slug,
-            agent_slug=req.agent_slug,
+            agent_slug=agent.worktree_slug or req.agent_slug,
         )
     additional_directories = agent_writable_roots(
         mounted_shares, worktree_manager, workdir

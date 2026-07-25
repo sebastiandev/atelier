@@ -39,16 +39,23 @@ function GlobalSearch({ path }: { path: string }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
 
   useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
+    function onRequest() {
       if (document.querySelector('[aria-modal="true"]')) return;
       if (document.querySelector(".search-modal")) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
       setOpen(true);
     }
+    function onKey(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      onRequest();
+    }
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("atelier:open-search", onRequest);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("atelier:open-search", onRequest);
+    };
   }, []);
 
   useEffect(() => {

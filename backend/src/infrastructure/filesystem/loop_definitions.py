@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -24,11 +25,24 @@ from src.domain.loop.dtos import (
     LoopReportField,
     LoopReportSchema,
     LoopRetryPolicy,
+    LoopReviewGate,
+    LoopReviewGateMode,
     LoopSessionPolicy,
     LoopStepDefinition,
     LoopStepKind,
+    StageDefinition,
+    StageDefinitionRef,
 )
+from src.domain.loop.snapshots import (
+    loop_pr_config_from_snapshot,
+    loop_pr_config_snapshot,
+    stage_overrides_from_snapshot,
+    stage_overrides_snapshot,
+)
+from src.domain.loop.stage_builtins import builtin_stage_definition
+from src.domain.loop.stages import StageDefinitionNotFound, resolve_stage_link
 from src.infrastructure.filesystem.atomic import atomic_write_text
+from src.infrastructure.filesystem.stage_definitions import FsStageDefinitionRepository
 
 _SCHEMA_VERSION = 1
 _REPORT_SCHEMA = LoopReportSchema(
@@ -39,6 +53,9 @@ _REPORT_SCHEMA = LoopReportSchema(
 
 class FsLoopDefinitionRepository:
     """Store custom loop definitions under ``<root>/.atelier/loops``."""
+
+    def __init__(self, stage_library_root: str | None = None) -> None:
+        self._stage_library_root = stage_library_root
 
     def list_definitions(
         self,
@@ -84,19 +101,38 @@ class FsLoopDefinitionRepository:
             scope=scope,
         )
         if current is not None and expected_revision != current.revision:
-            raise LoopDefinitionConflict(
-                f"loop definition changed: {definition.definition_id}"
-            )
+            raise LoopDefinitionConflict(f"loop definition changed: {definition.definition_id}")
         if current is None and expected_revision is not None:
             raise LoopDefinitionConflict(
                 f"loop definition no longer exists: {definition.definition_id}"
             )
 
-        prepared = prepare_definition(definition)
+        prepared = prepare_definition(
+            replace(
+                definition,
+                stages=tuple(
+                    resolve_stage_link(
+                        stage,
+                        _linked_source(
+                            root_path,
+                            stage.stage_ref.definition_id,
+                            self._stage_library_root,
+                        ),
+                    )
+                    if stage.stage_ref is not None
+                    else stage
+                    for stage in definition.stages
+                ),
+            )
+        )
         directory.mkdir(parents=True, exist_ok=True)
         steps_dir = directory / "steps"
         for stage in prepared.stages:
-            if stage.kind in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW}:
+            if stage.stage_ref is None and stage.kind in {
+                LoopStepKind.AGENT_TASK,
+                LoopStepKind.AGENT_REVIEW,
+                LoopStepKind.PR,
+            }:
                 atomic_write_text(
                     steps_dir / f"{stage.step_id}.md",
                     stage.instructions.rstrip() + "\n",
@@ -124,7 +160,12 @@ class FsLoopDefinitionRepository:
             raw = yaml.safe_load((directory / "loop.yaml").read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise ValueError("loop.yaml must contain a mapping")
-            definition = _from_yaml_data(directory, raw, scope=scope)
+            definition = _from_yaml_data(
+                directory,
+                raw,
+                scope=scope,
+                stage_library_root=self._stage_library_root,
+            )
             return prepare_definition(definition)
         except (OSError, ValueError, TypeError, yaml.YAMLError) as exc:
             return _invalid_definition(directory.name, str(exc), scope=scope)
@@ -135,6 +176,7 @@ def _from_yaml_data(
     raw: dict[str, Any],
     *,
     scope: LoopDefinitionScope,
+    stage_library_root: str | None = None,
 ) -> LoopDefinition:
     version = raw.get("schema_version")
     if version != _SCHEMA_VERSION:
@@ -145,7 +187,10 @@ def _from_yaml_data(
     raw_steps = raw.get("steps")
     if not isinstance(raw_steps, list):
         raise ValueError("steps must be a list")
-    stages = tuple(_stage_from_data(directory, item) for item in raw_steps)
+    stages = tuple(
+        _stage_from_data(directory, item, stage_library_root=stage_library_root)
+        for item in raw_steps
+    )
     return LoopDefinition(
         definition_id=definition_id,
         name=_required_str(raw, "name"),
@@ -159,10 +204,31 @@ def _from_yaml_data(
     )
 
 
-def _stage_from_data(directory: Path, value: object) -> LoopStepDefinition:
+def _stage_from_data(
+    directory: Path,
+    value: object,
+    *,
+    stage_library_root: str | None = None,
+) -> LoopStepDefinition:
     if not isinstance(value, dict):
         raise ValueError("each stage must be a mapping")
     step_id = _required_str(value, "id")
+    source_id = _optional_str(value.get("from"))
+    if source_id:
+        source = _linked_source(str(directory.parents[2]), source_id, stage_library_root)
+        raw_transitions = value.get("transitions", {})
+        instance = LoopStepDefinition(
+            step_id=step_id,
+            name=source.name,
+            kind=source.stage.kind,
+            transitions=_transitions_from_data(raw_transitions),
+            stage_ref=StageDefinitionRef(
+                source_id,
+                _optional_str(value.get("from_rev")) or source.revision,
+            ),
+            overrides=stage_overrides_from_snapshot(value.get("overrides")),
+        )
+        return resolve_stage_link(instance, source)
     kind = LoopStepKind(_required_str(value, "kind"))
     instruction_ref = _optional_str(value.get("instructions"))
     instructions = ""
@@ -188,16 +254,17 @@ def _stage_from_data(directory: Path, value: object) -> LoopStepDefinition:
         retry=_retry_from_data(retry_raw),
         transitions=_transitions_from_data(transitions_raw),
         check_adapter=(
-            _optional_str(check_raw.get("adapter"))
-            if isinstance(check_raw, dict)
-            else None
+            _optional_str(check_raw.get("adapter")) if isinstance(check_raw, dict) else None
         )
         or None,
         check_command=(
-            tuple(_str_list(check_raw.get("command", [])))
-            if isinstance(check_raw, dict)
-            else ()
+            tuple(_str_list(check_raw.get("command", []))) if isinstance(check_raw, dict) else ()
         ),
+        note_required=(
+            value.get("note_required") if isinstance(value.get("note_required"), bool) else None
+        ),
+        review_gate=_review_gate_from_data(value.get("review_gate")),
+        pr_config=loop_pr_config_from_snapshot(value.get("pr_config")),
     )
 
 
@@ -214,11 +281,16 @@ def _context_from_data(value: object) -> LoopContextReference:
 
 
 def _agent_from_data(value: object, kind: LoopStepKind) -> LoopAgentPolicy | None:
-    if kind not in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW}:
+    if kind not in {
+        LoopStepKind.AGENT_TASK,
+        LoopStepKind.AGENT_REVIEW,
+        LoopStepKind.PR,
+    }:
         return None
     if not isinstance(value, dict):
         raise ValueError("agent stage requires an agent mapping")
     raw_permissions = value.get("permissions", "read")
+    raw_prefixes = value.get("approved_command_prefixes")
     return LoopAgentPolicy(
         session=LoopSessionPolicy(_optional_str(value.get("session")) or "fresh"),
         permissions=(
@@ -229,6 +301,10 @@ def _agent_from_data(value: object, kind: LoopStepKind) -> LoopAgentPolicy | Non
         provider=_optional_str(value.get("provider")) or None,
         model=_optional_str(value.get("model")) or None,
         effort=_optional_str(value.get("effort")) or None,
+        fast=value.get("fast") if isinstance(value.get("fast"), bool) else None,
+        approved_command_prefixes=(
+            tuple(_str_list(raw_prefixes)) if raw_prefixes is not None else None
+        ),
     )
 
 
@@ -251,6 +327,18 @@ def _transitions_from_data(value: object) -> dict[LoopOutcome, str | None]:
     }
 
 
+def _review_gate_from_data(value: object) -> LoopReviewGate | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("review_gate must be a mapping")
+    return LoopReviewGate(
+        mode=LoopReviewGateMode(_optional_str(value.get("mode")) or "automatic"),
+        max_passes=_positive_int(value.get("max_passes"), 3),
+        locked=bool(value.get("locked", False)),
+    )
+
+
 def _to_yaml_data(definition: LoopDefinition) -> dict[str, Any]:
     data: dict[str, Any] = {
         "schema_version": _SCHEMA_VERSION,
@@ -270,21 +358,55 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
         "name": stage.name,
         "kind": stage.kind.value,
     }
-    if stage.kind in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW}:
+    if stage.stage_ref is not None:
+        return {
+            "id": stage.step_id,
+            "from": stage.stage_ref.definition_id,
+            "from_rev": stage.stage_ref.revision,
+            **(
+                {"overrides": stage_overrides_snapshot(stage.overrides)}
+                if stage.overrides is not None
+                else {}
+            ),
+            "transitions": {
+                outcome.value: destination
+                for outcome, destination in stage.transitions.items()
+                if destination is not None
+            },
+        }
+    if stage.kind in {
+        LoopStepKind.AGENT_TASK,
+        LoopStepKind.AGENT_REVIEW,
+        LoopStepKind.PR,
+    }:
         data["instructions"] = f"steps/{stage.step_id}.md"
+    if stage.note_required is not None:
+        data["note_required"] = stage.note_required
+    if stage.review_gate is not None:
+        data["review_gate"] = {
+            "mode": stage.review_gate.mode.value,
+            "max_passes": stage.review_gate.max_passes,
+            "locked": stage.review_gate.locked,
+        }
+    if stage.pr_config is not None:
+        data["pr_config"] = loop_pr_config_snapshot(stage.pr_config)
     if stage.context:
         data["context"] = [_context_to_data(item) for item in stage.context]
     if stage.agent is not None:
         data["agent"] = {
             "session": stage.agent.session.value,
             "permissions": (
-                stage.agent.permissions.value
-                if stage.agent.permissions is not None
-                else "inherit"
+                stage.agent.permissions.value if stage.agent.permissions is not None else "inherit"
             ),
             **({"provider": stage.agent.provider} if stage.agent.provider else {}),
             **({"model": stage.agent.model} if stage.agent.model else {}),
             **({"effort": stage.agent.effort} if stage.agent.effort else {}),
+            **({"fast": stage.agent.fast} if stage.agent.fast is not None else {}),
+            **(
+                {"approved_command_prefixes": list(stage.agent.approved_command_prefixes)}
+                if stage.agent.approved_command_prefixes is not None
+                else {}
+            ),
         }
     data["report_contract"] = stage.report_contract
     data["retry"] = {
@@ -313,6 +435,16 @@ def _context_to_data(context: LoopContextReference) -> dict[str, Any]:
         **({"step": context.step} if context.step else {}),
         **({"ref": context.ref} if context.ref else {}),
     }
+
+
+def _linked_source(root_path: str, source_id: str, fallback_root: str | None) -> StageDefinition:
+    repository = FsStageDefinitionRepository()
+    source = builtin_stage_definition(source_id) or repository.get_definition(root_path, source_id)
+    if source is None and fallback_root is not None:
+        source = repository.get_definition(fallback_root, source_id)
+    if source is None:
+        raise StageDefinitionNotFound(f"stage definition not found: {source_id}")
+    return source
 
 
 def _invalid_definition(

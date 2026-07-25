@@ -22,9 +22,11 @@ from typing import Any
 from src.domain.agents.context_render import render_agent_contexts
 from src.domain.artifacts import Artifact, make_artifact, validate_status
 from src.domain.artifacts.models import PrArtifact
+from src.domain.loop.dtos import LoopBrief
 from src.domain.models import Agent, AgentStatus, Context, Handoff, Work
 from src.domain.workstore._serde import (
     deserialize_contexts,
+    deserialize_loop_brief,
     deserialize_work_record,
     serialize_agent,
     serialize_work_record,
@@ -99,6 +101,7 @@ class WorkStoreService:
                 status="active",
                 created_at=self._clock(),
                 project_slug=req.project_slug,
+                mode=req.mode,
                 from_chat_slug=req.from_chat.chat_slug if req.from_chat else None,
                 from_chat_title=req.from_chat.chat_title if req.from_chat else None,
             )
@@ -135,6 +138,7 @@ class WorkStoreService:
             contexts=list(req.contexts),
             from_chat=req.from_chat,
             chat_context_folders=hydrated,
+            loop_brief=None,
         )
 
     def get_work(self, work_slug: str) -> WorkRecord | None:
@@ -147,16 +151,19 @@ class WorkStoreService:
                 _fs_work, contexts, from_chat, folders = deserialize_work_record(
                     data
                 )
+                loop_brief = deserialize_loop_brief(data)
             else:
                 contexts = []
                 from_chat = _from_chat_from_work(work)
                 folders = []
+                loop_brief = None
             folders = self._hydrate_chat_context_folders(work_slug, folders)
         return WorkRecord(
             work=work,
             contexts=contexts,
             from_chat=from_chat,
             chat_context_folders=folders,
+            loop_brief=loop_brief,
         )
 
     def list_works(self) -> list[Work]:
@@ -175,10 +182,12 @@ class WorkStoreService:
                 _fs_work, existing_contexts, from_chat, folders = (
                     deserialize_work_record(data)
                 )
+                loop_brief = deserialize_loop_brief(data)
             else:
                 existing_contexts = []
                 from_chat = _from_chat_from_work(existing)
                 folders = []
+                loop_brief = None
 
             if req.name is not None:
                 existing.name = req.name
@@ -186,12 +195,16 @@ class WorkStoreService:
                 existing.description = req.description
             if req.status is not None:
                 existing.status = req.status
+            if req.mode is not None:
+                existing.mode = req.mode
             new_contexts = list(req.contexts) if req.contexts is not None else existing_contexts
 
             self._repo.upsert_work(existing)
             self._files.write_work_json(
                 req.work_slug,
-                serialize_work_record(existing, new_contexts, from_chat, folders),
+                serialize_work_record(
+                    existing, new_contexts, from_chat, folders, loop_brief
+                ),
             )
             if req.description is not None:
                 self._files.write_brief(req.work_slug, req.description)
@@ -201,6 +214,31 @@ class WorkStoreService:
             contexts=new_contexts,
             from_chat=from_chat,
             chat_context_folders=folders,
+            loop_brief=loop_brief,
+        )
+
+    def save_loop_brief(self, work_slug: str, brief: LoopBrief) -> WorkRecord:
+        """Persist a Work's editable loop brief without changing Work metadata."""
+        with self._lock:
+            existing = self._require_work(work_slug)
+            data = self._files.read_work_json(work_slug)
+            if data is not None:
+                _fs_work, contexts, from_chat, folders = deserialize_work_record(data)
+            else:
+                contexts = []
+                from_chat = _from_chat_from_work(existing)
+                folders = []
+            self._files.write_work_json(
+                work_slug,
+                serialize_work_record(existing, contexts, from_chat, folders, brief),
+            )
+            hydrated = self._hydrate_chat_context_folders(work_slug, folders)
+        return WorkRecord(
+            work=existing,
+            contexts=contexts,
+            from_chat=from_chat,
+            chat_context_folders=hydrated,
+            loop_brief=brief,
         )
 
     def ensure_work_chat_context(
@@ -213,10 +251,12 @@ class WorkStoreService:
                 _fs_work, contexts, from_chat, folders = deserialize_work_record(
                     data
                 )
+                loop_brief = deserialize_loop_brief(data)
             else:
                 contexts = []
                 from_chat = _from_chat_from_work(existing)
                 folders = []
+                loop_brief = None
 
             folder = req.folder
             existing_folder = next(
@@ -256,7 +296,9 @@ class WorkStoreService:
                 ]
                 self._files.write_work_json(
                     req.work_slug,
-                    serialize_work_record(existing, contexts, from_chat, folders),
+                    serialize_work_record(
+                        existing, contexts, from_chat, folders, loop_brief
+                    ),
                 )
                 self._files.write_work_chat_context_file(req.work_slug, folder)
 
@@ -266,6 +308,7 @@ class WorkStoreService:
             contexts=contexts,
             from_chat=from_chat,
             chat_context_folders=hydrated,
+            loop_brief=loop_brief,
         )
 
     def move_work_to_project(
@@ -278,17 +321,19 @@ class WorkStoreService:
                 _fs_work, contexts, from_chat, folders = deserialize_work_record(
                     data
                 )
+                loop_brief = deserialize_loop_brief(data)
             else:
                 contexts = []
                 from_chat = _from_chat_from_work(existing)
                 folders = []
+                loop_brief = None
 
             existing.project_slug = project_slug
             self._repo.upsert_work(existing)
             # Re-write work.json so reconcile sees the new project on startup.
             self._files.write_work_json(
                 work_slug,
-                serialize_work_record(existing, contexts, from_chat, folders),
+                serialize_work_record(existing, contexts, from_chat, folders, loop_brief),
             )
             folders = self._hydrate_chat_context_folders(work_slug, folders)
         return WorkRecord(
@@ -296,6 +341,7 @@ class WorkStoreService:
             contexts=contexts,
             from_chat=from_chat,
             chat_context_folders=folders,
+            loop_brief=loop_brief,
         )
 
     def soft_delete_work(self, work_slug: str) -> None:
@@ -306,15 +352,17 @@ class WorkStoreService:
                 _fs_work, contexts, from_chat, folders = deserialize_work_record(
                     data
                 )
+                loop_brief = deserialize_loop_brief(data)
             else:
                 contexts = []
                 from_chat = _from_chat_from_work(existing)
                 folders = []
+                loop_brief = None
             existing.status = "deleted"
             self._repo.upsert_work(existing)
             self._files.write_work_json(
                 work_slug,
-                serialize_work_record(existing, contexts, from_chat, folders),
+                serialize_work_record(existing, contexts, from_chat, folders, loop_brief),
             )
 
     def delete_agent(self, agent_slug: str) -> None:
@@ -342,6 +390,7 @@ class WorkStoreService:
                 folder=req.folder,
                 status=AgentStatus.IDLE,
                 started_at=self._clock(),
+                worktree_slug=req.worktree_slug,
                 # Empty dict normalises to ``None`` so the column stores
                 # NULL for "no options" — keeps the on-disk shape uniform
                 # with rows created before this column existed.

@@ -1,23 +1,17 @@
-"""Resume a blocked planning artifact run."""
+"""Resume a paused Planning artifact run."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.domain.commands.planning import _loop_persistence, _loop_runtime
-from src.domain.loop.dtos import LoopStatus, LoopStepKind, LoopStepStatus
+from src.domain.agents.ports import AgentAdapterFactory
+from src.domain.connections import ConnectionStore
+from src.domain.loop import lifecycle
 from src.domain.loop.ports import LoopRunRepository
-from src.domain.loop.prompts import (
-    ReviewStagePrompt,
-    TaskStagePrompt,
-    build_stage_prompt,
-)
-from src.domain.loop.snapshots import definition_from_snapshot
-from src.domain.loop.transitions import stage_by_id
 from src.domain.planning import actions
-from src.domain.planning.dtos import PlanArtifactDetail, PlanRunStatus
-from src.domain.planning.loop import blocker_resolved_prompt
+from src.domain.planning.dtos import PlanArtifactDetail
+from src.domain.planning.loop_store import PlanningLoopRunStore
 from src.domain.planning.ports import PlanningFiles
 from src.domain.planning.service import (
     PlanArtifactNotExecutable,
@@ -39,21 +33,24 @@ class WorkNotFound(ValueError):
 
 
 class AgentNotFound(ValueError):
-    """The run agent doesn't belong to the work."""
+    """The run agent doesn't belong to the Work."""
 
 
 class PlanArtifactRunNotResumable(ValueError):
-    """The run is not blocked for user input."""
+    """The run cannot resume from its current state."""
 
 
 @dataclass(frozen=True)
 class ResumeArtifactRunRequest:
-    """Command input for resuming one blocked artifact run."""
+    """Command input for resuming one paused artifact run."""
 
     work_slug: str
     artifact_id: str
     run_id: str
     resolution_note: str = ""
+    retry_failed: bool = False
+    gate_decision: str | None = None
+    enforced_findings: tuple[int, ...] = ()
 
 
 async def execute(
@@ -62,16 +59,17 @@ async def execute(
     loop_runs: LoopRunRepository,
     supervisor: AgentSupervisorService,
     worktree_manager: WorktreeManager,
+    connection_store: ConnectionStore,
     sharestore: SharedFolderStore,
     share_provisioner: ShareProvisioner,
+    adapter_factory: AgentAdapterFactory,
     settings: Settings,
     req: ResumeArtifactRunRequest,
 ) -> PlanArtifactDetail:
-    """Resume a blocked-user artifact run.
+    """Resume a Planning artifact through the shared Loop lifecycle.
 
-    Preconditions: Work, artifact, run, and a ``blocked_user`` loop exist.
-    Postconditions: the run agent receives the resolution prompt and the run
-    is marked running again.
+    Preconditions: Work, artifact, and run exist in the requested paused state.
+    Postconditions: the reused stage workspace is running and state is persisted.
     """
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
@@ -84,148 +82,32 @@ async def execute(
     )
     if run is None:
         raise PlanArtifactRunNotFound(f"plan artifact run not found: {req.run_id}")
-    loop = actions.dict_or_empty(run.get("loop"))
-    current_stage_id = actions.str_or_empty(loop.get("current_stage_id"))
-    current_stage_row = _stage_row(loop, current_stage_id)
-    agent_slug = (
-        actions.str_or_empty(current_stage_row.get("agent_slug"))
-        if current_stage_row is not None
-        else actions.str_or_empty(run.get("agent_slug"))
-    )
-    if workstore.get_work_slug_for_agent(agent_slug) != req.work_slug:
-        raise AgentNotFound(f"agent not found on work: {agent_slug}")
-
-    status = actions.loop_status(loop.get("status"), actions.run_status(run))
-    if status != LoopStatus.BLOCKED_USER:
-        raise PlanArtifactRunNotResumable(
-            f"plan artifact run is not blocked for user input: {req.run_id}"
-        )
-    cursor = _loop_runtime.last_transcript_seq(
-        workstore,
-        work_slug=req.work_slug,
-        agent_slug=agent_slug,
-    )
+    store = PlanningLoopRunStore(files, loop_runs, req.artifact_id)
+    target = store.load(req.work_slug, req.run_id)
+    if target is None:
+        raise PlanArtifactRunNotFound(f"plan artifact run not found: {req.run_id}")
     try:
-        await _loop_runtime.send_loop_prompt(
+        await lifecycle.resume(
+            target,
             workstore,
             supervisor,
             worktree_manager,
+            connection_store,
             sharestore,
             share_provisioner,
+            adapter_factory,
             settings,
-            work_slug=req.work_slug,
-            agent_slug=agent_slug,
-            prompt=(
-                blocker_resolved_prompt(detail.artifact, loop, req.resolution_note)
-                if bool(loop.get("legacy", True))
-                else _stage_resume_prompt(
-                    req,
-                    detail,
-                    loop,
-                    current_stage_id,
-                    current_stage_row,
-                )
-            ),
-        )
-    except _loop_runtime.AgentNotFound as exc:
-        raise AgentNotFound(str(exc)) from exc
-    if bool(loop.get("legacy", True)):
-        actions.mark_run_running(
-            manifest,
-            artifact_id=req.artifact_id,
-            run_id=req.run_id,
-            existing_loop=loop,
-            last_checked_seq=cursor,
-        )
-    else:
-        if current_stage_row is None:
-            raise PlanArtifactRunNotResumable("blocked loop has no current stage")
-        current_stage_row["status"] = LoopStepStatus.RUNNING.value
-        current_stage_row["attempt"] = (
-            actions.int_or_default(current_stage_row.get("attempt"), 1) + 1
-        )
-        run["status"] = PlanRunStatus.RUNNING.value
-        run["completed_at"] = None
-        loop["status"] = LoopStatus.RUNNING.value
-        loop["status_reason"] = "The blocked stage resumed after user input."
-        loop["last_checked_seq"] = cursor
-        loop["attempt"] = actions.int_or_default(loop.get("attempt"), 1) + 1
-        run["loop"] = loop
-        manifest["updated_at"] = actions.now_iso()
-    files.write_manifest(req.work_slug, manifest)
-    saved_run = actions.find_run_by_id(
-        actions.artifact_runs_for_update(manifest, req.artifact_id), req.run_id
-    )
-    if saved_run is not None:
-        _loop_persistence.persist_artifact_run(
-            loop_runs,
-            work_slug=req.work_slug,
-            artifact=detail.artifact,
-            run=saved_run,
-        )
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
-
-
-def _stage_resume_prompt(
-    req: ResumeArtifactRunRequest,
-    detail: PlanArtifactDetail,
-    loop: dict[str, object],
-    stage_id: str,
-    stage_row: dict[str, object] | None,
-) -> str:
-    definition = definition_from_snapshot(loop.get("definition_snapshot"))
-    stage = stage_by_id(definition, stage_id)
-    prompt_type = (
-        ReviewStagePrompt
-        if stage.kind == LoopStepKind.AGENT_REVIEW
-        else TaskStagePrompt
-    )
-    findings = stage_row.get("findings", []) if stage_row else []
-    return build_stage_prompt(
-        prompt_type(
-            run_id=req.run_id,
-            work_slug=req.work_slug,
-            artifact_id=detail.artifact.id,
-            artifact_title=detail.artifact.title,
-            source_ref=detail.artifact.source_ref,
-            stage=stage,
-            previous_summary=(
-                actions.str_or_empty(stage_row.get("summary")) if stage_row else ""
-            ),
-            previous_findings=tuple(
-                item for item in findings if isinstance(item, str)
-            )
-            if isinstance(findings, list)
-            else (),
             resolution_note=req.resolution_note,
-            resolved_context=tuple(
-                actions.str_list(stage_row.get("resolved_context"))
-                if stage_row
-                else []
-            ),
-            context_warnings=tuple(
-                actions.str_list(stage_row.get("context_warnings"))
-                if stage_row
-                else []
-            ),
+            retry_failed=req.retry_failed,
+            gate_decision=req.gate_decision,
+            enforced_findings=req.enforced_findings,
         )
-    )
-
-
-def _stage_row(
-    loop: dict[str, object], stage_id: str
-) -> dict[str, object] | None:
-    rows = loop.get("stages")
-    if not isinstance(rows, list):
-        return None
-    return next(
-        (
-            row
-            for row in rows
-            if isinstance(row, dict) and row.get("id") == stage_id
-        ),
-        None,
-    )
+    except lifecycle.LoopAgentNotFound as exc:
+        raise AgentNotFound(str(exc)) from exc
+    except lifecycle.LoopRunNotResumable as exc:
+        raise PlanArtifactRunNotResumable(str(exc)) from exc
+    store.save(target)
+    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
 
 
 __all__ = [

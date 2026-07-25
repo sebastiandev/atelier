@@ -165,6 +165,7 @@ works_table = Table(
     ),
     Column("from_chat_slug", String, nullable=True, index=True),
     Column("from_chat_title", String, nullable=True),
+    Column("mode", String, nullable=True),
 )
 
 
@@ -212,6 +213,12 @@ chats_table = Table(
     # Provider-specific chat runtime options (permission/mode, etc.).
     # Nullable for chats created before this field existed.
     Column("options", JsonDict, nullable=True),
+    # Marks read-only run discussions. NULL preserves legacy chat rows.
+    Column("discussion_only", Boolean, nullable=True),
+    # Hidden provider context for an idle chat, primarily selected run stages.
+    Column("context_seed", String, nullable=True),
+    # Stable identity for one run-stage discussion. NULL preserves older chats.
+    Column("discussion_key", String, nullable=True),
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
     # Provider session/thread ID once a chat stream has established one.
@@ -340,6 +347,9 @@ agents_table = Table(
     # one cross-cutting goal. WorktreeManager.ensure(source=this) is
     # what turns it into a per-agent git worktree when it's a repo.
     Column("folder", PathType, nullable=False),
+    # Loop stages can share one Work-owned checkout while retaining separate
+    # agent rows and provider sessions. NULL preserves per-agent worktrees.
+    Column("worktree_slug", String, nullable=True),
     Column("status", AgentStatusType, nullable=False),
     Column("started_at", UTCDateTime, nullable=False),
     Column("stopped_at", UTCDateTime, nullable=True),

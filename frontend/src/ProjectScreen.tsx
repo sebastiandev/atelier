@@ -134,7 +134,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
         planningStartStorageKey(created.slug),
         JSON.stringify(intent.seed),
       );
-      window.location.assign(`/works/${created.slug}?start=planning`);
+      window.location.assign(`/works/${created.slug}`);
       return created;
     }
     if (intent.mode === "loop") {
@@ -142,10 +142,10 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
         loopStartStorageKey(created.slug),
         JSON.stringify(intent.seed),
       );
-      window.location.assign(`/works/${created.slug}?start=loop`);
+      window.location.assign(`/works/${created.slug}`);
       return created;
     }
-    window.location.assign(`/works/${created.slug}?mode=manual`);
+    window.location.assign(`/works/${created.slug}`);
     return created;
   }
 
@@ -217,7 +217,6 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
     >
       <ShellTopbar
         crumbs={[{ hue: project.color, label: project.name }]}
-        onSearch={() => setSearchOpen(true)}
       />
       {/* LEFT — project rail: hero, stats, defaults, shared folders, actions */}
       <aside className="shell-left proj-rail">
@@ -573,10 +572,10 @@ function SharedFoldersManagerDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal modal-lg">
+      <div className="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="shared-folders-title">
         <div className="modal-hd">
           <div>
-            <h3>Shared folders</h3>
+            <h3 id="shared-folders-title">Shared folders</h3>
             <div className="sub">
               Project: <strong>{projectName}</strong>
             </div>

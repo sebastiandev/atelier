@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 _CONNECTION_BACKED_TYPES = frozenset({"jira", "sentry", "honeycomb"})
-FRESH_AGENT_BASE_REF = "master"
+FRESH_AGENT_BASE_REF = "HEAD"
 
 
 @dataclass(frozen=True)
@@ -49,10 +49,16 @@ class AgentLaunchRequest:
     contexts: tuple[Context, ...] = ()
     fork_from_agent: str | None = None
     branch_name: str | None = None
+    worktree_slug: str | None = None
+    approved_command_prefixes: tuple[str, ...] = ()
 
 
 class WorkNotFound(ValueError):
     """The target Work does not exist."""
+
+
+class WorkNotActive(ValueError):
+    """The target Work is completed and must be reopened before mutation."""
 
 
 class InvalidProviderConfig(ValueError):
@@ -82,6 +88,10 @@ async def launch_agent(
     record = workstore.get_work(req.work_slug)
     if record is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
+    if record.work.status != "active":
+        raise WorkNotActive(
+            f"work {req.work_slug} is completed; reopen it before starting an agent"
+        )
 
     try:
         req.folder.mkdir(parents=True, exist_ok=True)
@@ -91,6 +101,7 @@ async def launch_agent(
     validation_common = CommonAgentConfig(
         workdir=req.folder,
         system_prompt=render_system_prompt(req.persona, req.role),
+        approved_command_prefixes=req.approved_command_prefixes,
     )
     try:
         SPECS[req.provider].build(validation_common, req.model, req.options)
@@ -114,6 +125,7 @@ async def launch_agent(
                 folder=req.folder,
                 contexts=req.contexts,
                 options=dict(req.options),
+                worktree_slug=req.worktree_slug,
             )
         )
     except ValueError as exc:
@@ -131,17 +143,18 @@ async def launch_agent(
     )
 
     try:
+        worktree_slug = req.worktree_slug or agent.slug
         if req.fork_from_agent is not None:
             workdir = worktree_manager.ensure_forked(
                 work_slug=req.work_slug,
-                new_agent_slug=agent.slug,
+                new_agent_slug=worktree_slug,
                 source_agent_slug=req.fork_from_agent,
                 source=req.folder,
             )
         else:
             workdir = worktree_manager.ensure(
                 work_slug=req.work_slug,
-                agent_slug=agent.slug,
+                agent_slug=worktree_slug,
                 source=req.folder,
                 base_ref=FRESH_AGENT_BASE_REF,
                 branch_name=req.branch_name,
@@ -152,7 +165,7 @@ async def launch_agent(
             provisioner=share_provisioner,
             project_slug=record.work.project_slug,
             work_slug=req.work_slug,
-            agent_slug=agent.slug,
+            agent_slug=worktree_slug,
         )
         mounted_chat_contexts = mount_work_chat_contexts(
             workdir=workdir,
@@ -164,6 +177,7 @@ async def launch_agent(
             writable_roots=agent_writable_roots(
                 mounted_shares, worktree_manager, workdir
             ),
+            approved_command_prefixes=req.approved_command_prefixes,
             system_prompt=render_system_prompt(
                 req.persona,
                 req.role,
@@ -185,10 +199,14 @@ async def launch_agent(
         if first_message is not None:
             await supervisor.send_input(agent.slug, first_message)
     except WorktreeProvisionFailed:
-        _rollback_agent(workstore, worktree_manager, req.work_slug, agent.slug)
+        _rollback_agent(
+            workstore, worktree_manager, req.work_slug, agent.slug, req.worktree_slug
+        )
         raise
     except Exception:
-        _rollback_agent(workstore, worktree_manager, req.work_slug, agent.slug)
+        _rollback_agent(
+            workstore, worktree_manager, req.work_slug, agent.slug, req.worktree_slug
+        )
         raise
     return agent
 
@@ -198,12 +216,14 @@ def _rollback_agent(
     worktree_manager: WorktreeManager,
     work_slug: str,
     agent_slug: str,
+    worktree_slug: str | None,
 ) -> None:
     """Remove partial agent state while preserving the original launch error."""
-    try:
-        worktree_manager.remove(work_slug, agent_slug)
-    except Exception:
-        _log.warning("rollback: worktree.remove failed for %s/%s", work_slug, agent_slug)
+    if worktree_slug is None:
+        try:
+            worktree_manager.remove(work_slug, agent_slug)
+        except Exception:
+            _log.warning("rollback: worktree.remove failed for %s/%s", work_slug, agent_slug)
     try:
         workstore.delete_agent(agent_slug)
     except Exception:
@@ -216,6 +236,7 @@ __all__ = [
     "AgentLaunchRequest",
     "InvalidProviderConfig",
     "MountedProjectShares",
+    "WorkNotActive",
     "WorkNotFound",
     "launch_agent",
 ]

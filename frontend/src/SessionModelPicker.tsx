@@ -93,10 +93,8 @@ export function SessionModelPicker({
       setOpen(false);
     };
     window.addEventListener("mousedown", close);
-    window.addEventListener("scroll", close, true);
     return () => {
       window.removeEventListener("mousedown", close);
-      window.removeEventListener("scroll", close, true);
     };
   }, [open]);
   useEffect(() => {

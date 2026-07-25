@@ -6,14 +6,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from src.domain.loop.dtos import (
-    LoopAssessment,
-    LoopAssessmentStatus,
-    LoopDefinition,
-    LoopStatus,
-    LoopStepStatus,
-)
-from src.domain.loop.snapshots import definition_snapshot
+from src.domain.loop.dtos import LoopStatus
 from src.domain.planning.dtos import (
     AcceptPlanArtifactRequest,
     PlanArtifactDetail,
@@ -21,21 +14,13 @@ from src.domain.planning.dtos import (
     PlanArtifactSummary,
     PlanRunStatus,
     PlanTrackingKind,
-    SubmitPlanArtifactReportRequest,
     WorkPlanView,
 )
-from src.domain.planning.loop import (
-    PLANNING_ARTIFACT_LOOP_DEFINITION_ID,
-    assess_planning_report,
-    build_report,
-    loop_status_for_run_status,
-    run_status_for_loop,
-)
+from src.domain.planning.loop import loop_status_for_run_status
 from src.domain.planning.ports import PlanningFiles
 from src.domain.planning.service import (
     PlanArtifactNotExecutable,
     PlanArtifactNotFound,
-    PlanArtifactRunNotFound,
     PlanningNotStarted,
     PlanningService,
 )
@@ -89,9 +74,7 @@ def get_plan_or_raise(files: PlanningFiles, work_slug: str) -> WorkPlanView:
     return plan
 
 
-def detail_or_raise(
-    files: PlanningFiles, work_slug: str, artifact_id: str
-) -> PlanArtifactDetail:
+def detail_or_raise(files: PlanningFiles, work_slug: str, artifact_id: str) -> PlanArtifactDetail:
     """Read one source-backed artifact detail.
 
     Preconditions: planning exists and ``artifact_id`` is indexed.
@@ -110,9 +93,7 @@ def require_executable(artifact: PlanArtifactSummary) -> None:
     Postconditions: raises if the artifact is not executable.
     """
     if not artifact.executable:
-        raise PlanArtifactNotExecutable(
-            f"plan artifact is not executable: {artifact.id}"
-        )
+        raise PlanArtifactNotExecutable(f"plan artifact is not executable: {artifact.id}")
 
 
 def current_hashes(files: PlanningFiles, work_slug: str) -> dict[str, str]:
@@ -165,9 +146,7 @@ def artifact_tracking_for_update(
     return links
 
 
-def artifact_runs_for_update(
-    manifest: dict[str, Any], artifact_id: str
-) -> list[dict[str, Any]]:
+def artifact_runs_for_update(manifest: dict[str, Any], artifact_id: str) -> list[dict[str, Any]]:
     """Return mutable run rows for one artifact.
 
     Preconditions: ``manifest`` is mutable.
@@ -249,19 +228,14 @@ def find_run_by_id(runs: list[dict[str, Any]], run_id: str) -> dict[str, Any] | 
     return None
 
 
-def select_run(
-    runs: list[dict[str, Any]], agent_slug: str | None
-) -> dict[str, Any] | None:
+def select_run(runs: list[dict[str, Any]], agent_slug: str | None) -> dict[str, Any] | None:
     """Select an explicit or latest artifact run row."""
     if agent_slug:
         return find_run(runs, agent_slug)
     return runs[-1] if runs else None
 
 
-def apply_report_fields(
-    run: dict[str, Any],
-    req: AcceptPlanArtifactRequest | SubmitPlanArtifactReportRequest,
-) -> None:
+def apply_report_fields(run: dict[str, Any], req: AcceptPlanArtifactRequest) -> None:
     """Copy structured report fields onto a mutable run row.
 
     Preconditions: ``run`` is mutable and ``req`` contains report fields.
@@ -274,73 +248,6 @@ def apply_report_fields(
     run["decisions"] = req.decisions
     run["changes"] = req.changes
     run["validation_evidence"] = req.validation_evidence
-
-
-def apply_artifact_report(
-    manifest: dict[str, Any],
-    artifact: PlanArtifactSummary,
-    req: SubmitPlanArtifactReportRequest,
-    *,
-    now: str,
-) -> None:
-    """Apply and assess a report for one executable planning artifact.
-
-    Preconditions: ``manifest`` is mutable and ``artifact`` is the indexed
-    artifact targeted by ``req``.
-    Postconditions: the selected/latest run stores report fields, loop
-    assessment, run status, and completion timestamp when terminal.
-    """
-    require_executable(artifact)
-    runs = artifact_runs_for_update(manifest, req.artifact_id)
-    run = find_run_by_id(runs, req.run_id) if req.run_id else None
-    if run is None:
-        run = select_run(runs, req.agent_slug)
-    if run is None:
-        run = {
-            "id": req.run_id or next_run_id(runs),
-            "agent_slug": req.agent_slug or "manual-review",
-            "started_at": now,
-        }
-        runs.append(run)
-    apply_report_fields(run, req)
-    loop = dict_or_empty(run.get("loop"))
-    current_loop_run_id = loop_run_id(
-        req.artifact_id,
-        str(run["agent_slug"]),
-        loop,
-        run_id=str_or_none(run.get("id")),
-    )
-    report_id = next_loop_child_id("report", loop.get("latest_report_id"))
-    assessment_id = next_loop_child_id("assess", loop.get("latest_assessment_id"))
-    report = build_report(
-        req,
-        loop_run_id=current_loop_run_id,
-        report_id=report_id,
-        submitted_at=now,
-        source=req.report_source,
-    )
-    assessment = assess_planning_report(
-        report,
-        assessment_id=assessment_id,
-        created_at=now,
-    )
-    next_loop_status = loop_status_from_assessment(assessment)
-    run["loop"] = assessed_loop_snapshot(
-        artifact_id=req.artifact_id,
-        agent_slug=str(run["agent_slug"]),
-        existing=loop,
-        loop_status=next_loop_status,
-        report_id=report.report_id,
-        report_source=report.source,
-        assessment=assessment,
-    )
-    run["status"] = run_status_for_loop(next_loop_status).value
-    run["completed_at"] = (
-        now
-        if next_loop_status
-        in {LoopStatus.COMPLETED, LoopStatus.BLOCKED_USER, LoopStatus.FAILED}
-        else None
-    )
 
 
 def upsert_artifact_entry(
@@ -373,241 +280,6 @@ def upsert_artifact_entry(
             raw[idx] = entry
             return
     raw.append(entry)
-
-
-def running_loop_snapshot(
-    *,
-    artifact_id: str,
-    agent_slug: str,
-    existing: dict[str, Any] | None,
-    run_id: str | None = None,
-) -> dict[str, Any]:
-    """Build a loop snapshot for a running planning artifact agent.
-
-    Preconditions: ``artifact_id`` and ``agent_slug`` identify one run.
-    Postconditions: returns manifest-ready loop metadata.
-    """
-    previous = existing or {}
-    attempt = int_or_default(previous.get("attempt"), 0) + 1
-    return {
-        **previous,
-        "loop_run_id": loop_run_id(artifact_id, agent_slug, previous, run_id=run_id),
-        "definition_id": str_or_none(previous.get("definition_id"))
-        or PLANNING_ARTIFACT_LOOP_DEFINITION_ID,
-        "status": LoopStatus.RUNNING.value,
-        "status_reason": f"{agent_slug} is working on {artifact_id}.",
-        "attempt": attempt,
-        "latest_report_id": str_or_none(previous.get("latest_report_id")),
-        "latest_assessment_id": str_or_none(previous.get("latest_assessment_id")),
-        "findings": str_list(previous.get("findings")),
-        "last_checked_seq": int_or_default(previous.get("last_checked_seq"), 0),
-    }
-
-
-def initialized_loop_snapshot(
-    *,
-    artifact_id: str,
-    agent_slug: str,
-    run_id: str,
-    definition: LoopDefinition,
-) -> dict[str, Any]:
-    """Build the immutable definition and initial stage state for a new run.
-
-    Preconditions: ``definition`` is valid and revision-pinned for this launch.
-    Postconditions: the first stage is running and later stages are pending.
-    """
-    loop = running_loop_snapshot(
-        artifact_id=artifact_id,
-        agent_slug=agent_slug,
-        existing=None,
-        run_id=run_id,
-    )
-    first = definition.stages[0]
-    loop.update(
-        {
-            "definition_id": definition.definition_id,
-            "definition_name": definition.name,
-            "definition_revision": definition.revision,
-            "definition_snapshot": definition_snapshot(definition),
-            "current_stage_id": first.step_id,
-            "source_agent_slug": agent_slug,
-            "owned_agent_slugs": [agent_slug],
-            "stages": [
-                {
-                    "id": stage.step_id,
-                    "name": stage.name,
-                    "kind": stage.kind.value,
-                    "status": (
-                        LoopStepStatus.RUNNING.value
-                        if stage.step_id == first.step_id
-                        else LoopStepStatus.PENDING.value
-                    ),
-                    "attempt": 1 if stage.step_id == first.step_id else 0,
-                    "max_attempts": stage.retry.max_attempts,
-                    "agent_slug": (
-                        agent_slug if stage.step_id == first.step_id else None
-                    ),
-                    "permissions": (
-                        stage.agent.permissions.value
-                        if stage.agent and stage.agent.permissions is not None
-                        else None
-                    ),
-                    "session": stage.agent.session.value if stage.agent else None,
-                    "summary": "",
-                    "findings": [],
-                }
-                for stage in definition.stages
-            ],
-        }
-    )
-    return loop
-
-
-def assessed_loop_snapshot(
-    *,
-    artifact_id: str,
-    agent_slug: str,
-    existing: dict[str, Any],
-    loop_status: LoopStatus,
-    report_id: str,
-    report_source: str,
-    assessment: LoopAssessment,
-) -> dict[str, Any]:
-    """Build a loop snapshot from a completed backend assessment.
-
-    Preconditions: ``assessment`` belongs to the run's latest report.
-    Postconditions: returns manifest-ready loop metadata.
-    """
-    return {
-        **existing,
-        "loop_run_id": loop_run_id(artifact_id, agent_slug, existing),
-        "definition_id": str_or_none(existing.get("definition_id"))
-        or PLANNING_ARTIFACT_LOOP_DEFINITION_ID,
-        "status": loop_status.value,
-        "status_reason": loop_status_reason(loop_status, assessment),
-        "attempt": int_or_default(existing.get("attempt"), 1),
-        "latest_report_id": report_id,
-        "latest_assessment_id": assessment.assessment_id,
-        "report_source": report_source,
-        "findings": assessment.findings,
-        "next_prompt": assessment.next_prompt,
-    }
-
-
-def mark_run_running(
-    manifest: dict[str, Any],
-    *,
-    artifact_id: str,
-    agent_slug: str | None = None,
-    run_id: str | None = None,
-    existing_loop: dict[str, Any],
-    last_checked_seq: int | None = None,
-) -> None:
-    """Mark one artifact run as active again.
-
-    Preconditions: ``manifest`` contains a run for ``artifact_id`` and either
-    ``run_id`` or ``agent_slug``.
-    Postconditions: the run status and loop status are running, with an
-    incremented loop attempt.
-    """
-    runs = artifact_runs_for_update(manifest, artifact_id)
-    run = find_run_by_id(runs, run_id) if run_id else None
-    if run is None and agent_slug:
-        run = find_run(runs, agent_slug)
-    if run is None:
-        raise PlanArtifactRunNotFound(
-            f"plan artifact run not found: {run_id or agent_slug}"
-        )
-    run["status"] = PlanRunStatus.RUNNING.value
-    run["completed_at"] = None
-    loop = running_loop_snapshot(
-        artifact_id=artifact_id,
-        agent_slug=str(run.get("agent_slug") or agent_slug or ""),
-        existing=existing_loop,
-        run_id=run_id,
-    )
-    if last_checked_seq is not None:
-        loop["last_checked_seq"] = last_checked_seq
-    run["loop"] = loop
-    manifest["updated_at"] = now_iso()
-
-
-def mark_run_failed(
-    manifest: dict[str, Any],
-    *,
-    artifact_id: str,
-    run_id: str,
-    reason: str,
-    findings: list[str],
-) -> None:
-    """Mark one artifact run as failed.
-
-    Preconditions: ``manifest`` contains ``run_id`` for ``artifact_id``.
-    Postconditions: the run is terminal, with failed loop metadata persisted.
-    """
-    run = find_run_by_id(artifact_runs_for_update(manifest, artifact_id), run_id)
-    if run is None:
-        raise PlanArtifactRunNotFound(f"plan artifact run not found: {run_id}")
-    now = now_iso()
-    run["status"] = PlanRunStatus.BLOCKED.value
-    run["completed_at"] = now
-    loop = dict_or_empty(run.get("loop"))
-    loop["status"] = LoopStatus.FAILED.value
-    loop["status_reason"] = reason
-    loop["findings"] = findings
-    run["loop"] = loop
-    manifest["updated_at"] = now
-
-
-def loop_status_from_assessment(assessment: LoopAssessment) -> LoopStatus:
-    """Map a report assessment onto the loop state machine."""
-    if assessment.status == LoopAssessmentStatus.PASS:
-        return LoopStatus.COMPLETED
-    if assessment.status == LoopAssessmentStatus.NEEDS_AGENT:
-        return LoopStatus.NEEDS_AGENT
-    if assessment.status == LoopAssessmentStatus.BLOCKED_USER:
-        return LoopStatus.BLOCKED_USER
-    return LoopStatus.FAILED
-
-
-def loop_status_reason(status: LoopStatus, assessment: LoopAssessment) -> str:
-    """Return the displayable reason for one assessed loop status."""
-    if status == LoopStatus.COMPLETED:
-        return "Report is complete and ready for review."
-    if status == LoopStatus.NEEDS_AGENT:
-        return "Report is incomplete; the agent needs to continue."
-    if status == LoopStatus.BLOCKED_USER:
-        return "The agent reported a blocker that needs user input."
-    if status == LoopStatus.FAILED:
-        return "Atelier could not assess the loop report."
-    return assessment.findings[0] if assessment.findings else status.replace("_", " ")
-
-
-def loop_run_id(
-    artifact_id: str,
-    agent_slug: str,
-    existing: dict[str, Any] | None,
-    *,
-    run_id: str | None = None,
-) -> str:
-    """Return the stable loop id for one artifact/agent pair."""
-    if existing:
-        current = str_or_none(existing.get("loop_run_id"))
-        if current:
-            return current
-    raw_suffix = run_id or agent_slug
-    safe_suffix = re.sub(r"[^a-zA-Z0-9._-]+", "-", raw_suffix).strip("-").lower()
-    return f"loop-{artifact_id}-{safe_suffix}"
-
-
-def next_loop_child_id(prefix: str, current: object) -> str:
-    """Return the next manifest-local loop child id."""
-    previous = str_or_none(current)
-    if previous:
-        match = re.search(r"(\d+)$", previous)
-        if match:
-            return f"{prefix}-{int(match.group(1)) + 1:03d}"
-    return f"{prefix}-001"
 
 
 def next_id(prefix: str, items: list[dict[str, Any]]) -> str:
@@ -782,25 +454,11 @@ def str_or_empty(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
-def int_or_default(value: object, default: int) -> int:
-    """Return a positive integer value or ``default``."""
-    return value if isinstance(value, int) and value > 0 else default
-
-
-def str_list(value: object) -> list[str]:
-    """Return string items from ``value`` when it is a list."""
-    if not isinstance(value, list):
-        return []
-    return [item for item in value if isinstance(item, str)]
-
-
 __all__ = [
-    "apply_artifact_report",
     "apply_report_fields",
     "artifact_proposals_for_update",
     "artifact_runs_for_update",
     "artifact_tracking_for_update",
-    "assessed_loop_snapshot",
     "bug_template",
     "clean",
     "create_artifact_proposal",
@@ -811,26 +469,16 @@ __all__ = [
     "find_run",
     "find_run_by_id",
     "get_plan_or_raise",
-    "initialized_loop_snapshot",
-    "int_or_default",
-    "loop_run_id",
     "loop_status",
-    "loop_status_from_assessment",
-    "loop_status_reason",
     "manifest_or_raise",
-    "mark_run_failed",
-    "mark_run_running",
     "next_bug_path",
     "next_id",
-    "next_loop_child_id",
     "next_run_id",
     "now_iso",
     "proposal_for_update",
     "require_executable",
     "run_status",
-    "running_loop_snapshot",
     "select_run",
-    "str_list",
     "str_or_empty",
     "str_or_none",
     "summary_template",

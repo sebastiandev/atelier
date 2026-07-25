@@ -36,7 +36,13 @@ from src.domain.chatstore import (
     ChatStore,
     CreateChatRequest,
 )
-from src.domain.commands.chats import compact, delete, read_compaction_summary, rename
+from src.domain.commands.chats import (
+    compact,
+    delete,
+    read_compaction_summary,
+    reconnect,
+    rename,
+)
 from src.domain.commands.projects import get as projects_get
 from src.domain.commands.works import create as works_create
 from src.domain.models import Chat, ChatMessage
@@ -133,26 +139,29 @@ def create_chat_endpoint(
 ) -> ChatDetail:
     try:
         _validate_chat_provider_config(payload, settings)
+        record = chatstore.create_chat(
+            CreateChatRequest(
+                provider=payload.provider,
+                model=payload.model,
+                first_message=payload.first_message,
+                title=payload.title,
+                grounding=(
+                    ChatGrounding(
+                        kind=payload.grounding.kind,
+                        ref=payload.grounding.ref,
+                    )
+                    if payload.grounding is not None
+                    else None
+                ),
+                working_directory=payload.working_directory,
+                options=payload.options or None,
+                discussion_only=payload.discussion_only,
+                context_seed=payload.context_seed,
+                discussion_key=payload.discussion_key,
+            )
+        )
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
-    record = chatstore.create_chat(
-        CreateChatRequest(
-            provider=payload.provider,
-            model=payload.model,
-            first_message=payload.first_message,
-            title=payload.title,
-            grounding=(
-                ChatGrounding(
-                    kind=payload.grounding.kind,
-                    ref=payload.grounding.ref,
-                )
-                if payload.grounding is not None
-                else None
-            ),
-            working_directory=payload.working_directory,
-            options=payload.options or None,
-        )
-    )
     return _to_detail(record)
 
 
@@ -201,6 +210,22 @@ async def delete_chat_endpoint(
             delete.DeleteChatRequest(chat_slug=chat_slug),
         )
     except delete.ChatNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+
+@router.post("/chats/{chat_slug}/reconnect", status_code=status.HTTP_204_NO_CONTENT)
+async def reconnect_chat_endpoint(
+    chat_slug: str,
+    chatstore: ChatStoreDep,
+    supervisor: ChatSupervisorDep,
+) -> None:
+    try:
+        await reconnect.execute(
+            chatstore,
+            supervisor,
+            reconnect.ReconnectChatRequest(chat_slug=chat_slug),
+        )
+    except reconnect.ChatNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
@@ -561,6 +586,8 @@ def _to_summary(record: ChatRecord) -> ChatSummary:
         provider=chat.provider,
         model=chat.model,
         options=chat.options or {},
+        discussion_only=bool(chat.discussion_only),
+        discussion_key=chat.discussion_key,
         grounding=(
             ChatGroundingSchema(kind=chat.grounding_kind, ref=chat.grounding_ref)
             if chat.grounding_kind is not None and chat.grounding_ref is not None

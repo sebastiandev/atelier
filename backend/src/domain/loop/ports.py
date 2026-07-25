@@ -12,8 +12,10 @@ from src.domain.loop.dtos import (
     LoopContextResolutionRequest,
     LoopDefinition,
     LoopDefinitionScope,
+    StageDefinition,
+    StageDefinitionScope,
 )
-from src.domain.loop.models import LoopRunRecord, LoopStepRunRecord
+from src.domain.loop.models import LoopRunRecord, LoopRunTarget, LoopStepRunRecord
 
 
 class LoopDefinitionRepository(Protocol):
@@ -54,6 +56,35 @@ class LoopDefinitionRepository(Protocol):
         ...
 
 
+class StageDefinitionRepository(Protocol):
+    """Read and write standalone stages below one library root."""
+
+    def list_definitions(
+        self,
+        root_path: str,
+        *,
+        scope: StageDefinitionScope = StageDefinitionScope.REPOSITORY,
+    ) -> list[StageDefinition]: ...
+
+    def get_definition(
+        self,
+        root_path: str,
+        definition_id: str,
+        *,
+        scope: StageDefinitionScope = StageDefinitionScope.REPOSITORY,
+    ) -> StageDefinition | None: ...
+
+    def save_definition(
+        self,
+        root_path: str,
+        definition: StageDefinition,
+        *,
+        expected_revision: str | None,
+    ) -> StageDefinition: ...
+
+    def delete_definition(self, root_path: str, definition_id: str) -> None: ...
+
+
 class LoopDefinitionLocations(Protocol):
     """Resolve Atelier-owned roots for global and Work-local loop storage."""
 
@@ -63,6 +94,14 @@ class LoopDefinitionLocations(Protocol):
 
     def work_loop_root(self, work_slug: str) -> str:
         """Return the root below which one Work's private loops are stored."""
+        ...
+
+
+class LoopWorkingRootRepository(Protocol):
+    """Resolve the persisted working root for one Work."""
+
+    def working_root_for_work(self, work_slug: str) -> str | None:
+        """Return the configured root without exposing its owning feature."""
         ...
 
 
@@ -89,6 +128,8 @@ class LoopRunRepository(Protocol):
 
     def get(self, work_slug: str, run_key: str) -> LoopRunRecord | None: ...
 
+    def list_for_work(self, work_slug: str) -> list[LoopRunRecord]: ...
+
     def list_active(self) -> list[LoopRunRecord]: ...
 
     def claim(
@@ -102,10 +143,25 @@ class LoopRunRepository(Protocol):
     def release(self, work_slug: str, run_key: str, worker_id: str) -> None: ...
 
 
+class LoopRunStateStore(Protocol):
+    """Load and save loop state independently of its owning feature."""
+
+    def load(self, work_slug: str, run_id: str) -> LoopRunTarget | None:
+        """Return one mutable target snapshot when it exists."""
+        ...
+
+    def save(self, target: LoopRunTarget) -> None:
+        """Persist one target snapshot without changing its wire shape."""
+        ...
+
+
 __all__ = [
     "LoopCheckRunner",
     "LoopContextResolver",
     "LoopDefinitionLocations",
     "LoopDefinitionRepository",
     "LoopRunRepository",
+    "LoopRunStateStore",
+    "LoopWorkingRootRepository",
+    "StageDefinitionRepository",
 ]

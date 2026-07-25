@@ -15,6 +15,7 @@ from src.domain.loop.dtos import (
     LoopDefinition,
     LoopDefinitionScope,
     LoopOutcome,
+    LoopPrConfig,
     LoopStepDefinition,
     LoopStepKind,
 )
@@ -98,6 +99,10 @@ def definition_revision(definition: LoopDefinition) -> str:
     data = asdict(definition)
     data.pop("revision", None)
     data.pop("errors", None)
+    for stage in data.get("stages", []):
+        agent = stage.get("agent") if isinstance(stage, dict) else None
+        if isinstance(agent, dict) and agent.get("approved_command_prefixes") is None:
+            agent.pop("approved_command_prefixes", None)
     payload = json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:6]
 
@@ -133,13 +138,36 @@ def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
         errors.append(f"{label} has an invalid id.")
     if not stage.name.strip():
         errors.append(f"{label} needs a name.")
-    if stage.kind in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW}:
+    if stage.kind in {
+        LoopStepKind.AGENT_TASK,
+        LoopStepKind.AGENT_REVIEW,
+        LoopStepKind.PR,
+    }:
         if not stage.instructions.strip():
             errors.append(f"{label} needs Markdown instructions.")
         if stage.agent is None:
             errors.append(f"{label} needs an agent policy.")
         else:
-            errors.extend(_validate_agent_policy(label, stage.agent))
+            errors.extend(validate_agent_policy(label, stage.agent))
+    if stage.kind == LoopStepKind.PR:
+        if stage.pr_config is None:
+            errors.append(f"{label} needs Create PR configuration.")
+        else:
+            errors.extend(validate_pr_config(label, stage.pr_config))
+    elif stage.pr_config is not None:
+        errors.append(f"{label} cannot declare Create PR configuration.")
+    if (
+        stage.kind not in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW, LoopStepKind.PR}
+        and stage.note_required is not None
+    ):
+        errors.append(f"{label} cannot declare a brief note slot.")
+    if stage.review_gate is not None:
+        if stage.kind != LoopStepKind.AGENT_REVIEW:
+            errors.append(f"{label} cannot declare a review gate.")
+        elif not stage.transitions.get(LoopOutcome.CHANGES_REQUESTED):
+            errors.append(f"{label} review gate needs a changes-requested destination.")
+        if stage.review_gate.max_passes < 1:
+            errors.append(f"{label} review gate max passes must be at least one.")
     if stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
         if stage.check_adapter != "command":
             errors.append(f"{label} needs the supported 'command' check adapter.")
@@ -152,7 +180,7 @@ def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
 
     for context in stage.context:
         if context.kind == LoopContextKind.PREVIOUS_REPORT:
-            if not context.step or context.step not in known:
+            if context.step and context.step not in known:
                 errors.append(f"{label} references an unknown previous-report stage.")
         for path in context.paths:
             if not _safe_relative(path):
@@ -163,24 +191,32 @@ def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
             continue
         if destination not in known and destination not in _TERMINALS:
             errors.append(
-                f"{label} {outcome.value!r} transition targets unknown stage "
-                f"{destination!r}."
+                f"{label} {outcome.value!r} transition targets unknown stage {destination!r}."
             )
         if destination == stage.step_id and outcome != LoopOutcome.CHANGES_REQUESTED:
             errors.append(f"{label} can only loop to itself on changes requested.")
-    if stage.kind != LoopStepKind.USER_APPROVAL and not stage.transitions.get(
-        LoopOutcome.PASS
-    ):
+    if stage.kind != LoopStepKind.USER_APPROVAL and not stage.transitions.get(LoopOutcome.PASS):
         errors.append(f"{label} needs a pass destination.")
     return errors
 
 
-def _validate_agent_policy(label: str, policy: LoopAgentPolicy) -> list[str]:
+def validate_agent_policy(label: str, policy: LoopAgentPolicy) -> list[str]:
+    """Return provider and allowlist errors for one agent policy."""
+    if policy.approved_command_prefixes is not None:
+        if any(
+            not prefix.strip() or "\n" in prefix or "\r" in prefix
+            for prefix in policy.approved_command_prefixes
+        ):
+            return [f"{label} has an invalid approved command prefix."]
+        if len(set(policy.approved_command_prefixes)) != len(policy.approved_command_prefixes):
+            return [f"{label} repeats an approved command prefix."]
     if policy.provider is None:
         return []
     if policy.provider not in SPECS:
         return [f"{label} uses an unknown provider: {policy.provider!r}."]
     descriptor = SPECS[policy.provider].describe()
+    if policy.fast is not None and "fast-mode" not in descriptor.options:
+        return [f"{label} uses fast mode with unsupported provider {policy.provider!r}."]
     if (
         policy.model
         and policy.provider != "opencode"
@@ -204,6 +240,22 @@ def _validate_agent_policy(label: str, policy: LoopAgentPolicy) -> list[str]:
     if policy.effort not in allowed:
         return [f"{label} uses an unsupported effort for {policy.provider!r}."]
     return []
+
+
+def validate_pr_config(label: str, config: LoopPrConfig) -> list[str]:
+    """Return persistence-safe errors for Create-PR configuration."""
+    errors: list[str] = []
+    if not config.name_template.strip():
+        errors.append(f"{label} needs a PR name template.")
+    if not config.base_branch.strip():
+        errors.append(f"{label} needs a PR base branch.")
+    if config.description_mode not in {"automatic", "manual"}:
+        errors.append(f"{label} has an invalid PR description mode.")
+    elif config.description_mode == "manual" and not config.manual_body.strip():
+        errors.append(f"{label} manual PR descriptions need Markdown content.")
+    if config.status not in {"draft", "open"}:
+        errors.append(f"{label} has an invalid PR status.")
+    return errors
 
 
 def _safe_relative(path: str) -> bool:
@@ -259,5 +311,7 @@ __all__ = [
     "definition_revision",
     "prepare_definition",
     "repository_copy",
+    "validate_agent_policy",
     "validate_definition",
+    "validate_pr_config",
 ]

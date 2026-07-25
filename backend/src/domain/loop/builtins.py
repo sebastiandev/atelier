@@ -14,6 +14,7 @@ from src.domain.loop.dtos import (
     LoopReportField,
     LoopReportSchema,
     LoopRetryPolicy,
+    LoopReviewGate,
     LoopSessionPolicy,
     LoopStepDefinition,
     LoopStepKind,
@@ -25,9 +26,7 @@ _GENERIC_REPORT = LoopReportSchema(
         LoopReportField("summary", "Summary", allow_explicit_none=False),
         LoopReportField("findings", "Findings"),
         LoopReportField("changes", "Changes"),
-        LoopReportField(
-            "validation_evidence", "Validation evidence", allow_explicit_none=False
-        ),
+        LoopReportField("validation_evidence", "Validation evidence", allow_explicit_none=False),
         LoopReportField("divergences", "Divergences"),
         LoopReportField("skipped_scope", "Skipped scope"),
         LoopReportField("blocker", "Blocker"),
@@ -71,10 +70,7 @@ def builtin_loop_definitions() -> tuple[LoopDefinition, ...]:
     Preconditions: built-in constants are importable.
     Postconditions: every returned definition contains its content revision.
     """
-    return tuple(
-        prepare_definition(definition)
-        for definition in (_fast(), _reviewed(), _secure())
-    )
+    return tuple(prepare_definition(definition) for definition in (_fast(), _reviewed(), _secure()))
 
 
 def builtin_loop_definition(definition_id: str) -> LoopDefinition | None:
@@ -167,10 +163,11 @@ def _implementation(pass_to: str) -> LoopStepDefinition:
             LoopContextReference(LoopContextKind.PLAN_INDEX),
         ),
         agent=LoopAgentPolicy(
-            session=LoopSessionPolicy.REUSE,
+            session=LoopSessionPolicy.FRESH,
             permissions=LoopPermission.WRITE,
         ),
         report_contract="implementation",
+        note_required=False,
         retry=LoopRetryPolicy(max_attempts=3, timeout_minutes=45),
         transitions={
             LoopOutcome.PASS: pass_to,
@@ -208,7 +205,9 @@ def _review(
             permissions=LoopPermission.READ,
         ),
         report_contract="review",
-        retry=LoopRetryPolicy(max_attempts=2, timeout_minutes=20),
+        review_gate=LoopReviewGate(),
+        note_required=True,
+        retry=LoopRetryPolicy(max_attempts=2, timeout_minutes=15),
         transitions={
             LoopOutcome.PASS: pass_to,
             LoopOutcome.CHANGES_REQUESTED: "implementation",

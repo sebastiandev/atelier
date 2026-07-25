@@ -18,6 +18,7 @@ from src.infrastructure.filesystem.ndjson import append_event, read_from_cursor
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.planning_files import FsPlanningFiles
 from src.infrastructure.filesystem.project_files import FsProjectFiles
+from src.infrastructure.filesystem.stage_definitions import FsStageDefinitionRepository
 from src.infrastructure.filesystem.transcript_log import FsTranscriptLog
 from src.infrastructure.filesystem.workspace_files import FsWorkspaceFiles
 
@@ -27,6 +28,7 @@ __all__ = [
     "FsLoopDefinitionRepository",
     "FsPlanningFiles",
     "FsProjectFiles",
+    "FsStageDefinitionRepository",
     "FsTranscriptLog",
     "FsWorkspaceFiles",
     "WorkspacePaths",

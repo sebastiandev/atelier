@@ -175,6 +175,15 @@ export function providerEffortOption(
   return null;
 }
 
+export function providerFastOption(
+  provider: ProviderDescriptor,
+): ProviderOptionSelection | null {
+  const field = provider.options["fast-mode"];
+  return field?.values.includes("on") && field.values.includes("off")
+    ? { key: "fast-mode", field }
+    : null;
+}
+
 export function providerPermissionOption(
   provider: ProviderDescriptor,
 ): ProviderOptionSelection | null {

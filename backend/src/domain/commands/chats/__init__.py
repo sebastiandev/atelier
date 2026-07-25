@@ -5,6 +5,7 @@ from src.domain.commands.chats import (
     connect,
     delete,
     read_compaction_summary,
+    reconnect,
     rename,
     send_input,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "connect",
     "delete",
     "read_compaction_summary",
+    "reconnect",
     "rename",
     "send_input",
 ]

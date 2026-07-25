@@ -19,7 +19,6 @@ export type ShellTopbarView = {
 
 type ShellTopbarProps = {
   crumbs?: ShellTopbarCrumb[];
-  onSearch?: () => void;
   primaryAction?: ReactNode;
   showUtilities?: boolean;
   view?: ShellTopbarView;
@@ -28,7 +27,6 @@ type ShellTopbarProps = {
 /** Shared app topbar with navigation breadcrumbs and global utilities. */
 export function ShellTopbar({
   crumbs = [],
-  onSearch,
   primaryAction,
   showUtilities = true,
   view,
@@ -78,11 +76,14 @@ export function ShellTopbar({
         {primaryAction}
         {showUtilities && (
           <>
-            {onSearch && (
-              <button className="btn ghost icon sm" onClick={onSearch} title="Search" aria-label="Search">
-                <SearchIcon size={12} />
-              </button>
-            )}
+            <button
+              className="btn ghost icon sm"
+              onClick={() => window.dispatchEvent(new Event("atelier:open-search"))}
+              title="Search (Cmd/Ctrl+K)"
+              aria-label="Search"
+            >
+              <SearchIcon size={12} />
+            </button>
             <a className="btn ghost icon sm" href="/settings" title="Settings" aria-label="Settings">
               <SlidersIcon size={12} />
             </a>

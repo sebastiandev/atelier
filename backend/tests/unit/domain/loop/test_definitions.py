@@ -18,6 +18,7 @@ def test_builtins_are_valid_and_revisioned() -> None:
         "atelier-secure",
     ]
     assert all(definition.valid and len(definition.revision) == 6 for definition in definitions)
+    assert definitions[1].stages[1].retry.timeout_minutes == 15
 
 
 def test_unsafe_context_path_invalidates_definition() -> None:
@@ -53,9 +54,7 @@ def test_review_stage_cannot_be_first() -> None:
 
     prepared = prepare_definition(review_first)
 
-    assert "first stage must be an implementation agent" in " ".join(
-        prepared.errors
-    ).lower()
+    assert "first stage must be an implementation agent" in " ".join(prepared.errors).lower()
 
 
 @pytest.mark.parametrize(

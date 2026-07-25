@@ -47,3 +47,14 @@ docs/screenshots/*.mov
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+
+# Atelier agent worktrees mount dependencies and shared folders as
+# symlinks. The patterns above end in `/`, which only matches real
+# directories — a symlink is a blob to git, so it still shows up as
+# untracked. Repeat them without the trailing slash, and cover the
+# per-work shared mounts (`_bmad-output`, chat contexts).
+.venv
+backend/.venv
+node_modules
+_bmad-output
+*-context

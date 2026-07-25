@@ -131,7 +131,7 @@ export function Home() {
         planningStartStorageKey(created.slug),
         JSON.stringify(intent.seed),
       );
-      window.location.assign(`/works/${created.slug}?start=planning`);
+      window.location.assign(`/works/${created.slug}`);
       return created;
     }
     if (intent.mode === "loop") {
@@ -139,10 +139,10 @@ export function Home() {
         loopStartStorageKey(created.slug),
         JSON.stringify(intent.seed),
       );
-      window.location.assign(`/works/${created.slug}?start=loop`);
+      window.location.assign(`/works/${created.slug}`);
       return created;
     }
-    window.location.assign(`/works/${created.slug}?mode=manual`);
+    window.location.assign(`/works/${created.slug}`);
     return created;
   }
 

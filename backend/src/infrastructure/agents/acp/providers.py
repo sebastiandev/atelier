@@ -7,6 +7,15 @@ bump deliberately, re-capturing the config-option fixtures in
 ``tests/fixtures/acp/`` when you do.
 """
 
+import json
+import os
+import shlex
+import shutil
+import tempfile
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
 from src.domain.agents import (
     AgentAdapter,
     ClaudeAcpAgentConfig,
@@ -17,16 +26,19 @@ from src.infrastructure.agents.acp.adapter import AcpAdapter
 from src.infrastructure.agents.factory import build_adapter
 from src.settings import Settings
 
+_ACP_RUNTIME_BIN = (
+    Path(__file__).resolve().parents[4]
+    / "acp-runtime"
+    / "node_modules"
+    / ".bin"
+)
+
 CLAUDE_ACP_ARGV: tuple[str, ...] = (
-    "npx",
-    "-y",
-    "@agentclientprotocol/claude-agent-acp@0.44.0",
+    str(_ACP_RUNTIME_BIN / "claude-agent-acp"),
 )
 
 CODEX_ACP_ARGV: tuple[str, ...] = (
-    "npx",
-    "-y",
-    "@zed-industries/codex-acp@0.16.0",
+    str(_ACP_RUNTIME_BIN / "codex-acp"),
 )
 
 # OpenCode ships its own ACP server; the local binary is the install.
@@ -35,19 +47,156 @@ OPENCODE_ARGV: tuple[str, ...] = ("opencode", "acp")
 
 @build_adapter.register
 def _build_claude_acp(config: ClaudeAcpAgentConfig, settings: Settings) -> AgentAdapter:
-    return AcpAdapter(config, CLAUDE_ACP_ARGV, model_label=config.model.value)
+    rules = _glob_command_prefixes(config.common.approved_command_prefixes)
+    return AcpAdapter(
+        config,
+        CLAUDE_ACP_ARGV,
+        model_label=config.model.value,
+        session_meta=(
+            {
+                "claudeCode": {
+                    "options": {
+                        "allowedTools": [f"Bash({rule} *)" for rule in rules]
+                    }
+                }
+            }
+            if rules
+            else None
+        ),
+    )
 
 
 @build_adapter.register
 def _build_codex_acp(config: CodexAcpAgentConfig, settings: Settings) -> AgentAdapter:
-    return AcpAdapter(config, CODEX_ACP_ARGV, model_label=config.model.value)
+    environment, cleanup = _codex_environment(
+        config.common.approved_command_prefixes
+    )
+    return AcpAdapter(
+        config,
+        CODEX_ACP_ARGV,
+        model_label=config.model.value,
+        environment=environment,
+        cleanup=cleanup,
+    )
 
 
 @build_adapter.register
 def _build_opencode(config: OpenCodeAgentConfig, settings: Settings) -> AgentAdapter:
     # No model_label: the underlying model is OpenCode's configured
     # default and unknown to Atelier; usage_update supplies runtime data.
-    return AcpAdapter(config, OPENCODE_ARGV)
+    rules = _glob_command_prefixes(config.common.approved_command_prefixes)
+    return AcpAdapter(
+        config,
+        OPENCODE_ARGV,
+        environment=(
+            {"OPENCODE_CONFIG_CONTENT": _opencode_config(rules)}
+            if rules
+            else None
+        ),
+    )
+
+
+def _command_prefix_tokens(prefixes: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
+    """Parse safe single-command prefixes for provider-native policies."""
+    parsed: list[tuple[str, ...]] = []
+    for prefix in prefixes:
+        if not prefix.strip() or "\n" in prefix or "\r" in prefix:
+            continue
+        try:
+            lexer = shlex.shlex(prefix, posix=True, punctuation_chars=";&|")
+            lexer.whitespace_split = True
+            tokens = tuple(lexer)
+        except ValueError:
+            continue
+        if tokens and not any(set(token) <= set(";&|") for token in tokens):
+            parsed.append(tokens)
+    return tuple(parsed)
+
+
+def _glob_command_prefixes(prefixes: tuple[str, ...]) -> tuple[str, ...]:
+    """Return command prefixes safe for Claude/OpenCode glob policy syntax."""
+    return tuple(
+        " ".join(tokens)
+        for tokens in _command_prefix_tokens(prefixes)
+        if all(
+            not any(char in token for char in "*?[]")
+            and not any(char.isspace() for char in token)
+            for token in tokens
+        )
+    )
+
+
+def _opencode_config(rules: tuple[str, ...]) -> str:
+    """Merge stage Bash approvals into OpenCode's process-local config."""
+    try:
+        current = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{}"))
+    except json.JSONDecodeError:
+        current = {}
+    config: dict[str, Any] = current if isinstance(current, dict) else {}
+    permission = config.get("permission")
+    if isinstance(permission, str):
+        permission = {"*": permission}
+    elif not isinstance(permission, dict):
+        permission = {}
+    bash = permission.get("bash")
+    if isinstance(bash, str):
+        bash = {"*": bash}
+    elif not isinstance(bash, dict):
+        bash = {"*": "ask"}
+    for rule in rules:
+        bash[rule] = "allow"
+        bash[f"{rule} *"] = "allow"
+    permission["bash"] = bash
+    config["permission"] = permission
+    return json.dumps(config, separators=(",", ":"))
+
+
+def _codex_environment(
+    prefixes: tuple[str, ...],
+) -> tuple[dict[str, str] | None, Callable[[], None] | None]:
+    """Create an isolated Codex ACP config layer with stage prefix rules."""
+    rules = _command_prefix_tokens(prefixes)
+    if not rules:
+        return None, None
+    source = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
+    overlay = tempfile.TemporaryDirectory(prefix="atelier-codex-acp-")
+    root = Path(overlay.name)
+    if source.is_dir():
+        for entry in source.iterdir():
+            if entry.name == "rules":
+                continue
+            target = root / entry.name
+            try:
+                target.symlink_to(entry, target_is_directory=entry.is_dir())
+            except OSError:
+                if entry.is_file():
+                    shutil.copy2(entry, target)
+    rules_dir = root / "rules"
+    rules_dir.mkdir()
+    source_rules = source / "rules"
+    if source_rules.is_dir():
+        for entry in source_rules.iterdir():
+            if entry.name == "atelier-stage.rules":
+                continue
+            target = rules_dir / entry.name
+            try:
+                target.symlink_to(entry, target_is_directory=entry.is_dir())
+            except OSError:
+                if entry.is_file():
+                    shutil.copy2(entry, target)
+    rendered = "\n\n".join(
+        "prefix_rule(\n"
+        f"    pattern = [{', '.join(json.dumps(token) for token in tokens)}],\n"
+        '    decision = "allow",\n'
+        '    justification = "Approved for this Atelier loop stage",\n'
+        ")"
+        for tokens in rules
+    )
+    (rules_dir / "atelier-stage.rules").write_text(rendered + "\n", encoding="utf-8")
+    return {
+        "CODEX_HOME": str(root),
+        "CODEX_SQLITE_HOME": os.environ.get("CODEX_SQLITE_HOME", str(source)),
+    }, overlay.cleanup
 
 
 __all__ = ["CLAUDE_ACP_ARGV", "CODEX_ACP_ARGV", "OPENCODE_ARGV"]

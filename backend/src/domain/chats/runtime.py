@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,7 @@ class ConnectChatRuntimeRequest:
 
     chat_slug: str
     cursor: int = 0
+    read_only: bool = False
 
 
 class ChatNotFound(ValueError):
@@ -65,36 +68,172 @@ async def connect_chat(
     if record is None:
         raise ChatNotFound(f"chat not found: {req.chat_slug}")
 
-    if not supervisor.is_registered(req.chat_slug):
-        adapter, context = _build_adapter(
-            record, workstore, projectstore, planningfiles, settings
+    linked_work_slug = record.chat.promoted_to_work_slug
+    if linked_work_slug is None and record.chat.grounding_kind == "work":
+        linked_work_slug = record.chat.grounding_ref
+    linked_work = (
+        workstore.get_work(linked_work_slug) if linked_work_slug is not None else None
+    )
+    if req.read_only or (
+        linked_work is not None and linked_work.work.status != "active"
+    ):
+        subscription = AgentSubscription(
+            queue=asyncio.Queue(maxsize=1),
+            kicked=asyncio.Event(),
+            replay=await asyncio.to_thread(
+                lambda: list(
+                    chatstore.read_transcript_from_cursor(req.chat_slug, req.cursor)
+                )
+            ),
         )
+        try:
+            yield subscription
+        finally:
+            subscription.kicked.set()
+        return
+
+    await _ensure_runtime(
+        record,
+        chatstore,
+        supervisor,
+        workstore,
+        projectstore,
+        planningfiles,
+        settings,
+    )
+
+    async with supervisor.subscribe(req.chat_slug, req.cursor) as sub:
+        yield sub
+
+
+async def ensure_chat_runtime(
+    chatstore: ChatStore,
+    supervisor: AgentSupervisorService,
+    workstore: WorkStore,
+    projectstore: ProjectStore,
+    planningfiles: PlanningFiles,
+    settings: Settings,
+    chat_slug: str,
+    *,
+    system_prompt_override: str | None = None,
+) -> bool:
+    """Ensure an active chat has a registered provider runtime.
+
+    Preconditions: ``chat_slug`` identifies a stored chat.
+    Postconditions: active chats are registered and their initial prompt is sent;
+    archived-work chats remain read-only and return false. Callers may supply an
+    opaque system prompt without adding workflow rules to this shared runtime.
+    """
+    record = chatstore.get_chat(chat_slug)
+    if record is None:
+        raise ChatNotFound(f"chat not found: {chat_slug}")
+    linked_work_slug = record.chat.promoted_to_work_slug
+    if linked_work_slug is None and record.chat.grounding_kind == "work":
+        linked_work_slug = record.chat.grounding_ref
+    linked_work = (
+        workstore.get_work(linked_work_slug) if linked_work_slug is not None else None
+    )
+    if linked_work is not None and linked_work.work.status != "active":
+        return False
+    await _ensure_runtime(
+        record,
+        chatstore,
+        supervisor,
+        workstore,
+        projectstore,
+        planningfiles,
+        settings,
+        system_prompt_override=system_prompt_override,
+    )
+    return True
+
+
+async def _ensure_runtime(
+    record: ChatRecord,
+    chatstore: ChatStore,
+    supervisor: AgentSupervisorService,
+    workstore: WorkStore,
+    projectstore: ProjectStore,
+    planningfiles: PlanningFiles,
+    settings: Settings,
+    *,
+    system_prompt_override: str | None = None,
+) -> None:
+    chat_slug = record.chat.slug
+    if chat_slug is None:
+        raise ChatNotFound("chat has no slug")
+    if not supervisor.is_registered(chat_slug):
+        adapter, context = _build_adapter(
+            record,
+            workstore,
+            projectstore,
+            planningfiles,
+            settings,
+            system_prompt_override=system_prompt_override,
+        )
+        registered = False
         try:
             await supervisor.register_agent(
                 _CHAT_WORK_SLUG,
-                req.chat_slug,
+                chat_slug,
                 adapter,
                 context,
-                lazy=True,
+                # Start discussion providers without submitting a turn so the
+                # dock can expose their live model/effort/fast controls.
+                lazy=not bool(record.chat.discussion_only),
             )
+            registered = True
         except RuntimeError:
             with suppress(Exception):
                 await adapter.close()
-            if not supervisor.is_registered(req.chat_slug):
+            if not supervisor.is_registered(chat_slug):
                 raise
-            await supervisor.refresh_seq_from_disk(req.chat_slug)
+            await supervisor.refresh_seq_from_disk(chat_slug)
+        if registered:
+            await _close_interrupted_turn(chatstore, supervisor, chat_slug)
 
-    initial = chatstore.claim_initial_prompt(req.chat_slug)
+    initial = chatstore.claim_initial_prompt(chat_slug)
     if initial is not None:
-        await supervisor.refresh_seq_from_disk(req.chat_slug)
+        await supervisor.refresh_seq_from_disk(chat_slug)
         await supervisor.send_input(
-            req.chat_slug,
+            chat_slug,
             initial,
             record_user_input=False,
         )
 
-    async with supervisor.subscribe(req.chat_slug, req.cursor) as sub:
-        yield sub
+
+async def _close_interrupted_turn(
+    chatstore: ChatStore,
+    supervisor: AgentSupervisorService,
+    chat_slug: str,
+) -> None:
+    events = list(chatstore.read_transcript_from_cursor(chat_slug, 0))
+    last_status = next(
+        (
+            event.get("status")
+            for event in reversed(events)
+            if event.get("type") == "status_change"
+        ),
+        None,
+    )
+    if last_status not in {"live", "thinking"}:
+        return
+    now = datetime.now(UTC).isoformat()
+    await supervisor.publish_external_event(
+        chat_slug,
+        {
+            "type": "error",
+            "ts": now,
+            "message": (
+                "The previous turn was interrupted when its runtime disconnected. "
+                "Send Continue to resume."
+            ),
+        },
+    )
+    await supervisor.publish_external_event(
+        chat_slug,
+        {"type": "status_change", "ts": now, "status": "idle"},
+    )
 
 
 def build_chat_runtime_config(
@@ -103,6 +242,8 @@ def build_chat_runtime_config(
     projectstore: ProjectStore,
     planningfiles: PlanningFiles,
     settings: Settings,
+    *,
+    system_prompt_override: str | None = None,
 ) -> tuple[AgentConfig, AgentStartContext, ChatRuntimeContext]:
     """Build provider config and prompt context for a chat.
 
@@ -114,7 +255,9 @@ def build_chat_runtime_config(
     runtime = _resolve_runtime_context(
         chat, workstore, projectstore, planningfiles, settings
     )
-    system_prompt = build_prompt(_prompt_input_for_chat(chat, runtime))
+    system_prompt = system_prompt_override or build_prompt(
+        _prompt_input_for_chat(chat, runtime)
+    )
     common = CommonAgentConfig(
         workdir=runtime.agent_workdir,
         writable_roots=runtime.writable_roots,
@@ -160,9 +303,16 @@ def _build_adapter(
     projectstore: ProjectStore,
     planningfiles: PlanningFiles,
     settings: Settings,
+    *,
+    system_prompt_override: str | None = None,
 ) -> tuple[AgentAdapter, AgentStartContext]:
     config, context, _runtime = build_chat_runtime_config(
-        record, workstore, projectstore, planningfiles, settings
+        record,
+        workstore,
+        projectstore,
+        planningfiles,
+        settings,
+        system_prompt_override=system_prompt_override,
     )
     adapter = build_adapter(config, settings)
     return adapter, context
@@ -388,6 +538,8 @@ def _prompt_input_for_chat(
         working_details=runtime.working_details,
         link_label=runtime.link_label,
         link_details=runtime.link_details,
+        discussion_only=bool(chat.discussion_only),
+        context_seed=chat.context_seed,
     )
 
 
@@ -401,9 +553,27 @@ def _provider_options(chat: Chat, runtime: ChatRuntimeContext) -> dict[str, Any]
     clean = dict(chat.options or {})
     clean.pop(PLANNING_READINESS_OPTION, None)
     clean.pop(PLANNING_CONFIG_OPTION, None)
+    if chat.discussion_only:
+        clean = _discussion_options(chat.provider, clean)
     if _is_planning_chat(chat) and runtime.planning_phase == "revision":
         return _planning_revision_options(chat.provider, clean)
     return clean
+
+
+def _discussion_options(provider: Provider, options: dict[str, Any]) -> dict[str, Any]:
+    """Force provider permissions to the available read-only posture."""
+    next_options = dict(options)
+    if provider == "amp":
+        next_options.update(permission_mode="default", read_only="true")
+    elif provider == "codex":
+        next_options["sandbox"] = "read-only"
+    elif provider in {"claude-code", "claude-acp"}:
+        next_options["permission_mode"] = "plan"
+    elif provider == "codex-acp":
+        next_options["mode"] = "read-only"
+    elif provider == "opencode":
+        next_options["mode"] = "plan"
+    return next_options
 
 
 def _planning_revision_options(
@@ -415,7 +585,7 @@ def _planning_revision_options(
         next_options["sandbox"] = "workspace-write"
         next_options["approval_mode"] = "on-request"
     elif provider == "codex-acp":
-        next_options["mode"] = "auto"
+        next_options["mode"] = "agent"
     elif provider == "claude-code":
         next_options["permission_mode"] = "default"
     elif provider == "claude-acp":
@@ -534,5 +704,6 @@ __all__ = [
     "ConnectChatRuntimeRequest",
     "build_chat_runtime_config",
     "connect_chat",
+    "ensure_chat_runtime",
     "provider_input_for_chat",
 ]

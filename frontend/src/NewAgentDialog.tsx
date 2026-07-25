@@ -118,8 +118,8 @@ export function NewAgentDialog({
     () => forkFromAgent?.folder ?? folderCandidates[0] ?? "",
   );
   // Optional branch name for the agent's worktree. Blank = detached
-  // HEAD from master (default), and the agent is told via system prompt to
-  // ``git switch -c <name>`` before checking out elsewhere.
+  // HEAD from the fetched remote default branch, and the agent is told via
+  // system prompt to ``git switch -c <name>`` before checking out elsewhere.
   const [branchName, setBranchName] = useState("");
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const [branchOptions, setBranchOptions] = useState<string[] | null>(null);
@@ -538,7 +538,7 @@ export function NewAgentDialog({
                     <strong>Fresh worktree</strong>
                     <span className="hint">
                       {" "}
-                      · clean checkout from master; loses{" "}
+                      · clean checkout from the remote default branch; loses{" "}
                       {forkFromAgent.name}'s uncommitted work
                     </span>
                   </span>
@@ -641,6 +641,26 @@ export function NewAgentDialog({
                           key,
                           field,
                         );
+                        if (key === "fast-mode") {
+                          return (
+                            <div key={key} className="field provider-fast-field">
+                              <span className="label">{effectiveField.label}</span>
+                              <label className="pm-fast-toggle">
+                                <input
+                                  type="checkbox"
+                                  aria-label={effectiveField.label}
+                                  checked={(options[key] ?? effectiveField.default) === "on"}
+                                  onChange={(event) => setOptions((previous) => ({
+                                    ...previous,
+                                    [key]: event.target.checked ? "on" : "off",
+                                  }))}
+                                />
+                                <span aria-hidden />
+                                Fast
+                              </label>
+                            </div>
+                          );
+                        }
                         return (
                           <label key={key} className="field">
                             <span className="label">{effectiveField.label}</span>

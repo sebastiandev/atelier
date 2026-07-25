@@ -55,10 +55,13 @@ class SqlPlanningSessionRepository:
     def get_by_work_slug(self, work_slug: str) -> PlanningSession | None:
         with self._txn() as db:
             return db.execute(
-                select(PlanningSession).where(
-                    planning_sessions_table.c.work_slug == work_slug
-                )
+                select(PlanningSession).where(planning_sessions_table.c.work_slug == work_slug)
             ).scalar_one_or_none()
+
+    def working_root_for_work(self, work_slug: str) -> str | None:
+        """Return the root through the feature-neutral Loop root port."""
+        session = self.get_by_work_slug(work_slug)
+        return session.root_path if session is not None and session.root_path else None
 
     def get_by_chat_slug(self, chat_slug: str) -> PlanningSession | None:
         with self._txn() as db:

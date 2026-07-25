@@ -7,6 +7,8 @@ the filesystem to confirm both sides of the boundary.
 """
 
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +22,24 @@ def _new_work(name: str = "Migration") -> dict[str, object]:
         "description": f"brief for {name}",
         "contexts": [],
     }
+
+
+def _git_repo(path: Path) -> Path:
+    """Create the smallest real repository needed by worktree integration tests."""
+    path.mkdir(parents=True)
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main"], cwd=path, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=path, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=path, check=True
+    )
+    (path / "README.md").write_text("hello\n")
+    subprocess.run(["git", "add", "README.md"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=path, check=True)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +87,22 @@ def test_post_with_contexts_persists_them(app_client: TestClient, test_settings:
         (test_settings.workspace_root / "works" / "WRK-001" / "work.json").read_text()
     )
     assert work_json["contexts"] == payload["contexts"]
+
+
+def test_post_persists_work_mode(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    payload = _new_work()
+    payload["mode"] = "loop"
+
+    response = app_client.post("/api/works", json=payload)
+
+    assert response.status_code == 201
+    assert response.json()["mode"] == "loop"
+    work_json = json.loads(
+        (test_settings.workspace_root / "works" / "WRK-001" / "work.json").read_text()
+    )
+    assert work_json["mode"] == "loop"
 
 
 def test_post_rejects_empty_name(app_client: TestClient) -> None:
@@ -158,6 +194,15 @@ def test_patch_status_to_completed(app_client: TestClient) -> None:
     response = app_client.patch("/api/works/WRK-001", json={"status": "completed"})
     assert response.status_code == 200
     assert response.json()["status"] == "completed"
+
+
+def test_patch_changes_work_mode(app_client: TestClient) -> None:
+    app_client.post("/api/works", json={**_new_work(), "mode": "manual"})
+
+    response = app_client.patch("/api/works/WRK-001", json={"mode": "planning"})
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "planning"
 
 
 def test_patch_replaces_contexts(app_client: TestClient) -> None:
@@ -318,6 +363,8 @@ def test_complete_flips_status_and_returns_agent_count(app_client: TestClient) -
     body = res.json()
     assert body["work_slug"] == "WRK-001"
     assert body["agent_count"] == 0  # no agents on a freshly-created work
+    assert body["workspace_count"] == 0
+    assert body["workspaces_removed"] == 0
 
     detail = app_client.get("/api/works/WRK-001").json()
     assert detail["status"] == "completed"
@@ -331,6 +378,83 @@ def test_complete_returns_409_when_already_completed(app_client: TestClient) -> 
     app_client.post("/api/works", json=_new_work())
     assert app_client.post("/api/works/WRK-001/complete").status_code == 200
     assert app_client.post("/api/works/WRK-001/complete").status_code == 409
+
+
+def test_completion_preview_and_default_complete_preserve_workspace(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    app_client.post("/api/works", json=_new_work())
+    source = _git_repo(test_settings.workspace_root / "source")
+    workdir = app_client.app.state.worktree_manager.ensure(
+        "WRK-001", "loop", source
+    )
+
+    preview = app_client.get("/api/works/WRK-001/completion")
+
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["workspaces"] == [
+        {
+            "owner": "loop",
+            "path": str(workdir),
+            "is_git_repo": True,
+            "branch": None,
+            "head": preview.json()["workspaces"][0]["head"],
+            "changed_files": [],
+            "untracked_files": [],
+            "removable": True,
+            "error": None,
+        }
+    ]
+
+    completed = app_client.post("/api/works/WRK-001/complete")
+
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["workspace_count"] == 1
+    assert completed.json()["workspaces_removed"] == 0
+    assert workdir.exists()
+
+
+def test_complete_refuses_explicit_dirty_workspace_cleanup(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    app_client.post("/api/works", json=_new_work())
+    source = _git_repo(test_settings.workspace_root / "source")
+    workdir = app_client.app.state.worktree_manager.ensure(
+        "WRK-001", "loop", source
+    )
+    (workdir / "README.md").write_text("unfinished\n")
+
+    response = app_client.post(
+        "/api/works/WRK-001/complete", json={"remove_workspaces": True}
+    )
+
+    assert response.status_code == 409
+    assert "dirty or cannot be inspected" in response.json()["detail"]
+    assert workdir.exists()
+    assert app_client.get("/api/works/WRK-001").json()["status"] == "active"
+
+
+def test_complete_can_remove_explicit_clean_workspace(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    app_client.post("/api/works", json=_new_work())
+    source = _git_repo(test_settings.workspace_root / "source")
+    workdir = app_client.app.state.worktree_manager.ensure(
+        "WRK-001", "loop", source
+    )
+    shared = test_settings.workspace_root / "shared"
+    shared.mkdir()
+    (shared / "notes.md").write_text("preserve me\n")
+    (workdir / "project-context").symlink_to(shared, target_is_directory=True)
+
+    response = app_client.post(
+        "/api/works/WRK-001/complete", json={"remove_workspaces": True}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["workspaces_removed"] == 1
+    assert not workdir.exists()
+    assert (shared / "notes.md").read_text() == "preserve me\n"
 
 
 # ---------------------------------------------------------------------------

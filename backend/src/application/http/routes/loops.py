@@ -22,17 +22,17 @@ from src.domain.commands.loops import (
     save_definition,
 )
 from src.domain.loop.dtos import (
-    LoopAgentPolicy,
-    LoopContextReference,
     LoopDefinition,
     LoopDefinitionScope,
     LoopReportField,
     LoopReportSchema,
-    LoopRetryPolicy,
-    LoopStepDefinition,
 )
-from src.domain.loop.ports import LoopDefinitionLocations, LoopDefinitionRepository
-from src.domain.planning.ports import PlanningSessionRepository
+from src.domain.loop.ports import (
+    LoopDefinitionLocations,
+    LoopDefinitionRepository,
+    LoopWorkingRootRepository,
+)
+from src.domain.loop.snapshots import loop_stage_from_snapshot, loop_stage_snapshot
 from src.domain.workstore.ports import WorkStore
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 
@@ -48,8 +48,8 @@ def _workstore(request: Request) -> WorkStore:
     return request.app.state.workstore  # type: ignore[no-any-return]
 
 
-def _planning_sessions(request: Request) -> PlanningSessionRepository:
-    return request.app.state.planning_sessions  # type: ignore[no-any-return]
+def _working_roots(request: Request) -> LoopWorkingRootRepository:
+    return request.app.state.work_roots  # type: ignore[no-any-return]
 
 
 def _definitions(request: Request) -> LoopDefinitionRepository:
@@ -61,8 +61,8 @@ def _locations(request: Request) -> LoopDefinitionLocations:
 
 
 WorkStoreDep = Annotated[WorkStore, Depends(_workstore)]
-PlanningSessionsDep = Annotated[
-    PlanningSessionRepository, Depends(_planning_sessions)
+WorkingRootsDep = Annotated[
+    LoopWorkingRootRepository, Depends(_working_roots)
 ]
 DefinitionsDep = Annotated[LoopDefinitionRepository, Depends(_definitions)]
 LocationsDep = Annotated[LoopDefinitionLocations, Depends(_locations)]
@@ -71,7 +71,7 @@ LocationsDep = Annotated[LoopDefinitionLocations, Depends(_locations)]
 @router.get("/loops", response_model=list[LoopDefinitionResponse])
 def list_loops_endpoint(
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
     work_slug: str | None = None,
@@ -81,7 +81,7 @@ def list_loops_endpoint(
         work_slug,
         root_path,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
     )
@@ -95,7 +95,7 @@ def list_loops_endpoint(
 def create_loop_endpoint(
     payload: SaveLoopDefinitionRequest,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> LoopDefinitionResponse:
@@ -107,7 +107,7 @@ def create_loop_endpoint(
     return _save(
         payload,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
     )
@@ -117,7 +117,7 @@ def create_loop_endpoint(
 def get_loop_endpoint(
     definition_id: str,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
     work_slug: str | None = None,
@@ -130,7 +130,7 @@ def get_loop_endpoint(
         root_path,
         scope,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
     )
@@ -142,7 +142,7 @@ def update_loop_endpoint(
     definition_id: str,
     payload: SaveLoopDefinitionRequest,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> LoopDefinitionResponse:
@@ -155,7 +155,7 @@ def update_loop_endpoint(
     return _save(
         payload,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
     )
@@ -170,7 +170,7 @@ def fork_loop_endpoint(
     definition_id: str,
     payload: ForkLoopDefinitionRequest,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> LoopDefinitionResponse:
@@ -178,7 +178,7 @@ def fork_loop_endpoint(
         definition_id,
         payload,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
     )
@@ -191,7 +191,7 @@ def fork_loop_endpoint(
 def reveal_loop_endpoint(
     definition_id: str,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
     work_slug: str | None = None,
@@ -204,7 +204,7 @@ def reveal_loop_endpoint(
         root_path,
         scope,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
     )
@@ -217,7 +217,7 @@ def reveal_loop_endpoint(
 def delete_loop_endpoint(
     definition_id: str,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
     work_slug: str | None = None,
@@ -230,7 +230,7 @@ def delete_loop_endpoint(
         root_path,
         scope,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
     )
@@ -243,7 +243,7 @@ def delete_loop_endpoint(
 def list_loop_definitions_endpoint(
     work_slug: str,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> list[LoopDefinitionResponse]:
@@ -251,7 +251,7 @@ def list_loop_definitions_endpoint(
         work_slug,
         None,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
         legacy_only=True,
@@ -267,14 +267,14 @@ def create_loop_definition_endpoint(
     work_slug: str,
     payload: SaveLoopDefinitionRequest,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> LoopDefinitionResponse:
     return _save(
         payload,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
         work_slug=work_slug,
@@ -290,7 +290,7 @@ def get_loop_definition_endpoint(
     work_slug: str,
     definition_id: str,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> LoopDefinitionResponse:
@@ -300,7 +300,7 @@ def get_loop_definition_endpoint(
         None,
         None,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
         legacy_only=True,
@@ -315,7 +315,7 @@ def reveal_loop_definition_endpoint(
     work_slug: str,
     definition_id: str,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> None:
@@ -325,7 +325,7 @@ def reveal_loop_definition_endpoint(
         None,
         None,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
         legacy_only=True,
@@ -341,7 +341,7 @@ def update_loop_definition_endpoint(
     definition_id: str,
     payload: SaveLoopDefinitionRequest,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> LoopDefinitionResponse:
@@ -349,7 +349,7 @@ def update_loop_definition_endpoint(
     return _save(
         payload,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
         work_slug=work_slug,
@@ -367,7 +367,7 @@ def fork_loop_definition_endpoint(
     definition_id: str,
     payload: ForkLoopDefinitionRequest,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> LoopDefinitionResponse:
@@ -375,7 +375,7 @@ def fork_loop_definition_endpoint(
         definition_id,
         payload,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
         work_slug=work_slug,
@@ -391,7 +391,7 @@ def delete_loop_definition_endpoint(
     work_slug: str,
     definition_id: str,
     workstore: WorkStoreDep,
-    planning_sessions: PlanningSessionsDep,
+    work_roots: WorkingRootsDep,
     locations: LocationsDep,
     definitions: DefinitionsDep,
 ) -> None:
@@ -401,7 +401,7 @@ def delete_loop_definition_endpoint(
         None,
         None,
         workstore,
-        planning_sessions,
+        work_roots,
         locations,
         definitions,
         legacy_only=True,
@@ -412,7 +412,7 @@ def _list(
     work_slug: str | None,
     root_path: str | None,
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
     *,
@@ -421,7 +421,7 @@ def _list(
     try:
         rows = list_definitions.execute(
             workstore,
-            planning_sessions,
+            work_roots,
             locations,
             definitions,
             list_definitions.ListLoopDefinitionsRequest(
@@ -448,7 +448,7 @@ def _get(
     root_path: str | None,
     scope: LoopDefinitionScope | None,
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
     *,
@@ -457,7 +457,7 @@ def _get(
     try:
         row = get_definition.execute(
             workstore,
-            planning_sessions,
+            work_roots,
             locations,
             definitions,
             get_definition.GetLoopDefinitionRequest(
@@ -483,7 +483,7 @@ def _get(
 def _save(
     payload: SaveLoopDefinitionRequest,
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
     *,
@@ -493,7 +493,7 @@ def _save(
     try:
         row = save_definition.execute(
             workstore,
-            planning_sessions,
+            work_roots,
             locations,
             definitions,
             save_definition.SaveLoopDefinitionRequest(
@@ -529,7 +529,7 @@ def _fork(
     definition_id: str,
     payload: ForkLoopDefinitionRequest,
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
     *,
@@ -539,7 +539,7 @@ def _fork(
     try:
         row = fork_definition.execute(
             workstore,
-            planning_sessions,
+            work_roots,
             locations,
             definitions,
             fork_definition.ForkLoopDefinitionRequest(
@@ -574,7 +574,7 @@ def _delete(
     root_path: str | None,
     scope: LoopDefinitionScope | None,
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
     *,
@@ -583,7 +583,7 @@ def _delete(
     try:
         delete_definition.execute(
             workstore,
-            planning_sessions,
+            work_roots,
             locations,
             definitions,
             delete_definition.DeleteLoopDefinitionRequest(
@@ -616,7 +616,7 @@ def _reveal(
     root_path: str | None,
     scope: LoopDefinitionScope | None,
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
     *,
@@ -625,7 +625,7 @@ def _reveal(
     try:
         target = reveal_definition.execute(
             workstore,
-            planning_sessions,
+            work_roots,
             locations,
             definitions,
             reveal_definition.RevealLoopDefinitionRequest(
@@ -678,40 +678,8 @@ def _to_domain(
         scope=scope,
         forked_from=payload.forked_from,
         stages=tuple(
-            LoopStepDefinition(
-                step_id=stage.id,
-                name=stage.name,
-                kind=stage.kind,
-                instructions=stage.instructions,
-                context=tuple(
-                    LoopContextReference(
-                        kind=context.kind,
-                        required=context.required,
-                        paths=tuple(context.paths),
-                        step=context.step,
-                        ref=context.ref,
-                    )
-                    for context in stage.context
-                ),
-                agent=(
-                    LoopAgentPolicy(
-                        session=stage.agent.session,
-                        permissions=stage.agent.permissions,
-                        provider=stage.agent.provider,
-                        model=stage.agent.model,
-                        effort=stage.agent.effort,
-                    )
-                    if stage.agent is not None
-                    else None
-                ),
-                report_contract=stage.report_contract,
-                retry=LoopRetryPolicy(
-                    max_attempts=stage.retry.max_attempts,
-                    timeout_minutes=stage.retry.timeout_minutes,
-                ),
-                transitions=dict(stage.transitions),
-                check_adapter=stage.check_adapter,
-                check_command=tuple(stage.check_command),
+            loop_stage_from_snapshot(
+                stage.model_dump(mode="json", exclude_none=True)
             )
             for stage in payload.stages
         ),
@@ -730,41 +698,7 @@ def _to_response(definition: LoopDefinition) -> LoopDefinitionResponse:
         is_default=definition.is_default,
         forked_from=definition.forked_from,
         stages=[
-            LoopStepDefinitionSchema.model_validate({
-                "id": stage.step_id,
-                "name": stage.name,
-                "kind": stage.kind,
-                "instructions": stage.instructions,
-                "context": [
-                    {
-                        "kind": context.kind,
-                        "required": context.required,
-                        "paths": list(context.paths),
-                        "step": context.step,
-                        "ref": context.ref,
-                    }
-                    for context in stage.context
-                ],
-                "agent": (
-                    {
-                        "session": stage.agent.session,
-                        "permissions": stage.agent.permissions,
-                        "provider": stage.agent.provider,
-                        "model": stage.agent.model,
-                        "effort": stage.agent.effort,
-                    }
-                    if stage.agent is not None
-                    else None
-                ),
-                "report_contract": stage.report_contract,
-                "retry": {
-                    "max_attempts": stage.retry.max_attempts,
-                    "timeout_minutes": stage.retry.timeout_minutes,
-                },
-                "transitions": stage.transitions,
-                "check_adapter": stage.check_adapter,
-                "check_command": list(stage.check_command),
-            })
+            LoopStepDefinitionSchema.model_validate(loop_stage_snapshot(stage))
             for stage in definition.stages
         ],
     )

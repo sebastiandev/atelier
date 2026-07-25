@@ -1,4 +1,4 @@
-export type WorkStatus = "active" | "completed" | "archived";
+export type WorkStatus = "active" | "completed" | "deleted";
 export type WorkModeKind = "manual" | "planning" | "loop";
 
 export type WorkSummary = {
@@ -14,6 +14,7 @@ export type WorkSummary = {
   // Optional grouping. ``null`` is "loose work". Resolve to a Project
   // record via ``listProjects()``.
   project_slug: string | null;
+  mode?: WorkModeKind | null;
   // Aggregated child counts for the workspace cards. Default to 0 when the
   // backend doesn't populate them (e.g. older payloads or freshly-created
   // works that have no children yet).
@@ -45,9 +46,6 @@ export type ContextEntry = {
 export type WorkDetail = WorkSummary & {
   contexts: ContextEntry[];
   chat_context_folders: WorkChatContextFolder[];
-  // Optional until the backend work-mode migration lands. The query-string
-  // seed still handles the first navigation from New Work.
-  mode?: WorkModeKind | null;
 };
 
 export type CreateWorkPayload = {
@@ -56,6 +54,7 @@ export type CreateWorkPayload = {
   contexts?: ContextEntry[];
   // Omit (or pass null) to create loose work.
   project_slug?: string | null;
+  mode?: WorkModeKind | null;
   from_chat?: WorkChatRef | null;
   chat_context_folders?: CreateWorkChatContextFolder[];
 };
@@ -121,7 +120,7 @@ export function createWork(payload: CreateWorkPayload): Promise<WorkDetail> {
 
 export function patchWork(
   slug: string,
-  payload: Partial<Pick<WorkDetail, "name" | "description" | "status" | "contexts">>,
+  payload: Partial<Pick<WorkDetail, "name" | "description" | "status" | "mode" | "contexts">>,
 ): Promise<WorkDetail> {
   return fetch(`/api/works/${slug}`, {
     method: "PATCH",
@@ -154,6 +153,8 @@ export type ChatSummary = {
   provider: string;
   model: string;
   options?: Record<string, unknown> | null;
+  discussion_only?: boolean;
+  discussion_key?: string | null;
   grounding: ChatGrounding | null;
   working_directory: string | null;
   created_at: string;
@@ -170,11 +171,14 @@ export type ChatDetail = ChatSummary & {
 export type CreateChatPayload = {
   provider: string;
   model: string;
-  first_message: string;
+  first_message?: string;
   title?: string | null;
   grounding?: ChatGrounding | null;
   working_directory?: string | null;
   options?: Record<string, string>;
+  discussion_only?: boolean;
+  context_seed?: string;
+  discussion_key?: string;
 };
 
 export function listChats(scope?: {
@@ -218,6 +222,22 @@ export async function deleteChat(slug: string): Promise<void> {
   if (!r.ok) {
     const detail = await r.text();
     throw new Error(`Delete failed (${r.status}): ${detail}`);
+  }
+}
+
+export async function reconnectChat(slug: string): Promise<void> {
+  const r = await fetch(`/api/chats/${slug}/reconnect`, { method: "POST" });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`Reconnect failed (${r.status}): ${detail}`);
+  }
+}
+
+export async function reconnectAgent(slug: string): Promise<void> {
+  const r = await fetch(`/api/agents/${slug}/reconnect`, { method: "POST" });
+  if (!r.ok) {
+    const detail = await r.text();
+    throw new Error(`Reconnect failed (${r.status}): ${detail}`);
   }
 }
 
@@ -283,32 +303,71 @@ export function revealWork(slug: string): Promise<void> {
  * non-git folders so the FE can render a "not a git repo" hint without
  * branching on errors. Most-recently-committed branch comes first.
  */
-export function listGitBranches(path: string): Promise<string[]> {
+export type GitBranchListing = {
+  path: string;
+  branches: string[];
+  is_git_repo: boolean;
+  branch: string | null;
+  detached: boolean;
+};
+
+export function getGitBranchListing(path: string): Promise<GitBranchListing> {
   const qs = new URLSearchParams({ path });
   return fetch(`/api/git/branches?${qs}`).then(async (r) => {
     if (!r.ok) {
       const body = await r.text().catch(() => "");
       throw new Error(`${r.status} ${r.statusText}: ${body}`);
     }
-    const data = (await r.json()) as { branches: string[] };
-    return data.branches;
+    return (await r.json()) as GitBranchListing;
   });
+}
+
+export function listGitBranches(path: string): Promise<string[]> {
+  return getGitBranchListing(path).then((data) => data.branches);
 }
 
 export type CompleteWorkResponse = {
   work_slug: string;
-  // Number of agents on the work; the backend stopped each + removed each
-  // worktree. Used by the FE for the success toast.
   agent_count: number;
+  workspace_count: number;
+  workspaces_removed: number;
 };
 
-/**
- * Mark a work as complete: backend stops running agents, removes their git
- * worktrees, flips the work's status to "completed". Transcripts and the
- * work folder are preserved.
- */
-export function completeWork(slug: string): Promise<CompleteWorkResponse> {
-  return fetch(`/api/works/${slug}/complete`, { method: "POST" }).then((r) =>
+export type CompletionWorkspace = {
+  owner: string;
+  path: string;
+  is_git_repo: boolean;
+  branch: string | null;
+  head: string | null;
+  changed_files: string[];
+  untracked_files: string[];
+  removable: boolean;
+  error: string | null;
+};
+
+export type CompleteWorkPreview = {
+  work_slug: string;
+  agent_count: number;
+  active_run_count: number;
+  workspaces: CompletionWorkspace[];
+};
+
+export function getWorkCompletion(slug: string): Promise<CompleteWorkPreview> {
+  return fetch(`/api/works/${slug}/completion`).then((r) =>
+    jsonOrThrow<CompleteWorkPreview>(r),
+  );
+}
+
+/** Archive a Work, preserving its durable records and workspaces by default. */
+export function completeWork(
+  slug: string,
+  payload?: { remove_workspaces: boolean },
+): Promise<CompleteWorkResponse> {
+  return fetch(`/api/works/${slug}/complete`, {
+    method: "POST",
+    headers: payload ? { "Content-Type": "application/json" } : undefined,
+    body: payload ? JSON.stringify(payload) : undefined,
+  }).then((r) =>
     jsonOrThrow<CompleteWorkResponse>(r),
   );
 }
@@ -389,6 +448,7 @@ export type LoopStepStatus =
   | "pending"
   | "running"
   | "blocked_user"
+  | "skipped"
   | "passed"
   | "changes_requested"
   | "failed"
@@ -399,7 +459,8 @@ export type LoopStepKind =
   | "agent_task"
   | "agent_review"
   | "deterministic_check"
-  | "user_approval";
+  | "user_approval"
+  | "pr";
 export type LoopPermission = "read" | "write";
 export type LoopSessionPolicy = "reuse" | "fresh";
 export type LoopContextKind =
@@ -411,12 +472,37 @@ export type LoopContextKind =
   | "previous_report"
   | "files"
   | "folder"
+  | "note"
   | "shared_context";
 export type LoopOutcome =
   | "pass"
   | "changes_requested"
   | "blocked_user"
   | "failed";
+export type LoopReviewGateMode = "automatic" | "human_check";
+
+export type LoopReviewGate = {
+  mode: LoopReviewGateMode;
+  max_passes: number;
+  locked: boolean;
+};
+
+export type LoopReviewGateState = {
+  stage_id: string;
+  destination_id: string;
+  mode: LoopReviewGateMode;
+  source: "template" | "run_override";
+  max_passes: number;
+  passes_used: number;
+  passes_spent: boolean;
+  summary: string;
+  findings: string[];
+  finding_details: Array<{
+    text: string;
+    severity: "high" | "medium" | "low" | "resolved";
+    location: string;
+  }>;
+};
 
 export type LoopContextReference = {
   kind: LoopContextKind;
@@ -432,11 +518,68 @@ export type LoopAgentPolicy = {
   provider: string | null;
   model: string | null;
   effort: string | null;
+  fast?: boolean | null;
+  approved_command_prefixes?: string[] | null;
 };
 
 export type LoopRetryPolicy = {
   max_attempts: number;
   timeout_minutes: number;
+};
+
+export type PrConfig = {
+  name: string;
+  description_mode: "automatic" | "manual";
+  description_instructions: string;
+  manual_body: string;
+  status: "draft" | "open";
+  base_branch: string;
+  branch_name: string;
+  provider?: string | null;
+  model?: string | null;
+  effort?: string | null;
+  fast?: boolean | null;
+};
+
+export type PrStageConfig = {
+  name_template: string;
+  description_mode: "automatic" | "manual";
+  description_instructions: string;
+  manual_body: string;
+  status: "draft" | "open";
+  base_branch: string;
+  branch_name: string | null;
+};
+
+export type PrFeedbackPayload = {
+  comments: Array<{ comment_id: string; instruction: string }>;
+  instruction: string;
+};
+
+export type PrLifecycle = {
+  url: string;
+  number: number | null;
+  title: string;
+  branch: string;
+  base: string;
+  status: "draft" | "open" | "merged" | "closed";
+  checks: { passed?: number; total?: number; state: string } | string;
+  review_state: string;
+  last_synced_at: string | null;
+};
+
+export type PrComment = {
+  id: string;
+  author: string;
+  location: string;
+  body: string;
+  created_at: string;
+  url: string;
+  kind?: "conversation" | "review";
+  reply_target_id?: string;
+  is_viewer?: boolean;
+  addressed_in_pass?: number | null;
+  reply_posted_at?: string | null;
 };
 
 export type LoopStepDefinition = {
@@ -451,7 +594,76 @@ export type LoopStepDefinition = {
   transitions: Partial<Record<LoopOutcome, string | null>>;
   check_adapter: string | null;
   check_command: string[];
+  note_required?: boolean | null;
+  review_gate?: LoopReviewGate | null;
+  pr_config?: PrStageConfig | null;
+  stage_ref?: { definition_id: string; revision: string } | null;
+  overrides?: StageOverrides | null;
 };
+
+export type StageOverrides = {
+  name?: string | null;
+  instructions?: string | null;
+  context?: LoopContextReference[] | null;
+  agent?: LoopAgentPolicy | null;
+  report_contract?: string | null;
+  retry?: LoopRetryPolicy | null;
+  check_adapter?: string | null;
+  check_command?: string[] | null;
+  note_required?: boolean | null;
+  review_gate?: LoopReviewGate | null;
+  pr_config?: PrStageConfig | null;
+};
+
+export type StageDefinition = {
+  id: string;
+  name: string;
+  description: string;
+  scope: Exclude<LoopDefinitionScope, "work">;
+  revision: string;
+  valid: boolean;
+  errors: string[];
+  forked_from: string | null;
+  used_by: string[];
+  stage: LoopStepDefinition;
+  outcomes: LoopOutcome[];
+  /** Frontend-only origin used when global and repository catalogs are merged. */
+  catalog_root?: string | null;
+};
+
+export type SaveStageDefinitionPayload = Pick<
+  StageDefinition,
+  "id" | "name" | "description" | "scope" | "forked_from" | "stage" | "outcomes"
+> & { expected_revision?: string | null };
+
+export type LoopBriefContextKind = "file" | "folder" | "url" | "note";
+
+export type LoopBriefContext = {
+  kind: LoopBriefContextKind;
+  value: string;
+};
+
+export type LoopBriefAgent = {
+  provider: string | null;
+  model: string | null;
+  options: Record<string, string>;
+};
+
+export type LoopStageBrief = {
+  stage_id: string;
+  note: string;
+  context: LoopBriefContext[];
+  agent: LoopBriefAgent | null;
+  review_gate?: LoopReviewGateMode | null;
+  approved_command_prefixes?: string[] | null;
+};
+
+export type LoopBrief = {
+  goal: string;
+  stages: LoopStageBrief[];
+};
+
+export type LoopRunKind = "initial" | "amend" | "verify";
 
 export type LoopDefinition = {
   id: string;
@@ -465,6 +677,11 @@ export type LoopDefinition = {
   forked_from: string | null;
   stages: LoopStepDefinition[];
 };
+
+export type LoopDefinitionSnapshot = Pick<
+  LoopDefinition,
+  "id" | "name" | "description" | "scope" | "revision" | "stages"
+>;
 
 export type SaveLoopDefinitionPayload = Pick<
   LoopDefinition,
@@ -513,6 +730,40 @@ export type PlanLoopStageRun = {
   changed_files: Array<{ path: string; additions: number; deletions: number }>;
   resolved_context: string[];
   context_warnings: string[];
+  reports: PlanLoopStageReport[];
+  push_at?: string | null;
+  pr?: PrLifecycle | null;
+  addressed_comments?: Array<Record<string, unknown>>;
+  feedback_instruction?: string;
+  approved_command_prefixes?: string[];
+};
+
+export type PlanLoopStageReport = {
+  outcome: LoopOutcome;
+  pass_number: number;
+  agent_slug: string | null;
+  summary: string;
+  findings: string[];
+  changes: string;
+  validation_evidence: string;
+  divergences: string;
+  skipped_scope: string;
+  blocker: string;
+  artifact_refs: string[];
+  finding_details: PlanLoopStageRun["finding_details"];
+  criteria_coverage: PlanLoopStageRun["criteria_coverage"];
+  changed_files: PlanLoopStageRun["changed_files"];
+  seq: number;
+  recorded_at: string;
+  review_decision?: {
+    decision: "send_back" | "approve_as_is";
+    enforced_findings: number[];
+    instruction: string;
+  } | null;
+  push_at?: string | null;
+  pr?: PrLifecycle | null;
+  addressed_comments?: Array<Record<string, unknown>>;
+  feedback_instruction?: string;
 };
 
 export type PlanArtifactRun = {
@@ -537,8 +788,16 @@ export type PlanArtifactRun = {
   loop_definition_id: string;
   loop_definition_name: string;
   loop_definition_revision: string;
+  loop_definition?: LoopDefinitionSnapshot | null;
   loop_current_stage_id: string;
   loop_stages: PlanLoopStageRun[];
+  brief_note?: string;
+  loop_review_gate?: LoopReviewGateState | null;
+  waived_findings_count?: number;
+  loop_pass_number?: number;
+  loop_passes?: Array<Record<string, unknown>>;
+  pr?: PrLifecycle | null;
+  pr_comments?: PrComment[];
 };
 
 export type WorkLoopRun = {
@@ -550,6 +809,7 @@ export type WorkLoopRun = {
   loop_definition_id: string;
   loop_definition_name: string;
   loop_definition_revision: string;
+  loop_definition?: LoopDefinitionSnapshot | null;
   current_stage_id: string | null;
   stages: PlanLoopStageRun[];
   root_path: string;
@@ -560,12 +820,23 @@ export type WorkLoopRun = {
   started_at: string;
   completed_at: string | null;
   accepted_at: string | null;
+  cancelled_at: string | null;
+  cleanup_at: string | null;
   elapsed_seconds: number | null;
   cost_usd: number | null;
   summary: string;
   changed_files: Array<{ path: string; additions: number; deletions: number }>;
   evidence: string[];
   source_run_id: string | null;
+  brief?: LoopBrief | null;
+  run_kind?: LoopRunKind;
+  seed_label?: string;
+  review_gate?: LoopReviewGateState | null;
+  waived_findings_count?: number;
+  pass_number?: number;
+  passes?: Array<Record<string, unknown>>;
+  pr?: PrLifecycle | null;
+  pr_comments?: PrComment[];
 };
 
 export type StartWorkLoopRunPayload = {
@@ -576,6 +847,8 @@ export type StartWorkLoopRunPayload = {
   provider: string;
   model: string;
   options?: Record<string, string>;
+  brief?: LoopBrief;
+  source_run_id?: string;
 };
 
 export type PlanArtifactProposal = {
@@ -662,6 +935,23 @@ export type PlanMaterializationStatus = {
   last_event_summary: string;
   message: string;
   tool_name: string | null;
+  recent_activity?: {
+    kind: string;
+    text: string;
+    ts: string | null;
+  }[];
+  pending_permissions?: {
+    request_id: string;
+    tool_name: string;
+    tool_input: Record<string, unknown>;
+    ts: string;
+    seq: number;
+    options?: {
+      option_id: string;
+      name: string;
+      kind: string;
+    }[];
+  }[];
 };
 
 export type StartWorkPlanResult = {
@@ -688,6 +978,24 @@ export function getWorkPlanMaterializationStatus(
     `/api/works/${workSlug}/plan/materialization-status`,
     init,
   ).then((r) => jsonOrThrow<PlanMaterializationStatus>(r));
+}
+
+export async function resolveWorkPlanMaterializationPermission(
+  workSlug: string,
+  requestId: string,
+  decision: "allow" | "allow_always" | "deny",
+): Promise<void> {
+  const response = await fetch(
+    `/api/works/${workSlug}/plan/materialization-permission`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request_id: requestId, decision }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
 }
 
 export function startWorkPlan(
@@ -808,6 +1116,17 @@ export function acceptPlanArtifactRun(
   ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
+export function cancelPlanArtifactRun(
+  workSlug: string,
+  artifactId: string,
+  runId: string,
+): Promise<PlanArtifactDetail> {
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/cancel`,
+    { method: "POST" },
+  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
 export function requestPlanArtifactRunChanges(
   workSlug: string,
   artifactId: string,
@@ -840,6 +1159,7 @@ export function startPlanArtifactRun(
   artifactId: string,
   agentSlug: string | null,
   definition?: Pick<LoopDefinition, "id" | "revision">,
+  briefNote?: string,
 ): Promise<PlanArtifactDetail> {
   return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/runs`, {
     method: "POST",
@@ -848,6 +1168,7 @@ export function startPlanArtifactRun(
       agent_slug: agentSlug ?? undefined,
       loop_definition_id: definition?.id,
       loop_revision: definition?.revision,
+      brief_note: briefNote || undefined,
     }),
   }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
@@ -921,7 +1242,12 @@ export function resumePlanArtifactRun(
   workSlug: string,
   artifactId: string,
   runId: string,
-  payload: { resolution_note?: string } = {},
+  payload: {
+    resolution_note?: string;
+    retry_failed?: boolean;
+    gate_decision?: "send_back" | "approve_as_is";
+    enforced_findings?: number[];
+  } = {},
 ): Promise<PlanArtifactDetail> {
   return fetch(
     `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/resume`,
@@ -1036,6 +1362,72 @@ export function revealLoopDefinition(
   });
 }
 
+function stagesPath(rootPath?: string | null): string {
+  const query = new URLSearchParams();
+  if (rootPath) query.set("root_path", rootPath);
+  const suffix = query.toString();
+  return `/api/stages${suffix ? `?${suffix}` : ""}`;
+}
+
+export function listStageDefinitions(rootPath?: string | null): Promise<StageDefinition[]> {
+  return fetch(stagesPath(rootPath)).then((response) =>
+    jsonOrThrow<StageDefinition[]>(response),
+  );
+}
+
+export async function listAvailableStageDefinitions(
+  rootPath?: string | null,
+): Promise<StageDefinition[]> {
+  const library = (await listStageDefinitions()).map((definition) => ({
+    ...definition,
+    catalog_root: null,
+  }));
+  if (!rootPath) return library;
+  const repository = (await listStageDefinitions(rootPath)).map((definition) => ({
+    ...definition,
+    catalog_root: rootPath,
+  }));
+  return [...new Map(
+    [...library, ...repository].map((definition) => [definition.id, definition]),
+  ).values()];
+}
+
+export function saveStageDefinition(
+  payload: SaveStageDefinitionPayload,
+  rootPath?: string | null,
+): Promise<StageDefinition> {
+  const updating = payload.expected_revision !== null && payload.expected_revision !== undefined;
+  return fetch(updating ? `/api/stages/${encodeURIComponent(payload.id)}` : "/api/stages", {
+    method: updating ? "PUT" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, root_path: rootPath }),
+  }).then((response) => jsonOrThrow<StageDefinition>(response));
+}
+
+export function deleteStageDefinition(
+  stageId: string,
+  rootPath?: string | null,
+): Promise<void> {
+  const query = stagesPath(rootPath).split("?")[1];
+  return fetch(`/api/stages/${encodeURIComponent(stageId)}${query ? `?${query}` : ""}`, {
+    method: "DELETE",
+  }).then((response) => {
+    if (!response.ok) return jsonOrThrow<never>(response);
+  });
+}
+
+export function revealStageDefinition(
+  stageId: string,
+  rootPath?: string | null,
+): Promise<void> {
+  const query = stagesPath(rootPath).split("?")[1];
+  return fetch(`/api/stages/${encodeURIComponent(stageId)}/reveal${query ? `?${query}` : ""}`, {
+    method: "POST",
+  }).then((response) => {
+    if (!response.ok) return jsonOrThrow<never>(response);
+  });
+}
+
 export function listWorkLoopRuns(workSlug: string): Promise<WorkLoopRun[]> {
   return fetch(`/api/works/${workSlug}/runs`).then((response) =>
     jsonOrThrow<WorkLoopRun[]>(response),
@@ -1062,15 +1454,119 @@ export function startWorkLoopRun(
   }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
 
+export function createWorkLoopRunPrStage(
+  workSlug: string,
+  runId: string,
+  payload: PrConfig,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/create-pr`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function sendWorkLoopRunPrFeedback(
+  workSlug: string,
+  runId: string,
+  payload: PrFeedbackPayload,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/pr-feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function refreshWorkLoopRunPr(
+  workSlug: string,
+  runId: string,
+  force = false,
+): Promise<WorkLoopRun> {
+  const query = force ? "?force=true" : "";
+  return fetch(`/api/works/${workSlug}/runs/${runId}/pr-refresh${query}`, {
+    method: "POST",
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function createPlanArtifactRunPrStage(
+  workSlug: string,
+  artifactId: string,
+  runId: string,
+  payload: PrConfig,
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/create-pr`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<PlanArtifactDetail>(response));
+}
+
+export function sendPlanArtifactRunPrFeedback(
+  workSlug: string,
+  artifactId: string,
+  runId: string,
+  payload: PrFeedbackPayload,
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/pr-feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<PlanArtifactDetail>(response));
+}
+
+export function refreshPlanArtifactRunPr(
+  workSlug: string,
+  artifactId: string,
+  runId: string,
+  force = false,
+): Promise<PlanArtifactDetail> {
+  const query = force ? "?force=true" : "";
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/pr-refresh${query}`,
+    { method: "POST" },
+  ).then((response) => jsonOrThrow<PlanArtifactDetail>(response));
+}
+
+export function getWorkLoopBrief(workSlug: string): Promise<LoopBrief | null> {
+  return fetch(`/api/works/${workSlug}/loop-brief`).then((response) =>
+    jsonOrThrow<LoopBrief | null>(response),
+  );
+}
+
+export function saveWorkLoopBrief(
+  workSlug: string,
+  brief: LoopBrief,
+): Promise<LoopBrief> {
+  return fetch(`/api/works/${workSlug}/loop-brief`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(brief),
+  }).then((response) => jsonOrThrow<LoopBrief>(response));
+}
+
 export function resumeWorkLoopRun(
   workSlug: string,
   runId: string,
-  resolutionNote = "",
+  payload: {
+    resolution_note?: string;
+    gate_decision?: "send_back" | "approve_as_is";
+    enforced_findings?: number[];
+  } = {},
 ): Promise<WorkLoopRun> {
   return fetch(`/api/works/${workSlug}/runs/${runId}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ resolution_note: resolutionNote || undefined }),
+    body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function retryWorkLoopRunStage(
+  workSlug: string,
+  runId: string,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/retry-stage`, {
+    method: "POST",
   }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
 
@@ -1095,11 +1591,11 @@ export function acceptWorkLoopRun(
   }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
 
-export function createWorkLoopRunPullRequest(
+export function cancelWorkLoopRun(
   workSlug: string,
   runId: string,
 ): Promise<WorkLoopRun> {
-  return fetch(`/api/works/${workSlug}/runs/${runId}/pull-request`, {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/cancel`, {
     method: "POST",
   }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
@@ -1107,9 +1603,12 @@ export function createWorkLoopRunPullRequest(
 export function rerunWorkLoopRun(
   workSlug: string,
   runId: string,
+  payload?: { kind: Exclude<LoopRunKind, "initial">; note?: string },
 ): Promise<WorkLoopRun> {
   return fetch(`/api/works/${workSlug}/runs/${runId}/rerun`, {
     method: "POST",
+    headers: payload ? { "Content-Type": "application/json" } : undefined,
+    body: payload ? JSON.stringify(payload) : undefined,
   }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
 
@@ -1130,6 +1629,7 @@ export type AgentSummary = {
   role: string;
   provider: string;
   model: string;
+  options?: Record<string, unknown> | null;
   // Working directory the adapter spawns in — per-agent so a single Work
   // can span multiple repos.
   folder: string;
@@ -1145,6 +1645,12 @@ export type AgentSummary = {
 export function listAgents(workSlug: string): Promise<AgentSummary[]> {
   return fetch(`/api/works/${workSlug}/agents`).then((r) =>
     jsonOrThrow<AgentSummary[]>(r),
+  );
+}
+
+export function getAgent(agentSlug: string): Promise<AgentSummary> {
+  return fetch(`/api/agents/${agentSlug}`).then((response) =>
+    jsonOrThrow<AgentSummary>(response),
   );
 }
 

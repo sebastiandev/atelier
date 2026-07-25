@@ -19,6 +19,7 @@ import {
   type ChatGrounding,
   type ChatDetail,
   type ChatSummary,
+  type CompletionWorkspace,
   type ContextEntry,
   type CreateAgentPayload,
   type HandoffSummary,
@@ -26,6 +27,8 @@ import {
   type PlanArtifact,
   type PlanArtifactDetail,
   type PlanMaterializationStatus,
+  type PrConfig,
+  type PrFeedbackPayload,
   type PlanningProfile,
   type ProviderDescriptor,
   type ProjectSummary,
@@ -36,25 +39,28 @@ import {
   PERSONA_GLYPH,
   acceptPlanArtifactRun,
   approveWorkPlan,
+  cancelPlanArtifactRun,
   checkPlanningFrameworkStatus,
   createAgent,
   createPlanBug,
+  createPlanArtifactRunPrStage,
   detachAgent,
   ensureWorkChatContext,
   finishWorkPlan,
   getPlanArtifact,
   getProject,
   getWork,
+  getWorkCompletion,
   getWorkPlan,
   getWorkPlanMaterializationStatus,
   listChats,
   listAgents,
   listArtifacts,
   refreshPrStatuses,
+  refreshPlanArtifactRunPr,
   listProjectShares,
   listProjects,
   listWorks,
-  markPlanRunCleaned,
   openAgentInConsole,
   patchWork,
   patchAgent,
@@ -63,6 +69,7 @@ import {
   revealWork,
   resumePlanArtifactRun,
   requestPlanArtifactRunChanges,
+  sendPlanArtifactRunPrFeedback,
   startPlanningChat,
   startPlanningSetupChat,
   startPlanArtifactRun,
@@ -79,7 +86,6 @@ import {
 } from "./Chat";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
-import { FolderPickerDialog } from "./FolderPickerDialog";
 import { HandoffDialog } from "./HandoffDialog";
 import {
   anchoredMenuPosition,
@@ -96,6 +102,7 @@ import {
 } from "./Icons";
 import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
+import { NewWorkDialog } from "./NewWorkDialog";
 import { LoopMode } from "./LoopMode";
 import { LoopSelectorDialog } from "./LoopUI";
 import {
@@ -186,12 +193,15 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     useState<PlanMaterializationStatus | null>(null);
   const [planSelectedRoot, setPlanSelectedRoot] = useState<string | null>(null);
   const [planRootCleared, setPlanRootCleared] = useState(false);
-  const [planRootPickerOpen, setPlanRootPickerOpen] = useState(false);
-  const [planRootPickerStartAfterPick, setPlanRootPickerStartAfterPick] =
-    useState(false);
   const planningStartConsumedRef = useRef(false);
   const [planningSetupPrompt, setPlanningSetupPrompt] =
     useState<PlanningSetupPrompt | null>(null);
+  const [planningDialogOpen, setPlanningDialogOpen] = useState(false);
+  const [planningEntryChecking, setPlanningEntryChecking] = useState(false);
+  const [planningEntryIssue, setPlanningEntryIssue] = useState<{
+    message: string;
+    workspaces: CompletionWorkspace[];
+  } | null>(null);
   const [workMode, setWorkMode] = useState<"manual" | "planning" | "loop">("planning");
   const [workModeExplicit, setWorkModeExplicit] = useState(false);
   const [loopStartSeed, setLoopStartSeed] = useState<LoopStartSeed | null>(null);
@@ -217,6 +227,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [deleteTarget, setDeleteTarget] = useState<AgentSummary | null>(null);
   const [deleteChatTarget, setDeleteChatTarget] = useState<ChatSummary | null>(null);
   const [completeOpen, setCompleteOpen] = useState(false);
+  const [workStatusSaving, setWorkStatusSaving] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
   // Projects list for the move picker — fetched lazily when the dialog
   // opens so the WorkView doesn't pay the cost on every mount.
@@ -342,11 +353,20 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const mode = params.get("mode");
-    const seededPlanning = params.get("start") === "planning";
-    const seededLoop = params.get("start") === "loop";
-    setWorkMode(mode === "manual" ? "manual" : mode === "loop" || seededLoop ? "loop" : "planning");
-    setWorkModeExplicit(mode === "manual" || mode === "planning" || mode === "loop" || seededPlanning || seededLoop);
+    if (params.has("mode") || params.has("start")) {
+      params.delete("mode");
+      params.delete("start");
+      const query = params.toString();
+      window.history.replaceState(
+        null,
+        "",
+        `/works/${workSlug}${query ? `?${query}` : ""}`,
+      );
+    }
+    setWork(null);
+    setError(null);
+    setWorkMode("planning");
+    setWorkModeExplicit(false);
     setLoopStartSeed(readLoopStartSeed(workSlug));
     setPlanningView({ kind: "overview" });
     setPlanOverviewTab("summary");
@@ -356,27 +376,21 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     setPlanAgentConfig(null);
     setPlanSelectedRoot(null);
     setPlanRootCleared(false);
-    setPlanRootPickerOpen(false);
-    setPlanRootPickerStartAfterPick(false);
+    setPlanningDialogOpen(false);
+    setPlanningEntryChecking(false);
+    setPlanningEntryIssue(null);
     planningStartConsumedRef.current = false;
     setPlanChatOpen(true);
     setPendingLoopTarget(null);
   }, [workSlug]);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const mode = params.get("mode");
-    const routeSelectsMode =
-      mode === "manual" ||
-      mode === "planning" ||
-      mode === "loop" ||
-      params.get("start") === "planning" ||
-      params.get("start") === "loop";
-    if (workModeExplicit || routeSelectsMode) return;
-    if (work?.mode === "loop") {
-      setWorkMode("loop");
+    if (!work) return;
+    if (work.mode) {
+      setWorkMode(work.mode);
       return;
     }
+    if (workModeExplicit) return;
     if (plan !== null || planningChatFrom(chats, workSlug) !== null) {
       setWorkMode("planning");
       return;
@@ -386,7 +400,15 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       return;
     }
     setWorkMode("planning");
-  }, [agents.length, chats.length, plan, work?.mode, workModeExplicit, workSlug]);
+  }, [agents.length, chats.length, plan, work, workModeExplicit, workSlug]);
+
+  useEffect(() => {
+    const persistedFramework =
+      plan?.work_slug === workSlug
+        ? plan.framework
+        : planningFrameworkFromChat(planningChatFrom(chats, workSlug));
+    if (persistedFramework) setPlanFramework(persistedFramework);
+  }, [chats, plan, workSlug]);
 
   useEffect(() => {
     if (!work || planningStartConsumedRef.current) return;
@@ -421,7 +443,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       profile: seed.profile,
       artifactRootPath: seed.planDir,
       agentConfig: seed.agentConfig,
-    });
+    }).catch(() => {});
   }, [work, workSlug]);
 
   // Open the project switcher and lazy-fetch the project list if we
@@ -474,6 +496,88 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   function chooseWorkMode(mode: "manual" | "planning" | "loop") {
     setWorkMode(mode);
     setWorkModeExplicit(true);
+    if (!work || work.mode === mode) return;
+    void patchWork(work.slug, { mode })
+      .then(setWork)
+      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+  }
+
+  async function unsafePlanningWorkspaces(): Promise<CompletionWorkspace[]> {
+    if (!work) return [];
+    const preview = await getWorkCompletion(work.slug);
+    return preview.workspaces.filter((workspace) => !workspace.removable);
+  }
+
+  async function openPlanningDialog() {
+    if (!work || planningEntryChecking) return;
+    setPlanningEntryChecking(true);
+    setPlanningEntryIssue(null);
+    try {
+      const workspaces = await unsafePlanningWorkspaces();
+      if (workspaces.length > 0) {
+        setPlanningEntryIssue({
+          message:
+            "Planning mode would hide the current agent workspaces. Commit, preserve, or discard their local changes before switching modes.",
+          workspaces,
+        });
+        return;
+      }
+      setPlanningDialogOpen(true);
+    } catch (reason) {
+      setPlanningEntryIssue({
+        message:
+          reason instanceof Error
+            ? `Could not inspect the current agent workspaces: ${reason.message}`
+            : "Could not inspect the current agent workspaces.",
+        workspaces: [],
+      });
+    } finally {
+      setPlanningEntryChecking(false);
+    }
+  }
+
+  async function startPlanningFromDialog(seed: PlanningStartSeed) {
+    const workspaces = await unsafePlanningWorkspaces();
+    if (workspaces.length > 0) {
+      setPlanningDialogOpen(false);
+      setPlanningEntryIssue({
+        message:
+          "Agent workspace changes appeared while Planning was being configured. Preserve them before switching modes.",
+        workspaces,
+      });
+      return;
+    }
+    setPlanSelectedRoot(seed.folder);
+    setPlanRootCleared(false);
+    setPlanArtifactRootDraft(seed.planDir);
+    setPlanFramework(seed.framework);
+    setPlanProfile(seed.profile);
+    setPlanPromptDraft(seed.idea);
+    setPlanAgentConfig(seed.agentConfig);
+    await handleStartPlanningChat(seed.folder, {
+      prompt: seed.idea,
+      framework: seed.framework,
+      profile: seed.profile,
+      artifactRootPath: seed.planDir,
+      agentConfig: seed.agentConfig,
+    });
+    setPlanningDialogOpen(false);
+  }
+
+  async function reopenWork() {
+    if (!work || work.status === "active") return;
+    setWorkStatusSaving(true);
+    setError(null);
+    setPlanError(null);
+    try {
+      setWork(await patchWork(work.slug, { status: "active" }));
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      setError(message);
+      setPlanError(message);
+    } finally {
+      setWorkStatusSaving(false);
+    }
   }
 
   function openPlanningView(next: PlanningView) {
@@ -525,9 +629,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         e.preventDefault();
         openProjectSwitcher();
       } else if (!e.shiftKey && (e.key === "n" || e.key === "N")) {
+        if (work?.status !== "active") return;
         e.preventDefault();
         setAgentDialogOpen(true);
       } else if (e.shiftKey && (e.key === "c" || e.key === "C")) {
+        if (work?.status !== "active") return;
         e.preventDefault();
         openChatComposer();
       }
@@ -547,6 +653,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     searchOpen,
     allProjects,
     allWorks,
+    work?.status,
   ]);
 
   // Refetch on revision bump (an agent emitted artifact_recorded) AND on
@@ -707,12 +814,15 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       if (inFlight) return;
       inFlight = true;
       try {
-        const next = await getWorkPlan(workSlug);
+        const [next, detail] = await Promise.all([
+          getWorkPlan(workSlug),
+          selectedPlanArtifactId
+            ? getPlanArtifact(workSlug, selectedPlanArtifactId)
+            : Promise.resolve(null),
+        ]);
         if (cancelled) return;
         setPlan(next);
-        if (selectedPlanArtifactId) {
-          const detail = await getPlanArtifact(workSlug, selectedPlanArtifactId);
-          if (cancelled) return;
+        if (detail) {
           setPlanArtifactDetail(detail);
           setPlanDraft((currentDraft) => {
             if (!planArtifactDetail || currentDraft === planArtifactDetail.content) {
@@ -849,6 +959,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   async function handleStartAgentFromChat(chat: ChatDetail) {
     const currentWork = work;
     if (!currentWork) return;
+    if (currentWork.status !== "active") {
+      showToast("Reopen this work before starting an agent.");
+      return;
+    }
     let folder =
       currentWork.chat_context_folders.find((f) => f.chat_slug === chat.slug) ??
       null;
@@ -883,16 +997,20 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     return next;
   }
 
-  function openPlanRootPicker(startAfterPick = false) {
-    setPlanRootPickerStartAfterPick(startAfterPick);
-    setPlanRootPickerOpen(true);
-  }
-
   async function createPlanningSetupChat(rootPath: string) {
     if (!work) return;
     setPlanLoading(true);
     setPlanError(null);
     try {
+      const status = await checkPlanningFrameworkStatus(work.slug, {
+        root_path: rootPath,
+        framework: planFramework,
+      });
+      if (status.ready) {
+        setPlanningSetupPrompt(null);
+        await handleStartPlanningChat(rootPath);
+        return;
+      }
       const agent = await resolvePlanningAgentConfig(planAgentConfig);
       const created = await startPlanningSetupChat(work.slug, {
         root_path: rootPath,
@@ -911,7 +1029,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       focusChat(created.slug);
       showToast("Planning setup chat created.");
     } catch (err) {
-      setPlanError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setPlanError(message);
+      setPlanningSetupPrompt((current) =>
+        current ? { ...current, message } : current,
+      );
     } finally {
       setPlanLoading(false);
     }
@@ -970,6 +1092,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       openPlanningView({ kind: "overview" });
     } catch (err) {
       setPlanError(err instanceof Error ? err.message : String(err));
+      throw err;
     } finally {
       setPlanLoading(false);
     }
@@ -1138,34 +1261,24 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     artifact: PlanArtifact,
     runId: string,
     agentSlug: string,
+    retryFailed = false,
+    resolutionNote = "",
+    gateDecision?: "send_back" | "approve_as_is",
+    enforcedFindings: number[] = [],
   ) {
     setPlanSaving(true);
     setPlanError(null);
     try {
-      const saved = await resumePlanArtifactRun(workSlug, artifact.id, runId);
+      const saved = await resumePlanArtifactRun(workSlug, artifact.id, runId, {
+        resolution_note: resolutionNote || undefined,
+        retry_failed: retryFailed,
+        gate_decision: gateDecision,
+        enforced_findings: enforcedFindings,
+      });
       setPlanArtifactDetail(saved);
       setPlanDraft(saved.content);
       await refreshPlan(saved.artifact.id);
       setFocusedSlug(agentSlug);
-    } catch (err) {
-      setPlanError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setPlanSaving(false);
-    }
-  }
-
-  async function handleCleanupPlanRun(
-    artifact: PlanArtifact,
-    runId: string,
-  ) {
-    setPlanSaving(true);
-    setPlanError(null);
-    try {
-      const saved = await markPlanRunCleaned(workSlug, artifact.id, runId);
-      setPlanArtifactDetail(saved);
-      setPlanDraft(saved.content);
-      await Promise.all([refreshAgents(), refreshPlan(saved.artifact.id)]);
-      showToast("Run agents cleaned up.");
     } catch (err) {
       setPlanError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1182,6 +1295,23 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       setPlanDraft(saved.content);
       await refreshPlan(saved.artifact.id);
       showToast("Result approved.");
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
+  async function handleCancelPlanRun(artifact: PlanArtifact, runId: string) {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const saved = await cancelPlanArtifactRun(workSlug, artifact.id, runId);
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      await refreshPlan(saved.artifact.id);
+      showToast("Run cancelled. Its workspace was preserved.");
     } catch (err) {
       setPlanError(err instanceof Error ? err.message : String(err));
       throw err;
@@ -1213,6 +1343,82 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       throw err;
     } finally {
       setPlanSaving(false);
+    }
+  }
+
+  async function handleCreatePlanRunPr(
+    artifact: PlanArtifact,
+    runId: string,
+    setup: PrConfig,
+  ) {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const saved = await createPlanArtifactRunPrStage(
+        workSlug,
+        artifact.id,
+        runId,
+        setup,
+      );
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      await refreshPlan(saved.artifact.id);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
+  async function handleSendPlanRunPrFeedback(
+    artifact: PlanArtifact,
+    runId: string,
+    payload: PrFeedbackPayload,
+  ) {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const saved = await sendPlanArtifactRunPrFeedback(
+        workSlug,
+        artifact.id,
+        runId,
+        payload,
+      );
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      await refreshPlan(saved.artifact.id);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
+  async function handleRefreshPlanRunPr(
+    artifact: PlanArtifact,
+    runId: string,
+    force = false,
+  ) {
+    if (force) {
+      setPlanSaving(true);
+      setPlanError(null);
+    }
+    try {
+      const saved = await refreshPlanArtifactRunPr(
+        workSlug,
+        artifact.id,
+        runId,
+        force,
+      );
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      if (force) await refreshPlan(saved.artifact.id);
+    } catch (err) {
+      if (force) setPlanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (force) setPlanSaving(false);
     }
   }
 
@@ -1261,6 +1467,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   async function handleLoopSelected(
     detail: PlanArtifactDetail,
     definition: LoopDefinition,
+    briefNote?: string,
   ): Promise<void> {
     setPlanSaving(true);
     setPlanError(null);
@@ -1270,6 +1477,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         detail.artifact.id,
         null,
         definition,
+        briefNote,
       );
       setPendingLoopTarget(null);
       setPlanArtifactDetail(linked);
@@ -1419,6 +1627,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const selectedContextFolder =
     chatContextFolders.find((f) => f.name === contextDocFolder) ?? null;
   const planningModeActive = workMode === "planning";
+  const planningModeReady = planningModeActive && Boolean(plan || planningChat);
   const loopModeActive = workMode === "loop";
   const planInitialRoot =
     agents[0]?.folder ??
@@ -1478,6 +1687,18 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             Cancel
           </button>
           <button
+            className="btn"
+            disabled={planLoading}
+            onClick={() => {
+              setPlanningSetupPrompt(null);
+              void handleStartPlanningChat(planningSetupPrompt.rootPath).catch(
+                () => undefined,
+              );
+            }}
+          >
+            Check again
+          </button>
+          <button
             className="btn primary"
             disabled={planLoading}
             onClick={() => {
@@ -1497,19 +1718,31 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         work={work}
         project={project}
         artifacts={artifacts}
-        chats={chats}
         initialSeed={loopStartSeed}
-        onSearch={openSearch}
-        onOpenChat={(chatSlug) => window.location.assign(`/chats/${chatSlug}`)}
       />
     );
   }
 
-  if (planningModeActive) {
+  if (planningModeReady) {
     return (
       <div className="planning-host" style={projectStyleVars}>
         <PlanningMode
           work={work}
+          workAction={
+            work.status === "active" ? (
+              <button
+                className="btn sm"
+                disabled={workStatusSaving}
+                onClick={() => setCompleteOpen(true)}
+              >
+                <CheckIcon size={11} /> Mark done
+              </button>
+            ) : (
+              <button className="btn sm" disabled={workStatusSaving} onClick={() => void reopenWork()}>
+                {workStatusSaving ? "Reopening..." : "Reopen"}
+              </button>
+            )
+          }
           project={project}
           plan={plan}
           materializationStatus={planMaterializationStatus}
@@ -1517,49 +1750,19 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           planningChatSummary={planningChat}
           planningChatProjects={allProjects ?? (project ? [project] : [])}
           planningChatWorks={allWorks ?? [work]}
+          runAgents={agents}
           selectedDetail={planArtifactDetail}
           draft={planDraft}
           error={planError}
-          loading={planLoading}
           saving={planSaving}
           view={planningView}
           overviewTab={planOverviewTab}
           chatOpen={planChatOpen}
-          initialRoot={planningRoot}
-          artifactRootPath={planningArtifactRoot}
-          prompt={planPromptDraft ?? work.description}
-          profile={planProfile}
           framework={planFramework}
-          agentConfig={planAgentConfig}
-          onPromptChange={setPlanPromptDraft}
-          onProfileChange={setPlanProfile}
-          onFrameworkChange={setPlanFramework}
-          onArtifactRootPathChange={setPlanArtifactRootDraft}
-          onAgentConfigChange={setPlanAgentConfig}
           onOverviewTab={setPlanOverviewTab}
           onView={openPlanningView}
-          onChooseRoot={() => openPlanRootPicker(false)}
-          onClearRoot={() => {
-            setPlanSelectedRoot(null);
-            setPlanRootCleared(true);
-          }}
-          onStart={() => {
-            if (planningRoot) {
-              void handleStartPlanningChat(planningRoot);
-              return;
-            }
-            openPlanRootPicker(true);
-          }}
           onCreateSourcePlan={handleCreateSourcePlanFromPlanningChat}
           onFinishConversation={handleFinishPlanningConversation}
-          onManual={() => chooseWorkMode("manual")}
-          onLoop={() => {
-            setLoopStartSeed({
-              folder: planningRoot ?? "",
-              goal: planPromptDraft ?? work.description ?? work.name,
-            });
-            chooseWorkMode("loop");
-          }}
           onDraftChange={setPlanDraft}
           onSave={handleSavePlanArtifact}
           onReset={() => {
@@ -1568,33 +1771,51 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           onApprovePlan={handleApprovePlan}
           onCreateBug={handleCreatePlanBug}
           onLaunch={handleLaunchPlanArtifact}
-          onResolveLoopBlocker={(artifact, runId, agentSlug) =>
-            void handleResolvePlanLoopBlocker(artifact, runId, agentSlug)
-          }
-          onCleanupRun={(artifact, runId) =>
-            void handleCleanupPlanRun(artifact, runId)
+          onResolveLoopBlocker={(artifact, runId, agentSlug, retryFailed, resolutionNote, gateDecision, enforcedFindings) =>
+            void handleResolvePlanLoopBlocker(
+              artifact,
+              runId,
+              agentSlug,
+              retryFailed,
+              resolutionNote,
+              gateDecision,
+              enforcedFindings,
+            )
           }
           onApproveRun={(artifact, runId) =>
             handleApprovePlanRun(artifact, runId)
           }
+          onCancelRun={(artifact, runId) =>
+            handleCancelPlanRun(artifact, runId)
+          }
           onRequestRunChanges={(artifact, runId, note) =>
             handleRequestPlanRunChanges(artifact, runId, note)
           }
+          onCreateRunPr={handleCreatePlanRunPr}
+          onSendRunPrFeedback={handleSendPlanRunPrFeedback}
+          onRefreshRunPr={handleRefreshPlanRunPr}
           onChatOpen={setPlanChatOpen}
           onPlanningChatUpdated={patchChatSummary}
         />
+        {completeOpen && (
+          <CompleteWorkDialog
+            work={work}
+            onClose={() => setCompleteOpen(false)}
+            onCompleted={() => window.location.assign("/")}
+          />
+        )}
         {pendingLoopTarget && (
           <LoopSelectorDialog
             workSlug={work.slug}
             rootPath={planningRoot}
             target={pendingLoopTarget}
             onClose={() => setPendingLoopTarget(null)}
-            onStart={(definition) =>
-              handleLoopSelected(pendingLoopTarget, definition)
+            onStart={(definition, briefNote) =>
+              handleLoopSelected(pendingLoopTarget, definition, briefNote)
             }
           />
         )}
-        {agentDialogOpen && (
+        {work.status === "active" && agentDialogOpen && (
           <NewAgentDialog
             workSlug={work.slug}
             workName={work.name}
@@ -1608,25 +1829,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             forkFromAgent={agentDialogPrefill?.forkFromAgent}
             initialGoal={agentDialogPrefill?.initialGoal}
             initialContexts={agentDialogPrefill?.initialContexts}
-          />
-        )}
-        {planRootPickerOpen && (
-          <FolderPickerDialog
-            initialPath={planningRoot}
-            mode="folder"
-            onCancel={() => {
-              setPlanRootPickerOpen(false);
-              setPlanRootPickerStartAfterPick(false);
-            }}
-            onPick={(picked) => {
-              setPlanRootPickerOpen(false);
-              setPlanSelectedRoot(picked);
-              setPlanRootCleared(false);
-              if (planRootPickerStartAfterPick) {
-                setPlanRootPickerStartAfterPick(false);
-                void handleStartPlanningChat(picked);
-              }
-            }}
           />
         )}
         {planningSetupDialog}
@@ -1648,18 +1850,27 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             : []),
           { label: work.slug },
         ]}
-        onSearch={openSearch}
         primaryAction={
-          <button className="btn primary sm" onClick={() => setAgentDialogOpen(true)}>
-            + New agent <span className="kbd">N</span>
-          </button>
+          work.status === "active" ? (
+            <>
+              <button className="btn sm" onClick={() => setCompleteOpen(true)}>
+                <CheckIcon size={11} /> Mark done
+              </button>
+              <button className="btn primary sm" onClick={() => setAgentDialogOpen(true)}>
+                + New agent <span className="kbd">N</span>
+              </button>
+            </>
+          ) : (
+            <button className="btn sm" disabled={workStatusSaving} onClick={() => void reopenWork()}>
+              {workStatusSaving ? "Reopening..." : "Reopen"}
+            </button>
+          )
         }
       />
 
       {completeOpen && (
         <CompleteWorkDialog
           work={work}
-          agentCount={agents.length}
           onClose={() => setCompleteOpen(false)}
           onCompleted={(_count) => {
             // Navigate back to the workspace; the completed work falls out
@@ -1702,29 +1913,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           <div className="name">{work.name}</div>
           {work.description && <div className="desc">{work.description}</div>}
           <div className="pills">
-            {work.status === "active" ? (
-              <button
-                className="btn"
-                onClick={() => setCompleteOpen(true)}
-                title="Mark this work as complete (stops agents, removes worktrees, keeps transcripts)"
-              >
-                <CheckIcon size={11} /> Mark done
-              </button>
-            ) : (
-              <button
-                className="btn"
-                onClick={() => {
-                  patchWork(work.slug, { status: "active" })
-                    .then(setWork)
-                    .catch((err) =>
-                      setError(err instanceof Error ? err.message : String(err)),
-                    );
-                }}
-                title="Reopen this completed work"
-              >
-                Reopen
-              </button>
-            )}
             {work.status === "active" && (
               <button
                 className="btn icon sm"
@@ -1832,10 +2020,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                     </button>
                   ) : (
                     <button
-                      onClick={() => chooseWorkMode("planning")}
-                      disabled={planLoading}
+                      onClick={() => void openPlanningDialog()}
+                      disabled={planningEntryChecking}
                     >
-                      plan
+                      {planningEntryChecking ? "checking" : "plan"}
                     </button>
                   )}
                 </span>
@@ -1845,13 +2033,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   <button
                     type="button"
                     className="v3-plan-start"
-                    onClick={() => chooseWorkMode("planning")}
-                    disabled={planLoading}
+                    onClick={() => void openPlanningDialog()}
+                    disabled={planningEntryChecking}
                   >
                     <span className="pip"><SparkIcon size={12} /></span>
                     <span className="meta">
                       <span className="name mono">
-                        {planLoading ? "starting plan" : "Plan this work"}
+                        {planningEntryChecking ? "checking workspaces" : "Plan this work"}
                       </span>
                       <span className="role">BMAD lightweight</span>
                     </span>
@@ -1877,11 +2065,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   {orderedAgents.length}
                 </span>
               </span>
-              <span className="right">
-                <button onClick={() => setAgentDialogOpen(true)}>
-                  + new <span className="kbd" style={{ marginLeft: 4 }}>N</span>
-                </button>
-              </span>
+              {work.status === "active" && (
+                <span className="right">
+                  <button onClick={() => setAgentDialogOpen(true)}>
+                    + new <span className="kbd" style={{ marginLeft: 4 }}>N</span>
+                  </button>
+                </span>
+              )}
             </div>
             <div className="work-rail-section-body themed-scrollbar">
               {orderedAgents.length === 0 && (
@@ -1893,6 +2083,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   agent={a}
                   focused={focusedSlug === a.slug}
                   closed={closedSlugs.includes(a.slug)}
+                  readOnly={work.status !== "active"}
                   onFocus={() => focusAgent(a.slug)}
                   onDelete={() => setDeleteTarget(a)}
                   onRename={(name) =>
@@ -1931,8 +2122,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                     focused={focusedSlug === c.slug}
                     hideGrounding
                     onOpen={() => focusChat(c.slug)}
-                    onRenamed={patchChatSummary}
-                    onDelete={setDeleteChatTarget}
+                    onRenamed={work.status === "active" ? patchChatSummary : undefined}
+                    onDelete={work.status === "active" ? setDeleteChatTarget : undefined}
                   />
                 ))}
               </div>
@@ -2048,17 +2239,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       </aside>
 
       <main className="shell-right work-right">
-        {completeOpen && (
-          <CompleteWorkDialog
-            work={work}
-            agentCount={agents.length}
-            onClose={() => setCompleteOpen(false)}
-            onCompleted={(_count) => {
-              window.location.assign("/");
-            }}
-          />
-        )}
-
         {moveOpen && allProjects !== null && (
           <MoveWorkDialog
             work={work}
@@ -2091,10 +2271,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                   {work.status === "active" && !plan && (
                     <button
                       className="btn primary"
-                      onClick={() => chooseWorkMode("planning")}
-                      disabled={planLoading}
+                      onClick={() => void openPlanningDialog()}
+                      disabled={planningEntryChecking}
                     >
-                      <SparkIcon size={12} /> Plan this work
+                      <SparkIcon size={12} />{" "}
+                      {planningEntryChecking ? "Checking workspaces..." : "Plan this work"}
                     </button>
                   )}
                 </div>
@@ -2133,15 +2314,16 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                           agentName={a.name}
                           provider={a.provider}
                           model={a.model}
+                          readOnly={work.status !== "active"}
                           worktreePath={a.worktree_path}
                           onClose={() => {
                             closeAgent(workSlug, a.slug);
                             if (focusedSlug === a.slug) setFocusedSlug(null);
                           }}
-                          onDetach={() => {
+                          onDetach={work.status === "active" ? () => {
                             void handleDetach(a.slug);
-                          }}
-                          onHandoff={() => setHandoffSource(a)}
+                          } : undefined}
+                          onHandoff={work.status === "active" ? () => setHandoffSource(a) : undefined}
                           onOpenInIde={() => {
                             window.location.href = editorUrl(editor, a.worktree_path);
                           }}
@@ -2182,13 +2364,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                               );
                             });
                           }}
-                          onRename={(name) =>
+                          onRename={work.status === "active" ? (name) =>
                             setAgents((curr) =>
                               curr.map((x) =>
                                 x.slug === a.slug ? { ...x, name } : x,
                               ),
                             )
-                          }
+                          : undefined}
                         />
                       </SortableCanvasCell>
                     );
@@ -2211,8 +2393,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                         projects={allProjects ?? (project ? [project] : [])}
                         works={allWorks ?? [work]}
                         onClose={() => closeChat(slug)}
-                        onStartAgent={(chat) => handleStartAgentFromChat(chat)}
-                        onUpdated={patchChatSummary}
+                        readOnly={work.status !== "active"}
+                        onStartAgent={work.status === "active" ? (chat) => handleStartAgentFromChat(chat) : undefined}
+                        onUpdated={work.status === "active" ? patchChatSummary : undefined}
                       />
                     </SortableCanvasCell>
                   );
@@ -2221,7 +2404,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             </div>
           </DndContext>
       </main>
-      {agentDialogOpen && (
+      {work.status === "active" && agentDialogOpen && (
         <NewAgentDialog
           workSlug={work.slug}
           workName={work.name}
@@ -2271,6 +2454,30 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             removeChatEverywhere(slug);
             setDeleteChatTarget(null);
           }}
+        />
+      )}
+      {planningDialogOpen && (
+        <NewWorkDialog
+          work={work}
+          projects={project ? [project] : []}
+          presetProjectSlug={work.project_slug}
+          lockProjectSlug
+          initialPlanningSeed={{
+            idea: planPromptDraft ?? work.description ?? work.name,
+            framework: planFramework,
+            profile: planProfile,
+            folder: planningRoot ?? "",
+            planDir: planningArtifactRoot,
+            agentConfig: planAgentConfig,
+          }}
+          onClose={() => setPlanningDialogOpen(false)}
+          onPlan={startPlanningFromDialog}
+        />
+      )}
+      {planningEntryIssue && (
+        <PlanningTransitionBlockedDialog
+          issue={planningEntryIssue}
+          onClose={() => setPlanningEntryIssue(null)}
         />
       )}
       {planningSetupDialog}
@@ -2348,25 +2555,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             ]);
             setChatComposerGrounding(undefined);
             focusChat(chat.slug);
-          }}
-        />
-      )}
-      {planRootPickerOpen && (
-        <FolderPickerDialog
-          initialPath={planningRoot}
-          mode="folder"
-          onCancel={() => {
-            setPlanRootPickerOpen(false);
-            setPlanRootPickerStartAfterPick(false);
-          }}
-          onPick={(picked) => {
-            setPlanRootPickerOpen(false);
-            setPlanSelectedRoot(picked);
-            setPlanRootCleared(false);
-            if (planRootPickerStartAfterPick) {
-              setPlanRootPickerStartAfterPick(false);
-              void handleStartPlanningChat(picked);
-            }
           }}
         />
       )}
@@ -2455,6 +2643,7 @@ function V3RailAgentRow({
   agent,
   focused,
   closed,
+  readOnly,
   onFocus,
   onDelete,
   onRename,
@@ -2462,6 +2651,7 @@ function V3RailAgentRow({
   agent: AgentSummary;
   focused: boolean;
   closed: boolean;
+  readOnly: boolean;
   onFocus: () => void;
   onDelete: () => void;
   onRename: (name: string) => void;
@@ -2596,11 +2786,11 @@ function V3RailAgentRow({
           ) : (
             <div
               className="name mono"
-              onDoubleClick={(e) => {
+              onDoubleClick={readOnly ? undefined : (e) => {
                 e.stopPropagation();
                 startRename();
               }}
-              title="Double-click to rename"
+              title={readOnly ? undefined : "Double-click to rename"}
             >
               {agent.name}
             </div>
@@ -2616,7 +2806,7 @@ function V3RailAgentRow({
       {renameError && !editing && (
         <div className="rail-agent-rename-err">{renameError}</div>
       )}
-      {!editing && (
+      {!readOnly && !editing && (
         <button
           ref={kebabRef}
           type="button"
@@ -2689,6 +2879,20 @@ function planningChatFrom(
         chat.grounding.ref === workSlug,
     ) ?? null
   );
+}
+
+function planningFrameworkFromChat(
+  chat: ChatSummary | null,
+): PlanningFrameworkId | null {
+  const config = chat?.options?.planning_config;
+  if (!config || typeof config !== "object") return null;
+  const framework = (config as Record<string, unknown>).framework;
+  return framework === "bmad" ||
+    framework === "spec" ||
+    framework === "openspec" ||
+    framework === "custom"
+    ? framework
+    : null;
 }
 
 function normalizePlanningChatSummary(
@@ -2774,6 +2978,83 @@ const PLAN_KIND_LABEL: Record<PlanArtifact["kind"], string> = {
   hotfix: "HF",
   note: "NT",
 };
+
+function PlanningTransitionBlockedDialog({
+  issue,
+  onClose,
+}: {
+  issue: { message: string; workspaces: CompletionWorkspace[] };
+  onClose: () => void;
+}) {
+  return (
+    <div className="scrim" onClick={onClose}>
+      <div
+        className="modal modal-lg complete-work-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="planning-transition-blocked-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="modal-hd">
+          <div>
+            <h3 id="planning-transition-blocked-title">Planning mode is blocked</h3>
+            <p className="sub">Current agent work must be preserved first</p>
+          </div>
+          <button className="btn icon" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="modal-bd">
+          <p className="complete-work-copy">{issue.message}</p>
+          {issue.workspaces.length > 0 && (
+            <section className="complete-work-workspaces" aria-label="Protected workspaces">
+              {issue.workspaces.map((workspace) => (
+                <article
+                  className="complete-work-workspace"
+                  key={`${workspace.owner}:${workspace.path}`}
+                >
+                  <header>
+                    <strong>{workspace.owner}</strong>
+                    <span className="protected">
+                      {workspace.error
+                        ? "Inspection failed"
+                        : workspace.is_git_repo
+                          ? "Changes present"
+                          : "Not a Git worktree"}
+                    </span>
+                  </header>
+                  <code title={workspace.path}>{workspace.path}</code>
+                  {(workspace.changed_files.length > 0 ||
+                    workspace.untracked_files.length > 0) && (
+                    <ul>
+                      {workspace.changed_files.map((file) => (
+                        <li key={`changed:${file}`}>
+                          {file} <em>changed</em>
+                        </li>
+                      ))}
+                      {workspace.untracked_files.map((file) => (
+                        <li key={`untracked:${file}`}>
+                          {file} <em>untracked</em>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {workspace.error && <p>{workspace.error}</p>}
+                </article>
+              ))}
+            </section>
+          )}
+        </div>
+        <div className="modal-ft">
+          <span className="spacer" />
+          <button className="btn primary" onClick={onClose}>
+            Keep current mode
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function V3RailPlanArtifactRow({
   artifact,

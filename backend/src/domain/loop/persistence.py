@@ -1,4 +1,4 @@
-"""Shared projection from Planning manifests into generic loop persistence."""
+"""Project loop state into its durable run and stage entities."""
 
 from __future__ import annotations
 
@@ -6,24 +6,26 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
+from src.domain.loop import actions
 from src.domain.loop.dtos import LoopStatus, LoopStepKind, LoopStepStatus, LoopTargetKind
 from src.domain.loop.models import LoopRunRecord, LoopStepRunRecord
 from src.domain.loop.ports import LoopRunRepository
-from src.domain.planning import actions
-from src.domain.planning.dtos import PlanArtifactSummary
 
 
-def persist_artifact_run(
+def persist_run(
     repository: LoopRunRepository,
     *,
     work_slug: str,
-    artifact: PlanArtifactSummary,
+    target_kind: LoopTargetKind,
+    target_ref: str,
     run: dict[str, Any],
+    artifact_id: str | None = None,
+    plan_run_id: str | None = None,
 ) -> None:
-    """Persist one Planning run in the shared loop index.
+    """Persist one target-independent loop run.
 
-    Preconditions: ``run`` is the manifest row for ``artifact``.
-    Postconditions: the SQL run and stage snapshots match the manifest row.
+    Preconditions: ``run`` contains an initialized loop snapshot.
+    Postconditions: the durable run and stage rows match the supplied state.
     """
     loop = actions.dict_or_empty(run.get("loop"))
     run_key = actions.str_or_empty(loop.get("loop_run_id"))
@@ -31,15 +33,24 @@ def persist_artifact_run(
         return
     now = datetime.now(UTC)
     status = _loop_status(loop.get("status"))
+    existing = repository.get(work_slug, run_key)
     completed_at = _date(run.get("completed_at"))
-    cleanup_at = _date(run.get("cleanup_at"))
+    accepted_at = (
+        _date(run.get("accepted_at"))
+        if "accepted_at" in run
+        else existing.accepted_at
+        if existing is not None
+        else None
+    )
+    if accepted_at is None and status == LoopStatus.ACCEPTED:
+        accepted_at = completed_at
     record = LoopRunRecord(
         run_key=run_key,
         work_slug=work_slug,
-        target_kind=LoopTargetKind.PLANNING_ARTIFACT,
-        target_ref=artifact.source_ref,
-        artifact_id=artifact.id,
-        plan_run_id=actions.str_or_none(run.get("id")),
+        target_kind=target_kind,
+        target_ref=target_ref,
+        artifact_id=artifact_id,
+        plan_run_id=plan_run_id,
         definition_id=actions.str_or_empty(loop.get("definition_id")),
         definition_revision=actions.str_or_empty(loop.get("definition_revision")),
         definition_snapshot=deepcopy(actions.dict_or_empty(loop.get("definition_snapshot"))),
@@ -49,12 +60,11 @@ def persist_artifact_run(
         started_at=_date(run.get("started_at")) or now,
         updated_at=now,
         completed_at=completed_at,
-        accepted_at=(
-            completed_at
-            if status in {LoopStatus.ACCEPTED, LoopStatus.CLEANED}
-            else None
-        ),
-        cleanup_at=cleanup_at,
+        accepted_at=accepted_at,
+        cancelled_at=_date(run.get("cancelled_at"))
+        or (existing.cancelled_at if existing is not None else None),
+        cleanup_at=_date(run.get("cleanup_at"))
+        or (existing.cleanup_at if existing is not None else None),
     )
     repository.upsert(record, _stage_records(run_key, loop, now))
 
@@ -76,10 +86,13 @@ def _stage_records(
             status = LoopStepStatus(actions.str_or_empty(stage.get("status")))
         except ValueError:
             continue
+        step_id = actions.str_or_empty(stage.get("id"))
+        if not step_id:
+            continue
         rows.append(
             LoopStepRunRecord(
                 run_key=run_key,
-                step_id=actions.str_or_empty(stage.get("id")),
+                step_id=step_id,
                 kind=kind,
                 status=status,
                 attempt=actions.int_or_default(stage.get("attempt"), 0),
@@ -89,7 +102,7 @@ def _stage_records(
                 updated_at=now,
             )
         )
-    return tuple(row for row in rows if row.step_id)
+    return tuple(rows)
 
 
 def _stage_cursor(stage: dict[str, Any], loop: dict[str, Any]) -> int:
@@ -120,4 +133,4 @@ def _date(value: object) -> datetime | None:
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
-__all__ = ["persist_artifact_run"]
+__all__ = ["persist_run"]

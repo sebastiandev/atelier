@@ -2,56 +2,49 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type ArtifactSummary,
-  type ChatSummary,
+  type LoopBrief,
   type LoopDefinition,
+  type LoopDefinitionSnapshot,
   type LoopStatus,
-  type ProviderDescriptor,
   type ProjectSummary,
   type WorkDetail,
   type WorkLoopRun,
   acceptWorkLoopRun,
-  createWorkLoopRunPullRequest,
+  cancelWorkLoopRun,
+  createWorkLoopRunPrStage,
   getWorkLoopRun,
+  getWorkLoopBrief,
   listLoopDefinitions,
   listWorkLoopRuns,
+  patchWork,
+  refreshWorkLoopRunPr,
   requestWorkLoopRunChanges,
+  retryWorkLoopRunStage,
   rerunWorkLoopRun,
+  saveWorkLoopBrief,
+  sendWorkLoopRunPrFeedback,
   resumeWorkLoopRun,
   startWorkLoopRun,
 } from "./api";
-import { ChatComposer } from "./Chat";
+import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { FolderPickerDialog } from "./FolderPickerDialog";
-import {
-  AlertIcon,
-  BranchIcon,
-  ChatIcon,
-  CheckIcon,
-  DocIcon,
-  EditIcon,
-  FolderIcon,
-  LoopIcon,
-  PlayIcon,
-  ReturnIcon,
-} from "./Icons";
+import { CheckIcon, LoopIcon } from "./Icons";
+import { LoopBriefSetup } from "./LoopBriefSetup";
 import {
   LoopDefinitionPickerDialog,
-  LoopDefinitionSummaryCard,
   LoopStructureEditor,
 } from "./LoopUI";
 import {
-  LoopRunStageSpine,
-  LoopRunStageTimeline,
+  type RunDock,
+  type RunSurfaceData,
+  RunRail,
+  RunSurface,
 } from "./LoopRunView";
 import { PaneResizeHandle } from "./PaneResizeHandle";
-import { PlanningAgentControls } from "./PlanningMode";
 import { type LoopStartSeed, loopStartStorageKey } from "./loopSetup";
 import { type PlanningAgentConfig } from "./planningSetup";
 import {
-  optionFieldForModel,
-  optionLabel,
-  providerEffortOption,
   providerOptionsPayload,
-  providerPermissionOption,
   useProviderDescriptors,
 } from "./providerDescriptors";
 import { ShellTopbar } from "./ShellTopbar";
@@ -60,14 +53,10 @@ import {
   WORK_RAIL_MAX,
   WORK_RAIL_MIN,
 } from "./state/layout";
-import { editorUrl, useSettingsStore } from "./state/settings";
 
 type Props = {
   artifacts: ArtifactSummary[];
-  chats: ChatSummary[];
   initialSeed: LoopStartSeed | null;
-  onOpenChat: (chatSlug: string) => void;
-  onSearch: () => void;
   project: ProjectSummary | null;
   work: WorkDetail;
 };
@@ -82,10 +71,7 @@ const ACTIVE_RUN_STATUSES = new Set<LoopStatus>([
 
 export function LoopMode({
   artifacts,
-  chats,
   initialSeed,
-  onOpenChat,
-  onSearch,
   project,
   work,
 }: Props) {
@@ -97,28 +83,38 @@ export function LoopMode({
   const [selectedDefinition, setSelectedDefinition] =
     useState<LoopDefinition | null>(null);
   const [agentConfig, setAgentConfig] = useState<PlanningAgentConfig | null>(null);
-  const [advanced, setAdvanced] = useState(false);
+  const [brief, setBrief] = useState<LoopBrief>({
+    goal: initialSeed?.goal || work.description || work.name,
+    stages: [],
+  });
+  const [briefPersistenceReady, setBriefPersistenceReady] = useState(false);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [selectorOpen, setSelectorOpen] = useState(false);
+  const [selectorDefinitionId, setSelectorDefinitionId] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(initialSeed?.createDefinition ?? false);
+  const [editorDefinition, setEditorDefinition] = useState<LoopDefinition | null>(null);
+  const [editReturnsToSetup, setEditReturnsToSetup] = useState(false);
+  const [preparingRun, setPreparingRun] = useState(false);
   const [creatingDefinition, setCreatingDefinition] = useState(
     initialSeed?.createDefinition ?? false,
   );
   const [runs, setRuns] = useState<WorkLoopRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [workStatus, setWorkStatus] = useState(work.status);
+  const [completeOpen, setCompleteOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [discussRun, setDiscussRun] = useState<WorkLoopRun | null>(null);
+  const [runDock, setRunDock] = useState<RunDock>(null);
   const railWidth = useLayoutStore((state) => state.workRailWidth);
   const setRailWidth = useLayoutStore((state) => state.setWorkRailWidth);
-  const editor = useSettingsStore((state) => state.editor);
   const { descriptors } = useProviderDescriptors();
   const requestSequence = useRef(0);
 
   const activeRun = useMemo(
-    () => runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
-    [runs, selectedRunId],
+    () => preparingRun ? null : runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
+    [preparingRun, runs, selectedRunId],
   );
+  const canActOnRun = workStatus === "active" && activeRun?.id === runs[0]?.id;
   const pullRequests = artifacts.filter((artifact) => artifact.type === "pr");
   const provider = descriptors?.find((item) => item.name === agentConfig?.provider) ?? null;
 
@@ -146,14 +142,49 @@ export function LoopMode({
         setRuns(ordered);
         setSelectedRunId(ordered[0]?.id ?? null);
       })
-      .catch(() => {
-        // The generic run endpoint is the deliberate backend follow-up.
-        // Setup remains usable while that endpoint is absent.
+      .catch((reason) => {
+        if (!cancelled) setError(errorMessage(reason));
       });
     return () => {
       cancelled = true;
     };
   }, [folder, initialSeed?.definitionId, work.slug]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getWorkLoopBrief(work.slug)
+      .then((saved) => {
+        if (cancelled) return;
+        setBriefPersistenceReady(true);
+        if (saved) {
+          setBrief(saved);
+          if (saved.goal.trim()) setGoal(saved.goal);
+        }
+      })
+      .catch(() => {
+        // Older backends and works without a saved draft keep the local defaults.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [work.slug]);
+
+  useEffect(() => {
+    if (!briefPersistenceReady) return;
+    const timer = window.setTimeout(() => {
+      void saveWorkLoopBrief(work.slug, { ...brief, goal }).catch(() => {
+        // Starting the run performs a final save and surfaces actionable errors.
+      });
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [brief, briefPersistenceReady, goal, work.slug]);
+
+  useEffect(() => {
+    if (!selectedDefinition || agentConfig) return;
+    const firstAgent = selectedDefinition.stages.find((stage) => stage.agent !== null);
+    const saved = brief.stages.find((stage) => stage.stage_id === firstAgent?.id)?.agent;
+    if (saved?.provider && saved.model) setAgentConfig({ ...saved, provider: saved.provider, model: saved.model });
+  }, [agentConfig, brief.stages, selectedDefinition]);
 
   useEffect(() => {
     if (!activeRun || !ACTIVE_RUN_STATUSES.has(activeRun.status)) return;
@@ -173,14 +204,7 @@ export function LoopMode({
   function replaceRun(next: WorkLoopRun) {
     setRuns((current) => orderRuns([next, ...current.filter((run) => run.id !== next.id)]));
     setSelectedRunId(next.id);
-  }
-
-  function changeAdvancedOption(key: string, value: string) {
-    if (!agentConfig) return;
-    setAgentConfig({
-      ...agentConfig,
-      options: { ...agentConfig.options, [key]: value },
-    });
+    setPreparingRun(false);
   }
 
   async function start() {
@@ -188,6 +212,8 @@ export function LoopMode({
     setBusy(true);
     setError(null);
     try {
+      const runBrief = normalizedBrief(brief, selectedDefinition, goal, agentConfig);
+      await saveWorkLoopBrief(work.slug, runBrief).catch(() => runBrief);
       const created = await startWorkLoopRun(work.slug, {
         goal: goal.trim(),
         root_path: folder.trim(),
@@ -200,6 +226,8 @@ export function LoopMode({
           agentConfig.model,
           agentConfig.options,
         ),
+        brief: runBrief,
+        source_run_id: preparingRun ? selectedRunId ?? undefined : undefined,
       });
       sessionStorage.removeItem(loopStartStorageKey(work.slug));
       replaceRun(created);
@@ -219,6 +247,37 @@ export function LoopMode({
       setError(errorMessage(reason));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function refreshActivePr(force = false) {
+    if (!activeRun) return;
+    if (force) {
+      await act(() => refreshWorkLoopRunPr(work.slug, activeRun.id, true));
+      return;
+    }
+    try {
+      replaceRun(await refreshWorkLoopRunPr(work.slug, activeRun.id));
+    } catch {
+      // Background polling is best-effort; the explicit refresh surfaces errors.
+    }
+  }
+
+  async function prepareNewRun(run: WorkLoopRun, chooseLoop = false) {
+    const snapshot = run.loop_definition;
+    setGoal(run.goal);
+    setFolder(run.root_path);
+    setAgentConfig({ provider: run.provider, model: run.model, options: run.options });
+    setBrief(run.brief ?? { goal: run.goal, stages: [] });
+    setSelectedDefinition(
+      definitions?.find((definition) => definition.id === run.loop_definition_id && definition.valid)
+        ?? (snapshot ? definitionFromSnapshot(snapshot) : null),
+    );
+    setRunDock(null);
+    setPreparingRun(true);
+    if (chooseLoop) {
+      setSelectorDefinitionId(run.loop_definition_id);
+      setSelectorOpen(true);
     }
   }
 
@@ -243,10 +302,29 @@ export function LoopMode({
                 label: project.name,
               }]
             : []),
-          { href: `/works/${work.slug}?mode=manual`, label: work.slug },
+          { href: `/works/${work.slug}`, label: work.slug },
           { label: "loop" },
         ]}
-        onSearch={onSearch}
+        primaryAction={workStatus === "active" ? (
+          <button className="btn sm" disabled={busy} onClick={() => setCompleteOpen(true)}>
+            <CheckIcon size={11} /> Mark done
+          </button>
+        ) : (
+          <button
+            className="btn sm"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(null);
+              patchWork(work.slug, { status: "active" })
+                .then((updated) => setWorkStatus(updated.status))
+                .catch((reason) => setError(errorMessage(reason)))
+                .finally(() => setBusy(false));
+            }}
+          >
+            Reopen
+          </button>
+        )}
       />
       <div className="loop-mode-shell">
         <LoopModeRail
@@ -257,9 +335,13 @@ export function LoopMode({
           runs={runs}
           selectedRunId={activeRun?.id ?? null}
           pullRequests={pullRequests}
-          chats={chats}
-          onRun={setSelectedRunId}
-          onChat={onOpenChat}
+          onRun={(runId) => {
+            setPreparingRun(false);
+            setSelectedRunId(runId);
+          }}
+          onViewLoop={() => {
+            if (activeRun) setRunDock({ kind: "loop", stageId: activeRun.current_stage_id });
+          }}
         />
         <PaneResizeHandle
           defaultValue={280}
@@ -270,41 +352,75 @@ export function LoopMode({
           value={railWidth}
           onChange={setRailWidth}
         />
-        <main className="loop-mode-main themed-scrollbar">
+        <main className={`loop-mode-main${activeRun ? " run-host" : ""} themed-scrollbar`}>
           {activeRun ? (
-            <LoopModeRunView
-              run={activeRun}
+            <RunSurface
+              data={workLoopRunData(activeRun)}
               busy={busy}
+              chatProjects={project ? [project] : []}
+              chatWorks={[work]}
+              dock={runDock}
               error={error}
-              onResume={(note) => act(() => resumeWorkLoopRun(work.slug, activeRun.id, note))}
-              onRequestChanges={(note) => act(() => requestWorkLoopRunChanges(work.slug, activeRun.id, note))}
-              onAccept={() => act(() => acceptWorkLoopRun(work.slug, activeRun.id))}
-              onCreatePullRequest={() => act(() => createWorkLoopRunPullRequest(work.slug, activeRun.id))}
-              onOpenEditor={() => {
-                if (activeRun.workspace_path) window.location.href = editorUrl(editor, activeRun.workspace_path);
-              }}
-              onDiscuss={() => setDiscussRun(activeRun)}
-              onRerun={() => act(() => rerunWorkLoopRun(work.slug, activeRun.id))}
+              readOnly={!canActOnRun}
+              variant="loop"
+              workSlug={work.slug}
+              onDock={setRunDock}
+              onResolveBlocker={canActOnRun ? (note) => act(() => resumeWorkLoopRun(work.slug, activeRun.id, { resolution_note: note })) : undefined}
+              onResolveReviewGate={canActOnRun ? (decision, enforcedFindings, instruction) => act(() => resumeWorkLoopRun(work.slug, activeRun.id, {
+                gate_decision: decision,
+                enforced_findings: enforcedFindings,
+                resolution_note: instruction || undefined,
+              })) : undefined}
+              onRequestChanges={canActOnRun ? (note) => act(() => requestWorkLoopRunChanges(work.slug, activeRun.id, note)) : undefined}
+              onRefreshPr={canActOnRun ? refreshActivePr : undefined}
+              onApprove={canActOnRun ? () => act(() => acceptWorkLoopRun(work.slug, activeRun.id)) : undefined}
+              onCancel={canActOnRun ? () => act(() => cancelWorkLoopRun(work.slug, activeRun.id)) : undefined}
+              onCreatePr={canActOnRun ? (setup) => act(() => createWorkLoopRunPrStage(work.slug, activeRun.id, setup)) : undefined}
+              onChangeLoop={canActOnRun ? () => prepareNewRun(activeRun, true) : undefined}
+              onFollowUp={canActOnRun ? (kind, note) => act(() => rerunWorkLoopRun(work.slug, activeRun.id, { kind, note: note || undefined })) : undefined}
+              onRerun={canActOnRun ? () => prepareNewRun(activeRun) : undefined}
+              onRetry={canActOnRun && activeRun.status === "failed" ? () => act(() => retryWorkLoopRunStage(work.slug, activeRun.id)) : undefined}
+              onSendPrFeedback={canActOnRun ? (comments, instruction) => act(() => sendWorkLoopRunPrFeedback(work.slug, activeRun.id, { comments, instruction })) : undefined}
+              onEditLoop={canActOnRun ? () => {
+                const snapshot = activeRun.loop_definition;
+                setGoal(activeRun.goal);
+                setFolder(activeRun.root_path);
+                setAgentConfig({ provider: activeRun.provider, model: activeRun.model, options: activeRun.options });
+                setBrief(activeRun.brief ?? { goal: activeRun.goal, stages: [] });
+                setEditorDefinition(
+                  (snapshot
+                    ? definitions?.find((definition) => definition.id === snapshot.id)
+                      ?? definitionFromSnapshot(snapshot)
+                    : null),
+                );
+                setEditReturnsToSetup(true);
+                setCreatingDefinition(false);
+                setEditorOpen(true);
+              } : undefined}
             />
           ) : (
-            <LoopModeSetup
+            <LoopBriefSetup
+              workSlug={work.slug}
               goal={goal}
               folder={folder}
               definitions={definitions}
               definition={selectedDefinition}
               agentConfig={agentConfig}
-              advanced={advanced}
-              provider={provider}
-              busy={busy}
-              error={error}
+              brief={brief}
+              busy={busy || workStatus !== "active"}
+              error={workStatus === "active" ? error : "Reopen this work to start another run."}
               onGoal={setGoal}
+              onBrief={setBrief}
               onAgentConfig={setAgentConfig}
-              onAdvanced={() => setAdvanced((value) => !value)}
-              onAdvancedOption={changeAdvancedOption}
               onChooseFolder={() => setFolderPickerOpen(true)}
-              onChangeLoop={() => setSelectorOpen(true)}
+              onChangeLoop={() => {
+                setSelectorDefinitionId(selectedDefinition?.id ?? null);
+                setSelectorOpen(true);
+              }}
               onEditLoop={() => {
                 if (!selectedDefinition) return;
+                setEditorDefinition(selectedDefinition);
+                setEditReturnsToSetup(false);
                 setCreatingDefinition(false);
                 setEditorOpen(true);
               }}
@@ -313,6 +429,14 @@ export function LoopMode({
           )}
         </main>
       </div>
+
+      {completeOpen && (
+        <CompleteWorkDialog
+          work={work}
+          onClose={() => setCompleteOpen(false)}
+          onCompleted={() => window.location.assign("/")}
+        />
+      )}
 
       {folderPickerOpen && (
         <FolderPickerDialog
@@ -329,39 +453,39 @@ export function LoopMode({
           workSlug={work.slug}
           rootPath={folder}
           goal={goal}
-          initialDefinitionId={selectedDefinition?.id}
-          onClose={() => setSelectorOpen(false)}
+          initialDefinitionId={selectorDefinitionId ?? selectedDefinition?.id}
+          onClose={() => {
+            setSelectorDefinitionId(null);
+            setSelectorOpen(false);
+          }}
           onSelect={async (definition) => {
             setSelectedDefinition(definition);
+            setSelectorDefinitionId(null);
             setSelectorOpen(false);
           }}
         />
       )}
-      {editorOpen && (creatingDefinition || selectedDefinition) && (
+      {editorOpen && (creatingDefinition || editorDefinition || selectedDefinition) && (
         <LoopStructureEditor
           workSlug={work.slug}
           rootPath={folder}
-          definition={creatingDefinition ? undefined : selectedDefinition ?? undefined}
-          onClose={() => setEditorOpen(false)}
+          definition={creatingDefinition ? undefined : editorDefinition ?? selectedDefinition ?? undefined}
+          onClose={() => {
+            setEditorDefinition(null);
+            setEditReturnsToSetup(false);
+            setEditorOpen(false);
+          }}
           onSaved={(definition) => {
             setSelectedDefinition(definition);
+            setEditorDefinition(null);
             setCreatingDefinition(false);
             setEditorOpen(false);
+            setPreparingRun(editReturnsToSetup);
+            setEditReturnsToSetup(false);
             setDefinitions((current) => current
               ? [definition, ...current.filter((item) => item.id !== definition.id)]
               : [definition]);
           }}
-        />
-      )}
-      {discussRun && (
-        <ChatComposer
-          projects={project ? [project] : []}
-          works={[work]}
-          presetGrounding={{ kind: "work", ref: work.slug }}
-          presetWorkingDirectory={discussRun.workspace_path}
-          hideGrounding
-          onClose={() => setDiscussRun(null)}
-          onStarted={(chat) => window.location.assign(`/chats/${chat.slug}`)}
         />
       )}
     </div>
@@ -376,9 +500,8 @@ function LoopModeRail({
   runs,
   selectedRunId,
   pullRequests,
-  chats,
   onRun,
-  onChat,
+  onViewLoop,
 }: {
   work: WorkDetail;
   goal: string;
@@ -387,78 +510,51 @@ function LoopModeRail({
   runs: WorkLoopRun[];
   selectedRunId: string | null;
   pullRequests: ArtifactSummary[];
-  chats: ChatSummary[];
   onRun: (runId: string) => void;
-  onChat: (chatSlug: string) => void;
+  onViewLoop: () => void;
 }) {
+  const selectedRun = runs.find((run) => run.id === selectedRunId) ?? null;
   return (
-    <aside className="loop-mode-rail">
-      <div className="loop-mode-label">
-        <span className="loop-mode-pip"><LoopIcon size={13} /></span>
-        <span>Loop</span>
-        <em>no plan needed</em>
-      </div>
-      <div className="loop-mode-work">
-        <strong>{work.name}</strong>
-        <span>{work.slug} · {compactPath(folder)}</span>
-      </div>
-      <p className="loop-mode-goal">{goal || "Describe the goal before starting."}</p>
-
-      <RailSection label="Loop">
-        {definition ? (
-          <div className="loop-mode-rail-definition">
-            <strong><LoopIcon size={11} /> {definition.name}</strong>
-            <div className="loop-mode-rail-strip">
-              {definition.stages.map((stage) => (
-                <i key={stage.id} data-stage-kind={stage.kind} title={stage.name} />
-              ))}
-            </div>
-          </div>
-        ) : <span className="loop-mode-rail-empty">Choose a loop to continue.</span>}
-      </RailSection>
-
-      {runs.length > 0 ? (
+    <RunRail
+      anchor={(
         <>
-          <RailSection label="Runs" count={runs.length}>
-            {runs.map((run) => (
-              <button
-                key={run.id}
-                className={"loop-mode-rail-row" + (run.id === selectedRunId ? " active" : "")}
-                onClick={() => onRun(run.id)}
-              >
-                <span>run {run.number}</span>
-                <strong>{run.source_run_id ? `from run ${run.source_run_id}` : "initial"}</strong>
-                <em className={statusTone(run.status)}>{statusLabel(run.status)}</em>
-              </button>
-            ))}
-          </RailSection>
-          <RailSection label="Pull requests" count={pullRequests.length}>
-            {pullRequests.map((artifact) => (
-              <a
-                className="loop-mode-rail-row"
-                href={artifact.url ?? undefined}
-                key={artifact.slug}
-                target={artifact.url ? "_blank" : undefined}
-                rel={artifact.url ? "noreferrer" : undefined}
-              >
-                <span>PR</span><strong>{artifact.title}</strong><em className="good">{artifact.status}</em>
-              </a>
-            ))}
-            {pullRequests.length === 0 && <span className="loop-mode-rail-empty">No pull requests yet.</span>}
-          </RailSection>
-          <RailSection label="Chats" count={chats.length} aux="+ C">
-            {chats.map((chat) => (
-              <button className="loop-mode-rail-row" key={chat.slug} onClick={() => onChat(chat.slug)}>
-                <span className="chat"><ChatIcon size={11} /></span><strong>{chat.title}</strong>
-              </button>
-            ))}
-            {chats.length === 0 && <span className="loop-mode-rail-empty">No chats yet.</span>}
-          </RailSection>
+          <div className="loop-mode-label">
+            <span className="loop-mode-pip"><LoopIcon size={13} /></span>
+            <span>Loop</span>
+          </div>
+          <div className="loop-mode-work">
+            <strong>{work.name}</strong>
+            <span>{work.slug} · {compactPath(folder)}</span>
+          </div>
+          <p className="loop-mode-goal">{goal || "Describe the goal before starting."}</p>
         </>
-      ) : (
-        <span className="loop-mode-rail-foot">runs, PRs and chats appear here once the loop starts</span>
       )}
-    </aside>
+      definition={selectedRun ? selectedRun.loop_definition ?? null : definition}
+      definitionMeta={selectedRun ? "pinned for selected run" : undefined}
+      runs={runs.map(workLoopRunData)}
+      selectedRunId={selectedRunId}
+      onRun={onRun}
+      onViewLoop={onViewLoop}
+    >
+      {runs.length > 0 ? (
+        <RailSection label="Pull requests" count={pullRequests.length}>
+          {pullRequests.map((artifact) => (
+            <a
+              className="loop-mode-rail-row"
+              href={artifact.url ?? undefined}
+              key={artifact.slug}
+              target={artifact.url ? "_blank" : undefined}
+              rel={artifact.url ? "noreferrer" : undefined}
+            >
+              <span>PR</span><strong>{artifact.title}</strong><em className="good">{artifact.status}</em>
+            </a>
+          ))}
+          {pullRequests.length === 0 && <span className="loop-mode-rail-empty">No pull requests yet.</span>}
+        </RailSection>
+      ) : (
+        <span className="loop-mode-rail-foot">runs and pull requests appear here once the loop starts</span>
+      )}
+    </RunRail>
   );
 }
 
@@ -481,311 +577,78 @@ function RailSection({
   );
 }
 
-function LoopModeSetup({
-  goal,
-  folder,
-  definitions,
-  definition,
-  agentConfig,
-  advanced,
-  provider,
-  busy,
-  error,
-  onGoal,
-  onAgentConfig,
-  onAdvanced,
-  onAdvancedOption,
-  onChooseFolder,
-  onChangeLoop,
-  onEditLoop,
-  onStart,
-}: {
-  goal: string;
-  folder: string;
-  definitions: LoopDefinition[] | null;
-  definition: LoopDefinition | null;
-  agentConfig: PlanningAgentConfig | null;
-  advanced: boolean;
-  provider: ProviderDescriptor | null;
-  busy: boolean;
-  error: string | null;
-  onGoal: (goal: string) => void;
-  onAgentConfig: (config: PlanningAgentConfig) => void;
-  onAdvanced: () => void;
-  onAdvancedOption: (key: string, value: string) => void;
-  onChooseFolder: () => void;
-  onChangeLoop: () => void;
-  onEditLoop: () => void;
-  onStart: () => void;
-}) {
-  const effortKey = provider && agentConfig
-    ? providerEffortOption(provider, agentConfig.model)?.key
-    : null;
-  const permissionKey = provider ? providerPermissionOption(provider)?.key : null;
-  const advancedOptions = provider
-    ? Object.entries(provider.options).filter(([key]) => key !== effortKey && key !== permissionKey)
-    : [];
-
-  return (
-    <div className="loop-mode-setup">
-      <header className="loop-mode-intro">
-        <strong>Ready when you are</strong>
-        <span>Review the goal, loop and parameters, then start. The run walks the stages until your approval.</span>
-      </header>
-
-      <SetupSection label="Goal">
-        <textarea rows={2} value={goal} onChange={(event) => onGoal(event.target.value)} />
-      </SetupSection>
-
-      <SetupSection label="Loop">
-        {definition ? (
-          <LoopDefinitionSummaryCard definition={definition} />
-        ) : (
-          <button className="loop-mode-empty-definition" onClick={onChangeLoop}>
-            <LoopIcon size={15} />
-            <span><strong>{definitions ? "Choose a loop" : "Loading loops…"}</strong><small>Select reusable stages for this goal.</small></span>
-          </button>
-        )}
-        <div className="loop-mode-definition-actions">
-          <button onClick={onChangeLoop}><ReturnIcon size={11} /> change loop</button>
-          <button disabled={!definition} onClick={onEditLoop}><EditIcon size={11} /> edit structure</button>
-        </div>
-      </SetupSection>
-
-      <SetupSection label="Parameters" note="this run only, the loop is not modified">
-        <PlanningAgentControls value={agentConfig} onChange={onAgentConfig} />
-        {(advancedOptions.length > 0 || Object.keys(provider?.text_options ?? {}).length > 0) && (
-          <>
-            <button className={"loop-mode-advanced-toggle" + (advanced ? " open" : "")} onClick={onAdvanced}>
-              advanced <span>›</span>
-            </button>
-            {advanced && provider && agentConfig && (
-              <div className="loop-mode-advanced-grid">
-                {advancedOptions.map(([key, field]) => {
-                  const effective = optionFieldForModel(provider, agentConfig.model, key, field);
-                  return (
-                    <label key={key}>
-                      <span>{effective.label}</span>
-                      <select value={agentConfig.options[key] ?? effective.default} onChange={(event) => onAdvancedOption(key, event.target.value)}>
-                        {effective.values.map((value) => <option key={value} value={value}>{optionLabel(effective, value)}</option>)}
-                      </select>
-                    </label>
-                  );
-                })}
-                {Object.entries(provider.text_options ?? {}).map(([key, field]) => (
-                  <label key={key}>
-                    <span>{field.label}</span>
-                    <input value={agentConfig.options[key] ?? field.default} placeholder={field.placeholder ?? ""} onChange={(event) => onAdvancedOption(key, event.target.value)} />
-                  </label>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-      </SetupSection>
-
-      <SetupSection label="Workdir">
-        <div className="loop-mode-workdir">
-          <input value={folder} readOnly placeholder="Choose a repository or project root" />
-          <button className="btn icon" onClick={onChooseFolder} title="Choose work folder"><FolderIcon size={12} /></button>
-          <span>isolated worktree</span>
-        </div>
-      </SetupSection>
-
-      {error && <div className="form-error">{error}</div>}
-      <footer className="loop-mode-start-row">
-        <button className="btn primary" disabled={busy || !goal.trim() || !folder.trim() || !definition || !agentConfig} onClick={onStart}>
-          <PlayIcon size={12} /> {busy ? "Starting…" : "Start loop"}
-        </button>
-      </footer>
-    </div>
-  );
-}
-
-function SetupSection({
-  label,
-  note,
-  children,
-}: {
-  label: string;
-  note?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="loop-mode-setup-section">
-      <header><strong>{label}</strong>{note && <span>— {note}</span>}</header>
-      {children}
-    </section>
-  );
-}
-
-function LoopModeRunView({
-  run,
-  busy,
-  error,
-  onResume,
-  onRequestChanges,
-  onAccept,
-  onCreatePullRequest,
-  onOpenEditor,
-  onDiscuss,
-  onRerun,
-}: {
-  run: WorkLoopRun;
-  busy: boolean;
-  error: string | null;
-  onResume: (note: string) => Promise<void>;
-  onRequestChanges: (note: string) => Promise<void>;
-  onAccept: () => Promise<void>;
-  onCreatePullRequest: () => Promise<void>;
-  onOpenEditor: () => void;
-  onDiscuss: () => void;
-  onRerun: () => Promise<void>;
-}) {
-  const [resolution, setResolution] = useState("");
-  const [requestingChanges, setRequestingChanges] = useState(false);
-  const [changeNote, setChangeNote] = useState("");
-  const resultReady = run.status === "completed" || run.status === "awaiting_approval" || run.status === "accepted";
-  const accepted = run.status === "accepted";
-  const changedFiles = collectChangedFiles(run);
-  const evidence = collectEvidence(run);
-  const summary = run.summary || [...run.stages].reverse().find((stage) => stage.summary)?.summary || "The loop completed without a summary.";
-  const attempt = Math.max(1, ...run.stages.map((stage) => stage.attempt));
-  const outputStage = run.stages.find((stage) => stage.id === run.current_stage_id)
-    ?? [...run.stages].reverse().find((stage) => stage.status !== "pending")
-    ?? null;
-
-  return (
-    <div className="loop-mode-run">
-      <header className="loop-mode-run-head">
-        <strong>run {run.number} · {run.loop_definition_name || run.loop_definition_id}</strong>
-        <span>rev {run.loop_definition_revision || "—"} · {compactPath(run.workspace_path)}</span>
-        <em className={statusTone(run.status)}>{statusLabel(run.status)}</em>
-      </header>
-      <LoopRunStageSpine
-        stages={run.stages}
-        attempt={attempt}
-        trailing={<>{formatElapsed(run.elapsed_seconds)}{run.cost_usd !== null && <> · ${run.cost_usd.toFixed(2)}</>}</>}
-      />
-
-      {run.status === "blocked_user" && (
-        <div className="loop-mode-blocker">
-          <AlertIcon size={15} />
-          <div>
-            <strong>The loop needs your input</strong>
-            <p>{run.status_reason || currentBlocker(run) || "Resolve the blocker, then resume the current stage."}</p>
-            <input value={resolution} onChange={(event) => setResolution(event.target.value)} placeholder="What changed or was decided?" />
-            <div className="loop-mode-blocker-actions">
-              <button className="btn primary sm" disabled={busy} onClick={() => void onResume(resolution.trim())}><CheckIcon size={11} /> Resume with answer</button>
-              <button className="btn sm" disabled={busy} onClick={() => void onResume("Fold this into the current scope and continue.")}>Fold it in</button>
-              <button className="btn sm" disabled={busy} onClick={() => void onResume("Keep this out of scope and continue.")}>Keep it out</button>
-              <button className="btn chat sm" onClick={onDiscuss}><ChatIcon size={11} /> Answer in chat</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {run.status === "failed" && (
-        <div className="loop-mode-blocker failed"><AlertIcon size={15} /><div><strong>Run failed</strong><p>{run.status_reason || "The backend stopped this run."}</p></div></div>
-      )}
-
-      {resultReady ? (
-        <div className="loop-mode-result">
-          <div className="loop-mode-result-summary doc">
-            <CheckIcon size={16} />
-            <div><strong>{accepted ? "Result approved" : "Result ready for approval"}</strong><p>{summary}</p></div>
-          </div>
-          <section className="loop-mode-result-card">
-            <header><strong>Changed files</strong><span>{changedFiles.length}</span><button className="btn ghost icon sm" onClick={onOpenEditor} title="Open changes in editor"><DocIcon size={12} /></button></header>
-            {changedFiles.map((file) => <div className="loop-mode-file" key={file.path}><span>{file.path}</span><em className="add">+{file.additions}</em><em className="del">−{file.deletions}</em></div>)}
-            {changedFiles.length === 0 && <p className="loop-mode-result-empty">No changed files reported.</p>}
-          </section>
-          <section className="loop-mode-result-card">
-            <header><strong>Validation evidence</strong></header>
-            <div className="loop-mode-evidence">
-              {evidence.map((item) => <span key={item}><CheckIcon size={9} /> {item}</span>)}
-              {evidence.length === 0 && <p className="loop-mode-result-empty">No validation evidence reported.</p>}
-            </div>
-          </section>
-          {requestingChanges && !accepted && (
-            <div className="loop-mode-change-request">
-              <strong>Request changes</strong>
-              <textarea value={changeNote} onChange={(event) => setChangeNote(event.target.value)} placeholder="Describe what needs to change…" autoFocus />
-              <div><button className="btn sm" onClick={() => setRequestingChanges(false)}>Cancel</button><button className="btn warn sm" disabled={busy || !changeNote.trim()} onClick={() => void onRequestChanges(changeNote.trim())}><ReturnIcon size={11} /> Send &amp; re-run</button></div>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="loop-mode-stage-detail">
-          <header className="loop-mode-stage-output-head"><span>Step output</span><strong>{outputStage?.name ?? "Waiting for the first stage"}</strong></header>
-          {ACTIVE_RUN_STATUSES.has(run.status) && <div className="loop-mode-live"><span className="matz-mini" /> {run.status === "assessing" ? "Assessing the latest stage report…" : "The loop is working through the current stage…"}</div>}
-          {outputStage && <LoopRunStageTimeline stages={[outputStage]} />}
-          {outputStage?.status === "changes_requested" && <div className="loop-mode-return-note"><ReturnIcon size={11} /> Changes requested · returning to the configured stage</div>}
-        </div>
-      )}
-
-      {error && <div className="form-error loop-mode-run-error">{error}</div>}
-      {resultReady && (
-        <footer className="loop-mode-result-actions">
-          {accepted ? (
-            <>
-              <button className="btn primary" disabled={busy} onClick={() => void onCreatePullRequest()}><BranchIcon size={12} /> Create pull request</button>
-              <button className="btn" onClick={onOpenEditor}><DocIcon size={12} /> Open in editor</button>
-              <button className="btn chat" onClick={onDiscuss}><ChatIcon size={12} /> Discuss in chat</button>
-              <span />
-              <button className="btn ghost" disabled={busy} onClick={() => void onRerun()}><LoopIcon size={12} /> Re-run from current state</button>
-            </>
-          ) : (
-            <>
-              <span />
-              <button className="btn" disabled={busy} onClick={() => setRequestingChanges((value) => !value)}><ReturnIcon size={12} /> Request changes</button>
-              <button className="btn approve" disabled={busy} onClick={() => void onAccept()}><CheckIcon size={12} /> Approve result</button>
-            </>
-          )}
-        </footer>
-      )}
-    </div>
-  );
-}
-
-function collectChangedFiles(run: WorkLoopRun) {
-  if (run.changed_files.length > 0) return run.changed_files;
+function workLoopRunData(run: WorkLoopRun): RunSurfaceData {
+  const changedFiles = run.changed_files.length > 0 ? run.changed_files : (() => {
   const byPath = new Map<string, { path: string; additions: number; deletions: number }>();
   for (const stage of run.stages) {
     for (const file of stage.changed_files) byPath.set(file.path, file);
   }
   return [...byPath.values()];
-}
-
-function collectEvidence(run: WorkLoopRun): string[] {
-  if (run.evidence.length > 0) return run.evidence;
-  return run.stages
+  })();
+  const evidence = run.evidence.length > 0 ? run.evidence : run.stages
     .map((stage) => stage.validation_evidence.trim())
     .filter((value, index, values) => value && values.indexOf(value) === index);
+  return {
+    accepted: run.status === "accepted" || run.accepted_at !== null,
+    changedFiles,
+    cleanupAt: run.cleanup_at,
+    completedAt: run.completed_at,
+    costUsd: run.cost_usd,
+    currentStageId: run.current_stage_id,
+    definition: run.loop_definition ?? null,
+    elapsedSeconds: run.elapsed_seconds,
+    evidence,
+    goal: run.goal,
+    id: run.id,
+    loopName: run.loop_definition_name || run.loop_definition_id,
+    number: run.number,
+    passNumber: run.pass_number ?? 1,
+    passes: run.passes ?? [],
+    pr: run.pr ?? null,
+    prComments: run.pr_comments ?? [],
+    revision: run.loop_definition_revision,
+    stages: run.stages,
+    startedAt: run.started_at,
+    status: run.status,
+    statusReason: run.status_reason,
+    summary: run.summary || [...run.stages].reverse().find((stage) => stage.summary)?.summary || "The loop completed without a summary.",
+    targetId: "objective",
+    workspacePath: run.workspace_path,
+    brief: run.brief ?? null,
+    reviewGate: run.review_gate ?? null,
+    waivedFindingsCount: run.waived_findings_count ?? 0,
+    runKind: run.run_kind ?? "initial",
+    seedLabel: run.seed_label ?? "",
+  };
 }
 
-function currentBlocker(run: WorkLoopRun): string {
-  return run.stages.find((stage) => stage.id === run.current_stage_id)?.blocker ?? "";
+function normalizedBrief(
+  brief: LoopBrief,
+  definition: LoopDefinition,
+  goal: string,
+  baseAgent: PlanningAgentConfig,
+): LoopBrief {
+  const firstAgentId = definition.stages.find((stage) => stage.agent !== null)?.id;
+  return {
+    goal: goal.trim(),
+    stages: definition.stages
+      .filter((stage) => stage.agent !== null)
+      .map((stage) => {
+        const saved = brief.stages.find((item) => item.stage_id === stage.id);
+        return {
+          stage_id: stage.id,
+          note: saved?.note.trim() ?? "",
+          context: (saved?.context ?? []).filter((item) => item.value.trim()).map((item) => ({ ...item, value: item.value.trim() })),
+          agent: stage.id === firstAgentId ? baseAgent : saved?.agent ?? null,
+          review_gate: saved?.review_gate ?? null,
+          approved_command_prefixes: saved?.approved_command_prefixes ?? null,
+        };
+      }),
+  };
 }
 
 function orderRuns(runs: WorkLoopRun[]): WorkLoopRun[] {
   return [...runs].sort((left, right) => right.number - left.number);
-}
-
-function statusLabel(status: LoopStatus): string {
-  if (status === "blocked_user") return "blocked · user";
-  if (status === "awaiting_approval" || status === "completed") return "awaiting approval";
-  if (status === "accepted") return "accepted";
-  if (status === "waiting_report") return "waiting report";
-  if (status === "needs_agent") return "starting agent";
-  return status.replaceAll("_", " ");
-}
-
-function statusTone(status: LoopStatus): string {
-  if (status === "accepted" || status === "cleaned") return "good";
-  if (status === "blocked_user" || status === "failed" || status === "cancelled") return "danger";
-  if (status === "awaiting_approval" || status === "completed") return "info";
-  return "warn";
 }
 
 function compactPath(path: string): string {
@@ -798,10 +661,14 @@ function compactPath(path: string): string {
   return path;
 }
 
-function formatElapsed(seconds: number | null): string {
-  if (seconds === null) return "elapsed —";
-  if (seconds < 60) return `${Math.round(seconds)} sec`;
-  return `${Math.round(seconds / 60)} min`;
+function definitionFromSnapshot(snapshot: LoopDefinitionSnapshot): LoopDefinition {
+  return {
+    ...snapshot,
+    errors: [],
+    forked_from: null,
+    is_default: false,
+    valid: true,
+  };
 }
 
 function errorMessage(reason: unknown): string {

@@ -1,18 +1,16 @@
-"""Accept a completed planning artifact run."""
+"""Accept a completed Planning artifact run."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from src.domain.commands.planning import _loop_persistence
-from src.domain.loop.dtos import LoopStatus, LoopStepStatus
+from src.domain.loop import actions as loop_actions
+from src.domain.loop import lifecycle, runtime
 from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning import actions
-from src.domain.planning.dtos import (
-    AcceptPlanArtifactRequest,
-    PlanArtifactDetail,
-    PlanRunStatus,
-)
+from src.domain.planning.dtos import AcceptPlanArtifactRequest, PlanArtifactDetail
+from src.domain.planning.loop_store import PlanningLoopRunStore
 from src.domain.planning.ports import PlanningFiles
 from src.domain.planning.service import (
     PlanArtifactNotExecutable,
@@ -22,13 +20,14 @@ from src.domain.planning.service import (
 )
 from src.domain.workstore.ports import WorkStore
 
+if TYPE_CHECKING:
+    from src.domain.supervisor import AgentSupervisorService
+
+PlanArtifactRunNotAcceptable = lifecycle.LoopRunNotAcceptable
+
 
 class WorkNotFound(ValueError):
     """The work_slug doesn't exist."""
-
-
-class PlanArtifactRunNotAcceptable(ValueError):
-    """The run is not completed and ready for review."""
 
 
 @dataclass(frozen=True)
@@ -47,72 +46,57 @@ class AcceptArtifactRunRequest:
     validation_evidence: str = ""
 
 
-def execute(
+async def execute(
     workstore: WorkStore,
     files: PlanningFiles,
     loop_runs: LoopRunRepository,
+    supervisor: AgentSupervisorService,
     req: AcceptArtifactRunRequest,
 ) -> PlanArtifactDetail:
-    """Archive reviewer acceptance for one completed artifact run.
+    """Accept a Planning run and release its provider runtimes.
 
-    Preconditions: Work exists and the selected run is completed pending review.
-    Postconditions: summary file, accepted run state, and accepted artifact
-    metadata are persisted.
+    Preconditions: Work, executable artifact, and completed run exist.
+    Postconditions: the loop and Planning metadata are accepted, provider
+    runtimes are stopped, and agents, transcripts, and workspace remain.
     """
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    manifest = actions.manifest_or_raise(files, req.work_slug)
     detail = actions.detail_or_raise(files, req.work_slug, req.artifact_id)
     actions.require_executable(detail.artifact)
-    run = actions.find_run_by_id(
-        actions.artifact_runs_for_update(manifest, req.artifact_id),
-        req.run_id,
-    )
-    if run is None:
+    store = PlanningLoopRunStore(files, loop_runs, req.artifact_id)
+    target = store.load(req.work_slug, req.run_id)
+    if target is None:
         raise PlanArtifactRunNotFound(f"plan artifact run not found: {req.run_id}")
-    loop = actions.dict_or_empty(run.get("loop"))
-    loop_status = actions.loop_status(loop.get("status"), actions.run_status(run))
-    if actions.run_status(run) != PlanRunStatus.COMPLETED_PENDING_REVIEW or loop_status not in {
-        LoopStatus.COMPLETED,
-        LoopStatus.AWAITING_APPROVAL,
-    }:
-        raise PlanArtifactRunNotAcceptable(
-            f"plan artifact run is not completed: {req.run_id}"
-        )
 
-    now = actions.now_iso()
     dto = AcceptPlanArtifactRequest(
         artifact_id=req.artifact_id,
-        summary=req.summary or actions.str_or_empty(run.get("summary")),
-        agent_slug=actions.str_or_empty(run.get("agent_slug")),
-        divergences=req.divergences or actions.str_or_empty(run.get("divergences")),
-        skipped_scope=req.skipped_scope or actions.str_or_empty(run.get("skipped_scope")),
-        blockers=req.blockers or actions.str_or_empty(run.get("blockers")),
-        decisions=req.decisions or actions.str_or_empty(run.get("decisions")),
-        changes=req.changes or actions.str_or_empty(run.get("changes")),
+        summary=req.summary or loop_actions.str_or_empty(target.run.get("summary")),
+        agent_slug=loop_actions.str_or_empty(target.run.get("agent_slug")),
+        divergences=req.divergences or loop_actions.str_or_empty(target.run.get("divergences")),
+        skipped_scope=req.skipped_scope
+        or loop_actions.str_or_empty(target.run.get("skipped_scope")),
+        blockers=req.blockers or loop_actions.str_or_empty(target.run.get("blockers")),
+        decisions=req.decisions or loop_actions.str_or_empty(target.run.get("decisions")),
+        changes=req.changes or loop_actions.str_or_empty(target.run.get("changes")),
         validation_evidence=req.validation_evidence
-        or actions.str_or_empty(run.get("validation_evidence")),
+        or loop_actions.str_or_empty(target.run.get("validation_evidence")),
     )
+    actions.apply_report_fields(target.run, dto)
+    completed = lifecycle.accept(target)
+    if not completed:
+        store.save(target)
+        return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    now = loop_actions.str_or_empty(target.run.get("completed_at"))
     summary_path = f"summaries/{req.artifact_id}-{req.run_id}.md"
+    target.run["report_path"] = summary_path
     files.write_text(
         req.work_slug,
         summary_path,
         actions.summary_template(detail.artifact, dto, now),
     )
-    actions.apply_report_fields(run, dto)
-    run["status"] = PlanRunStatus.ACCEPTED.value
-    run["completed_at"] = now
-    run["report_path"] = summary_path
-    loop["status"] = LoopStatus.ACCEPTED.value
-    loop["status_reason"] = "The result was approved."
-    current_stage = actions.str_or_empty(loop.get("current_stage_id"))
-    raw_stages = loop.get("stages")
-    if current_stage and isinstance(raw_stages, list):
-        for stage in raw_stages:
-            if isinstance(stage, dict) and stage.get("id") == current_stage:
-                stage["status"] = LoopStepStatus.PASSED.value
-                break
-    run["loop"] = loop
+    store.save(target)
+
+    manifest = actions.manifest_or_raise(files, req.work_slug)
     accepted = manifest.setdefault("accepted_artifacts", {})
     accepted[req.artifact_id] = {
         "accepted_at": now,
@@ -122,11 +106,12 @@ def execute(
     manifest["updated_at"] = now
     manifest["source_hashes"] = actions.current_hashes(files, req.work_slug)
     files.write_manifest(req.work_slug, manifest)
-    _loop_persistence.persist_artifact_run(
-        loop_runs,
+    await runtime.release_run_agents(
+        workstore,
+        supervisor,
         work_slug=req.work_slug,
-        artifact=detail.artifact,
-        run=run,
+        run=target.run,
+        loop=loop_actions.dict_or_empty(target.run.get("loop")),
     )
     return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
 

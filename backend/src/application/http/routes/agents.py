@@ -35,6 +35,7 @@ from src.domain.commands.agents import (
     detach,
     list_for_work,
     read_compaction_summary,
+    reconnect,
     rename,
     start,
     switch_thread,
@@ -121,6 +122,51 @@ def list_agents_for_work(
     return [_to_summary(work_slug, a, paths) for a in agents]
 
 
+@router.get("/agents/{agent_slug}", response_model=AgentSummary)
+def get_agent(
+    agent_slug: str,
+    workstore: WorkStoreDep,
+    settings: SettingsDep,
+) -> AgentSummary:
+    """Return one stored agent for standalone transcript views."""
+    work_slug = workstore.get_work_slug_for_agent(agent_slug)
+    agent = next(
+        (
+            item
+            for item in workstore.list_agents_for_work(work_slug)
+            if item.slug == agent_slug
+        ),
+        None,
+    ) if work_slug is not None else None
+    if work_slug is None or agent is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail=f"agent not found: {agent_slug}",
+        )
+    return _to_summary(
+        work_slug,
+        agent,
+        WorkspacePaths(workspace_root=settings.workspace_root),
+    )
+
+
+@router.post("/agents/{agent_slug}/reconnect", status_code=status.HTTP_204_NO_CONTENT)
+async def reconnect_agent(
+    agent_slug: str,
+    workstore: WorkStoreDep,
+    supervisor: SupervisorDep,
+) -> None:
+    """Restart one stalled provider runtime without resending input."""
+    try:
+        await reconnect.execute(
+            workstore,
+            supervisor,
+            reconnect.ReconnectAgentRequest(agent_slug=agent_slug),
+        )
+    except reconnect.AgentNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
 @router.post(
     "/works/{work_slug}/agents",
     response_model=AgentSummary,
@@ -170,6 +216,8 @@ async def create_agent(
         )
     except start.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except start.WorkNotActive as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     except (start.InvalidProviderConfig, start.AgentFolderMissing) as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except ContextFetchError as e:
@@ -318,7 +366,12 @@ def reveal_agent(
     if kind == "atelier":
         target = paths.agent_dir(work_slug, agent_slug)
     else:
-        target = _resolve_worktree_path(paths, work_slug, agent_slug, agent.folder)
+        target = _resolve_worktree_path(
+            paths,
+            work_slug,
+            agent.worktree_slug or agent_slug,
+            agent.folder,
+        )
     try:
         open_in_file_browser(str(target))
     except (OSError, subprocess.SubprocessError) as exc:
@@ -358,7 +411,12 @@ def open_agent_in_console(
             status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
         )
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
-    target = _resolve_worktree_path(paths, work_slug, agent_slug, agent.folder)
+    target = _resolve_worktree_path(
+        paths,
+        work_slug,
+        agent.worktree_slug or agent_slug,
+        agent.folder,
+    )
     try:
         open_in_terminal(str(target), kind=kind)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -495,11 +553,19 @@ def _to_summary(work_slug: str, agent: Agent, paths: WorkspacePaths) -> AgentSum
         role=agent.role,
         provider=agent.provider,
         model=agent.model,
+        options=dict(agent.options) if agent.options is not None else None,
         folder=str(agent.folder),
         status=agent.status,
         started_at=agent.started_at,
         stopped_at=agent.stopped_at,
-        worktree_path=str(_resolve_worktree_path(paths, work_slug, agent.slug, agent.folder)),
+        worktree_path=str(
+            _resolve_worktree_path(
+                paths,
+                work_slug,
+                agent.worktree_slug or agent.slug,
+                agent.folder,
+            )
+        ),
     )
 
 

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from src.domain.loop.dtos import LoopBrief
 from src.domain.models import (
     ArtifactType,
     Context,
@@ -17,6 +18,7 @@ from src.domain.models import (
     Persona,
     Provider,
     Work,
+    WorkMode,
     WorkStatus,
 )
 
@@ -57,6 +59,7 @@ class CreateWorkRequest:
     # Optional grouping. ``None`` is "loose work" — first-class, not a
     # hidden bucket. Validated by the route layer (project must exist).
     project_slug: str | None = None
+    mode: WorkMode | None = None
     from_chat: WorkChatProvenance | None = None
     chat_context_folders: list[CreateWorkChatContextFolder] = field(
         default_factory=list
@@ -71,6 +74,7 @@ class UpdateWorkRequest:
     name: str | None = None
     description: str | None = None
     status: WorkStatus | None = None
+    mode: WorkMode | None = None
     contexts: list[Context] | None = None
 
 
@@ -88,6 +92,7 @@ class WorkRecord:
     chat_context_folders: list[WorkChatContextFolder] = field(
         default_factory=list
     )
+    loop_brief: LoopBrief | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,7 @@ class AddAgentRequest:
     # agent row so resume + detach see the same selections later. Empty
     # dict means "use provider defaults" — same as ``None`` post-load.
     options: dict[str, Any] = field(default_factory=dict)
+    worktree_slug: str | None = None
 
 
 @dataclass(frozen=True)

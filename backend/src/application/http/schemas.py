@@ -12,11 +12,15 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field
 
 from src.domain.loop.dtos import (
+    LoopBriefContextKind,
     LoopContextKind,
     LoopDefinitionScope,
     LoopFindingSeverity,
     LoopOutcome,
     LoopPermission,
+    LoopReviewDecisionKind,
+    LoopReviewGateMode,
+    LoopRunKind,
     LoopSessionPolicy,
     LoopStatus,
     LoopStepKind,
@@ -30,6 +34,7 @@ from src.domain.models import (
     ContextType,
     Persona,
     Provider,
+    WorkMode,
     WorkStatus,
 )
 from src.domain.planning.dtos import (
@@ -82,6 +87,7 @@ class NewWorkRequest(BaseModel):
     # Optional. Omit for "loose work". Validated as an existing project at
     # the route layer — the FK enforces it again at insert time.
     project_slug: str | None = None
+    mode: WorkMode | None = None
     from_chat: WorkChatRef | None = None
     chat_context_folders: list[NewWorkChatContextFolder] = Field(
         default_factory=list
@@ -92,6 +98,7 @@ class PatchWorkRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     description: str | None = None
     status: WorkStatus | None = None
+    mode: WorkMode | None = None
     contexts: list[ContextSchema] | None = None
 
 
@@ -111,6 +118,7 @@ class WorkSummary(BaseModel):
     # a hidden bucket. Frontend resolves slug → name/glyph/color via the
     # /api/projects payload.
     project_slug: str | None = None
+    mode: WorkMode | None = None
     # Aggregated child counts. Populated by ``list_works`` for the workspace
     # cards; default 0 for endpoints that don't have a ready-made counts
     # dict (e.g. ``create_work`` returning the freshly-created shell, where
@@ -167,15 +175,16 @@ class AgentSummary(BaseModel):
     role: str
     provider: Provider
     model: str
+    options: dict[str, Any] | None = None
     folder: str
     status: AgentStatus
     started_at: datetime
     stopped_at: datetime | None = None
     # The directory the adapter actually runs in. For git source folders
-    # this is ``<workspace>/works/<work>/worktrees/<agent>/`` once
-    # provisioned by the WorktreeManager; for non-git sources (or before
-    # provisioning) it falls back to ``folder``. Surfaced on the agent
-    # tile so the user can reveal it in their file browser.
+    # this is ``<workspace>/works/<work>/worktrees/<owner>/`` once
+    # provisioned by the WorktreeManager; loop stages can share an owner.
+    # For non-git sources it falls back to ``folder``. Surfaced on the
+    # agent tile so the user can reveal it in their file browser.
     worktree_path: str
 
 
@@ -191,15 +200,45 @@ class DetachResponse(BaseModel):
     when the FE should copy ``command`` to the clipboard instead."""
 
 
+class CompleteWorkRequestBody(BaseModel):
+    """Optional cleanup choice for POST /works/{slug}/complete."""
+
+    remove_workspaces: bool = False
+
+
+class CompletionWorkspaceResponse(BaseModel):
+    """One managed workspace included in completion impact."""
+
+    owner: str
+    path: str
+    is_git_repo: bool
+    branch: str | None = None
+    head: str | None = None
+    changed_files: list[str]
+    untracked_files: list[str]
+    removable: bool
+    error: str | None = None
+
+
+class CompleteWorkPreviewResponse(BaseModel):
+    """Result of GET /works/{slug}/completion."""
+
+    work_slug: str
+    agent_count: int
+    active_run_count: int
+    workspaces: list[CompletionWorkspaceResponse]
+
+
 class CompleteWorkResponse(BaseModel):
     """Result of POSTing /works/{slug}/complete."""
 
     work_slug: str
 
     agent_count: int
-    """How many agents were on the work. All had their supervisor task
-    stopped and worktree removed (both idempotent — actual side effects
-    depend on prior state). The FE uses this for the success toast."""
+    """How many agent runtimes were stopped. Durable agent records remain."""
+
+    workspace_count: int = 0
+    workspaces_removed: int = 0
 
 
 class MoveWorkRequest(BaseModel):
@@ -438,6 +477,8 @@ class ChatSummary(BaseModel):
     provider: Provider
     model: str
     options: dict[str, Any] = Field(default_factory=dict)
+    discussion_only: bool = False
+    discussion_key: str | None = None
     grounding: ChatGroundingSchema | None = None
     working_directory: str | None = None
     created_at: datetime
@@ -454,13 +495,16 @@ class ChatDetail(ChatSummary):
 class NewChatRequest(BaseModel):
     provider: Provider
     model: str = Field(min_length=1)
-    first_message: str = Field(min_length=1)
+    first_message: str | None = Field(default=None, min_length=1)
     title: str | None = None
     grounding: ChatGroundingSchema | None = None
     working_directory: str | None = None
     # Provider-specific knobs for chats. Today the frontend exposes only
     # permission/mode, but this stays generic to match the agent surface.
     options: dict[str, Any] = Field(default_factory=dict)
+    discussion_only: bool = False
+    context_seed: str | None = None
+    discussion_key: str | None = Field(default=None, min_length=1, max_length=1024)
 
 
 class PatchChatRequest(BaseModel):
@@ -533,6 +577,21 @@ class StartWorkPlanRequest(BaseModel):
     planning_chat_slug: str | None = None
 
 
+class PlanMaterializationActivityResponse(BaseModel):
+    kind: str
+    text: str
+    ts: str | None = None
+
+
+class PlanMaterializationPermissionResponse(BaseModel):
+    request_id: str
+    tool_name: str
+    tool_input: dict[str, Any] = Field(default_factory=dict)
+    ts: str
+    seq: int
+    options: list[dict[str, str]] = Field(default_factory=list)
+
+
 class PlanMaterializationStatusResponse(BaseModel):
     state: Literal[
         "idle",
@@ -549,6 +608,17 @@ class PlanMaterializationStatusResponse(BaseModel):
     last_event_summary: str = ""
     message: str = ""
     tool_name: str | None = None
+    recent_activity: list[PlanMaterializationActivityResponse] = Field(
+        default_factory=list
+    )
+    pending_permissions: list[PlanMaterializationPermissionResponse] = Field(
+        default_factory=list
+    )
+
+
+class ResolvePlanMaterializationPermissionRequest(BaseModel):
+    request_id: str = Field(min_length=1)
+    decision: Literal["allow", "allow_always", "deny"]
 
 
 class PlanOverviewResponse(BaseModel):
@@ -582,6 +652,36 @@ class PlanLoopChangedFileResponse(BaseModel):
     deletions: int = 0
 
 
+class LoopReviewDecisionResponse(BaseModel):
+    decision: LoopReviewDecisionKind
+    enforced_findings: list[int] = Field(default_factory=list)
+    instruction: str = ""
+
+
+class PlanLoopStageReportResponse(BaseModel):
+    outcome: LoopOutcome
+    pass_number: int = 1
+    agent_slug: str | None = None
+    summary: str = ""
+    findings: list[str] = Field(default_factory=list)
+    changes: str = ""
+    validation_evidence: str = ""
+    divergences: str = ""
+    skipped_scope: str = ""
+    blocker: str = ""
+    artifact_refs: list[str] = Field(default_factory=list)
+    finding_details: list[PlanLoopFindingResponse] = Field(default_factory=list)
+    criteria_coverage: list[PlanLoopCriterionResponse] = Field(default_factory=list)
+    changed_files: list[PlanLoopChangedFileResponse] = Field(default_factory=list)
+    seq: int = 0
+    recorded_at: str = ""
+    review_decision: LoopReviewDecisionResponse | None = None
+    push_at: str | None = None
+    pr: dict[str, Any] | None = None
+    addressed_comments: list[dict[str, Any]] = Field(default_factory=list)
+    feedback_instruction: str = ""
+
+
 class PlanLoopStageRunResponse(BaseModel):
     id: str
     name: str
@@ -605,6 +705,12 @@ class PlanLoopStageRunResponse(BaseModel):
     changed_files: list[PlanLoopChangedFileResponse] = Field(default_factory=list)
     resolved_context: list[str] = Field(default_factory=list)
     context_warnings: list[str] = Field(default_factory=list)
+    reports: list[PlanLoopStageReportResponse] = Field(default_factory=list)
+    push_at: str | None = None
+    pr: dict[str, Any] | None = None
+    addressed_comments: list[dict[str, Any]] = Field(default_factory=list)
+    feedback_instruction: str = ""
+    approved_command_prefixes: list[str] = Field(default_factory=list)
 
 
 class PlanArtifactRunResponse(BaseModel):
@@ -622,6 +728,7 @@ class PlanArtifactRunResponse(BaseModel):
     decisions: str = ""
     changes: str = ""
     validation_evidence: str = ""
+    brief_note: str = ""
     loop_status: LoopStatus | None = None
     loop_status_reason: str = ""
     loop_attempt: int = 1
@@ -629,8 +736,15 @@ class PlanArtifactRunResponse(BaseModel):
     loop_definition_id: str = ""
     loop_definition_name: str = ""
     loop_definition_revision: str = ""
+    loop_definition: dict[str, Any] | None = None
     loop_current_stage_id: str = ""
     loop_stages: list[PlanLoopStageRunResponse] = Field(default_factory=list)
+    loop_review_gate: dict[str, Any] | None = None
+    waived_findings_count: int = 0
+    loop_pass_number: int = 1
+    loop_passes: list[dict[str, Any]] = Field(default_factory=list)
+    pr: dict[str, Any] | None = None
+    pr_comments: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PlanArtifactProposalResponse(BaseModel):
@@ -720,14 +834,135 @@ class StartPlanArtifactRunRequest(BaseModel):
     agent_slug: str | None = Field(default=None, min_length=1)
     loop_definition_id: str | None = None
     loop_revision: str | None = None
+    brief_note: str = ""
 
 
 class ResumePlanArtifactRunRequest(BaseModel):
     resolution_note: str = ""
+    retry_failed: bool = False
+    gate_decision: Literal["send_back", "approve_as_is"] | None = None
+    enforced_findings: list[int] = Field(default_factory=list)
 
 
 class RequestPlanRunChangesRequest(BaseModel):
     note: str = Field(min_length=1)
+
+
+class LoopBriefContextSchema(BaseModel):
+    kind: LoopBriefContextKind
+    value: str = Field(min_length=1)
+
+
+class LoopBriefAgentSchema(BaseModel):
+    provider: str | None = None
+    model: str | None = None
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+class LoopStageBriefSchema(BaseModel):
+    stage_id: str = Field(min_length=1)
+    note: str = ""
+    context: list[LoopBriefContextSchema] = Field(default_factory=list)
+    agent: LoopBriefAgentSchema | None = None
+    review_gate: LoopReviewGateMode | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    approved_command_prefixes: list[str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
+
+class LoopBriefSchema(BaseModel):
+    goal: str = Field(min_length=1)
+    stages: list[LoopStageBriefSchema] = Field(default_factory=list)
+
+
+class StartWorkLoopRunRequest(BaseModel):
+    goal: str = Field(min_length=1)
+    root_path: str = Field(min_length=1)
+    loop_definition_id: str = Field(min_length=1)
+    loop_revision: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    options: dict[str, str] = Field(default_factory=dict)
+    brief: LoopBriefSchema | None = None
+    source_run_id: str | None = None
+
+
+class RerunWorkLoopRunRequest(BaseModel):
+    kind: Literal["amend", "verify"]
+    note: str = ""
+
+
+class CreatePrStageRequest(BaseModel):
+    """Configuration persisted by a one-off Create PR stage."""
+
+    name: str = Field(min_length=1)
+    description_mode: Literal["automatic", "manual"] = "automatic"
+    description_instructions: str = ""
+    manual_body: str = ""
+    status: Literal["draft", "open"] = "draft"
+    base_branch: str = Field(default="master", min_length=1)
+    branch_name: str = ""
+    provider: str | None = None
+    model: str | None = None
+    effort: str | None = None
+    fast: bool | None = None
+
+
+class PrFeedbackCommentRequest(BaseModel):
+    """One PR comment selected for the next implementation pass."""
+
+    comment_id: str = Field(min_length=1)
+    instruction: str = ""
+
+
+class SendPrFeedbackRequest(BaseModel):
+    """Selected comments and free-form feedback for another loop pass."""
+
+    comments: list[PrFeedbackCommentRequest] = Field(default_factory=list)
+    instruction: str = ""
+
+
+class WorkLoopRunResponse(BaseModel):
+    id: str
+    number: int
+    goal: str
+    status: LoopStatus
+    status_reason: str = ""
+    loop_definition_id: str
+    loop_definition_name: str
+    loop_definition_revision: str
+    loop_definition: dict[str, Any] | None = None
+    current_stage_id: str | None = None
+    stages: list[PlanLoopStageRunResponse] = Field(default_factory=list)
+    root_path: str
+    workspace_path: str
+    provider: str
+    model: str
+    options: dict[str, str] = Field(default_factory=dict)
+    started_at: str
+    completed_at: str | None = None
+    accepted_at: str | None = None
+    cancelled_at: str | None = None
+    cleanup_at: str | None = None
+    elapsed_seconds: float | None = None
+    cost_usd: float | None = None
+    summary: str = ""
+    changed_files: list[PlanLoopChangedFileResponse] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    source_run_id: str | None = None
+    run_kind: LoopRunKind = LoopRunKind.INITIAL
+    seed_label: str = ""
+    brief: LoopBriefSchema | None = None
+    review_gate: dict[str, Any] | None = None
+    waived_findings_count: int = 0
+    pass_number: int = 1
+    passes: list[dict[str, Any]] = Field(default_factory=list)
+    pr: dict[str, Any] | None = None
+    pr_comments: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class CreatePlanArtifactProposalRequest(BaseModel):
@@ -768,11 +1003,51 @@ class LoopAgentPolicySchema(BaseModel):
     provider: str | None = None
     model: str | None = None
     effort: str | None = None
+    fast: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+    approved_command_prefixes: list[str] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class LoopRetryPolicySchema(BaseModel):
     max_attempts: int = Field(default=2, ge=1, le=20)
     timeout_minutes: int = Field(default=20, ge=1, le=1440)
+
+
+class LoopReviewGateSchema(BaseModel):
+    mode: LoopReviewGateMode = LoopReviewGateMode.AUTOMATIC
+    max_passes: int = Field(default=3, ge=1, le=20)
+    locked: bool = False
+
+
+class LoopPrConfigSchema(BaseModel):
+    name_template: str = "{goal} - {work-id}"
+    description_mode: Literal["automatic", "manual"] = "automatic"
+    description_instructions: str = ""
+    manual_body: str = ""
+    status: Literal["draft", "open"] = "draft"
+    base_branch: str = "master"
+    branch_name: str | None = None
+
+
+class StageDefinitionRefSchema(BaseModel):
+    definition_id: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+
+
+class StageOverridesSchema(BaseModel):
+    name: str | None = None
+    instructions: str | None = None
+    context: list[LoopContextReferenceSchema] | None = None
+    agent: LoopAgentPolicySchema | None = None
+    report_contract: str | None = None
+    retry: LoopRetryPolicySchema | None = None
+    check_adapter: str | None = None
+    check_command: list[str] | None = None
+    note_required: bool | None = None
+    review_gate: LoopReviewGateSchema | None = None
+    pr_config: LoopPrConfigSchema | None = None
 
 
 class LoopStepDefinitionSchema(BaseModel):
@@ -787,6 +1062,20 @@ class LoopStepDefinitionSchema(BaseModel):
     transitions: dict[LoopOutcome, str | None] = Field(default_factory=dict)
     check_adapter: str | None = None
     check_command: list[str] = Field(default_factory=list)
+    note_required: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+    review_gate: LoopReviewGateSchema | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    pr_config: LoopPrConfigSchema | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    stage_ref: StageDefinitionRefSchema | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    overrides: StageOverridesSchema | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class LoopDefinitionResponse(BaseModel):
@@ -822,6 +1111,38 @@ class ForkLoopDefinitionRequest(BaseModel):
     root_path: str | None = None
 
 
+class StageDefinitionResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    scope: Literal["builtin", "repo"]
+    revision: str
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    forked_from: str | None = None
+    used_by: list[str] = Field(default_factory=list)
+    outcomes: list[LoopOutcome] = Field(default_factory=list)
+    stage: LoopStepDefinitionSchema
+
+
+class SaveStageDefinitionRequest(BaseModel):
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    description: str = ""
+    scope: Literal["repo"] = "repo"
+    root_path: str | None = None
+    expected_revision: str | None = None
+    forked_from: str | None = None
+    outcomes: list[LoopOutcome] = Field(default_factory=list)
+    stage: LoopStepDefinitionSchema
+
+
+class ForkStageDefinitionRequest(BaseModel):
+    id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    root_path: str | None = None
+
+
 class MarkPlanRunCleanedRequest(BaseModel):
     agent_slug: str = Field(min_length=1)
 
@@ -843,12 +1164,18 @@ __all__ = [
     "CreatePlanBugRequest",
     "DetachResponse",
     "ForkLoopDefinitionRequest",
+    "ForkStageDefinitionRequest",
     "HandoffSummary",
     "LinkPlanArtifactTrackingRequest",
     "LoopAgentPolicySchema",
+    "LoopBriefAgentSchema",
+    "LoopBriefContextSchema",
+    "LoopBriefSchema",
     "LoopContextReferenceSchema",
     "LoopDefinitionResponse",
+    "LoopPrConfigSchema",
     "LoopRetryPolicySchema",
+    "LoopStageBriefSchema",
     "LoopStepDefinitionSchema",
     "MarkPlanRunCleanedRequest",
     "NewAgentRequest",
@@ -866,6 +1193,8 @@ __all__ = [
     "PlanArtifactResponse",
     "PlanArtifactRunResponse",
     "PlanLoopStageRunResponse",
+    "PlanMaterializationActivityResponse",
+    "PlanMaterializationPermissionResponse",
     "PlanMaterializationStatusResponse",
     "PlanOverviewResponse",
     "PlanTrackingLinkResponse",
@@ -875,12 +1204,19 @@ __all__ = [
     "ProjectSummary",
     "PromoteChatRequest",
     "RequestPlanRunChangesRequest",
+    "RerunWorkLoopRunRequest",
+    "ResolvePlanMaterializationPermissionRequest",
     "ResumePlanArtifactRunRequest",
     "SaveLoopDefinitionRequest",
+    "SaveStageDefinitionRequest",
     "SendChatMessageRequest",
+    "StageDefinitionRefSchema",
+    "StageDefinitionResponse",
+    "StageOverridesSchema",
     "StartPlanArtifactRunRequest",
     "StartPlanningChatRequest",
     "StartPlanningSetupChatRequest",
+    "StartWorkLoopRunRequest",
     "StartWorkPlanRequest",
     "StartWorkPlanResponse",
     "SwitchThreadRequest",
@@ -890,6 +1226,7 @@ __all__ = [
     "WorkChatContextFolderSummary",
     "WorkChatRef",
     "WorkDetail",
+    "WorkLoopRunResponse",
     "WorkPlanResponse",
     "WorkSummary",
 ]

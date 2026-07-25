@@ -28,6 +28,7 @@ from src.domain.supervisor import (
     AgentSupervisorService,
     AgentTerminated,
 )
+from src.domain.workstore.ports import WorkStore
 
 router = APIRouter()
 
@@ -46,6 +47,7 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
     settings = websocket.app.state.settings
 
     cursor = _parse_cursor(websocket.query_params.get("cursor"))
+    read_only = websocket.query_params.get("read_only") == "1"
 
     try:
         async with connect.execute(
@@ -55,7 +57,11 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
             projectstore,
             planningfiles,
             settings,
-            connect.ConnectChatRequest(chat_slug=chat_slug, cursor=cursor),
+            connect.ConnectChatRequest(
+                chat_slug=chat_slug,
+                cursor=cursor,
+                read_only=read_only,
+            ),
         ) as sub:
             await websocket.accept()
             send_task = asyncio.create_task(_drain(sub, websocket, chatstore, chat_slug))
@@ -64,8 +70,10 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
                     websocket,
                     supervisor,
                     chatstore,
+                    workstore,
                     planningfiles,
                     chat_slug,
+                    read_only,
                 )
             )
             kick_task = asyncio.create_task(sub.kicked.wait())
@@ -113,8 +121,8 @@ async def _drain(
 def _planning_readiness_event(
     chatstore: ChatStore,
     chat_slug: str,
-    event: dict,
-) -> dict | None:
+    event: dict[str, object],
+) -> dict[str, object] | None:
     """Persist and render a Planning readiness event from a completed message."""
     if event.get("type") != "message_complete":
         return None
@@ -144,11 +152,15 @@ async def _receive_inputs(
     websocket: WebSocket,
     supervisor: AgentSupervisorService,
     chatstore: ChatStore,
+    workstore: WorkStore,
     planningfiles: PlanningFiles,
     chat_slug: str,
+    read_only: bool,
 ) -> None:
     while True:
         msg = await websocket.receive_text()
+        if read_only:
+            continue
         try:
             data = json.loads(msg)
         except json.JSONDecodeError:
@@ -175,6 +187,7 @@ async def _receive_inputs(
                             chatstore,
                             supervisor,
                             planningfiles,
+                            workstore,
                             send_chat_input.SendChatInputRequest(
                                 chat_slug=chat_slug,
                                 text=text,
@@ -194,6 +207,9 @@ async def _receive_inputs(
                             chatstore.set_chat_option(chat_slug, key, value)
                 case RefreshSessionConfigOptions(config_id=config_id):
                     await supervisor.refresh_config_options(chat_slug, config_id)
+        except send_chat_input.WorkNotActive as exc:
+            with suppress(Exception):
+                await websocket.send_json({"type": "client_error", "message": str(exc)})
         except AgentTerminated:
             with suppress(Exception):
                 await websocket.send_json(

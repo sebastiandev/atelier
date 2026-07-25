@@ -64,6 +64,40 @@ def test_canonical_create_rejects_unknown_stage_provider(
     assert "unknown provider" in response.json()["detail"]
 
 
+def test_command_prefixes_round_trip_through_loop_library(
+    app_client: TestClient,
+) -> None:
+    payload = app_client.get("/api/loops/atelier-reviewed").json()
+    payload.update(id="approved-tests", name="Approved tests", scope="repo")
+    payload["stages"][0]["agent"]["approved_command_prefixes"] = [
+        "dt sh -s app-endpoints"
+    ]
+
+    created = app_client.post("/api/loops", json=payload)
+
+    assert created.status_code == 201, created.text
+    assert created.json()["stages"][0]["agent"]["approved_command_prefixes"] == [
+        "dt sh -s app-endpoints"
+    ]
+
+
+def test_fast_mode_round_trips_through_loop_library(
+    app_client: TestClient,
+) -> None:
+    payload = app_client.get("/api/loops/atelier-reviewed").json()
+    payload.update(id="fast-review", name="Fast review", scope="repo")
+    payload["stages"][0]["agent"].update(
+        provider="codex-acp",
+        model="gpt-5.5",
+        fast=True,
+    )
+
+    created = app_client.post("/api/loops", json=payload)
+
+    assert created.status_code == 201, created.text
+    assert created.json()["stages"][0]["agent"]["fast"] is True
+
+
 def test_canonical_loop_verbs_do_not_upsert(app_client: TestClient) -> None:
     payload = app_client.get("/api/loops/atelier-fast").json()
     payload.update(id="verb-loop", name="Verb loop", scope="repo")

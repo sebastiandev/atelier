@@ -34,6 +34,7 @@ from src.domain.agents.configs import (
     AmpPermissionMode,
     ClaudeAcpAgentConfig,
     ClaudeAcpEffort,
+    ClaudeAcpFastMode,
     ClaudeAcpModel,
     ClaudeAcpPermissionMode,
     ClaudeAgentConfig,
@@ -42,6 +43,7 @@ from src.domain.agents.configs import (
     ClaudePermissionMode,
     CodexAcpAgentConfig,
     CodexAcpEffort,
+    CodexAcpFastMode,
     CodexAcpMode,
     CodexAcpModel,
     CodexAgentConfig,
@@ -533,9 +535,8 @@ class CodexSpec:
 _CLAUDE_ACP_MODEL_META: dict[str, ModelMeta] = {
     # Wrapper option values are runtime aliases; pricing/window mirror the
     # models they resolve to (per the wrapper's own option descriptions,
-    # captured 2026-06-11): default→Opus 4.8 (1M), sonnet[1m] keeps
-    # standard Sonnet pricing here — long-context surcharges are not
-    # modelled. ACP agents report authoritative cost via usage_update,
+    # captured 2026-07-24): default/opus[1m]→Opus 4.8 (1M). ACP agents
+    # report authoritative cost via usage_update,
     # so these numbers only back the dialog's price hints and the FE's
     # fallback estimate.
     ClaudeAcpModel.DEFAULT.value: ModelMeta(
@@ -545,23 +546,21 @@ _CLAUDE_ACP_MODEL_META: dict[str, ModelMeta] = {
         cache_read_per_mtok=0.50,
         cache_write_per_mtok=6.25,
     ),
+    ClaudeAcpModel.OPUS_1M.value: ModelMeta(
+        context_window=1_000_000,
+        input_per_mtok=5.0,
+        output_per_mtok=25.0,
+        cache_read_per_mtok=0.50,
+        cache_write_per_mtok=6.25,
+    ),
     ClaudeAcpModel.FABLE_5_1M.value: ModelMeta(
         context_window=1_000_000,
-        input_per_mtok=15.0,
-        output_per_mtok=75.0,
-        cache_read_per_mtok=1.50,
-        cache_write_per_mtok=18.75,
+        input_per_mtok=10.0,
+        output_per_mtok=50.0,
         effort_default=ClaudeAcpEffort.XHIGH.value,
     ),
     ClaudeAcpModel.SONNET.value: ModelMeta(
         context_window=200_000,
-        input_per_mtok=3.0,
-        output_per_mtok=15.0,
-        cache_read_per_mtok=0.30,
-        cache_write_per_mtok=3.75,
-    ),
-    ClaudeAcpModel.SONNET_1M.value: ModelMeta(
-        context_window=1_000_000,
         input_per_mtok=3.0,
         output_per_mtok=15.0,
         cache_read_per_mtok=0.30,
@@ -588,7 +587,11 @@ class ClaudeAcpSpec:
     name: ClassVar[Provider] = "claude-acp"
     label: ClassVar[str] = "Claude Code (Anthropic)"
 
-    _allowed_options: ClassVar[set[str]] = {"thinking_effort", "permission_mode"}
+    _allowed_options: ClassVar[set[str]] = {
+        "thinking_effort",
+        "permission_mode",
+        "fast-mode",
+    }
 
     _ADVANCED_INTRO: ClassVar[str] = (
         "Runs Claude Code through the Agent Client Protocol (the same "
@@ -609,9 +612,9 @@ class ClaudeAcpSpec:
                 default=ClaudeAcpModel.DEFAULT.value,
                 value_labels=[
                     "CLI default — Opus 4.8 1M (recommended)",
+                    "Opus 4.8 (1M)",
                     "Fable 5 (1M)",
-                    "Sonnet 4.6",
-                    "Sonnet 4.6 (1M)",
+                    "Sonnet 5",
                     "Haiku 4.5",
                 ],
             ),
@@ -634,6 +637,12 @@ class ClaudeAcpSpec:
                         "Bypass all permissions (risky)",
                     ],
                 ),
+                "fast-mode": EnumOption(
+                    label="Fast mode",
+                    values=_enum_values(ClaudeAcpFastMode),
+                    default=ClaudeAcpFastMode.OFF.value,
+                    value_labels=["Off", "On"],
+                ),
             },
             advanced_intro=self._ADVANCED_INTRO,
             model_meta=dict(_CLAUDE_ACP_MODEL_META),
@@ -643,14 +652,18 @@ class ClaudeAcpSpec:
         self, common: CommonAgentConfig, model: str, options: dict[str, Any]
     ) -> ClaudeAcpAgentConfig:
         _reject_unknown(self.name, options, self._allowed_options)
+        normalized_model = "sonnet" if model == "sonnet[1m]" else model
         return ClaudeAcpAgentConfig(
             common=common,
-            model=ClaudeAcpModel(model),
+            model=ClaudeAcpModel(normalized_model),
             thinking_effort=ClaudeAcpEffort(
                 options.get("thinking_effort", ClaudeAcpEffort.DEFAULT.value)
             ),
             permission_mode=ClaudeAcpPermissionMode(
                 options.get("permission_mode", ClaudeAcpPermissionMode.DEFAULT.value)
+            ),
+            fast_mode=ClaudeAcpFastMode(
+                options.get("fast-mode", ClaudeAcpFastMode.OFF.value)
             ),
         )
 
@@ -693,7 +706,11 @@ class CodexAcpSpec:
     name: ClassVar[Provider] = "codex-acp"
     label: ClassVar[str] = "Codex (OpenAI)"
 
-    _allowed_options: ClassVar[set[str]] = {"reasoning_effort", "mode"}
+    _allowed_options: ClassVar[set[str]] = {
+        "reasoning_effort",
+        "fast-mode",
+        "mode",
+    }
 
     _ADVANCED_INTRO: ClassVar[str] = (
         "Runs Codex through the Agent Client Protocol. Mode is Codex's "
@@ -718,6 +735,12 @@ class CodexAcpSpec:
                     values=_enum_values(CodexAcpEffort),
                     default=CodexAcpEffort.MEDIUM.value,
                 ),
+                "fast-mode": EnumOption(
+                    label="Fast mode",
+                    values=_enum_values(CodexAcpFastMode),
+                    default=CodexAcpFastMode.OFF.value,
+                    value_labels=["Off", "On"],
+                ),
                 "mode": EnumOption(
                     label="Mode",
                     values=_enum_values(CodexAcpMode),
@@ -737,13 +760,20 @@ class CodexAcpSpec:
         self, common: CommonAgentConfig, model: str, options: dict[str, Any]
     ) -> CodexAcpAgentConfig:
         _reject_unknown(self.name, options, self._allowed_options)
+        mode = options.get("mode", CodexAcpMode.AUTO.value)
+        mode = {"auto": "agent", "full-access": "agent-full-access"}.get(
+            mode, mode
+        )
         return CodexAcpAgentConfig(
             common=common,
             model=CodexAcpModel(_normalize_codex_model(model)),
             reasoning_effort=CodexAcpEffort(
                 options.get("reasoning_effort", CodexAcpEffort.MEDIUM.value)
             ),
-            mode=CodexAcpMode(options.get("mode", CodexAcpMode.AUTO.value)),
+            fast_mode=CodexAcpFastMode(
+                options.get("fast-mode", CodexAcpFastMode.OFF.value)
+            ),
+            mode=CodexAcpMode(mode),
         )
 
 

@@ -19,6 +19,7 @@ from src.application.http.routes import (
     projects,
     providers,
     shared_folders,
+    stages,
     update_status,
     works,
 )
@@ -29,12 +30,11 @@ from src.application.ws import agents as ws_agents
 from src.application.ws import chats as ws_chats
 from src.domain.agents import record_artifact
 from src.domain.chatstore import ChatStoreService
+from src.domain.commands.loops import objective_runs
 from src.domain.commands.planning import run_monitor as planning_run_monitor
 from src.domain.connections import ConnectionStoreService
 from src.domain.loop.dtos import LoopStatus, LoopTargetKind
 from src.domain.models import Artifact
-from src.domain.planning.dtos import PlanRunStatus
-from src.domain.planning.service import PlanningService
 from src.domain.projectstore import ProjectStoreService
 from src.domain.projectstore import reconcile as reconcile_projects
 from src.domain.sharedfolders import SharedFolderStoreService
@@ -68,6 +68,7 @@ from src.infrastructure.filesystem import (
     FsLoopDefinitionRepository,
     FsPlanningFiles,
     FsProjectFiles,
+    FsStageDefinitionRepository,
     FsTranscriptLog,
     FsWorkspaceFiles,
     WorkspacePaths,
@@ -111,7 +112,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         files = FsWorkspaceFiles(paths)
         planning_files = FsPlanningFiles(paths)
         planning_sessions = SqlPlanningSessionRepository(session_factory)
-        loop_definitions = FsLoopDefinitionRepository()
+        loop_definitions = FsLoopDefinitionRepository(str(resolved.workspace_root))
+        stage_definitions = FsStageDefinitionRepository()
         loop_check_runner = SubprocessLoopCheckRunner()
         loop_context_resolver = FilesystemLoopContextResolver()
         loop_runs = SqlLoopRunRepository(session_factory)
@@ -166,9 +168,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Resolve an agent's actual working directory. The per-agent
         # worktree if provisioned, the source folder otherwise.
         def _resolve_workdir(work_slug: str, agent_slug: str) -> Path:
-            candidate = paths.worktree_dir(work_slug, agent_slug)
-            if candidate.exists():
-                return candidate
             agent = next(
                 (
                     a
@@ -179,6 +178,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             if agent is None:
                 raise ValueError(f"agent not found: {agent_slug}")
+            candidate = paths.worktree_dir(
+                work_slug, agent.worktree_slug or agent_slug
+            )
+            if candidate.exists():
+                return candidate
             return agent.folder
 
         # The full set of filesystem roots an agent is allowed to drop a
@@ -225,7 +229,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for work in workstore.list_works():
             if work.slug is None:
                 continue
-            live = {a.slug for a in workstore.list_agents_for_work(work.slug) if a.slug}
+            live = {
+                a.worktree_slug or a.slug
+                for a in workstore.list_agents_for_work(work.slug)
+                if a.slug
+            }
+            if work.mode == "loop":
+                live.add(objective_runs.OBJECTIVE_WORKTREE_SLUG)
             worktree_manager.sweep_orphans(work.slug, live)
 
         app.state.settings = resolved
@@ -235,10 +245,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.workstore = workstore
         app.state.planningfiles = planning_files
         app.state.planning_sessions = planning_sessions
+        app.state.work_roots = planning_sessions
         app.state.loop_check_runner = loop_check_runner
         app.state.loop_context_resolver = loop_context_resolver
         app.state.loop_runs = loop_runs
         app.state.loop_definitions = loop_definitions
+        app.state.stage_definitions = stage_definitions
         app.state.projectstore = projectstore
         app.state.chatstore = chatstore
         app.state.supervisor = supervisor
@@ -262,9 +274,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         planning_run_monitor_tasks: dict[str, asyncio.Task[Any]] = {}
         app.state.planning_run_monitor_tasks = planning_run_monitor_tasks
         for persisted in loop_runs.list_active():
+            if persisted.status not in {
+                LoopStatus.RUNNING,
+                LoopStatus.WAITING_REPORT,
+            }:
+                continue
+            if persisted.target_kind == LoopTargetKind.OBJECTIVE:
+                run_id = str(persisted.state.get("id") or "")
+                if not run_id:
+                    continue
+                key = f"{persisted.work_slug}:objective:{run_id}"
+                planning_run_monitor_tasks[key] = asyncio.create_task(
+                    objective_runs.monitor_run(
+                        workstore,
+                        loop_runs,
+                        supervisor,
+                        worktree_manager,
+                        connection_store,
+                        sharestore,
+                        share_provisioner,
+                        agent_adapter_factory,
+                        loop_check_runner,
+                        resolved,
+                        objective_runs.ObjectiveRunRequest(
+                            work_slug=persisted.work_slug,
+                            run_id=run_id,
+                        ),
+                    ),
+                    name=f"objective-run-{persisted.work_slug}-{run_id}",
+                )
+                continue
             if (
-                persisted.status != LoopStatus.RUNNING
-                or persisted.target_kind != LoopTargetKind.PLANNING_ARTIFACT
+                persisted.target_kind != LoopTargetKind.PLANNING_ARTIFACT
                 or persisted.artifact_id is None
                 or persisted.plan_run_id is None
             ):
@@ -297,44 +338,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     f"{persisted.artifact_id}-{persisted.plan_run_id}"
                 ),
             )
-
-        # Compatibility import boundary for manifest runs created before the
-        # SQL loop index existed. New runs are recovered from ``loop_runs``.
-        planning_service = PlanningService(planning_files)
-        for work in workstore.list_works():
-            if work.slug is None:
-                continue
-            plan = planning_service.get_plan(work.slug)
-            if plan is None:
-                continue
-            for artifact in plan.artifacts:
-                for run in artifact.runs:
-                    if run.status != PlanRunStatus.RUNNING:
-                        continue
-                    key = f"{work.slug}:{artifact.id}:{run.id}"
-                    if key in planning_run_monitor_tasks:
-                        continue
-                    planning_run_monitor_tasks[key] = asyncio.create_task(
-                        planning_run_monitor.execute(
-                            workstore,
-                            planning_files,
-                            supervisor,
-                            worktree_manager,
-                            connection_store,
-                            sharestore,
-                            share_provisioner,
-                            agent_adapter_factory,
-                            loop_check_runner,
-                            loop_runs,
-                            resolved,
-                            planning_run_monitor.MonitorArtifactRunRequest(
-                                work_slug=work.slug,
-                                artifact_id=artifact.id,
-                                run_id=run.id,
-                            ),
-                        ),
-                        name=f"planning-run-{work.slug}-{artifact.id}-{run.id}",
-                    )
 
         # Background loop that refreshes non-terminal PR artifact
         # statuses against GitHub every 5 minutes. No-op when the user
@@ -376,6 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(projects.router, prefix="/api")
     app.include_router(works.router, prefix="/api")
     app.include_router(loops.router, prefix="/api")
+    app.include_router(stages.router, prefix="/api")
     app.include_router(chats.router, prefix="/api")
     app.include_router(agents.router, prefix="/api")
     app.include_router(providers.router, prefix="/api")

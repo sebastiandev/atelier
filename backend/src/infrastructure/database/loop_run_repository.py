@@ -98,6 +98,15 @@ class SqlLoopRunRepository:
             ).mappings().one_or_none()
             return _to_run(row) if row is not None else None
 
+    def list_for_work(self, work_slug: str) -> list[LoopRunRecord]:
+        with self._txn() as session:
+            rows = session.execute(
+                select(loop_runs_table)
+                .where(loop_runs_table.c.work_slug == work_slug)
+                .order_by(loop_runs_table.c.id)
+            ).mappings()
+            return [_to_run(row) for row in rows]
+
     def list_active(self) -> list[LoopRunRecord]:
         terminal = {
             LoopStatus.ACCEPTED.value,

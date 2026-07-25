@@ -2,11 +2,6 @@
 
 from dataclasses import dataclass, replace
 
-from src.domain.commands.loops._root import (
-    WorkNotFound,
-    resolve_catalog_roots,
-    resolve_working_root,
-)
 from src.domain.loop.builtins import builtin_loop_definition
 from src.domain.loop.catalog import LoopDefinitionRoots, locate_definition, writable_root
 from src.domain.loop.definitions import (
@@ -18,8 +13,16 @@ from src.domain.loop.definitions import (
     prepare_definition,
 )
 from src.domain.loop.dtos import LoopDefinition, LoopDefinitionScope
-from src.domain.loop.ports import LoopDefinitionLocations, LoopDefinitionRepository
-from src.domain.planning.ports import PlanningSessionRepository
+from src.domain.loop.ports import (
+    LoopDefinitionLocations,
+    LoopDefinitionRepository,
+    LoopWorkingRootRepository,
+)
+from src.domain.loop.roots import (
+    WorkNotFound,
+    resolve_catalog_roots,
+    resolve_working_root,
+)
 from src.domain.workstore.ports import WorkStore
 
 
@@ -36,17 +39,13 @@ class SaveLoopDefinitionRequest:
 
 def execute(
     workstore: WorkStore,
-    planning_sessions: PlanningSessionRepository,
+    work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     repository: LoopDefinitionRepository,
     req: SaveLoopDefinitionRequest,
 ) -> LoopDefinition:
     """Validate and persist one global or Work-local loop definition."""
-    scope = (
-        LoopDefinitionScope.REPOSITORY
-        if req.legacy_only
-        else req.definition.scope
-    )
+    scope = LoopDefinitionScope.REPOSITORY if req.legacy_only else req.definition.scope
     if scope == LoopDefinitionScope.BUILTIN:
         raise LoopDefinitionReadOnly("built-in loops must be forked before editing")
     if (
@@ -60,14 +59,14 @@ def execute(
         roots = LoopDefinitionRoots(
             library=resolve_working_root(
                 workstore,
-                planning_sessions,
+                work_roots,
                 req.work_slug,
             )
         )
     else:
         roots = resolve_catalog_roots(
             workstore,
-            planning_sessions,
+            work_roots,
             locations,
             work_slug=req.work_slug,
             root_path=req.root_path,

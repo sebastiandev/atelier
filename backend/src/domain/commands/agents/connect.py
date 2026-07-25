@@ -21,6 +21,7 @@ input frames.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -28,18 +29,22 @@ from typing import TYPE_CHECKING
 
 from src.domain.agents import resume_runtime
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
+from src.domain.supervisor import AgentSubscription
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
 from src.settings import Settings
 
 if TYPE_CHECKING:
-    from src.domain.supervisor import AgentSubscription, AgentSupervisorService
+    from src.domain.supervisor import AgentSupervisorService
 
 
 @dataclass(frozen=True)
 class ConnectRequest:
+    """Inputs for subscribing to an agent transcript."""
+
     agent_slug: str
     cursor: int = 0
+    read_only: bool = False
 
 
 class AgentNotFound(ValueError):
@@ -56,14 +61,36 @@ async def execute(
     settings: Settings,
     req: ConnectRequest,
 ) -> AsyncIterator[AgentSubscription]:
+    history_work_slug = workstore.get_work_slug_for_agent(req.agent_slug)
+    if history_work_slug is None:
+        raise AgentNotFound(f"agent not found: {req.agent_slug}")
+    record = workstore.get_work(history_work_slug)
+    if record is None:
+        raise AgentNotFound(f"work not found: {history_work_slug}")
+
+    if req.read_only or record.work.status != "active":
+        subscription = AgentSubscription(
+            queue=asyncio.Queue(maxsize=1),
+            kicked=asyncio.Event(),
+            replay=await asyncio.to_thread(
+                lambda: list(
+                    workstore.read_transcript_from_cursor(
+                        history_work_slug, req.agent_slug, req.cursor
+                    )
+                )
+            ),
+        )
+        try:
+            yield subscription
+        finally:
+            subscription.kicked.set()
+        return
+
     if not supervisor.is_registered(req.agent_slug):
         # Supervisor has no live state — backend restart, the agent was
         # closed-to-rail, or it was detached to CLI. Resume will resolve
         # the work_slug from the workstore, register the agent, and (if
         # detached) merge the SDK-side events first.
-        history_work_slug = workstore.get_work_slug_for_agent(req.agent_slug)
-        if history_work_slug is None:
-            raise AgentNotFound(f"agent not found: {req.agent_slug}")
         try:
             await resume_runtime.resume_agent(
                 workstore,
@@ -82,9 +109,6 @@ async def execute(
         # A view-only reattach registers lazily. If the user keeps typing
         # in the external CLI after that, later opens must still import
         # provider transcript entries before computing the WS replay window.
-        history_work_slug = workstore.get_work_slug_for_agent(req.agent_slug)
-        if history_work_slug is None:
-            raise AgentNotFound(f"agent not found: {req.agent_slug}")
         try:
             synced = await resume_runtime.catch_up_cli_events(
                 workstore,

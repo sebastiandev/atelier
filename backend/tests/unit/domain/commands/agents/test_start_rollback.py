@@ -167,7 +167,11 @@ class _StubProvisioner:
 
 
 class _StubAdapterFactory:
+    def __init__(self) -> None:
+        self.configs: list[Any] = []
+
     def build(self, config: Any) -> object:
+        self.configs.append(config)
         return object()
 
 
@@ -238,13 +242,14 @@ def test_start_rolls_back_agent_when_worktree_provisioning_fails(
     assert supervisor.registered == []
 
 
-def test_fresh_start_provisions_worktree_from_master(tmp_path: Path) -> None:
+def test_fresh_start_provisions_worktree_from_remote_default(tmp_path: Path) -> None:
     workstore, _files, _repo = _make_workstore()
     supervisor = _StubSupervisor()
     workdir = tmp_path / "worktree"
     worktrees = _RecordingWorktreeManager(workdir)
     work_slug = _seed_work(workstore)
     source = tmp_path / "source"
+    adapter_factory = _StubAdapterFactory()
 
     req = start.StartAgentRequest(
         work_slug=work_slug,
@@ -256,6 +261,7 @@ def test_fresh_start_provisions_worktree_from_master(tmp_path: Path) -> None:
         folder=source,
         options={},
         contexts=(),
+        approved_command_prefixes=("dt pytest",),
     )
 
     asyncio.run(
@@ -266,7 +272,7 @@ def test_fresh_start_provisions_worktree_from_master(tmp_path: Path) -> None:
             _StubConnectionStore(),
             _StubSharestore(),
             _StubProvisioner(),
-            _StubAdapterFactory(),
+            adapter_factory,
             req,
         )
     )
@@ -274,9 +280,12 @@ def test_fresh_start_provisions_worktree_from_master(tmp_path: Path) -> None:
     assert worktrees.ensure_calls == [
         (work_slug, "agt-1", source, start.FRESH_AGENT_BASE_REF, None)
     ]
-    assert start.FRESH_AGENT_BASE_REF == "master"
+    assert start.FRESH_AGENT_BASE_REF == "HEAD"
     assert worktrees.fork_calls == []
     assert supervisor.registered == ["agt-1"]
+    assert adapter_factory.configs[0].common.approved_command_prefixes == (
+        "dt pytest",
+    )
 
 
 def test_handoff_start_forks_source_agent_state_instead_of_master(

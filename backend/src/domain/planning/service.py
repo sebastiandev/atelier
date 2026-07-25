@@ -8,17 +8,23 @@ from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
+from src.domain.loop.briefs import optional_brief_from_snapshot
 from src.domain.loop.dtos import (
     LoopChangedFile,
     LoopCriterionCoverage,
+    LoopDefinition,
     LoopFinding,
     LoopFindingSeverity,
+    LoopOutcome,
     LoopPermission,
+    LoopReviewDecision,
+    LoopReviewDecisionKind,
     LoopSessionPolicy,
     LoopStatus,
     LoopStepKind,
     LoopStepStatus,
 )
+from src.domain.loop.snapshots import definition_from_snapshot
 from src.domain.planning.dtos import (
     PlanArtifactDetail,
     PlanArtifactKind,
@@ -26,6 +32,7 @@ from src.domain.planning.dtos import (
     PlanArtifactRun,
     PlanArtifactStatus,
     PlanArtifactSummary,
+    PlanLoopStageReport,
     PlanLoopStageRun,
     PlanningDepth,
     PlanningFramework,
@@ -435,11 +442,19 @@ def _readiness(kind: PlanArtifactKind, content: str) -> Literal["ready", "needs_
         return "ready"
     lowered = content.lower()
     if kind in {"bug", "hotfix"}:
-        if (
-            "## explanation" in lowered
-            and "## references" in lowered
-            and "## validation" in lowered
-        ):
+        has_problem = any(
+            heading in lowered
+            for heading in ("## explanation", "## evidence", "## references")
+        )
+        has_scope = any(
+            heading in lowered
+            for heading in ("## required fix", "## scope", "## objective", "## goal")
+        )
+        has_validation = any(
+            heading in lowered
+            for heading in ("## validation", "## acceptance criteria")
+        )
+        if has_problem and has_scope and has_validation:
             return "ready"
         return "needs_detail"
     has_acceptance = "## acceptance criteria" in lowered
@@ -591,6 +606,7 @@ def _runs(
         raw_status = item.get("status")
         status = _run_status(raw_status)
         loop = _dict(item.get("loop"))
+        brief = optional_brief_from_snapshot(item.get("brief"))
         loop_status = _loop_status(loop.get("status"), status)
         report_path = _str_or_none(item.get("report_path"))
         out.append(
@@ -611,6 +627,14 @@ def _runs(
                 decisions=_str_or_empty(item.get("decisions")),
                 changes=_str_or_empty(item.get("changes")),
                 validation_evidence=_str_or_empty(item.get("validation_evidence")),
+                brief_note=(
+                    next(
+                        (stage.note for stage in brief.stages if stage.note.strip()),
+                        "",
+                    )
+                    if brief is not None
+                    else ""
+                ),
                 loop_status=loop_status,
                 loop_status_reason=_str_or_empty(loop.get("status_reason")),
                 loop_attempt=_int_or_default(loop.get("attempt"), 1),
@@ -620,8 +644,31 @@ def _runs(
                 loop_definition_revision=_str_or_empty(
                     loop.get("definition_revision")
                 ),
+                loop_definition=_loop_definition(loop.get("definition_snapshot")),
                 loop_current_stage_id=_str_or_empty(loop.get("current_stage_id")),
                 loop_stages=_loop_stage_runs(loop.get("stages")),
+                loop_review_gate=(
+                    dict(loop["review_gate"])
+                    if isinstance(loop.get("review_gate"), dict)
+                    else None
+                ),
+                waived_findings_count=len(_str_list(loop.get("waived_findings"))),
+                loop_pass_number=max(1, _int_or_default(loop.get("pass_number"), 1)),
+                loop_passes=[
+                    dict(row)
+                    for row in loop.get("passes", [])
+                    if isinstance(row, dict)
+                ]
+                if isinstance(loop.get("passes"), list)
+                else [],
+                pr=(dict(loop["pr"]) if isinstance(loop.get("pr"), dict) else None),
+                pr_comments=[
+                    dict(row)
+                    for row in loop.get("pr_comments", [])
+                    if isinstance(row, dict)
+                ]
+                if isinstance(loop.get("pr_comments"), list)
+                else [],
             )
         )
     return out
@@ -762,9 +809,104 @@ def _loop_stage_runs(value: object) -> list[PlanLoopStageRun]:
                 changed_files=_loop_changed_files(item.get("changed_files")),
                 resolved_context=_str_list(item.get("resolved_context")),
                 context_warnings=_str_list(item.get("context_warnings")),
+                reports=_loop_stage_reports(item.get("reports")),
+                push_at=_str_or_none(item.get("push_at")),
+                pr=(dict(item["pr"]) if isinstance(item.get("pr"), dict) else None),
+                addressed_comments=[
+                    dict(row)
+                    for row in item.get("addressed_comments", [])
+                    if isinstance(row, dict)
+                ]
+                if isinstance(item.get("addressed_comments"), list)
+                else [],
+                feedback_instruction=_str_or_empty(item.get("feedback_instruction")),
+                approved_command_prefixes=_str_list(
+                    item.get("approved_command_prefixes")
+                ),
             )
         )
     return stages
+
+
+def _loop_stage_reports(value: object) -> list[PlanLoopStageReport]:
+    if not isinstance(value, list):
+        return []
+    reports: list[PlanLoopStageReport] = []
+    for index, item in enumerate(value, start=1):
+        if not isinstance(item, dict):
+            continue
+        raw_outcome = item.get("outcome")
+        if not isinstance(raw_outcome, str):
+            continue
+        try:
+            outcome = LoopOutcome(raw_outcome)
+        except ValueError:
+            continue
+        reports.append(
+            PlanLoopStageReport(
+                outcome=outcome,
+                pass_number=_int_or_default(item.get("pass_number"), index),
+                agent_slug=_str_or_none(item.get("agent_slug")),
+                summary=_str_or_empty(item.get("summary")),
+                findings=_str_list(item.get("findings")),
+                changes=_str_or_empty(item.get("changes")),
+                validation_evidence=_str_or_empty(
+                    item.get("validation_evidence")
+                ),
+                divergences=_str_or_empty(item.get("divergences")),
+                skipped_scope=_str_or_empty(item.get("skipped_scope")),
+                blocker=_str_or_empty(item.get("blocker")),
+                artifact_refs=_str_list(item.get("artifact_refs")),
+                finding_details=_loop_finding_details(item.get("finding_details")),
+                criteria_coverage=_loop_criteria(item.get("criteria_coverage")),
+                changed_files=_loop_changed_files(item.get("changed_files")),
+                seq=_int_or_default(item.get("seq"), 0),
+                recorded_at=_str_or_empty(item.get("recorded_at")),
+                review_decision=_loop_review_decision(item.get("review_decision")),
+                push_at=_str_or_none(item.get("push_at")),
+                pr=(dict(item["pr"]) if isinstance(item.get("pr"), dict) else None),
+                addressed_comments=[
+                    dict(row)
+                    for row in item.get("addressed_comments", [])
+                    if isinstance(row, dict)
+                ]
+                if isinstance(item.get("addressed_comments"), list)
+                else [],
+                feedback_instruction=_str_or_empty(item.get("feedback_instruction")),
+            )
+        )
+    return reports
+
+
+def _loop_review_decision(value: object) -> LoopReviewDecision | None:
+    if not isinstance(value, dict):
+        return None
+    try:
+        decision = LoopReviewDecisionKind(_str_or_empty(value.get("decision")))
+    except ValueError:
+        return None
+    enforced = value.get("enforced_findings")
+    return LoopReviewDecision(
+        decision=decision,
+        enforced_findings=tuple(
+            item
+            for item in enforced
+            if isinstance(item, int) and not isinstance(item, bool) and item >= 0
+        )
+        if isinstance(enforced, list)
+        else (),
+        instruction=_str_or_empty(value.get("instruction")),
+    )
+
+
+def _loop_definition(value: object) -> LoopDefinition | None:
+    """Restore an optional pinned definition from a legacy-compatible run."""
+    if not isinstance(value, dict):
+        return None
+    try:
+        return definition_from_snapshot(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _loop_permission(value: object) -> LoopPermission | None:

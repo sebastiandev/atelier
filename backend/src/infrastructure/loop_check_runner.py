@@ -7,6 +7,7 @@ import asyncio
 from src.domain.loop.dtos import LoopCheckRequest, LoopCheckResult
 
 _OUTPUT_LIMIT = 32_000
+_CHANGED_FILES_TOKEN = "{changed_files}"
 
 
 class SubprocessLoopCheckRunner:
@@ -15,8 +16,17 @@ class SubprocessLoopCheckRunner:
     async def run(self, request: LoopCheckRequest) -> LoopCheckResult:
         if not request.argv:
             raise ValueError("check command is empty")
+        argv = tuple(
+            value
+            for argument in request.argv
+            for value in (
+                request.changed_files
+                if argument == _CHANGED_FILES_TOKEN
+                else (argument,)
+            )
+        )
         process = await asyncio.create_subprocess_exec(
-            *request.argv,
+            *argv,
             cwd=request.workdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
