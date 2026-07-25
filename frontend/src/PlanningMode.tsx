@@ -433,8 +433,6 @@ export function PlanningMode({
             onSave={onSave}
             onReset={onReset}
             onResolveLoopBlocker={onResolveLoopBlocker}
-            onApproveRun={onApproveRun}
-            onRequestRunChanges={onRequestRunChanges}
             onCreateRunPr={onCreateRunPr}
             runAgents={runAgents}
             onOpenRun={(runId) => {
@@ -1801,8 +1799,6 @@ function ArtifactDetail({
   onSave,
   onReset,
   onResolveLoopBlocker,
-  onApproveRun,
-  onRequestRunChanges,
   onCreateRunPr,
   runAgents,
   onOpenRun,
@@ -1823,8 +1819,6 @@ function ArtifactDetail({
     runId: string,
     agentSlug: string,
   ) => void;
-  onApproveRun: (artifact: PlanArtifact, runId: string) => Promise<void>;
-  onRequestRunChanges: (artifact: PlanArtifact, runId: string, note: string) => Promise<void>;
   onCreateRunPr: (artifact: PlanArtifact, runId: string, setup: PrConfig) => Promise<void>;
   runAgents: AgentSummary[];
   onOpenRun: (runId: string) => void;
@@ -1832,8 +1826,6 @@ function ArtifactDetail({
   onEpic: () => void;
   onApprovePlan: () => void;
 }) {
-  const [requestingRunChanges, setRequestingRunChanges] = useState(false);
-  const [runChangeNote, setRunChangeNote] = useState("");
   const [createPrOpen, setCreatePrOpen] = useState(false);
   if (!artifact) return <div className="pm-loading">Artifact not found.</div>;
   if (!detail) return <div className="pm-loading">Loading source…</div>;
@@ -1947,39 +1939,6 @@ function ArtifactDetail({
                     {latestRun.loop_latest_assessment.join(" ")}
                   </div>
                 )}
-                {requestingRunChanges && latestRunReviewable && (
-                  <div className="pm-latest-run-request">
-                    <textarea
-                      value={runChangeNote}
-                      onChange={(event) => setRunChangeNote(event.target.value)}
-                      placeholder="Describe what needs to change…"
-                      autoFocus
-                    />
-                    <div>
-                      <button className="btn ghost sm" type="button" onClick={() => setRequestingRunChanges(false)}>Cancel</button>
-                      <button
-                        className="btn warn sm"
-                        type="button"
-                        disabled={saving || !runChangeNote.trim()}
-                        onClick={async () => {
-                          try {
-                            await onRequestRunChanges(
-                              detail.artifact,
-                              latestRun.id,
-                              runChangeNote.trim(),
-                            );
-                          } catch {
-                            return;
-                          }
-                          setRunChangeNote("");
-                          setRequestingRunChanges(false);
-                        }}
-                      >
-                        Send &amp; re-run
-                      </button>
-                    </div>
-                  </div>
-                )}
                 <div className="pm-inline-actions">
                   {latestLoopStatus === "blocked_user" && (
                     <button
@@ -1990,11 +1949,8 @@ function ArtifactDetail({
                       {latestRun.loop_review_gate ? "Review findings" : "Mark resolved"}
                     </button>
                   )}
-                  {latestRunReviewable && !requestingRunChanges && (
-                    <>
-                      <button className="btn ghost sm" disabled={saving} onClick={() => setRequestingRunChanges(true)}>Request changes</button>
-                      <button className="btn primary sm" disabled={saving} onClick={() => void onApproveRun(detail.artifact, latestRun.id)}><CheckIcon size={11} /> Approve result</button>
-                    </>
+                  {latestRunReviewable && (
+                    <button className="btn primary sm" disabled={saving} onClick={() => onOpenRun(latestRun.id)}>Review result</button>
                   )}
                   {latestRunCanCreatePr && (
                     <button className="btn primary sm" disabled={saving} onClick={() => setCreatePrOpen(true)}><BranchIcon size={11} /> Create PR</button>
