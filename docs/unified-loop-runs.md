@@ -1,6 +1,7 @@
 # Unified loop runs
 
-**Status:** proposal. Nothing implemented. Scoping only — no code has been written against this.
+**Status:** scoped and agreed; not implemented. Decisions recorded below are
+signed off — Option B for storage, typed `source`, no legacy runs to migrate.
 
 A loop run is a loop run. Where it was triggered from — a freeform objective,
 or a plan story — is provenance, not a different kind of thing. Today it is
@@ -94,7 +95,7 @@ back. The API's story runs are built from the manifest, not SQL.
 So today the same run state exists twice, with the copies canonical in
 opposite directions depending on kind.
 
-#### Option A — dual-write when a source is present
+#### Option A — dual-write when a source is present (rejected)
 
 Keep the manifest as the story read path. One store that writes SQL always
 and the manifest additionally when `source` is set.
@@ -106,7 +107,7 @@ and the manifest additionally when `source` is set.
 - The unified command layer has to stay aware of the source to know whether
   to dual-write — the coupling we are trying to remove, moved down a layer.
 
-#### Option B — SQL canonical, manifest holds identifiers only (recommended)
+#### Option B — SQL canonical, manifest holds identifiers only (chosen)
 
 **In SQL (`loop_runs`)** — all run state, for every run:
 
@@ -118,7 +119,10 @@ and the manifest additionally when `source` is set.
   reports, `pr`, `pr_comments`, `pr_config`, review gate, findings), plus
   `brief`, `run_kind`, `entry_stage_id`, `source_run_id`, `workspace_path`
 - `artifact_id` / `plan_run_id` become the generic `source` — the only
-  provenance a unified run carries
+  provenance a unified run carries. Typed, not free text: a
+  `LoopRunSourceKind` enum (`story` today) plus the reference, so adding a
+  future trigger is an enum member rather than a second migration. `NULL`
+  source = a sourceless run (Loop mode)
 
 **In the manifest (`.atelier/planning/<WRK>/manifest.json`)** — provenance
 only:
@@ -142,17 +146,14 @@ copy rather than adding one.
 
 Costs:
 
-- **Migration.** For each `artifact_runs[artifact_id]` entry, ensure a
-  `loop_runs` row exists carrying its `state`, then reduce the manifest entry
-  to its id. Forward-only, idempotent, `scripts/migrate-*.py` pattern
-  (`scripts/migrate-transcripts.py` is the template). Rows are already
-  written for every story run, so in practice this is a verify-then-shrink.
 - **`service._runs` rewrite** (`service.py:588`) — build `PlanArtifactRun`
-  from `loop_runs` filtered by source instead of from the manifest.
-- **Breaks the on-disk manifest shape.** Per `AGENTS.md` this needs explicit
-  sign-off: users with existing plans have run state in their manifests that
-  moves into SQL. The migration is what makes it safe; without it, story run
-  history disappears from the UI.
+  from `loop_runs` filtered by source instead of from the manifest. This is
+  the bulk of the work.
+- **Breaks the on-disk manifest shape.** Signed off. Two facts make it cheap:
+  there is exactly one story run in existence (`run-005`, DI migration,
+  finished), and nothing outside this repo reads `artifact_runs`. So no
+  migration script is required — the shape change lands with the code, and
+  `run-005` can be left as-is or reduced by hand.
 
 ## Naming
 
@@ -204,14 +205,18 @@ Each step is independently shippable and leaves the tree green.
 Steps 1-2 are safe and useful on their own. Step 3 is the one that needs the
 compat decision. Steps 4-6 are mechanical once 1-3 land.
 
-## Open questions
+## Decisions
 
-- Do existing per-run story worktrees need migrating to the stable slug, or
-  is "new runs only" acceptable? (Recommend the latter; finished runs keep
-  their workspace for history.)
-- Should `source` be a typed union (`story` today, others later) or just a
-  nullable artifact reference? Typed costs nothing now and avoids a second
-  migration if loops ever get triggered from something else.
-- Does anything outside the backend read `artifact_runs[*].loop` from the
-  manifest — scripts, the user's own tooling? Not found in this repo, but the
-  file is in the user's repo and reachable from outside it.
+- **Storage: Option B.** SQL canonical, manifest keeps run ids only.
+- **`source` is typed** — enum discriminator + reference, not free text.
+- **No legacy migration.** One story run exists and it is finished; nothing
+  outside the repo reads `artifact_runs`.
+- **Existing worktrees are not migrated.** Finished runs keep the per-run
+  worktree they were built in; the stable slug applies to new runs.
+
+## Related asymmetry
+
+`workspace_path` is populated on objective runs and always `None` on story
+runs. It does not break the within-run feedback pass — the monitor resolves
+the worktree from the stage agent's `worktree_slug` (`monitor.py:1173`), not
+from that field — but it is the same split and should be unified in step 2.
