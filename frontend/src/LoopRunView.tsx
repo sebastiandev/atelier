@@ -234,7 +234,6 @@ function RunSurfaceContent({
   const resultReady = ["completed", "awaiting_approval", "accepted", "cleaned"].includes(data.status);
   const canSendPrFeedback = resultReady ? onSendPrFeedback : undefined;
   const openCreatePr = data.accepted
-    && variant === "loop"
     && onCreatePr
     && !data.definition?.stages.some((item) => item.kind === "pr")
     ? () => setCreatePrOpen(true)
@@ -685,6 +684,7 @@ type LoopRunViewProps = {
   onResolveBlocker: (note: string, agentSlug: string) => void;
   onResolveReviewGate: (decision: "send_back" | "approve_as_is", enforcedFindings: number[], instruction: string) => void;
   onRetry: (agentSlug: string) => void;
+  onCreatePr?: RunSurfaceProps["onCreatePr"];
   onSendPrFeedback?: RunSurfaceProps["onSendPrFeedback"];
   onRefreshPr?: RunSurfaceProps["onRefreshPr"];
   readOnly?: boolean;
@@ -710,6 +710,7 @@ export function LoopRunView({ artifact, run, ...props }: LoopRunViewProps) {
       onApprove={props.readOnly ? undefined : props.onApprove}
       onBack={props.onBack}
       onCancel={props.readOnly ? undefined : props.onCancel}
+      onCreatePr={props.readOnly ? undefined : props.onCreatePr}
       onDock={props.onDock}
       onRequestChanges={props.readOnly ? undefined : props.onRequestChanges}
       onRerun={props.readOnly ? undefined : async () => props.onRerun()}

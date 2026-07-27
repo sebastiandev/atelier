@@ -1750,7 +1750,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           planningChatSummary={planningChat}
           planningChatProjects={allProjects ?? (project ? [project] : [])}
           planningChatWorks={allWorks ?? [work]}
-          runAgents={agents}
           selectedDetail={planArtifactDetail}
           draft={planDraft}
           error={planError}

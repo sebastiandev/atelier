@@ -7,7 +7,6 @@ import {
 } from "react";
 
 import {
-  type AgentSummary,
   type ChatSummary,
   type LoopStatus,
   type PlanArtifact,
@@ -15,6 +14,7 @@ import {
   type PlanArtifactRun,
   type PlanMaterializationStatus,
   type PrConfig,
+  type PrLifecycle,
   type PrFeedbackPayload,
   type ProviderDescriptor,
   type ProjectSummary,
@@ -24,7 +24,6 @@ import {
   resolveWorkPlanMaterializationPermission,
 } from "./api";
 import { ChatTile } from "./Chat";
-import { CreatePrDialog } from "./CreatePrDialog";
 import {
   AgentIcon,
   BranchIcon,
@@ -94,7 +93,6 @@ type PlanningModeProps = {
   planningChatSummary: ChatSummary | null;
   planningChatProjects: ProjectSummary[];
   planningChatWorks: WorkSummary[];
-  runAgents: AgentSummary[];
   selectedDetail: PlanArtifactDetail | null;
   draft: string;
   error: string | null;
@@ -182,7 +180,6 @@ export function PlanningMode({
   planningChatSummary,
   planningChatProjects,
   planningChatWorks,
-  runAgents,
   selectedDetail,
   draft,
   error,
@@ -433,8 +430,6 @@ export function PlanningMode({
             onSave={onSave}
             onReset={onReset}
             onResolveLoopBlocker={onResolveLoopBlocker}
-            onCreateRunPr={onCreateRunPr}
-            runAgents={runAgents}
             onOpenRun={(runId) => {
               if (artifact) onView({ kind: "run", id: artifact.id, runId });
             }}
@@ -502,6 +497,13 @@ export function PlanningMode({
                 onCancelRun(
                   selectedDetail.artifact,
                   selectedRun.id,
+                )
+              }
+              onCreatePr={(setup) =>
+                onCreateRunPr(
+                  selectedDetail.artifact,
+                  selectedRun.id,
+                  setup,
                 )
               }
               onSendPrFeedback={(comments, instruction) =>
@@ -1257,9 +1259,9 @@ function PlanRail({
   const setPlanningRailWidth = useLayoutStore((s) => s.setPlanningRailWidth);
   const activeProgress = counts.running + counts.review + counts.ready + counts.draft;
   const pullRequests = plan.artifacts.flatMap((item) =>
-    item.tracking
-      .filter((link) => link.kind === "pr")
-      .map((link) => ({ artifactId: item.id, link })),
+    item.runs
+      .filter((run): run is PlanArtifactRun & { pr: PrLifecycle } => Boolean(run.pr))
+      .map((run) => ({ artifactId: item.id, runId: run.id, pr: run.pr })),
   );
   return (
     <aside className="pm-rail">
@@ -1352,14 +1354,14 @@ function PlanRail({
           <span>{pullRequests.length}</span>
         </div>
         <div className="pm-rail-tracking">
-          {pullRequests.map(({ artifactId, link }) => (
+          {pullRequests.map(({ artifactId, runId, pr }) => (
             <button
-              key={`${artifactId}:${link.id}`}
+              key={`${artifactId}:${runId}`}
               className="pm-track-row rail"
               onClick={() => onArtifact(artifactId)}
             >
-              <span className={"pm-track-kind " + link.kind}>{link.kind}</span>
-              <strong>{link.title}</strong>
+              <span className={`pm-track-kind pr ${pr.status}`}>{pr.status}</span>
+              <strong>{pr.number ? `#${pr.number} ` : ""}{pr.title}</strong>
               <small>{artifactId}</small>
             </button>
           ))}
@@ -1799,8 +1801,6 @@ function ArtifactDetail({
   onSave,
   onReset,
   onResolveLoopBlocker,
-  onCreateRunPr,
-  runAgents,
   onOpenRun,
   onLaunch,
   onEpic,
@@ -1819,30 +1819,23 @@ function ArtifactDetail({
     runId: string,
     agentSlug: string,
   ) => void;
-  onCreateRunPr: (artifact: PlanArtifact, runId: string, setup: PrConfig) => Promise<void>;
-  runAgents: AgentSummary[];
   onOpenRun: (runId: string) => void;
   onLaunch: (detail: PlanArtifactDetail) => void;
   onEpic: () => void;
   onApprovePlan: () => void;
 }) {
-  const [createPrOpen, setCreatePrOpen] = useState(false);
   if (!artifact) return <div className="pm-loading">Artifact not found.</div>;
   if (!detail) return <div className="pm-loading">Loading source…</div>;
   const status = uiStatus(detail.artifact);
   const editable = !readOnly && (status === "draft" || status === "ready" || status === "blocked");
   const dirty = draft !== detail.content;
   const latestRun = detail.artifact.runs.at(-1) ?? null;
-  const latestRunAgent = latestRun
-    ? runAgents.find((agent) => agent.slug === latestRun.agent_slug) ?? null
-    : null;
   const latestLoopStatus = latestRun ? loopStatus(latestRun) : null;
   const latestRunData = latestRun ? planningRunData(detail.artifact, latestRun) : null;
   const latestRunReviewable = latestLoopStatus === "completed" || latestLoopStatus === "awaiting_approval";
-  const latestRunCanCreatePr = latestLoopStatus === "accepted"
-    && !latestRun?.pr
-    && !latestRun?.loop_definition?.stages.some((stage) => stage.kind === "pr");
-  const pullRequests = detail.artifact.tracking.filter((link) => link.kind === "pr");
+  const pullRequests = detail.artifact.runs
+    .filter((item): item is PlanArtifactRun & { pr: PrLifecycle } => Boolean(item.pr))
+    .map((item) => ({ runId: item.id, pr: item.pr }));
   const approvalBlocker = detail.artifact.launch_blockers.find((blocker) =>
     blocker.toLowerCase().startsWith("approve "),
   );
@@ -1952,9 +1945,6 @@ function ArtifactDetail({
                   {latestRunReviewable && (
                     <button className="btn primary sm" disabled={saving} onClick={() => onOpenRun(latestRun.id)}>Review result</button>
                   )}
-                  {latestRunCanCreatePr && (
-                    <button className="btn primary sm" disabled={saving} onClick={() => setCreatePrOpen(true)}><BranchIcon size={11} /> Create PR</button>
-                  )}
                 </div>
               </>
             ) : (
@@ -1964,37 +1954,24 @@ function ArtifactDetail({
           {pullRequests.length > 0 && (
             <InspectorPanel title="Pull requests">
               <div className="pm-track-list">
-                {pullRequests.map((link) => (
-                  <div key={link.id} className="pm-track-row">
-                    <span className={"pm-track-kind " + link.kind}>{link.kind}</span>
-                    <strong>{link.title}</strong>
-                    <small>{link.ref || link.status || link.url || "linked"}</small>
-                  </div>
+                {pullRequests.map(({ runId, pr }) => (
+                  <a
+                    key={runId}
+                    className="pm-track-row"
+                    href={pr.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <span className={`pm-track-kind pr ${pr.status}`}>{pr.status}</span>
+                    <strong>{pr.number ? `#${pr.number} ` : ""}{pr.title}</strong>
+                    <small>{pr.branch} → {pr.base}</small>
+                  </a>
                 ))}
               </div>
             </InspectorPanel>
           )}
         </aside>
       </div>
-      {createPrOpen && latestRun && (
-        <CreatePrDialog
-          goal={detail.artifact.title}
-          runLabel={latestRun.id.replace("-", " ")}
-          inheritedAgent={latestRunAgent ? {
-            provider: latestRunAgent.provider,
-            model: latestRunAgent.model,
-            options: Object.fromEntries(Object.entries(latestRunAgent.options ?? {}).filter(
-              (entry): entry is [string, string] => typeof entry[1] === "string",
-            )),
-          } : null}
-          workspacePath={latestRunAgent?.worktree_path || latestRunAgent?.folder || ""}
-          onClose={() => setCreatePrOpen(false)}
-          onCreate={async (setup) => {
-            await onCreateRunPr(detail.artifact, latestRun.id, setup);
-            setCreatePrOpen(false);
-          }}
-        />
-      )}
     </div>
   );
 }

@@ -10053,6 +10053,28 @@ h5.md-h {
   border-color: color-mix(in oklch, var(--warn) 45%, var(--line));
   color: var(--warn);
 }
+/* PR rows badge the live lifecycle status, so the tone tracks the status
+   rather than the "it is a PR" fact. These follow .pm-track-kind.pr on
+   purpose — later rule wins. */
+.pm-track-kind.pr.draft {
+  border-color: var(--line);
+  color: var(--fg-3);
+}
+.pm-track-kind.pr.merged {
+  border-color: color-mix(in oklch, var(--info) 45%, var(--line));
+  color: var(--info);
+}
+.pm-track-kind.pr.closed {
+  border-color: color-mix(in oklch, var(--danger) 40%, var(--line));
+  color: var(--danger);
+}
+a.pm-track-row {
+  color: inherit;
+  text-decoration: none;
+}
+a.pm-track-row:hover strong {
+  text-decoration: underline;
+}
 .pm-copy {
   margin: 0 0 14px;
   color: var(--fg-2);
