@@ -154,6 +154,33 @@ Costs:
   moves into SQL. The migration is what makes it safe; without it, story run
   history disappears from the UI.
 
+## Naming
+
+The entity vocabulary is already generic and correct: `LoopRun`,
+`LoopRunRecord`, `LoopRunTarget`, `LoopRunRepository`, `LoopRunStatus`,
+`LoopRunStateStore`, and the `loop_runs` table. Nothing to rename there.
+
+"Objective" exists only in the kind-specific layer this proposal deletes
+(~180 occurrences): `objective_runs`, `ObjectiveRunRequest`,
+`ObjectiveLoopRunStore`, `ObjectiveStartSpec`, `OBJECTIVE_TARGET_ID`,
+`OBJECTIVE_WORKTREE_SLUG`, `objective_start`, `objective_store`,
+`objective_run_key`, and the `Objective*` error classes -- most of which
+already have generic twins (`LoopRunNotFound`, `LoopRunNotResumable`).
+
+So this is a deletion plus one promotion:
+`commands/loops/objective_runs.py` becomes the generic
+`commands/loops/runs.py`, and `ObjectiveLoopRunStore` +
+`PlanningLoopRunStore` collapse into one `LoopRunStore`.
+
+Two cautions:
+
+- **"Objective" survives only as the freeform goal text** in Loop mode,
+  which the code already calls `goal` (`ObjectiveStartSpec.goal`,
+  `target_ref`). Keep "goal"; drop "objective" as an entity or mode word.
+  After unification the distinction is *sourceless* vs *story-sourced*.
+- **The source is not a "kind."** `LoopRunKind` is taken and means
+  `initial | amend | verify`. Keep `source` distinct from it.
+
 ## Sequencing
 
 Each step is independently shippable and leaves the tree green.
