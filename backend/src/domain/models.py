@@ -172,6 +172,10 @@ class Chat:
     # Run discussions are ordinary chats constrained to read-only conversation.
     # Nullable so rows created before this marker continue to load unchanged.
     discussion_only: bool | None = None
+    # What the chat is for, declared by whoever created it. Drives the
+    # permission posture and the conduct paragraph in the system prompt --
+    # see ``domain/chats/posture.py``. Stored as the ``ChatRole`` value.
+    role: str = "explore"
     # Hidden context available to the provider without appearing as a user turn.
     # Run discussions use this to carry the selected stage's persisted output.
     context_seed: str | None = None

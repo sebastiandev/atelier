@@ -29,6 +29,7 @@ from src.application.http.schemas import (
 from src.domain.agents import SPECS, CommonAgentConfig
 from src.domain.agents.compactions import CompactionSessionClient
 from src.domain.agents.handoffs import Summarizer
+from src.domain.chats.posture import ChatRole
 from src.domain.chatstore import (
     AppendChatMessageRequest,
     ChatGrounding,
@@ -158,6 +159,7 @@ def create_chat_endpoint(
                 discussion_only=payload.discussion_only,
                 context_seed=payload.context_seed,
                 discussion_key=payload.discussion_key,
+                role=payload.role,
             )
         )
     except ValueError as e:
@@ -588,6 +590,7 @@ def _to_summary(record: ChatRecord) -> ChatSummary:
         options=chat.options or {},
         discussion_only=bool(chat.discussion_only),
         discussion_key=chat.discussion_key,
+        role=ChatRole(chat.role),
         grounding=(
             ChatGroundingSchema(kind=chat.grounding_kind, ref=chat.grounding_ref)
             if chat.grounding_kind is not None and chat.grounding_ref is not None

@@ -26,6 +26,7 @@ def serialize_chat(chat: Chat) -> dict[str, Any]:
         out["options"] = chat.options
     if chat.discussion_only:
         out["discussion_only"] = True
+    out["role"] = chat.role
     if chat.context_seed:
         out["context_seed"] = chat.context_seed
     if chat.discussion_key:
@@ -55,6 +56,7 @@ def deserialize_chat(data: dict[str, Any]) -> Chat:
             else None
         ),
         discussion_only=True if data.get("discussion_only") is True else None,
+        role=data.get("role") or "explore",
         context_seed=(
             data["context_seed"]
             if isinstance(data.get("context_seed"), str) and data["context_seed"].strip()

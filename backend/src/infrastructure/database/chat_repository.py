@@ -56,6 +56,7 @@ class SqlChatRepository:
                 existing.working_directory = chat.working_directory
                 existing.options = chat.options
                 existing.discussion_only = chat.discussion_only
+                existing.role = chat.role
                 existing.context_seed = chat.context_seed
                 existing.discussion_key = chat.discussion_key
                 existing.created_at = chat.created_at

@@ -11,6 +11,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from src.domain.chats.posture import ChatRole
 from src.domain.loop.dtos import (
     LoopBriefContextKind,
     LoopContextKind,
@@ -479,6 +480,7 @@ class ChatSummary(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
     discussion_only: bool = False
     discussion_key: str | None = None
+    role: ChatRole = ChatRole.EXPLORE
     grounding: ChatGroundingSchema | None = None
     working_directory: str | None = None
     created_at: datetime
@@ -505,6 +507,9 @@ class NewChatRequest(BaseModel):
     discussion_only: bool = False
     context_seed: str | None = None
     discussion_key: str | None = Field(default=None, min_length=1, max_length=1024)
+    # What the chat is for. The creator declares it; the runtime never
+    # infers it. See domain/chats/posture.py.
+    role: ChatRole = ChatRole.EXPLORE
 
 
 class PatchChatRequest(BaseModel):

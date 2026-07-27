@@ -12,9 +12,17 @@ from typing import Any
 
 from src.domain.agents import SPECS, AgentAdapter, AgentStartContext, CommonAgentConfig
 from src.domain.agents.configs import AgentConfig
+from src.domain.chats.posture import (
+    ChatPosture,
+    ChatRole,
+    resolve_posture,
+)
+from src.domain.chats.posture import (
+    provider_options as posture_provider_options,
+)
 from src.domain.chats.prompts import RegularChatRuntimePrompt
 from src.domain.chatstore import ChatRecord, ChatStore
-from src.domain.models import Chat, Provider
+from src.domain.models import Chat
 from src.domain.planning.dtos import PlanningFramework, PlanningProfile
 from src.domain.planning.ports import PlanningFiles
 from src.domain.planning.prompts import (
@@ -538,14 +546,22 @@ def _prompt_input_for_chat(
         working_details=runtime.working_details,
         link_label=runtime.link_label,
         link_details=runtime.link_details,
-        discussion_only=bool(chat.discussion_only),
+        conduct=_posture(chat, runtime).conduct,
         context_seed=chat.context_seed,
     )
 
 
 def _is_planning_chat(chat: Chat) -> bool:
     """Return true for the reserved per-work Planning chat."""
-    return chat.title.strip().casefold() == "planning" and chat.grounding_kind == "work"
+    return chat.role == ChatRole.PLANNING
+
+
+def _posture(chat: Chat, runtime: ChatRuntimeContext) -> ChatPosture:
+    """Return the posture declared by whoever created this chat."""
+    return resolve_posture(
+        ChatRole(chat.role),
+        planning_revision=runtime.planning_phase == "revision",
+    )
 
 
 def _provider_options(chat: Chat, runtime: ChatRuntimeContext) -> dict[str, Any]:
@@ -553,63 +569,7 @@ def _provider_options(chat: Chat, runtime: ChatRuntimeContext) -> dict[str, Any]
     clean = dict(chat.options or {})
     clean.pop(PLANNING_READINESS_OPTION, None)
     clean.pop(PLANNING_CONFIG_OPTION, None)
-    if chat.discussion_only:
-        clean = _discussion_options(chat.provider, clean)
-    if _is_planning_chat(chat) and runtime.planning_phase == "revision":
-        return _planning_revision_options(chat.provider, clean)
-    return clean
-
-
-def _discussion_options(provider: Provider, options: dict[str, Any]) -> dict[str, Any]:
-    """Force provider permissions to the prompt-on-every-action posture.
-
-    A run discussion answers questions and may write scratch files, but
-    must not implement fixes. No provider expresses "scratch writes yes,
-    source edits no" through its options, so the boundary is enforced by
-    the discussion system prompt plus a visible approval prompt for each
-    action -- not by a sandbox.
-
-    Deliberately *not* a hard read-only / plan posture: plan mode ends by
-    calling the plan-exit tool, which arrives as a permission request. A
-    read-only discussion therefore always produces one prompt it can
-    never satisfy, and the turn blocks forever on the unanswered ACP
-    call.
-    """
-    next_options = dict(options)
-    if provider == "amp":
-        next_options["permission_mode"] = "default"
-        next_options.pop("read_only", None)
-    elif provider == "codex":
-        next_options["sandbox"] = "workspace-write"
-        next_options["approval_mode"] = "on-request"
-    elif provider in {"claude-code", "claude-acp"}:
-        next_options["permission_mode"] = "default"
-    elif provider == "codex-acp":
-        next_options["mode"] = "agent"
-    elif provider == "opencode":
-        next_options["mode"] = "build"
-    return next_options
-
-
-def _planning_revision_options(
-    provider: Provider, options: dict[str, Any]
-) -> dict[str, Any]:
-    """Return write-capable provider options for Planning source revisions."""
-    next_options = dict(options)
-    if provider == "codex":
-        next_options["sandbox"] = "workspace-write"
-        next_options["approval_mode"] = "on-request"
-    elif provider == "codex-acp":
-        next_options["mode"] = "agent"
-    elif provider == "claude-code":
-        next_options["permission_mode"] = "default"
-    elif provider == "claude-acp":
-        next_options["permission_mode"] = "default"
-    elif provider == "opencode":
-        next_options["mode"] = "build"
-    elif provider == "amp":
-        next_options["permission_mode"] = "default"
-    return next_options
+    return posture_provider_options(chat.provider, _posture(chat, runtime), clean)
 
 
 def _with_planning_runtime(

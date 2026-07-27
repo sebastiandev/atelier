@@ -101,6 +101,7 @@ class ChatStoreService:
                 working_directory=working_directory,
                 options=req.options or None,
                 discussion_only=True if req.discussion_only else None,
+                role=req.role,
                 context_seed=context_seed,
                 discussion_key=discussion_key,
                 created_at=now,

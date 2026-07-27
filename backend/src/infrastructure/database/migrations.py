@@ -25,7 +25,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 23
+CURRENT_SCHEMA_VERSION = 24
 
 
 class SchemaMismatchError(RuntimeError):
@@ -261,6 +261,32 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
             if not _has_column(conn, "chats", "discussion_key"):
                 conn.execute(text("ALTER TABLE chats ADD COLUMN discussion_key TEXT"))
             existing = 23
+        if existing == 23:
+            # v23 -> v24: chats declare an owner-supplied role instead of the
+            # runtime inferring one from the title string and the
+            # discussion_only flag. Backfill once so existing chats keep the
+            # posture they were running under; the read path has no fallback.
+            if not _has_column(conn, "chats", "role"):
+                conn.execute(
+                    text(
+                        "ALTER TABLE chats ADD COLUMN role TEXT "
+                        "NOT NULL DEFAULT 'explore'"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "UPDATE chats SET role = 'advisory' "
+                        "WHERE discussion_only = 1"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "UPDATE chats SET role = 'planning' "
+                        "WHERE lower(trim(title)) = 'planning' "
+                        "AND grounding_kind = 'work'"
+                    )
+                )
+            existing = 24
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

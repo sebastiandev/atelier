@@ -130,6 +130,55 @@ def test_v22_upgrade_adds_nullable_chat_discussion_key(
     assert "discussion_key" in columns
 
 
+def test_v23_upgrade_backfills_chat_roles_from_the_legacy_markers(
+    isolated_engine: Engine,
+) -> None:
+    """Chats used to have their posture inferred from title + discussion_only.
+
+    The read path has no fallback any more, so the one-shot backfill has to
+    preserve what each existing chat was running under.
+    """
+    with isolated_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE chats DROP COLUMN role"))
+        for slug, title, discussion, grounding in (
+            ("CHT-001", "Planning", 0, "work"),
+            ("CHT-002", "Code review", 1, "work"),
+            ("CHT-003", "Idle thoughts", 0, None),
+            # A folder-grounded chat that merely happens to be called
+            # Planning was never the reserved Planning chat.
+            ("CHT-004", "planning", 0, "folder"),
+        ):
+            conn.execute(
+                text(
+                    "INSERT INTO chats (slug, title, provider, model, "
+                    "discussion_only, grounding_kind, created_at, updated_at) "
+                    "VALUES (:slug, :title, 'amp', 'default', :discussion, "
+                    ":grounding, '2026-01-01', '2026-01-01')"
+                ),
+                {
+                    "slug": slug,
+                    "title": title,
+                    "discussion": discussion,
+                    "grounding": grounding,
+                },
+            )
+        conn.execute(schema_version_table.update().values(version=23))
+
+    initialize_database(isolated_engine)
+
+    with isolated_engine.connect() as conn:
+        roles = dict(
+            conn.execute(text("SELECT slug, role FROM chats")).all()  # type: ignore[arg-type]
+        )
+
+    assert roles == {
+        "CHT-001": "planning",
+        "CHT-002": "advisory",
+        "CHT-003": "explore",
+        "CHT-004": "explore",
+    }
+
+
 def test_initialize_rejects_unknown_schema_version(isolated_engine: Engine) -> None:
     """If someone hand-edits the version stamp to a future value, we refuse to start."""
     with isolated_engine.begin() as conn:

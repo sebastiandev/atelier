@@ -236,6 +236,7 @@ def test_planning_chat_runtime_prompt_uses_setup_contract(
         json={
             **_new_chat("Initialize an Atelier Planning session."),
             "title": "Planning",
+            "role": "planning",
             "grounding": {"kind": "work", "ref": work["slug"]},
             "working_directory": str(working_dir),
         },
@@ -259,6 +260,39 @@ def test_planning_chat_runtime_prompt_uses_setup_contract(
     assert "atelier_planning_ready" in context.system_prompt
 
 
+def test_a_chat_merely_titled_planning_is_not_the_planning_chat(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """Posture comes from the declared role, never from the title string."""
+    work = app_client.post(
+        "/api/works",
+        json={"name": "Impostor", "description": "Look like Planning", "contexts": []},
+    ).json()
+    working_dir = test_settings.workspace_root / "impostor"
+    working_dir.mkdir(parents=True)
+    app_client.post(
+        "/api/chats",
+        json={
+            **_new_chat("I am not the reserved Planning chat."),
+            "title": "Planning",
+            "grounding": {"kind": "work", "ref": work["slug"]},
+            "working_directory": str(working_dir),
+        },
+    )
+
+    record = app_client.app.state.chatstore.get_chat("CHT-001")
+    assert record is not None
+    _config, context, _runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
+        test_settings,
+    )
+
+    assert "Atelier's Planning chat" not in context.system_prompt
+
+
 def test_planning_chat_revision_prompt_lists_source_documents(
     app_client: TestClient, test_settings: Settings
 ) -> None:
@@ -278,6 +312,7 @@ def test_planning_chat_revision_prompt_lists_source_documents(
         json={
             **_new_codex_acp_chat("Initialize an Atelier Planning session."),
             "title": "Planning",
+            "role": "planning",
             "grounding": {"kind": "work", "ref": work["slug"]},
             "working_directory": str(working_dir),
             "options": {"reasoning_effort": "xhigh", "mode": "read-only"},
@@ -350,6 +385,7 @@ def test_planning_chat_input_sends_hidden_current_document_index(
         json={
             **_new_chat("Initialize an Atelier Planning session."),
             "title": "Planning",
+            "role": "planning",
             "grounding": {"kind": "work", "ref": work["slug"]},
             "working_directory": str(working_dir),
         },
@@ -421,6 +457,7 @@ def test_planning_chat_summary_exposes_readiness(
         json={
             **_new_chat("Initialize an Atelier Planning session."),
             "title": "Planning",
+            "role": "planning",
             "grounding": {"kind": "work", "ref": work["slug"]},
             "working_directory": str(working_dir),
         },
@@ -463,6 +500,7 @@ def test_planning_readiness_metadata_is_not_sent_to_provider_config(
         json={
             **_new_codex_acp_chat("Initialize an Atelier Planning session."),
             "title": "Planning",
+            "role": "planning",
             "grounding": {"kind": "work", "ref": work["slug"]},
             "working_directory": str(working_dir),
             "options": {"reasoning_effort": "xhigh", "mode": "read-only"},
@@ -540,6 +578,7 @@ def test_create_discussion_chat_keeps_marker_out_of_provider_options(
             "working_directory": str(run_worktree),
             "options": {"permission_mode": "default", "read_only": "true"},
             "discussion_only": True,
+            "role": "advisory",
         },
     )
 
@@ -589,6 +628,7 @@ def test_create_idle_discussion_chat_seeds_prompting_runtime(
             "working_directory": str(run_worktree),
             "options": {"mode": "agent", "reasoning_effort": "high"},
             "discussion_only": True,
+            "role": "advisory",
             "context_seed": "Stage: Code review\nFinding: preserve the public API.",
         },
     )
@@ -619,7 +659,7 @@ def test_create_idle_discussion_chat_seeds_prompting_runtime(
     assert config.reasoning_effort is CodexAcpEffort.HIGH
     assert context.system_prompt is not None
     assert "Finding: preserve the public API." in context.system_prompt
-    assert "Do not implement fixes" in context.system_prompt
+    assert "not allowed to implement" in context.system_prompt
 
 
 def test_create_discussion_chat_reopens_existing_run_stage(
@@ -628,6 +668,7 @@ def test_create_discussion_chat_reopens_existing_run_stage(
     legacy_payload = {
         **_new_amp_chat("Code review"),
         "discussion_only": True,
+        "role": "advisory",
         "grounding": {"kind": "work", "ref": "WRK-001"},
         "context_seed": "Stage: Code review",
     }

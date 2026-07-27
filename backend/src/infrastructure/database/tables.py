@@ -215,6 +215,8 @@ chats_table = Table(
     Column("options", JsonDict, nullable=True),
     # Marks read-only run discussions. NULL preserves legacy chat rows.
     Column("discussion_only", Boolean, nullable=True),
+    # Owner-declared chat role: explore | advisory | planning.
+    Column("role", String, nullable=False, server_default="explore"),
     # Hidden provider context for an idle chat, primarily selected run stages.
     Column("context_seed", String, nullable=True),
     # Stable identity for one run-stage discussion. NULL preserves older chats.

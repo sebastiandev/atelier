@@ -147,6 +147,9 @@ export type PlanningChatReadiness = {
   summary: string;
 };
 
+/** Mirrors backend `ChatRole` (domain/chats/posture.py). */
+export type ChatRole = "explore" | "advisory" | "planning";
+
 export type ChatSummary = {
   slug: string;
   title: string;
@@ -155,6 +158,7 @@ export type ChatSummary = {
   options?: Record<string, unknown> | null;
   discussion_only?: boolean;
   discussion_key?: string | null;
+  role?: ChatRole;
   grounding: ChatGrounding | null;
   working_directory: string | null;
   created_at: string;
@@ -179,6 +183,9 @@ export type CreateChatPayload = {
   discussion_only?: boolean;
   context_seed?: string;
   discussion_key?: string;
+  /** What the chat is for. The creator declares it; the backend never
+   *  infers it from the title. Drives permission posture + conduct. */
+  role?: ChatRole;
 };
 
 export function listChats(scope?: {

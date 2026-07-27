@@ -30,6 +30,7 @@ class CreateChatRequest:
     discussion_only: bool = False
     context_seed: str | None = None
     discussion_key: str | None = None
+    role: str = "explore"
 
 
 @dataclass(frozen=True)

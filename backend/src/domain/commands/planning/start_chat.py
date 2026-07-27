@@ -102,6 +102,7 @@ def execute(
             grounding=ChatGrounding(kind="work", ref=req.work_slug),
             working_directory=req.root_path,
             options=chat_options,
+            role="planning",
         )
     )
     _upsert_planning_session(planning_sessions, req, created.chat.slug)

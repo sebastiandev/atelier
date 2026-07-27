@@ -318,6 +318,7 @@ function RunSurfaceContent({
         working_directory: data.workspacePath || discussionAgent.worktree_path || null,
         options: stringOptions(discussionAgent.options ?? {}),
         discussion_only: true,
+        role: "advisory",
         discussion_key: JSON.stringify([
           workSlug,
           data.targetId,
