@@ -380,7 +380,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             visible={!readOnly && stalled}
             onReconnect={() => reconnectChat(chat.slug)}
           />
-          {!readOnly && !discussionOnly && pendingPermissions.length > 0 && (
+          {!readOnly && pendingPermissions.length > 0 && (
             <PermissionApprovalDialog
               pendingPermissions={pendingPermissions}
               onDecide={sendPermission}
@@ -1174,7 +1174,7 @@ export function ChatTile({
             compactTitle="Compact this chat context"
           />
         )}
-        {!readOnly && !discussionOnly && pendingPermissions.length > 0 && (
+        {!readOnly && pendingPermissions.length > 0 && (
           <PermissionApprovalDialog
             pendingPermissions={pendingPermissions}
             onDecide={sendPermission}

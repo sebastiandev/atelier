@@ -570,10 +570,12 @@ def test_create_discussion_chat_keeps_marker_out_of_provider_options(
     assert context.workdir == run_worktree
     assert runtime.workdir == run_worktree
     assert config.permission_mode is AmpPermissionMode.DEFAULT
-    assert config.read_only is True
+    # Not read-only: a discussion may write scratch files, and a hard
+    # read-only posture deadlocks the plan-exit permission request.
+    assert config.read_only is False
 
 
-def test_create_idle_discussion_chat_seeds_read_only_runtime(
+def test_create_idle_discussion_chat_seeds_prompting_runtime(
     app_client: TestClient, test_settings: Settings
 ) -> None:
     run_worktree = test_settings.workspace_root / "works" / "WRK-001" / "worktrees" / "loop"
@@ -613,11 +615,11 @@ def test_create_idle_discussion_chat_seeds_read_only_runtime(
         test_settings,
     )
     assert isinstance(config, CodexAcpAgentConfig)
-    assert config.mode is CodexAcpMode.READ_ONLY
+    assert config.mode is CodexAcpMode.AUTO
     assert config.reasoning_effort is CodexAcpEffort.HIGH
     assert context.system_prompt is not None
     assert "Finding: preserve the public API." in context.system_prompt
-    assert "Do not edit files, run commands" in context.system_prompt
+    assert "Do not implement fixes" in context.system_prompt
 
 
 def test_create_discussion_chat_reopens_existing_run_stage(

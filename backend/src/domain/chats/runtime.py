@@ -561,18 +561,33 @@ def _provider_options(chat: Chat, runtime: ChatRuntimeContext) -> dict[str, Any]
 
 
 def _discussion_options(provider: Provider, options: dict[str, Any]) -> dict[str, Any]:
-    """Force provider permissions to the available read-only posture."""
+    """Force provider permissions to the prompt-on-every-action posture.
+
+    A run discussion answers questions and may write scratch files, but
+    must not implement fixes. No provider expresses "scratch writes yes,
+    source edits no" through its options, so the boundary is enforced by
+    the discussion system prompt plus a visible approval prompt for each
+    action -- not by a sandbox.
+
+    Deliberately *not* a hard read-only / plan posture: plan mode ends by
+    calling the plan-exit tool, which arrives as a permission request. A
+    read-only discussion therefore always produces one prompt it can
+    never satisfy, and the turn blocks forever on the unanswered ACP
+    call.
+    """
     next_options = dict(options)
     if provider == "amp":
-        next_options.update(permission_mode="default", read_only="true")
+        next_options["permission_mode"] = "default"
+        next_options.pop("read_only", None)
     elif provider == "codex":
-        next_options["sandbox"] = "read-only"
+        next_options["sandbox"] = "workspace-write"
+        next_options["approval_mode"] = "on-request"
     elif provider in {"claude-code", "claude-acp"}:
-        next_options["permission_mode"] = "plan"
+        next_options["permission_mode"] = "default"
     elif provider == "codex-acp":
-        next_options["mode"] = "read-only"
+        next_options["mode"] = "agent"
     elif provider == "opencode":
-        next_options["mode"] = "plan"
+        next_options["mode"] = "build"
     return next_options
 
 

@@ -5,6 +5,7 @@
 - Backend Python work uses the `uv`-managed virtualenv at `backend/.venv`.
 - Before running backend Python commands directly, activate it with `source .venv/bin/activate` from `backend/`, or prefer `uv run ...` / `uv sync`.
 - Do not run backend Python tools against the system interpreter.
+- **Dev tools need `--extra dev`: `cd backend && uv run --extra dev pytest`.** `pytest`, `ruff`, and `mypy` are in `[project.optional-dependencies].dev`, so a bare `uv run pytest` first syncs to the default set — which *uninstalls pytest* — then fails with `Failed to spawn: pytest / No such file or directory`. That looks like a broken venv but isn't, and running the bare form leaves the (agent-shared) venv without pytest for everyone else. See `.agents/skills/test/SKILL.md`.
 - When resuming work, read `.claude/docs/checkpoint-xxxx.md` first. Each of them are different checkpoints that can be resumed using /recap xxxx
 - When saving or updating checkpoint context for this repo, write it to `.claude/docs/checkpoint-xxxxx.md`.
 - For quick project state, check `_bmad-output/project-status.yaml` right after the continuation prompt.
