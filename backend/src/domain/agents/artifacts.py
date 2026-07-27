@@ -68,7 +68,7 @@ def record_artifact(
     resolve_allowed_roots: Callable[[str, str], list[Path]],
 ) -> Artifact:
     artifact_type = _require_type(payload)
-    title = _require_str(payload, "title")
+    title = _resolved_title(payload, artifact_type)
 
     if artifact_type == "pr":
         return workstore.record_artifact(
@@ -177,6 +177,35 @@ def _require_type(payload: dict[str, Any]) -> ArtifactType:
             f"(expected one of {sorted(_ALLOWED_TYPES)})"
         )
     return cast(ArtifactType, raw)
+
+
+def _resolved_title(payload: dict[str, Any], artifact_type: ArtifactType) -> str:
+    """Return the marker's title, deriving one when the agent omitted it.
+
+    Preconditions: ``artifact_type`` has already been validated.
+    Postconditions: always returns a non-empty title.
+
+    A title is a label. Rejecting the marker over a missing one used to
+    surface as a run-halting "Agent runtime failed", losing the whole
+    stage over cosmetic metadata for a pull request that already exists
+    on the remote. The identifying fields (``url`` for pr/jira, ``path``
+    for doc) are still required, so a derived title always points at
+    something real.
+    """
+    raw = payload.get("title")
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    if artifact_type == "doc":
+        path = payload.get("path")
+        stem = Path(path).name if isinstance(path, str) and path.strip() else ""
+        return stem or "Untitled document"
+    url = payload.get("url")
+    label = "Pull request" if artifact_type == "pr" else "Issue"
+    if isinstance(url, str) and url.strip():
+        tail = url.rstrip("/").rsplit("/", 1)[-1]
+        if tail:
+            return f"{label} {tail}"
+    return label
 
 
 def _require_str(payload: dict[str, Any], key: str) -> str:

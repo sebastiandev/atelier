@@ -281,15 +281,18 @@ def test_unknown_type_is_rejected() -> None:
         )
 
 
-def test_missing_title_rejected() -> None:
-    with pytest.raises(InvalidMarker, match="'title'"):
-        record_artifact(
-            "WRK-001",
-            "agt-7",
-            {"type": "pr", "url": "https://x"},
-            workstore=_RecorderStore(),  # type: ignore[arg-type]
-            resolve_allowed_roots=_resolve_allowed_roots,
-        )
+def test_missing_title_is_derived_rather_than_rejected() -> None:
+    store = _RecorderStore()
+
+    record_artifact(
+        "WRK-001",
+        "agt-7",
+        {"type": "pr", "url": "https://x"},
+        workstore=store,  # type: ignore[arg-type]
+        resolve_allowed_roots=_resolve_allowed_roots,
+    )
+
+    assert store.calls[0].title.strip()
 
 
 def test_payload_attribution_is_ignored() -> None:
@@ -312,3 +315,86 @@ def test_payload_attribution_is_ignored() -> None:
     req = store.calls[0]
     assert req.work_slug == "WRK-001"
     assert req.agent_slug == "agt-7"
+
+
+# ---------------------------------------------------------------------------
+# Derived titles
+#
+# A missing title used to raise InvalidMarker, which the supervisor turned
+# into an `error` event, which turn_monitor read as a terminal runtime
+# error, which failed the whole loop run -- over a label, for a PR that
+# already existed on the remote.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("title", [None, "", "   "])
+def test_pr_without_a_usable_title_derives_one_from_the_url(
+    title: str | None,
+) -> None:
+    store = _RecorderStore()
+    payload: dict[str, Any] = {
+        "type": "pr",
+        "url": "https://github.com/acme/app/pull/42",
+    }
+    if title is not None:
+        payload["title"] = title
+
+    record_artifact(
+        "WRK-002",
+        "agt-1",
+        payload,
+        workstore=store,  # type: ignore[arg-type]
+        resolve_allowed_roots=_resolve_allowed_roots,
+    )
+
+    assert store.calls[0].title == "Pull request 42"
+
+
+def test_jira_without_a_title_derives_one_from_the_url() -> None:
+    store = _RecorderStore()
+
+    record_artifact(
+        "WRK-002",
+        "agt-1",
+        {
+            "type": "jira",
+            "status": "todo",
+            "url": "https://acme.atlassian.net/browse/ABC-7",
+        },
+        workstore=store,  # type: ignore[arg-type]
+        resolve_allowed_roots=_resolve_allowed_roots,
+    )
+
+    assert store.calls[0].title == "Issue ABC-7"
+
+
+def test_a_supplied_title_still_wins() -> None:
+    store = _RecorderStore()
+
+    record_artifact(
+        "WRK-002",
+        "agt-1",
+        {
+            "type": "pr",
+            "title": "Harden TypeBuilder",
+            "url": "https://github.com/acme/app/pull/42",
+        },
+        workstore=store,  # type: ignore[arg-type]
+        resolve_allowed_roots=_resolve_allowed_roots,
+    )
+
+    assert store.calls[0].title == "Harden TypeBuilder"
+
+
+def test_identifying_fields_are_still_required() -> None:
+    """Deriving a label is fine; inventing the thing it points at is not."""
+    store = _RecorderStore()
+
+    with pytest.raises(InvalidMarker, match="url"):
+        record_artifact(
+            "WRK-002",
+            "agt-1",
+            {"type": "pr"},
+            workstore=store,  # type: ignore[arg-type]
+            resolve_allowed_roots=_resolve_allowed_roots,
+        )

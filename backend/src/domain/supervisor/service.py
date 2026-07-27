@@ -815,6 +815,11 @@ class AgentSupervisorService:
                     "type": "error",
                     "ts": datetime.now(UTC).isoformat(),
                     "message": f"invalid artifact marker: {exc}",
+                    # Bookkeeping, not the provider dying. The turn is
+                    # unaffected and the artifact this describes may well
+                    # exist already, so this must not read as a terminal
+                    # runtime error and fail the surrounding loop stage.
+                    "recoverable": True,
                 },
             )
             return
@@ -828,6 +833,7 @@ class AgentSupervisorService:
                     "type": "error",
                     "ts": datetime.now(UTC).isoformat(),
                     "message": f"artifact tracker error: {exc!r}",
+                    "recoverable": True,
                 },
             )
             return

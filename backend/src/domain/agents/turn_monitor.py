@@ -114,6 +114,11 @@ def _terminal_error(events: list[dict[str, Any]]) -> str | None:
         if event_type in {"message_complete", "user_input"}:
             return None
         if event_type == "error":
+            if event.get("recoverable") is True:
+                # Side-band failures (a rejected artifact marker, a
+                # tracker hiccup) leave the turn itself healthy. Keep
+                # scanning rather than reporting the run as dead.
+                continue
             message = event.get("message")
             return message if isinstance(message, str) and message.strip() else "Unknown error"
     return None
