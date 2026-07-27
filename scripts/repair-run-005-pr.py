@@ -73,6 +73,14 @@ PR_URL = "https://github.com/Shiphero/Shiphero-API/pull/46245"
 PR_REPO = "Shiphero/Shiphero-API"
 # What the stage was configured to name the PR (loop.pr_config.name).
 PR_TITLE = "Close Verified TypeBuilder Correctness Gaps"
+# When the push really happened -- the Create PR agent's last tool call.
+#
+# capture_completion stamps push_at with `now`, which is correct in the
+# live path and wrong in a retroactive repair: the UI filters PR comments
+# to those created *after* push_at (`prCommentThreads`), so a push_at of
+# "whenever the repair ran" silently hides every review comment the PR
+# already had. Stamp the real time instead.
+REAL_PUSH_AT = "2026-07-27T11:18:15.642119+00:00"
 SUMMARY = (
     "Committed, pushed, and opened PR #46245. Recorded retroactively: the "
     "original artifact marker was rejected for a missing title."
@@ -156,6 +164,7 @@ def main() -> int:
     stage_row["status"] = "passed"
     stage_row["summary"] = SUMMARY
     pr_lifecycle.capture_completion(workstore, target, stage_row, (PR_URL,))
+    stage_row["push_at"] = REAL_PUSH_AT
     loop.pop("failure_kind", None)
     loop["findings"] = []
     _complete_pr(run, loop, STAGE_ID)
