@@ -35,12 +35,6 @@ from src.domain.loop.dtos import (
     LoopTargetKind,
 )
 from src.domain.loop.models import LoopRunRecord
-from src.domain.loop.objective_store import (
-    OBJECTIVE_TARGET_ID,
-    OBJECTIVE_WORKTREE_SLUG,
-    get_objective_run,
-    list_objective_runs,
-)
 from src.domain.loop.persistence import persist_run
 from src.domain.loop.ports import (
     LoopContextResolver,
@@ -50,6 +44,12 @@ from src.domain.loop.ports import (
 )
 from src.domain.loop.prompts import ReviewStagePrompt, TaskStagePrompt, build_stage_prompt
 from src.domain.loop.snapshots import definition_from_snapshot
+from src.domain.loop.store import (
+    DEFAULT_TARGET_ID,
+    DEFAULT_WORKTREE_SLUG,
+    get_run_record,
+    list_runs,
+)
 from src.domain.models import Provider
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.ports import WorkStore
@@ -59,17 +59,17 @@ if TYPE_CHECKING:
     from src.domain.supervisor import AgentSupervisorService
 
 
-class ObjectiveWorkNotFound(ValueError):
+class WorkNotFound(ValueError):
     """The standalone run's Work does not exist."""
 
 
-class ObjectiveContextMissing(ValueError):
+class ContextMissing(ValueError):
     """One or more required loop context references could not be resolved."""
 
 
 @dataclass(frozen=True)
-class ObjectiveStartSpec:
-    """User-supplied runtime configuration for one standalone loop run."""
+class LoopRunStartSpec:
+    """User-supplied runtime configuration for one goal-driven loop run."""
 
     work_slug: str
     goal: str
@@ -100,16 +100,16 @@ async def start(
     share_provisioner: ShareProvisioner,
     adapter_factory: AgentAdapterFactory,
     settings: Any,
-    spec: ObjectiveStartSpec,
+    spec: LoopRunStartSpec,
 ) -> LoopRunRecord:
-    """Launch and persist one standalone objective run.
+    """Launch and persist one goal-driven loop run.
 
     Preconditions: Work, root, template, user runtime config, and required context
     are valid. Postconditions: the entry stage and pinned run state exist.
     """
     work = workstore.get_work(spec.work_slug)
     if work is None:
-        raise ObjectiveWorkNotFound(f"work not found: {spec.work_slug}")
+        raise WorkNotFound(f"work not found: {spec.work_slug}")
     if work.work.status != "active":
         raise WorkNotActive(f"work {spec.work_slug} is completed; reopen it before starting a run")
     source = spec.source
@@ -119,7 +119,7 @@ async def start(
         LoopStatus.FAILED,
     }:
         source_id = actions.str_or_empty(source.state.get("id")) or source.run_key
-        raise ValueError(f"objective run cannot be reused: {source_id}")
+        raise ValueError(f"loop run cannot be reused: {source_id}")
     root = Path(spec.root_path).expanduser().resolve()
     if not root.is_dir():
         raise AgentFolderMissing(f"agent folder does not exist: {root}")
@@ -181,7 +181,7 @@ async def start(
         for item in resolution.missing_required
     ]
     if missing:
-        raise ObjectiveContextMissing("Required loop context is missing: " + "; ".join(missing))
+        raise ContextMissing("Required loop context is missing: " + "; ".join(missing))
 
     entry = next(
         (
@@ -196,7 +196,7 @@ async def start(
     source_loop = actions.dict_or_empty(source.state.get("loop")) if source else {}
     source_agent_slug = actions.str_or_none(source_loop.get("source_agent_slug"))
     if source is not None and source_agent_slug is None:
-        raise ValueError("objective run has no reusable source agent")
+        raise ValueError("loop run has no reusable source agent")
     workspace_slug, source_workspace = _workspace_source(
         workstore,
         spec,
@@ -209,12 +209,12 @@ async def start(
         root,
     )
     if source_workspace is not None and workspace.resolve() != source_workspace:
-        raise ValueError("objective run did not resolve to its retained workspace")
+        raise ValueError("loop run did not resolve to its retained workspace")
     run_number = (
         max(
             (
                 actions.int_or_default(row.state.get("number"), 0)
-                for row in list_objective_runs(loop_runs, spec.work_slug)
+                for row in list_runs(loop_runs, spec.work_slug)
             ),
             default=0,
         )
@@ -302,7 +302,7 @@ async def start(
                 prompt_type(
                     run_id=run_id,
                     work_slug=spec.work_slug,
-                    artifact_id=OBJECTIVE_TARGET_ID,
+                    artifact_id=DEFAULT_TARGET_ID,
                     artifact_title=spec.goal,
                     source_ref=str(root),
                     stage=entry,
@@ -323,7 +323,7 @@ async def start(
         raise ValueError("non-agent loop entry requires a reusable workspace")
     now = actions.now_iso()
     loop = actions.initialized_loop_snapshot(
-        target_id=OBJECTIVE_TARGET_ID,
+        target_id=DEFAULT_TARGET_ID,
         agent_slug=run_agent_slug,
         run_id=run_id,
         definition=definition,
@@ -382,9 +382,9 @@ async def start(
         target_ref=spec.goal,
         run=run,
     )
-    record = get_objective_run(loop_runs, spec.work_slug, run_id)
+    record = get_run_record(loop_runs, spec.work_slug, run_id)
     if record is None:
-        raise RuntimeError(f"objective run was not persisted: {run_id}")
+        raise RuntimeError(f"loop run was not persisted: {run_id}")
     return record
 
 
@@ -414,16 +414,16 @@ def _resolve_contexts(
 
 def _workspace_source(
     workstore: WorkStore,
-    spec: ObjectiveStartSpec,
+    spec: LoopRunStartSpec,
     source: LoopRunRecord | None,
     source_loop: dict[str, Any],
 ) -> tuple[str, Path | None]:
     """Return the stable workspace owner and retained path for one run."""
     if source is None:
-        return OBJECTIVE_WORKTREE_SLUG, None
+        return DEFAULT_WORKTREE_SLUG, None
     source_agent_slug = actions.str_or_none(source_loop.get("source_agent_slug"))
     if source_agent_slug is None:
-        raise ValueError("objective run has no reusable workspace")
+        raise ValueError("loop run has no reusable workspace")
     source_agent = next(
         (
             item
@@ -433,20 +433,20 @@ def _workspace_source(
         None,
     )
     if source_agent is None:
-        raise ValueError("objective run has no reusable workspace")
+        raise ValueError("loop run has no reusable workspace")
     raw_workspace = actions.str_or_empty(source.state.get("workspace_path"))
     if not raw_workspace:
-        raise ValueError("objective run has no reusable workspace")
+        raise ValueError("loop run has no reusable workspace")
     source_workspace = Path(raw_workspace).expanduser().resolve()
     if not source_workspace.is_dir():
-        raise ValueError(f"objective run workspace is missing: {source_workspace}")
+        raise ValueError(f"loop run workspace is missing: {source_workspace}")
     return source_agent.worktree_slug or source_agent_slug, source_workspace
 
 
 __all__ = [
-    "ObjectiveContextMissing",
-    "ObjectiveStartSpec",
-    "ObjectiveWorkNotFound",
+    "ContextMissing",
+    "LoopRunStartSpec",
     "WorkNotActive",
+    "WorkNotFound",
     "start",
 ]

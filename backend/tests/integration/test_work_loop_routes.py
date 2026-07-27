@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from src.domain.agents import AmpAgentConfig
 from src.domain.loop import monitor as loop_monitor
 from src.domain.loop.dtos import LoopFailureKind
-from src.domain.loop.objective_store import ObjectiveLoopRunStore, objective_run_key
+from src.domain.loop.store import LoopRunStore, loop_run_key
 from src.domain.supervisor import service as supervisor_service
 from src.infrastructure.agents import StubAgentAdapter
 from src.infrastructure.agents.factory import build_adapter
@@ -470,7 +470,7 @@ def test_edited_run_reuses_the_exact_legacy_workspace(
     (legacy_workspace / "README.md").write_text("retained tracked edit\n")
     (legacy_workspace / "carried.txt").write_text("retained untracked edit\n")
 
-    store = ObjectiveLoopRunStore(app_client.app.state.loop_runs)
+    store = LoopRunStore(app_client.app.state.loop_runs)
     target = store.load("WRK-001", "run-001")
     assert target is not None
     target.run["workspace_path"] = str(legacy_workspace)
@@ -558,7 +558,7 @@ def test_legacy_loop_workspace_reads_as_the_retained_source_workspace(
 ) -> None:
     _start_run(app_client, tmp_path)
     retained_workspace = tmp_path / "worktrees" / "agt-33"
-    store = ObjectiveLoopRunStore(app_client.app.state.loop_runs)
+    store = LoopRunStore(app_client.app.state.loop_runs)
     source = store.load("WRK-001", "run-001")
     assert source is not None
     source.run["workspace_path"] = str(retained_workspace)
@@ -571,7 +571,7 @@ def test_legacy_loop_workspace_reads_as_the_retained_source_workspace(
     legacy.run["workspace_path"] = str(tmp_path / "worktrees" / "loop")
     loop = legacy.run["loop"]
     assert isinstance(loop, dict)
-    loop["loop_run_id"] = objective_run_key("run-002")
+    loop["loop_run_id"] = loop_run_key("run-002")
     store.save(legacy)
 
     listed = app_client.get("/api/works/WRK-001/runs")
@@ -703,7 +703,7 @@ def test_agent_runtime_error_fails_without_report_retries(
     assert any(
         agent["slug"] == agent_slug for agent in app_client.get("/api/works/WRK-001/agents").json()
     )
-    target = ObjectiveLoopRunStore(app_client.app.state.loop_runs).load("WRK-001", "run-001")
+    target = LoopRunStore(app_client.app.state.loop_runs).load("WRK-001", "run-001")
     assert target is not None
     assert target.run["loop"]["failure_kind"] == LoopFailureKind.PROVIDER_RUNTIME.value
 
@@ -936,7 +936,7 @@ def test_failed_stage_retry_uses_new_agent_in_same_workspace(
         {"type": "error", "message": "Provider stopped."},
     )
     failed = _wait_for_status(app_client, "failed")
-    store = ObjectiveLoopRunStore(app_client.app.state.loop_runs)
+    store = LoopRunStore(app_client.app.state.loop_runs)
     target = store.load("WRK-001", "run-001")
     assert target is not None
     target.run["loop"]["failure_kind"] = LoopFailureKind.PROVIDER_RUNTIME.value

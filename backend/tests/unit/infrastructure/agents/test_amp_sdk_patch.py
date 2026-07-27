@@ -10,8 +10,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-import pytest
-
 import amp_sdk.core as _amp_core
 
 from src.infrastructure.agents import _amp_sdk_patch

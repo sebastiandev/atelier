@@ -13,7 +13,6 @@ import pytest
 
 from src.infrastructure.filesystem import terminal as term_mod
 
-
 # ---------------------------------------------------------------------------
 # Test fixtures: a recording fake for ``subprocess.run`` + a controllable
 # ``shutil.which`` so each test can pretend specific binaries exist.

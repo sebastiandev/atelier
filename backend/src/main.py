@@ -30,7 +30,7 @@ from src.application.ws import agents as ws_agents
 from src.application.ws import chats as ws_chats
 from src.domain.agents import record_artifact
 from src.domain.chatstore import ChatStoreService
-from src.domain.commands.loops import objective_runs
+from src.domain.commands.loops import runs as loop_run_commands
 from src.domain.commands.planning import run_monitor as planning_run_monitor
 from src.domain.connections import ConnectionStoreService
 from src.domain.loop.dtos import LoopRunSourceKind, LoopStatus
@@ -235,7 +235,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 if a.slug
             }
             if work.mode == "loop":
-                live.add(objective_runs.OBJECTIVE_WORKTREE_SLUG)
+                live.add(loop_run_commands.DEFAULT_WORKTREE_SLUG)
             worktree_manager.sweep_orphans(work.slug, live)
 
         app.state.settings = resolved
@@ -283,9 +283,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 run_id = str(persisted.state.get("id") or "")
                 if not run_id:
                     continue
-                key = f"{persisted.work_slug}:objective:{run_id}"
+                key = f"{persisted.work_slug}:loop:{run_id}"
                 planning_run_monitor_tasks[key] = asyncio.create_task(
-                    objective_runs.monitor_run(
+                    loop_run_commands.monitor_run(
                         workstore,
                         loop_runs,
                         supervisor,
@@ -296,12 +296,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         agent_adapter_factory,
                         loop_check_runner,
                         resolved,
-                        objective_runs.ObjectiveRunRequest(
+                        loop_run_commands.LoopRunRequest(
                             work_slug=persisted.work_slug,
                             run_id=run_id,
                         ),
                     ),
-                    name=f"objective-run-{persisted.work_slug}-{run_id}",
+                    name=f"loop-run-{persisted.work_slug}-{run_id}",
                 )
                 continue
             if (

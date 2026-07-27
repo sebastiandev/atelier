@@ -75,7 +75,7 @@ from src.domain.agents.handoffs import (
 )
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.chatstore import ChatRecord, ChatStore
-from src.domain.commands.loops import objective_runs
+from src.domain.commands.loops import runs as loop_run_commands
 from src.domain.commands.planning import (
     accept_run as planning_accept_run,
 )
@@ -363,7 +363,10 @@ def list_work_loop_runs_endpoint(
     loop_runs: LoopRunRepositoryDep,
 ) -> list[WorkLoopRunResponse]:
     """List durable standalone Loop runs for one Work."""
-    return [_to_work_loop_run(record) for record in objective_runs.list_runs(loop_runs, work_slug)]
+    return [
+        _to_work_loop_run(record)
+        for record in loop_run_commands.list_runs(loop_runs, work_slug)
+    ]
 
 
 @router.get("/works/{work_slug}/loop-brief", response_model=LoopBriefSchema | None)
@@ -373,8 +376,8 @@ def get_work_loop_brief_endpoint(
 ) -> LoopBriefSchema | None:
     """Return the latest editable Loop brief saved on one Work."""
     try:
-        brief = objective_runs.get_work_brief(workstore, work_slug)
-    except objective_runs.WorkNotFound as exc:
+        brief = loop_run_commands.get_work_brief(workstore, work_slug)
+    except loop_run_commands.WorkNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return _to_loop_brief_schema(brief) if brief is not None else None
 
@@ -387,12 +390,12 @@ def save_work_loop_brief_endpoint(
 ) -> LoopBriefSchema:
     """Save task input on the Work without changing its loop definition."""
     try:
-        brief = objective_runs.save_work_brief(
+        brief = loop_run_commands.save_work_brief(
             workstore,
             work_slug,
             _to_loop_brief(payload),
         )
-    except objective_runs.WorkNotFound as exc:
+    except loop_run_commands.WorkNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
@@ -407,11 +410,11 @@ def get_work_loop_run_endpoint(
 ) -> WorkLoopRunResponse:
     """Return one durable standalone Loop run."""
     try:
-        record = objective_runs.get_run(
+        record = loop_run_commands.get_run(
             loop_runs,
-            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+            loop_run_commands.LoopRunRequest(work_slug, run_id),
         )
-    except objective_runs.ObjectiveRunNotFound as exc:
+    except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return _to_work_loop_run(record)
 
@@ -437,17 +440,17 @@ async def refresh_work_loop_pr_endpoint(
             detail="pull-request lifecycle service is unavailable",
         )
     try:
-        record = await objective_runs.refresh_pr(
+        record = await loop_run_commands.refresh_pr(
             workstore,
             loop_runs,
             gateway,
-            objective_runs.RefreshObjectivePrRequest(
+            loop_run_commands.RefreshPrRequest(
                 work_slug=work_slug,
                 run_id=run_id,
                 force=force,
             ),
         )
-    except (objective_runs.ObjectiveRunNotFound, objective_runs.WorkNotFound) as exc:
+    except (loop_run_commands.RunNotFound, loop_run_commands.WorkNotFound) as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except pr_review.PrReviewUnavailable as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
@@ -479,7 +482,7 @@ async def start_work_loop_run_endpoint(
 ) -> WorkLoopRunResponse:
     """Start a standalone Loop run and schedule its monitor."""
     try:
-        record = await objective_runs.start_run(
+        record = await loop_run_commands.start_run(
             workstore,
             loop_definitions,
             loop_locations,
@@ -492,7 +495,7 @@ async def start_work_loop_run_endpoint(
             share_provisioner,
             adapter_factory,
             settings,
-            objective_runs.StartObjectiveRunRequest(
+            loop_run_commands.StartLoopRunRequest(
                 work_slug=work_slug,
                 goal=payload.goal,
                 root_path=payload.root_path,
@@ -506,20 +509,20 @@ async def start_work_loop_run_endpoint(
             ),
         )
     except (
-        objective_runs.WorkNotFound,
-        objective_runs.ObjectiveRunNotFound,
-        objective_runs.LoopDefinitionNotFound,
+        loop_run_commands.WorkNotFound,
+        loop_run_commands.RunNotFound,
+        loop_run_commands.LoopDefinitionNotFound,
     ) as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except objective_runs.LoopDefinitionConflict as exc:
+    except loop_run_commands.LoopDefinitionConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except objective_runs.WorkNotActive as exc:
+    except loop_run_commands.WorkNotActive as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except (
-        objective_runs.AgentFolderMissing,
-        objective_runs.InvalidProviderConfig,
-        objective_runs.LoopContextMissing,
-        objective_runs.LoopDefinitionInvalid,
+        loop_run_commands.AgentFolderMissing,
+        loop_run_commands.InvalidProviderConfig,
+        loop_run_commands.LoopContextMissing,
+        loop_run_commands.LoopDefinitionInvalid,
         ValueError,
     ) as exc:
         raise HTTPException(
@@ -528,7 +531,7 @@ async def start_work_loop_run_endpoint(
         ) from exc
     except AgentTerminated as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    _ensure_objective_run_monitor_task(
+    _ensure_loop_run_monitor_task(
         request,
         workstore,
         supervisor,
@@ -540,7 +543,7 @@ async def start_work_loop_run_endpoint(
         check_runner,
         loop_runs,
         settings,
-        objective_runs.ObjectiveRunRequest(work_slug, str(record.state["id"])),
+        loop_run_commands.LoopRunRequest(work_slug, str(record.state["id"])),
     )
     return _to_work_loop_run(record)
 
@@ -567,7 +570,7 @@ async def resume_work_loop_run_endpoint(
 ) -> WorkLoopRunResponse:
     """Resume one blocker-paused standalone Loop run."""
     try:
-        record = await objective_runs.resume_run(
+        record = await loop_run_commands.resume_run(
             workstore,
             loop_runs,
             supervisor,
@@ -577,7 +580,7 @@ async def resume_work_loop_run_endpoint(
             share_provisioner,
             adapter_factory,
             settings,
-            objective_runs.ResumeObjectiveRunRequest(
+            loop_run_commands.ResumeLoopRunRequest(
                 work_slug,
                 run_id,
                 payload.resolution_note,
@@ -585,14 +588,14 @@ async def resume_work_loop_run_endpoint(
                 enforced_findings=tuple(payload.enforced_findings),
             ),
         )
-    except objective_runs.ObjectiveRunNotFound as exc:
+    except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
-    _ensure_objective_run_monitor_task(
+    _ensure_loop_run_monitor_task(
         request,
         workstore,
         supervisor,
@@ -604,7 +607,7 @@ async def resume_work_loop_run_endpoint(
         check_runner,
         loop_runs,
         settings,
-        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        loop_run_commands.LoopRunRequest(work_slug, run_id),
     )
     return _to_work_loop_run(record)
 
@@ -630,7 +633,7 @@ async def retry_work_loop_run_stage_endpoint(
 ) -> WorkLoopRunResponse:
     """Retry one failed standalone Loop stage in place."""
     try:
-        record = await objective_runs.retry_stage(
+        record = await loop_run_commands.retry_stage(
             workstore,
             loop_runs,
             supervisor,
@@ -640,9 +643,9 @@ async def retry_work_loop_run_stage_endpoint(
             share_provisioner,
             adapter_factory,
             settings,
-            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+            loop_run_commands.LoopRunRequest(work_slug, run_id),
         )
-    except objective_runs.ObjectiveRunNotFound as exc:
+    except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -651,7 +654,7 @@ async def retry_work_loop_run_stage_endpoint(
         ) from exc
     except AgentTerminated as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    _ensure_objective_run_monitor_task(
+    _ensure_loop_run_monitor_task(
         request,
         workstore,
         supervisor,
@@ -663,7 +666,7 @@ async def retry_work_loop_run_stage_endpoint(
         check_runner,
         loop_runs,
         settings,
-        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        loop_run_commands.LoopRunRequest(work_slug, run_id),
     )
     return _to_work_loop_run(record)
 
@@ -688,9 +691,9 @@ async def request_work_loop_run_changes_endpoint(
     check_runner: LoopCheckRunnerDep,
     settings: SettingsDep,
 ) -> WorkLoopRunResponse:
-    """Return an objective run to its configured write stage."""
+    """Return a sourceless loop run to its configured write stage."""
     try:
-        record = await objective_runs.request_changes(
+        record = await loop_run_commands.request_changes(
             workstore,
             loop_runs,
             supervisor,
@@ -698,20 +701,20 @@ async def request_work_loop_run_changes_endpoint(
             sharestore,
             share_provisioner,
             settings,
-            objective_runs.RequestObjectiveChangesRequest(
+            loop_run_commands.RequestChangesRequest(
                 work_slug,
                 run_id,
                 payload.note,
             ),
         )
-    except objective_runs.ObjectiveRunNotFound as exc:
+    except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
-    _ensure_objective_run_monitor_task(
+    _ensure_loop_run_monitor_task(
         request,
         workstore,
         supervisor,
@@ -723,7 +726,7 @@ async def request_work_loop_run_changes_endpoint(
         check_runner,
         loop_runs,
         settings,
-        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        loop_run_commands.LoopRunRequest(work_slug, run_id),
     )
     return _to_work_loop_run(record)
 
@@ -749,13 +752,13 @@ async def accept_work_loop_run_endpoint(
 ) -> WorkLoopRunResponse:
     """Accept one completed standalone Loop run."""
     try:
-        record = await objective_runs.accept_run(
+        record = await loop_run_commands.accept_run(
             workstore,
             loop_runs,
             supervisor,
-            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+            loop_run_commands.LoopRunRequest(work_slug, run_id),
         )
-    except objective_runs.ObjectiveRunNotFound as exc:
+    except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -763,7 +766,7 @@ async def accept_work_loop_run_endpoint(
             detail=str(exc),
         ) from exc
     if record.status not in {LoopStatus.ACCEPTED, LoopStatus.CLEANED}:
-        _ensure_objective_run_monitor_task(
+        _ensure_loop_run_monitor_task(
             request,
             workstore,
             supervisor,
@@ -775,7 +778,7 @@ async def accept_work_loop_run_endpoint(
             check_runner,
             loop_runs,
             settings,
-            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+            loop_run_commands.LoopRunRequest(work_slug, run_id),
         )
     return _to_work_loop_run(record)
 
@@ -802,23 +805,23 @@ async def create_work_loop_pr_stage_endpoint(
 ) -> WorkLoopRunResponse:
     """Add and launch a Work-local Create PR stage."""
     try:
-        record = objective_runs.create_pr_stage(
+        record = loop_run_commands.create_pr_stage(
             workstore,
             loop_runs,
-            objective_runs.CreateObjectivePrRequest(
+            loop_run_commands.CreatePrRequest(
                 work_slug=work_slug,
                 run_id=run_id,
                 setup=pr_lifecycle.PrSetup(**payload.model_dump()),
             ),
         )
-    except (objective_runs.ObjectiveRunNotFound, objective_runs.WorkNotFound) as exc:
+    except (loop_run_commands.RunNotFound, loop_run_commands.WorkNotFound) as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
-    _ensure_objective_run_monitor_task(
+    _ensure_loop_run_monitor_task(
         request,
         workstore,
         supervisor,
@@ -830,7 +833,7 @@ async def create_work_loop_pr_stage_endpoint(
         check_runner,
         loop_runs,
         settings,
-        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        loop_run_commands.LoopRunRequest(work_slug, run_id),
     )
     return _to_work_loop_run(record)
 
@@ -857,10 +860,10 @@ async def send_work_loop_pr_feedback_endpoint(
 ) -> WorkLoopRunResponse:
     """Start another pass from selected pull-request feedback."""
     try:
-        record = objective_runs.send_pr_feedback(
+        record = loop_run_commands.send_pr_feedback(
             workstore,
             loop_runs,
-            objective_runs.SendObjectivePrFeedbackRequest(
+            loop_run_commands.SendPrFeedbackRequest(
                 work_slug=work_slug,
                 run_id=run_id,
                 comments=tuple(
@@ -873,14 +876,14 @@ async def send_work_loop_pr_feedback_endpoint(
                 instruction=payload.instruction,
             ),
         )
-    except (objective_runs.ObjectiveRunNotFound, objective_runs.WorkNotFound) as exc:
+    except (loop_run_commands.RunNotFound, loop_run_commands.WorkNotFound) as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
-    _ensure_objective_run_monitor_task(
+    _ensure_loop_run_monitor_task(
         request,
         workstore,
         supervisor,
@@ -892,7 +895,7 @@ async def send_work_loop_pr_feedback_endpoint(
         check_runner,
         loop_runs,
         settings,
-        objective_runs.ObjectiveRunRequest(work_slug, run_id),
+        loop_run_commands.LoopRunRequest(work_slug, run_id),
     )
     return _to_work_loop_run(record)
 
@@ -910,13 +913,13 @@ async def cancel_work_loop_run_endpoint(
 ) -> WorkLoopRunResponse:
     """Cancel one active standalone Loop run."""
     try:
-        record = await objective_runs.cancel_run(
+        record = await loop_run_commands.cancel_run(
             workstore,
             loop_runs,
             supervisor,
-            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+            loop_run_commands.LoopRunRequest(work_slug, run_id),
         )
-    except objective_runs.ObjectiveRunNotFound as exc:
+    except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -939,13 +942,13 @@ async def cleanup_work_loop_run_endpoint(
 ) -> WorkLoopRunResponse:
     """Deprecated compatibility alias that releases provider runtimes."""
     try:
-        record = await objective_runs.clean_run(
+        record = await loop_run_commands.clean_run(
             workstore,
             loop_runs,
             supervisor,
-            objective_runs.ObjectiveRunRequest(work_slug, run_id),
+            loop_run_commands.LoopRunRequest(work_slug, run_id),
         )
-    except objective_runs.ObjectiveRunNotFound as exc:
+    except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -981,7 +984,7 @@ async def rerun_work_loop_run_endpoint(
 ) -> WorkLoopRunResponse:
     """Start another run from a terminal run's kept workspace."""
     try:
-        record = await objective_runs.rerun(
+        record = await loop_run_commands.rerun(
             workstore,
             loop_definitions,
             loop_locations,
@@ -994,16 +997,16 @@ async def rerun_work_loop_run_endpoint(
             share_provisioner,
             adapter_factory,
             settings,
-            objective_runs.RerunObjectiveRunRequest(
+            loop_run_commands.RerunLoopRunRequest(
                 work_slug,
                 run_id,
                 LoopRunKind(payload.kind) if payload is not None else LoopRunKind.INITIAL,
                 payload.note if payload is not None else "",
             ),
         )
-    except objective_runs.ObjectiveRunNotFound as exc:
+    except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except objective_runs.LoopDefinitionConflict as exc:
+    except loop_run_commands.LoopDefinitionConflict as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -1013,7 +1016,7 @@ async def rerun_work_loop_run_endpoint(
     except AgentTerminated as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     new_run_id = str(record.state["id"])
-    _ensure_objective_run_monitor_task(
+    _ensure_loop_run_monitor_task(
         request,
         workstore,
         supervisor,
@@ -1025,7 +1028,7 @@ async def rerun_work_loop_run_endpoint(
         check_runner,
         loop_runs,
         settings,
-        objective_runs.ObjectiveRunRequest(work_slug, new_run_id),
+        loop_run_commands.LoopRunRequest(work_slug, new_run_id),
     )
     return _to_work_loop_run(record)
 
@@ -1343,7 +1346,7 @@ def _ensure_plan_run_monitor_task(
     task.add_done_callback(_clear)
 
 
-def _ensure_objective_run_monitor_task(
+def _ensure_loop_run_monitor_task(
     request: Request,
     workstore: WorkStore,
     supervisor: AgentSupervisorService,
@@ -1355,10 +1358,10 @@ def _ensure_objective_run_monitor_task(
     check_runner: LoopCheckRunner,
     loop_runs: LoopRunRepository,
     settings: Settings,
-    req: objective_runs.ObjectiveRunRequest,
+    req: loop_run_commands.LoopRunRequest,
 ) -> None:
-    """Schedule one objective monitor unless that monitor is already active."""
-    key = f"{req.work_slug}:objective:{req.run_id}"
+    """Schedule one loop-run monitor unless that monitor is already active."""
+    key = f"{req.work_slug}:loop:{req.run_id}"
     tasks = getattr(request.app.state, "planning_run_monitor_tasks", None)
     if tasks is None:
         tasks = {}
@@ -1369,7 +1372,7 @@ def _ensure_objective_run_monitor_task(
     poller = getattr(request.app.state, "pr_status_poller", None)
     pr_gateway = poller.lifecycle_gateway() if poller is not None else None
     task = asyncio.create_task(
-        objective_runs.monitor_run(
+        loop_run_commands.monitor_run(
             workstore,
             loop_runs,
             supervisor,
@@ -1383,7 +1386,7 @@ def _ensure_objective_run_monitor_task(
             req,
             pr_gateway=pr_gateway,
         ),
-        name=f"objective-run-{req.work_slug}-{req.run_id}",
+        name=f"loop-run-{req.work_slug}-{req.run_id}",
     )
     tasks[key] = task
 
@@ -1396,7 +1399,7 @@ def _ensure_objective_run_monitor_task(
             pass
         except Exception:
             _log.exception(
-                "objective run monitor failed for %s %s",
+                "loop run monitor failed for %s %s",
                 req.work_slug,
                 req.run_id,
             )
@@ -3129,7 +3132,7 @@ def _to_plan_run(run: PlanArtifactRun) -> PlanArtifactRunResponse:
 
 
 def _to_work_loop_run(record: LoopRunRecord) -> WorkLoopRunResponse:
-    """Project one durable objective record onto its REST response."""
+    """Project one durable loop run onto its REST response."""
     state = record.state
     raw_loop = state.get("loop")
     loop: dict[str, Any] = raw_loop if isinstance(raw_loop, dict) else {}

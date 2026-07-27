@@ -18,12 +18,12 @@ from src.domain.loop import (
     actions,
     briefs,
     lifecycle,
-    objective_start,
     pr_lifecycle,
     pr_review,
     runtime,
 )
 from src.domain.loop import monitor as loop_monitor
+from src.domain.loop import start as loop_start
 from src.domain.loop.definitions import (
     LoopDefinitionConflict,
     LoopDefinitionInvalid,
@@ -38,12 +38,6 @@ from src.domain.loop.dtos import (
     LoopTargetKind,
 )
 from src.domain.loop.models import LoopRunRecord, LoopRunTarget
-from src.domain.loop.objective_store import (
-    OBJECTIVE_WORKTREE_SLUG,
-    ObjectiveLoopRunStore,
-    get_objective_run,
-    list_objective_runs,
-)
 from src.domain.loop.persistence import persist_run
 from src.domain.loop.ports import (
     LoopCheckRunner,
@@ -53,6 +47,12 @@ from src.domain.loop.ports import (
     LoopRunRepository,
 )
 from src.domain.loop.snapshots import definition_from_snapshot
+from src.domain.loop.store import (
+    DEFAULT_WORKTREE_SLUG,
+    LoopRunStore,
+    get_run_record,
+)
+from src.domain.loop.store import list_runs as store_list_runs
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.dtos import UpdateWorkRequest
 from src.domain.workstore.ports import WorkStore
@@ -61,19 +61,19 @@ from src.domain.worktrees import WorktreeManager
 if TYPE_CHECKING:
     from src.domain.supervisor import AgentSupervisorService
 
-WorkNotFound = objective_start.ObjectiveWorkNotFound
+WorkNotFound = loop_start.WorkNotFound
 
 
-class ObjectiveRunNotFound(ValueError):
-    """The requested objective run does not exist."""
+class RunNotFound(ValueError):
+    """The requested loop run does not exist."""
 
 
-LoopContextMissing = objective_start.ObjectiveContextMissing
+LoopContextMissing = loop_start.ContextMissing
 
 
 @dataclass(frozen=True)
-class StartObjectiveRunRequest:
-    """Command input for starting one freeform objective run."""
+class StartLoopRunRequest:
+    """Command input for starting one goal-driven loop run."""
 
     work_slug: str
     goal: str
@@ -88,15 +88,15 @@ class StartObjectiveRunRequest:
 
 
 @dataclass(frozen=True)
-class ObjectiveRunRequest:
-    """Command input identifying one freeform objective run."""
+class LoopRunRequest:
+    """Command input identifying one goal-driven loop run."""
 
     work_slug: str
     run_id: str
 
 
 @dataclass(frozen=True)
-class RerunObjectiveRunRequest:
+class RerunLoopRunRequest:
     """Command input for a terminal-workspace follow-up run."""
 
     work_slug: str
@@ -106,8 +106,8 @@ class RerunObjectiveRunRequest:
 
 
 @dataclass(frozen=True)
-class ResumeObjectiveRunRequest:
-    """Command input for resuming one blocked objective run."""
+class ResumeLoopRunRequest:
+    """Command input for resuming one blocked loop run."""
 
     work_slug: str
     run_id: str
@@ -117,8 +117,8 @@ class ResumeObjectiveRunRequest:
 
 
 @dataclass(frozen=True)
-class RequestObjectiveChangesRequest:
-    """Command input for returning an objective run to implementation."""
+class RequestChangesRequest:
+    """Command input for returning a loop run to implementation."""
 
     work_slug: str
     run_id: str
@@ -126,7 +126,7 @@ class RequestObjectiveChangesRequest:
 
 
 @dataclass(frozen=True)
-class CreateObjectivePrRequest:
+class CreatePrRequest:
     """Command input for adding a Work-local PR stage to an accepted run."""
 
     work_slug: str
@@ -135,7 +135,7 @@ class CreateObjectivePrRequest:
 
 
 @dataclass(frozen=True)
-class SendObjectivePrFeedbackRequest:
+class SendPrFeedbackRequest:
     """Command input for starting another pass from selected PR feedback."""
 
     work_slug: str
@@ -145,7 +145,7 @@ class SendObjectivePrFeedbackRequest:
 
 
 @dataclass(frozen=True)
-class RefreshObjectivePrRequest:
+class RefreshPrRequest:
     """Command input for synchronizing one run's pull request."""
 
     work_slug: str
@@ -157,18 +157,18 @@ def list_runs(
     repository: LoopRunRepository,
     work_slug: str,
 ) -> tuple[LoopRunRecord, ...]:
-    """Return every objective run for one Work, oldest first."""
-    return list_objective_runs(repository, work_slug)
+    """Return every loop run for one Work, oldest first."""
+    return store_list_runs(repository, work_slug)
 
 
 def get_run(
     repository: LoopRunRepository,
-    req: ObjectiveRunRequest,
+    req: LoopRunRequest,
 ) -> LoopRunRecord:
-    """Return one objective run or raise before any state changes."""
-    record = get_objective_run(repository, req.work_slug, req.run_id)
+    """Return one loop run or raise before any state changes."""
+    record = get_run_record(repository, req.work_slug, req.run_id)
     if record is None:
-        raise ObjectiveRunNotFound(f"objective run not found: {req.run_id}")
+        raise RunNotFound(f"loop run not found: {req.run_id}")
     return record
 
 
@@ -207,15 +207,15 @@ async def start_run(
     share_provisioner: ShareProvisioner,
     adapter_factory: AgentAdapterFactory,
     settings: Any,
-    req: StartObjectiveRunRequest,
+    req: StartLoopRunRequest,
 ) -> LoopRunRecord:
     """Adapt user-selected runtime config to the standalone Loop start action."""
     source = (
-        get_run(loop_runs, ObjectiveRunRequest(req.work_slug, req.source_run_id))
+        get_run(loop_runs, LoopRunRequest(req.work_slug, req.source_run_id))
         if req.source_run_id
         else None
     )
-    record = await objective_start.start(
+    record = await loop_start.start(
         workstore,
         definitions,
         locations,
@@ -228,7 +228,7 @@ async def start_run(
         share_provisioner,
         adapter_factory,
         settings,
-        objective_start.ObjectiveStartSpec(
+        loop_start.LoopRunStartSpec(
             work_slug=req.work_slug,
             goal=req.goal,
             root_path=req.root_path,
@@ -259,13 +259,13 @@ async def monitor_run(
     adapter_factory: AgentAdapterFactory,
     check_runner: LoopCheckRunner,
     settings: Any,
-    req: ObjectiveRunRequest,
+    req: LoopRunRequest,
     *,
     pr_gateway: PrLifecycleGateway | None = None,
 ) -> LoopRunRecord:
-    """Monitor one objective run through the generic leased loop engine."""
+    """Monitor one loop run through the generic leased loop engine."""
     get_run(loop_runs, req)
-    store = ObjectiveLoopRunStore(loop_runs)
+    store = LoopRunStore(loop_runs)
     target = await loop_monitor.execute(
         workstore,
         store,
@@ -299,12 +299,12 @@ async def resume_run(
     share_provisioner: ShareProvisioner,
     adapter_factory: AgentAdapterFactory,
     settings: Any,
-    req: ResumeObjectiveRunRequest,
+    req: ResumeLoopRunRequest,
 ) -> LoopRunRecord:
-    """Resume one blocked objective run through the loop lifecycle action."""
-    key = ObjectiveRunRequest(req.work_slug, req.run_id)
+    """Resume one blocked loop run through the loop lifecycle action."""
+    key = LoopRunRequest(req.work_slug, req.run_id)
     get_run(loop_runs, key)
-    store = ObjectiveLoopRunStore(loop_runs)
+    store = LoopRunStore(loop_runs)
     target = _target_or_raise(store, key)
     await lifecycle.resume(
         target,
@@ -334,16 +334,16 @@ async def retry_stage(
     share_provisioner: ShareProvisioner,
     adapter_factory: AgentAdapterFactory,
     settings: Any,
-    req: ObjectiveRunRequest,
+    req: LoopRunRequest,
 ) -> LoopRunRecord:
     """Retry the failed current stage in its existing run and workspace.
 
-    Preconditions: the objective run failed on a retryable pinned stage.
+    Preconditions: the loop run failed on a retryable pinned stage.
     Postconditions: the same run/worktree and a fresh stage agent are active
     for one additional attempt.
     """
     get_run(loop_runs, req)
-    store = ObjectiveLoopRunStore(loop_runs)
+    store = LoopRunStore(loop_runs)
     target = _target_or_raise(store, req)
     await lifecycle.resume(
         target,
@@ -370,12 +370,12 @@ async def request_changes(
     sharestore: SharedFolderStore,
     share_provisioner: ShareProvisioner,
     settings: Any,
-    req: RequestObjectiveChangesRequest,
+    req: RequestChangesRequest,
 ) -> LoopRunRecord:
-    """Return an awaiting-approval objective to its configured write stage."""
-    key = ObjectiveRunRequest(req.work_slug, req.run_id)
+    """Return an awaiting-approval run to its configured write stage."""
+    key = LoopRunRequest(req.work_slug, req.run_id)
     get_run(loop_runs, key)
-    store = ObjectiveLoopRunStore(loop_runs)
+    store = LoopRunStore(loop_runs)
     target = _target_or_raise(store, key)
     await lifecycle.request_changes(
         target,
@@ -394,14 +394,14 @@ async def request_changes(
 def create_pr_stage(
     workstore: WorkStore,
     loop_runs: LoopRunRepository,
-    req: CreateObjectivePrRequest,
+    req: CreatePrRequest,
 ) -> LoopRunRecord:
-    """Add and schedule one durable PR stage on an accepted objective run."""
+    """Add and schedule one durable PR stage on an accepted loop run."""
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    key = ObjectiveRunRequest(req.work_slug, req.run_id)
+    key = LoopRunRequest(req.work_slug, req.run_id)
     get_run(loop_runs, key)
-    store = ObjectiveLoopRunStore(loop_runs)
+    store = LoopRunStore(loop_runs)
     target = _target_or_raise(store, key)
     pr_lifecycle.add_one_off_stage(target, req.setup)
     store.save(target)
@@ -411,14 +411,14 @@ def create_pr_stage(
 def send_pr_feedback(
     workstore: WorkStore,
     loop_runs: LoopRunRepository,
-    req: SendObjectivePrFeedbackRequest,
+    req: SendPrFeedbackRequest,
 ) -> LoopRunRecord:
-    """Schedule selected PR feedback through the same objective loop run."""
+    """Schedule selected PR feedback through the same loop run."""
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    key = ObjectiveRunRequest(req.work_slug, req.run_id)
+    key = LoopRunRequest(req.work_slug, req.run_id)
     get_run(loop_runs, key)
-    store = ObjectiveLoopRunStore(loop_runs)
+    store = LoopRunStore(loop_runs)
     target = _target_or_raise(store, key)
     pr_lifecycle.prepare_feedback(target, req.comments, req.instruction)
     store.save(target)
@@ -429,14 +429,14 @@ async def refresh_pr(
     workstore: WorkStore,
     loop_runs: LoopRunRepository,
     gateway: PrLifecycleGateway,
-    req: RefreshObjectivePrRequest,
+    req: RefreshPrRequest,
 ) -> LoopRunRecord:
     """Synchronize PR review state and persist any posted comment replies."""
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    key = ObjectiveRunRequest(req.work_slug, req.run_id)
+    key = LoopRunRequest(req.work_slug, req.run_id)
     get_run(loop_runs, key)
-    store = ObjectiveLoopRunStore(loop_runs)
+    store = LoopRunStore(loop_runs)
     target = _target_or_raise(store, key)
     await pr_review.refresh(target, gateway, force=req.force)
     store.save(target)
@@ -456,17 +456,17 @@ async def rerun(
     share_provisioner: ShareProvisioner,
     adapter_factory: AgentAdapterFactory,
     settings: Any,
-    req: RerunObjectiveRunRequest,
+    req: RerunLoopRunRequest,
 ) -> LoopRunRecord:
-    """Start a fresh run from one completed objective run's saved workspace."""
-    key = ObjectiveRunRequest(req.work_slug, req.run_id)
+    """Start a fresh run from one completed loop run's saved workspace."""
+    key = LoopRunRequest(req.work_slug, req.run_id)
     source = get_run(loop_runs, key)
     if source.status not in {
         LoopStatus.ACCEPTED,
         LoopStatus.CANCELLED,
         LoopStatus.FAILED,
     }:
-        raise ValueError(f"objective run cannot be reused: {req.run_id}")
+        raise ValueError(f"loop run cannot be reused: {req.run_id}")
     state = source.state
     raw_options = state.get("options")
     pinned_brief = briefs.optional_brief_from_snapshot(state.get("brief"))
@@ -494,7 +494,7 @@ async def rerun(
         if review_stage is None:
             raise ValueError("verify follow-up requires a review or check stage")
         entry_stage_id = review_stage.step_id
-    record = await objective_start.start(
+    record = await loop_start.start(
         workstore,
         definitions,
         locations,
@@ -507,7 +507,7 @@ async def rerun(
         share_provisioner,
         adapter_factory,
         settings,
-        objective_start.ObjectiveStartSpec(
+        loop_start.LoopRunStartSpec(
             work_slug=req.work_slug,
             goal=source.target_ref,
             root_path=actions.str_or_empty(state.get("root_path")),
@@ -561,13 +561,13 @@ async def accept_run(
     workstore: WorkStore,
     loop_runs: LoopRunRepository,
     supervisor: AgentSupervisorService,
-    req: ObjectiveRunRequest,
+    req: LoopRunRequest,
 ) -> LoopRunRecord:
-    """Approve one objective, releasing runtimes only when the loop ends."""
+    """Approve one run, releasing runtimes only when the loop ends."""
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
     get_run(loop_runs, req)
-    store = ObjectiveLoopRunStore(loop_runs)
+    store = LoopRunStore(loop_runs)
     target = _target_or_raise(store, req)
     completed = lifecycle.accept(target)
     store.save(target)
@@ -586,15 +586,15 @@ async def cancel_run(
     workstore: WorkStore,
     loop_runs: LoopRunRepository,
     supervisor: AgentSupervisorService,
-    req: ObjectiveRunRequest,
+    req: LoopRunRequest,
 ) -> LoopRunRecord:
-    """Stop an active objective run while preserving its workspace for cleanup.
+    """Stop an active loop run while preserving its workspace for cleanup.
 
     Preconditions: the run exists and is non-terminal.
     Postconditions: stage agents are stopped and the durable run is cancelled.
     """
     get_run(loop_runs, req)
-    store = ObjectiveLoopRunStore(loop_runs)
+    store = LoopRunStore(loop_runs)
     target = _target_or_raise(store, req)
     lifecycle.cancel(target)
     loop = actions.dict_or_empty(target.run.get("loop"))
@@ -613,7 +613,7 @@ async def clean_run(
     workstore: WorkStore,
     loop_runs: LoopRunRepository,
     supervisor: AgentSupervisorService,
-    req: ObjectiveRunRequest,
+    req: LoopRunRequest,
 ) -> LoopRunRecord:
     """Compatibility alias for releasing a terminal run's providers.
 
@@ -625,7 +625,7 @@ async def clean_run(
     if record.status == LoopStatus.CLEANED:
         return record
     if record.status not in {LoopStatus.ACCEPTED, LoopStatus.CANCELLED}:
-        raise ValueError(f"objective run cannot be cleaned up: {req.run_id}")
+        raise ValueError(f"loop run cannot be cleaned up: {req.run_id}")
     run = deepcopy(record.state)
     loop = actions.dict_or_empty(run.get("loop"))
     await runtime.release_run_agents(
@@ -651,31 +651,31 @@ async def clean_run(
 
 
 def _target_or_raise(
-    store: ObjectiveLoopRunStore,
-    req: ObjectiveRunRequest,
+    store: LoopRunStore,
+    req: LoopRunRequest,
 ) -> LoopRunTarget:
     target = store.load(req.work_slug, req.run_id)
     if target is None:
-        raise ObjectiveRunNotFound(f"objective run not found: {req.run_id}")
+        raise RunNotFound(f"loop run not found: {req.run_id}")
     return target
 
 
 __all__ = [
-    "OBJECTIVE_WORKTREE_SLUG",
+    "DEFAULT_WORKTREE_SLUG",
     "AgentFolderMissing",
-    "CreateObjectivePrRequest",
+    "CreatePrRequest",
     "InvalidProviderConfig",
     "LoopContextMissing",
     "LoopDefinitionConflict",
     "LoopDefinitionInvalid",
     "LoopDefinitionNotFound",
-    "ObjectiveRunNotFound",
-    "ObjectiveRunRequest",
-    "RefreshObjectivePrRequest",
-    "RequestObjectiveChangesRequest",
-    "ResumeObjectiveRunRequest",
-    "SendObjectivePrFeedbackRequest",
-    "StartObjectiveRunRequest",
+    "LoopRunRequest",
+    "RefreshPrRequest",
+    "RequestChangesRequest",
+    "ResumeLoopRunRequest",
+    "RunNotFound",
+    "SendPrFeedbackRequest",
+    "StartLoopRunRequest",
     "WorkNotActive",
     "WorkNotFound",
     "accept_run",
