@@ -132,6 +132,30 @@ _TOOL_TO_TYPE: dict[str, str] = {
 }
 
 
+def schema_violation(tool_name: str, arguments: dict[str, Any]) -> str | None:
+    """Return why ``arguments`` fail the tool's declared schema, else None.
+
+    Deliberately narrow: it checks the ``required`` keys and ``enum``
+    members that ``TOOL_SCHEMAS`` actually declares, rather than being a
+    general JSON Schema implementation. These are our own schemas for
+    our own three tools; a test asserts every declared ``required`` key
+    is covered so the two cannot drift apart.
+    """
+    schema = TOOL_SCHEMAS.get(_strip_known_prefix(tool_name))
+    if schema is None:
+        return None
+    for key in schema.get("required", []):
+        value = arguments.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return f"missing or empty {key!r}"
+    properties = schema.get("properties", {})
+    for key, value in arguments.items():
+        allowed = properties.get(key, {}).get("enum")
+        if allowed is not None and value not in allowed:
+            return f"{key!r} must be one of {sorted(allowed)}"
+    return None
+
+
 def marker_payload_for_tool(
     tool_name: str, arguments: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -140,11 +164,22 @@ def marker_payload_for_tool(
 
     The adapter calls this on every observed ToolUseBlock — a return of
     ``None`` means "fall through to the regular ToolCall event".
+
+    A call that violates the tool's schema also returns ``None``, so the
+    adapter stays quiet and the MCP server's own rejection reaches the
+    model, which can then retry with the missing field. Without that
+    gate the adapter races ahead of the server: it observes the raw
+    tool-call frame and records the artifact *before* the server can
+    reject it. Since ``WorkStore.record_artifact`` is first-write-wins
+    on URL, that pre-emptive write is permanent -- the model's corrected
+    retry is silently discarded as a duplicate.
     """
     tool_name, arguments = _normalize_tool_invocation(tool_name, arguments)
     bare = _strip_known_prefix(tool_name)
     artifact_type = _TOOL_TO_TYPE.get(bare)
     if artifact_type is None:
+        return None
+    if schema_violation(bare, arguments) is not None:
         return None
     payload: dict[str, Any] = {"type": artifact_type, **dict(arguments)}
     return payload
@@ -296,4 +331,5 @@ __all__ = [
     "marker_text_for_tool",
     "scan_text_for_artifact_markers",
     "scan_tool_output_for_artifact_markers",
+    "schema_violation",
 ]
