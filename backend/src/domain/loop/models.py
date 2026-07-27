@@ -6,7 +6,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from src.domain.loop.dtos import LoopStatus, LoopStepKind, LoopStepStatus, LoopTargetKind
+from src.domain.loop.dtos import (
+    LoopRunSource,
+    LoopRunSourceKind,
+    LoopStatus,
+    LoopStepKind,
+    LoopStepStatus,
+    LoopTargetKind,
+)
 
 
 @dataclass(kw_only=True)
@@ -34,6 +41,19 @@ class LoopRunRecord:
     cleanup_at: datetime | None = None
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
+
+    @property
+    def source(self) -> LoopRunSource | None:
+        """Return what triggered this run, or None if nothing did.
+
+        Derived rather than stored: ``target_kind`` and ``artifact_id``
+        already carry it, and a second copy in SQL could disagree with the
+        first. Callers should branch on ``source`` -- a run's provenance --
+        instead of on ``target_kind``, which models it as two kinds of run.
+        """
+        if self.target_kind is LoopTargetKind.PLANNING_ARTIFACT and self.artifact_id:
+            return LoopRunSource(kind=LoopRunSourceKind.STORY, ref=self.artifact_id)
+        return None
 
 
 @dataclass(kw_only=True)

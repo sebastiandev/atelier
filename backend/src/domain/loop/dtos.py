@@ -53,8 +53,28 @@ class LoopTargetKind(StrEnum):
     OBJECTIVE = "objective"
 
 
+class LoopRunSourceKind(StrEnum):
+    """What triggered a loop run, when something other than the user did.
+
+    A run with no source is a plain loop run started from a goal (Loop
+    mode). This is provenance, not a different kind of run: the engine,
+    stores and routes must not branch on it. New triggers are new members
+    here, not new run types.
+    """
+
+    STORY = "story"
+
+
+@dataclass(frozen=True)
+class LoopRunSource:
+    """Where a loop run was triggered from."""
+
+    kind: LoopRunSourceKind
+    ref: str
+
+
 class LoopRunKind(StrEnum):
-    """Why an objective run was started."""
+    """Why a loop run was started: fresh, or seeded from a previous one."""
 
     INITIAL = "initial"
     AMEND = "amend"

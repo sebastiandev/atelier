@@ -192,8 +192,20 @@ Each step is independently shippable and leaves the tree green.
    idempotent on an existing target, so a later run attaches instead of
    forking. Nothing deletes worktrees on run end (cleanup releases runtimes
    only), so sharing one across runs is safe.
-2. **`source` on the run entity** — nullable, replacing
-   `target_kind`/`artifact_id`/`plan_run_id`. Additive in SQL.
+2. ~~**`source` on the run entity** — nullable, replacing
+   `target_kind`/`artifact_id`/`plan_run_id`.~~ **Done, derived not stored.**
+   `LoopRunSourceKind` + `LoopRunSource` in `domain/loop/dtos.py`, exposed as
+   a `LoopRunRecord.source` property that reads the existing columns. No new
+   SQL: a stored copy could disagree with `target_kind`/`artifact_id`, which
+   is the duplicate-state problem Option B exists to remove. The columns get
+   replaced in step 3, where the shape changes anyway. `main.py` now branches
+   on `source` instead of `target_kind`.
+
+   `workspace_path` (populated for sourceless runs, never for story runs) was
+   scoped here but deferred: it is computed at the HTTP layer from
+   `WorkspacePaths`, so populating it from the command means a new dependency
+   for a field nothing reads yet. Do it in step 4/5 when the unified store
+   needs it.
 3. **Storage migration (Option B)** — manifest reduced to ids, `service._runs`
    reads SQL.
 4. **One command module, and drop the `objective` prefix.** Extract the

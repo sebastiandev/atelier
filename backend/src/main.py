@@ -33,7 +33,7 @@ from src.domain.chatstore import ChatStoreService
 from src.domain.commands.loops import objective_runs
 from src.domain.commands.planning import run_monitor as planning_run_monitor
 from src.domain.connections import ConnectionStoreService
-from src.domain.loop.dtos import LoopStatus, LoopTargetKind
+from src.domain.loop.dtos import LoopRunSourceKind, LoopStatus
 from src.domain.models import Artifact
 from src.domain.projectstore import ProjectStoreService
 from src.domain.projectstore import reconcile as reconcile_projects
@@ -279,7 +279,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 LoopStatus.WAITING_REPORT,
             }:
                 continue
-            if persisted.target_kind == LoopTargetKind.OBJECTIVE:
+            if persisted.source is None:
                 run_id = str(persisted.state.get("id") or "")
                 if not run_id:
                     continue
@@ -305,13 +305,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
                 continue
             if (
-                persisted.target_kind != LoopTargetKind.PLANNING_ARTIFACT
-                or persisted.artifact_id is None
+                persisted.source.kind is not LoopRunSourceKind.STORY
                 or persisted.plan_run_id is None
             ):
                 continue
             key = (
-                f"{persisted.work_slug}:{persisted.artifact_id}:"
+                f"{persisted.work_slug}:{persisted.source.ref}:"
                 f"{persisted.plan_run_id}"
             )
             planning_run_monitor_tasks[key] = asyncio.create_task(
@@ -329,13 +328,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     resolved,
                     planning_run_monitor.MonitorArtifactRunRequest(
                         work_slug=persisted.work_slug,
-                        artifact_id=persisted.artifact_id,
+                        artifact_id=persisted.source.ref,
                         run_id=persisted.plan_run_id,
                     ),
                 ),
                 name=(
                     f"planning-run-{persisted.work_slug}-"
-                    f"{persisted.artifact_id}-{persisted.plan_run_id}"
+                    f"{persisted.source.ref}-{persisted.plan_run_id}"
                 ),
             )
 
