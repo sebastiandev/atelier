@@ -2922,3 +2922,24 @@ def _artifact_root(
     root: Path, framework: PlanningFramework = "bmad", work_slug: str = "WRK-001"
 ) -> Path:
     return root / artifact_root_rel_path(framework, work_slug)
+
+
+def test_story_runs_share_one_worktree_per_story(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """The worktree slug is derived from the story, not the launching agent.
+
+    A follow-up run has to land on the same branch for "an open pull request
+    is updated in place" to hold. Defaulting to the agent slug gave every run
+    its own worktree, so a second run would fork a fresh branch and open a
+    second PR.
+    """
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+
+    agent, _run_id = _start_artifact_run(app_client, test_settings)
+
+    worktree = Path(str(agent["worktree_path"]))
+    assert worktree.name == "loop-story-001"
+    assert worktree.name != agent["slug"]

@@ -186,8 +186,12 @@ Two cautions:
 
 Each step is independently shippable and leaves the tree green.
 
-1. **Worktree slug for story-sourced runs** — stable `loop-<artifact_id>`.
-   Unblocks everything else; on its own it makes story PRs update in place.
+1. ~~**Worktree slug for story-sourced runs** — stable `loop-<artifact_id>`.~~
+   **Done.** `loop_actions.sourced_worktree_slug`, passed from
+   `start_run._launch_initial_agent`. `ensure` / `ensure_forked` are both
+   idempotent on an existing target, so a later run attaches instead of
+   forking. Nothing deletes worktrees on run end (cleanup releases runtimes
+   only), so sharing one across runs is safe.
 2. **`source` on the run entity** — nullable, replacing
    `target_kind`/`artifact_id`/`plan_run_id`. Additive in SQL.
 3. **Storage migration (Option B)** — manifest reduced to ids, `service._runs`

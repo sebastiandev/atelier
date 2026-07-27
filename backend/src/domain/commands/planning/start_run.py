@@ -365,6 +365,7 @@ async def _launch_initial_agent(
             model=model,
             folder=parent_folder,
             options=options,
+            worktree_slug=loop_actions.sourced_worktree_slug(req.artifact_id),
             fork_from_agent=fork_from_agent,
             approved_command_prefixes=briefs.resolved_approved_command_prefixes(
                 definition,

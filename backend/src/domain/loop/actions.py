@@ -22,6 +22,23 @@ _VENV_ACTIVATION = re.compile(
 _SHELL_OPERATORS = {";", "&&", "||", "|", "&"}
 
 
+def sourced_worktree_slug(source_ref: str) -> str:
+    """Return the worktree slug shared by every run of one source.
+
+    Preconditions: ``source_ref`` identifies the run's source (today, a plan
+    artifact id).
+    Postconditions: the slug is stable, so a later run of the same source
+    attaches to the existing worktree instead of forking a new one.
+
+    A sourceless run uses the constant ``"loop"`` slug for the same reason.
+    Story runs used to default to the launching agent's slug, giving each run
+    its own worktree and its own branch -- which silently breaks the promise
+    that a follow-up "keeps the same branch; an open pull request is updated
+    in place".
+    """
+    return f"loop-{source_ref}"
+
+
 def initialized_loop_snapshot(
     *,
     target_id: str,
@@ -388,6 +405,7 @@ __all__ = [
     "permission_request_matches_approved_prefix",
     "run_agent_slugs",
     "run_status",
+    "sourced_worktree_slug",
     "stage_row",
     "start_next_pass",
     "str_list",
