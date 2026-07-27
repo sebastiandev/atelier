@@ -214,7 +214,8 @@ Each step is independently shippable and leaves the tree green.
    normalises any manifest still holding run bodies so the list cannot end up
    a mix of dicts and strings. `artifact_runs_for_update` is deleted rather
    than left to hand id strings to callers expecting dicts.
-4. **One command module, and drop the `objective` prefix.** Extract the
+4. ~~**One command module, and drop the `objective` prefix.**~~ **Renames
+   done; the module merge is partial.** Extract the
    target-agnostic parts of `objective_runs.rerun` (amend-brief construction,
    task/review stage selection, reusable-status guard) into `domain/loop/`,
    then collapse the seven planning command modules into it. Renames:
@@ -231,9 +232,26 @@ Each step is independently shippable and leaves the tree green.
      `OBJECTIVE_WORKTREE_SLUG` → `DEFAULT_WORKTREE_SLUG`, still `"loop"`
 5. **One route family** — `/works/{slug}/runs/...` for everything, with
    `source` in the create payload. Old story routes become aliases, then are
-   removed.
+   removed. **Not started.** Its hard half is unifying the two start paths:
+   `commands/planning/start_run` hardcodes `definition.stages[0]` when it
+   launches the first agent (twice), while `loop/start.py` branches on the
+   entry stage's kind and handles an entry that needs no agent at all
+   (a deterministic check). Until they are one path, a story run cannot start
+   partway through a loop.
 6. **Delete the `variant` gates** — `frontend/src/LoopRunView.tsx:353`, `:483`.
-   `retry-stage` and `rerun` become available to story runs for free.
+   **Blocked on 5, and smaller than it looked.** `retry-stage` is already
+   available to story runs: objective `retry_stage` is just
+   `lifecycle.resume(retry_failed=True)`, and `planning/resume_run` already
+   accepts `retry_failed`. So only the follow-up chooser is genuinely
+   missing, and only its `VERIFY` half needs step 5 -- `AMEND` re-enters
+   through the brief, not by skipping stages, so it needs no entry-stage
+   support.
+
+   Shared seeding already landed in `domain/loop/followups.py`
+   (`require_reusable`, `entry_stage_id`, `seeded_brief`, `seed_label`), with
+   the objective `rerun` rewired onto it. What remains for story follow-ups
+   is a `run_kind`/`note` on `StartArtifactRunRequest`, a rerun route, and
+   the frontend wiring.
 
 Steps 1-2 are safe and useful on their own. Step 3 carries the manifest
 shape change. Steps 4-6 are mechanical once 1-3 land — step 4 is a rename

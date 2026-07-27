@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from src.domain.agents.launch import (
@@ -17,6 +17,7 @@ from src.domain.connections import ConnectionStore
 from src.domain.loop import (
     actions,
     briefs,
+    followups,
     lifecycle,
     pr_lifecycle,
     pr_review,
@@ -32,9 +33,7 @@ from src.domain.loop.definitions import (
 from src.domain.loop.dtos import (
     LoopBrief,
     LoopRunKind,
-    LoopStageBrief,
     LoopStatus,
-    LoopStepKind,
     LoopTargetKind,
 )
 from src.domain.loop.models import LoopRunRecord, LoopRunTarget
@@ -461,39 +460,14 @@ async def rerun(
     """Start a fresh run from one completed loop run's saved workspace."""
     key = LoopRunRequest(req.work_slug, req.run_id)
     source = get_run(loop_runs, key)
-    if source.status not in {
-        LoopStatus.ACCEPTED,
-        LoopStatus.CANCELLED,
-        LoopStatus.FAILED,
-    }:
-        raise ValueError(f"loop run cannot be reused: {req.run_id}")
+    followups.require_reusable(source.status, req.run_id)
     state = source.state
     raw_options = state.get("options")
     pinned_brief = briefs.optional_brief_from_snapshot(state.get("brief"))
     source_brief = pinned_brief or LoopBrief(goal=source.target_ref)
     definition = definition_from_snapshot(source.definition_snapshot)
-    brief = source_brief
-    entry_stage_id = None
-    if req.kind == LoopRunKind.AMEND:
-        task_stage = next(
-            (stage for stage in definition.stages if stage.kind == LoopStepKind.AGENT_TASK),
-            None,
-        )
-        if task_stage is None:
-            raise ValueError("amend follow-up requires an implementation stage")
-        brief = _amend_brief(source_brief, req.note, task_stage.step_id)
-    elif req.kind == LoopRunKind.VERIFY:
-        review_stage = next(
-            (
-                stage
-                for stage in definition.stages
-                if stage.kind in {LoopStepKind.AGENT_REVIEW, LoopStepKind.DETERMINISTIC_CHECK}
-            ),
-            None,
-        )
-        if review_stage is None:
-            raise ValueError("verify follow-up requires a review or check stage")
-        entry_stage_id = review_stage.step_id
+    brief = followups.seeded_brief(source_brief, definition, req.kind, req.note)
+    entry_stage_id = followups.entry_stage_id(definition, req.kind)
     record = await loop_start.start(
         workstore,
         definitions,
@@ -519,13 +493,7 @@ async def rerun(
             brief=brief,
             brief_explicit=pinned_brief is not None,
             run_kind=req.kind,
-            seed_label=(
-                "feedback"
-                if req.kind == LoopRunKind.AMEND
-                else "manual edits"
-                if req.kind == LoopRunKind.VERIFY
-                else ""
-            ),
+            seed_label=followups.seed_label(req.kind),
             entry_stage_id=entry_stage_id,
             source=source,
         ),
@@ -534,27 +502,6 @@ async def rerun(
     if work is not None and work.work.mode != "loop":
         workstore.update_work(UpdateWorkRequest(work_slug=req.work_slug, mode="loop"))
     return record
-
-
-def _amend_brief(brief: LoopBrief, note: str, stage_id: str) -> LoopBrief:
-    """Append required follow-up feedback to the first task-stage note."""
-    feedback = note.strip()
-    if not feedback:
-        raise ValueError("amend follow-up runs require a brief note")
-    existing = next((item for item in brief.stages if item.stage_id == stage_id), None)
-    if existing is not None:
-        updated = replace(
-            existing,
-            note="\n\n".join(part for part in (existing.note.strip(), feedback) if part),
-        )
-        return replace(
-            brief,
-            stages=tuple(updated if item.stage_id == stage_id else item for item in brief.stages),
-        )
-    return replace(
-        brief,
-        stages=(*brief.stages, LoopStageBrief(stage_id=stage_id, note=feedback)),
-    )
 
 
 async def accept_run(
