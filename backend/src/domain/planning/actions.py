@@ -156,21 +156,37 @@ def artifact_tracking_for_update(
     return links
 
 
-def artifact_runs_for_update(manifest: dict[str, Any], artifact_id: str) -> list[dict[str, Any]]:
-    """Return mutable run rows for one artifact.
+def record_artifact_run_id(
+    manifest: dict[str, Any], artifact_id: str, run_id: str
+) -> None:
+    """Note a run id against its story in the manifest.
 
-    Preconditions: ``manifest`` is mutable.
-    Postconditions: the run container exists in ``manifest``.
+    Preconditions: ``manifest`` is mutable; the caller writes it back.
+    Postconditions: ``artifact_runs[artifact_id]`` contains ``run_id`` once.
+
+    The manifest lives in the user's repository and describes the plan, so
+    it carries ids only -- enough to see which stories have been run
+    without holding machine state that is rewritten on every monitor tick.
+    SQL owns the run itself.
     """
     all_runs = manifest.setdefault("artifact_runs", {})
     if not isinstance(all_runs, dict):
         all_runs = {}
         manifest["artifact_runs"] = all_runs
-    runs = all_runs.setdefault(artifact_id, [])
-    if not isinstance(runs, list):
-        runs = []
-        all_runs[artifact_id] = runs
-    return runs
+    ids = all_runs.setdefault(artifact_id, [])
+    if not isinstance(ids, list):
+        ids = []
+    # Manifests written before SQL became canonical hold whole run bodies.
+    # Normalise them to ids on the next write so the list never ends up a
+    # mix of dicts and strings.
+    ids = [
+        str(item.get("id")) if isinstance(item, dict) else item
+        for item in ids
+        if not isinstance(item, dict) or item.get("id")
+    ]
+    all_runs[artifact_id] = ids
+    if run_id not in ids:
+        ids.append(run_id)
 
 
 def proposal_for_update(
@@ -468,7 +484,6 @@ def str_or_empty(value: object) -> str:
 __all__ = [
     "apply_report_fields",
     "artifact_proposals_for_update",
-    "artifact_runs_for_update",
     "artifact_tracking_for_update",
     "bug_template",
     "clean",
@@ -487,6 +502,7 @@ __all__ = [
     "next_run_id",
     "now_iso",
     "proposal_for_update",
+    "record_artifact_run_id",
     "require_executable",
     "run_status",
     "select_run",

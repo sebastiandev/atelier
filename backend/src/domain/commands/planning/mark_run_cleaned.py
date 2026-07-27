@@ -9,7 +9,10 @@ from src.domain.loop.dtos import LoopStatus
 from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning import actions
 from src.domain.planning.dtos import PlanArtifactDetail, PlanRunStatus
-from src.domain.planning.loop_persistence import persist_artifact_run
+from src.domain.planning.loop_persistence import (
+    artifact_run_rows,
+    persist_artifact_run,
+)
 from src.domain.planning.ports import PlanningFiles
 from src.domain.planning.service import (
     PlanArtifactNotFound,
@@ -52,10 +55,9 @@ async def execute(
     """
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    manifest = actions.manifest_or_raise(files, req.work_slug)
     detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     run = actions.find_run_by_id(
-        actions.artifact_runs_for_update(manifest, req.artifact_id),
+        artifact_run_rows(loop_runs, req.work_slug, req.artifact_id),
         req.run_id,
     )
     if run is None:
@@ -83,8 +85,6 @@ async def execute(
         "Provider runtimes were released; transcripts and workspace were kept."
     )
     run["loop"] = loop
-    manifest["updated_at"] = now
-    files.write_manifest(req.work_slug, manifest)
     persist_artifact_run(
         loop_runs,
         work_slug=req.work_slug,

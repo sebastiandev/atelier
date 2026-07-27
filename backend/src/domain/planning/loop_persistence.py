@@ -20,7 +20,7 @@ def persist_artifact_run(
     """Persist one Planning artifact run through the generic loop action.
 
     Preconditions: the run belongs to the supplied source artifact.
-    Postconditions: SQL stores the same run and pinned definition as the manifest.
+    Postconditions: SQL holds the run's canonical state.
     """
     run_id = run.get("id")
     persist_run(
@@ -34,4 +34,29 @@ def persist_artifact_run(
     )
 
 
-__all__ = ["persist_artifact_run"]
+def artifact_run_rows(
+    repository: LoopRunRepository,
+    work_slug: str,
+    artifact_id: str,
+) -> list[dict[str, Any]]:
+    """Return one artifact's run states, oldest first.
+
+    Preconditions: none; an artifact with no runs yields an empty list.
+    Postconditions: the returned dicts are the canonical run states from
+    SQL. Mutating one only takes effect once it is passed back through
+    ``persist_artifact_run``.
+
+    Ordering is by run id, which is allocated as ``run-NNN`` and so sorts
+    chronologically. Callers rely on it: ``select_run`` treats the last
+    entry as the latest run.
+    """
+    rows = [
+        record.state
+        for record in repository.list_for_work(work_slug)
+        if (source := record.source) is not None and source.ref == artifact_id
+    ]
+    rows.sort(key=lambda row: str(row.get("id") or ""))
+    return rows
+
+
+__all__ = ["artifact_run_rows", "persist_artifact_run"]

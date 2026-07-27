@@ -206,8 +206,14 @@ Each step is independently shippable and leaves the tree green.
    `WorkspacePaths`, so populating it from the command means a new dependency
    for a field nothing reads yet. Do it in step 4/5 when the unified store
    needs it.
-3. **Storage migration (Option B)** — manifest reduced to ids, `service._runs`
-   reads SQL.
+3. ~~**Storage migration (Option B)** — manifest reduced to ids,
+   `service._runs` reads SQL.~~ **Done.** `artifact_run_rows` reads run state
+   from `loop_runs` filtered by `source.ref`; `PlanningLoopRunStore`,
+   `start_run` and `mark_run_cleaned` write SQL only. The manifest keeps
+   `{artifact_id: [run_id, ...]}` via `record_artifact_run_id`, which also
+   normalises any manifest still holding run bodies so the list cannot end up
+   a mix of dicts and strings. `artifact_runs_for_update` is deleted rather
+   than left to hand id strings to callers expecting dicts.
 4. **One command module, and drop the `objective` prefix.** Extract the
    target-agnostic parts of `objective_runs.rerun` (amend-brief construction,
    task/review stage selection, reusable-status guard) into `domain/loop/`,

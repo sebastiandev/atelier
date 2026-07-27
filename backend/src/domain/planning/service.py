@@ -44,6 +44,7 @@ from src.domain.planning.dtos import (
     WorkPlanView,
 )
 from src.domain.planning.loop import loop_status_for_run_status
+from src.domain.planning.loop_persistence import artifact_run_rows
 from src.domain.planning.ports import PlanningFiles
 
 _ROOT_DOCS: tuple[tuple[str, tuple[str, ...], PlanArtifactKind, str], ...] = (
@@ -594,9 +595,9 @@ def _runs(
     work_slug: str,
     loop_runs: LoopRunRepository,
 ) -> list[PlanArtifactRun]:
-    raw = _dict(manifest.get("artifact_runs")).get(artifact_id)
-    if not isinstance(raw, list):
-        return []
+    # SQL is canonical for run state; the manifest keeps only the ids so
+    # the plan file stays readable without carrying machine state.
+    raw = artifact_run_rows(loop_runs, work_slug, artifact_id)
     out: list[PlanArtifactRun] = []
     for idx, item in enumerate(raw, start=1):
         if not isinstance(item, dict):

@@ -53,7 +53,10 @@ from src.domain.loop.prompts import (
 from src.domain.models import Provider
 from src.domain.planning import actions
 from src.domain.planning.dtos import PlanArtifactDetail, PlanRunStatus
-from src.domain.planning.loop_persistence import persist_artifact_run
+from src.domain.planning.loop_persistence import (
+    artifact_run_rows,
+    persist_artifact_run,
+)
 from src.domain.planning.paths import atelier_planning_rel_path
 from src.domain.planning.ports import PlanningFiles, PlanningSessionRepository
 from src.domain.planning.service import (
@@ -211,8 +214,9 @@ async def execute(
             fork_from_agent=req.agent_slug,
         )
     assert agent_slug is not None
-    runs = actions.artifact_runs_for_update(manifest, req.artifact_id)
-    run_id = actions.next_run_id(runs)
+    run_id = actions.next_run_id(
+        artifact_run_rows(loop_runs, req.work_slug, req.artifact_id)
+    )
     cursor = _loop_runtime.last_transcript_seq(
         workstore,
         work_slug=req.work_slug,
@@ -279,15 +283,17 @@ async def execute(
     }
     if brief is not None:
         run["brief"] = briefs.brief_snapshot(brief)
-    runs.append(run)
-    manifest["updated_at"] = now
-    files.write_manifest(req.work_slug, manifest)
     persist_artifact_run(
         loop_runs,
         work_slug=req.work_slug,
         artifact=detail.artifact,
-        run=runs[-1],
+        run=run,
     )
+    # The manifest keeps the id so the plan file still shows which stories
+    # have been run; the run's state lives in SQL.
+    actions.record_artifact_run_id(manifest, req.artifact_id, run_id)
+    manifest["updated_at"] = now
+    files.write_manifest(req.work_slug, manifest)
     return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 

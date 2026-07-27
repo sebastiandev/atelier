@@ -73,15 +73,8 @@ async def execute(
     """
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    manifest = actions.manifest_or_raise(files, req.work_slug)
     detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     actions.require_executable(detail.artifact)
-    run = actions.find_run_by_id(
-        actions.artifact_runs_for_update(manifest, req.artifact_id),
-        req.run_id,
-    )
-    if run is None:
-        raise PlanArtifactRunNotFound(f"plan artifact run not found: {req.run_id}")
     store = PlanningLoopRunStore(files, loop_runs, req.artifact_id)
     target = store.load(req.work_slug, req.run_id)
     if target is None:

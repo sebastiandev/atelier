@@ -2110,7 +2110,15 @@ def test_selected_loop_pins_optional_planning_brief_note(
     assert run["brief_note"] == note
     manifest = app_client.app.state.planningfiles.read_manifest("WRK-001")
     assert manifest is not None
-    pinned = manifest["artifact_runs"]["story-001"][0]["brief"]
+    # The manifest carries run ids; the pinned brief lives in SQL with the
+    # rest of the run state.
+    assert manifest["artifact_runs"]["story-001"] == [run["id"]]
+    stored = next(
+        record
+        for record in app_client.app.state.loop_runs.list_for_work("WRK-001")
+        if record.source is not None and record.source.ref == "story-001"
+    )
+    pinned = stored.state["brief"]
     assert {stage["stage_id"]: stage["note"] for stage in pinned["stages"]} == {
         "implementation": note,
         "code-review": note,
@@ -2951,3 +2959,31 @@ def test_story_runs_share_one_worktree_per_story(
     worktree = Path(str(agent["worktree_path"]))
     assert worktree.name == "loop-story-001"
     assert worktree.name != agent["slug"]
+
+
+def test_manifest_holds_run_ids_not_run_state(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """SQL is canonical for run state; the manifest stays a plan description.
+
+    The manifest lives in the user's repository. Run state is machine state
+    -- large, and rewritten on every monitor tick -- so the plan file keeps
+    only enough to show which stories have been run.
+    """
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    _agent, run_id = _start_artifact_run(app_client, test_settings)
+
+    manifest = app_client.app.state.planningfiles.read_manifest("WRK-001")
+    assert manifest is not None
+
+    assert manifest["artifact_runs"]["story-001"] == [run_id]
+    assert "loop" not in json.dumps(manifest["artifact_runs"])
+
+    # The projection still returns the full run, sourced from SQL.
+    runs = app_client.get(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs"
+    ).json()
+    assert [item["id"] for item in runs] == [run_id]
+    assert runs[0]["loop_stages"]
