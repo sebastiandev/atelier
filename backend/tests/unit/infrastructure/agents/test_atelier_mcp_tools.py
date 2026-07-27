@@ -247,7 +247,7 @@ def test_a_non_atelier_tool_is_still_ignored() -> None:
 
 
 def test_every_declared_required_key_is_enforced() -> None:
-    """Guards the narrow checker against drift in TOOL_SCHEMAS."""
+    """Every required field must actually block a marker when absent."""
     from src.infrastructure.agents.atelier_mcp_tools import schema_violation
 
     for tool_name, schema in TOOL_SCHEMAS.items():

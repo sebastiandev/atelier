@@ -17,6 +17,8 @@ import json
 import re
 from typing import Any
 
+import jsonschema
+
 # Server name (mcp_servers key for Claude / mcpConfig key for Amp).
 MCP_SERVER_NAME = "atelier"
 TOOL_RECORDING_ACK = "Artifact will be recorded by Atelier."
@@ -37,10 +39,12 @@ _PR_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "url": {
             "type": "string",
+            "pattern": r"\S",
             "description": "Full URL of the pull request.",
         },
         "title": {
             "type": "string",
+            "pattern": r"\S",
             "description": "Concise human-readable title for the rail.",
         },
         "status": {
@@ -50,6 +54,7 @@ _PR_INPUT_SCHEMA: dict[str, Any] = {
         },
         "repo": {
             "type": "string",
+            "pattern": r"\S",
             "description": "Optional 'owner/name' shorthand for grouping.",
         },
     },
@@ -59,8 +64,8 @@ _PR_INPUT_SCHEMA: dict[str, Any] = {
 _JIRA_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "url": {"type": "string"},
-        "title": {"type": "string"},
+        "url": {"type": "string", "pattern": r"\S"},
+        "title": {"type": "string", "pattern": r"\S"},
         "status": {
             "type": "string",
             "enum": ["todo", "in_progress", "in_review", "done", "blocked"],
@@ -74,12 +79,13 @@ _DOC_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "path": {
             "type": "string",
+            "pattern": r"\S",
             "description": (
                 "Path to the document, relative to your working directory. "
                 "Atelier validates the file exists before recording."
             ),
         },
-        "title": {"type": "string"},
+        "title": {"type": "string", "pattern": r"\S"},
         "status": {
             "type": "string",
             "enum": ["draft"],
@@ -135,24 +141,16 @@ _TOOL_TO_TYPE: dict[str, str] = {
 def schema_violation(tool_name: str, arguments: dict[str, Any]) -> str | None:
     """Return why ``arguments`` fail the tool's declared schema, else None.
 
-    Deliberately narrow: it checks the ``required`` keys and ``enum``
-    members that ``TOOL_SCHEMAS`` actually declares, rather than being a
-    general JSON Schema implementation. These are our own schemas for
-    our own three tools; a test asserts every declared ``required`` key
-    is covered so the two cannot drift apart.
+    Validates against the same ``TOOL_SCHEMAS`` entry the MCP server
+    advertises, so what we enforce is exactly what the model was told.
     """
     schema = TOOL_SCHEMAS.get(_strip_known_prefix(tool_name))
     if schema is None:
         return None
-    for key in schema.get("required", []):
-        value = arguments.get(key)
-        if not isinstance(value, str) or not value.strip():
-            return f"missing or empty {key!r}"
-    properties = schema.get("properties", {})
-    for key, value in arguments.items():
-        allowed = properties.get(key, {}).get("enum")
-        if allowed is not None and value not in allowed:
-            return f"{key!r} must be one of {sorted(allowed)}"
+    try:
+        jsonschema.validate(instance=arguments, schema=schema)
+    except jsonschema.ValidationError as exc:
+        return str(exc.message)
     return None
 
 
