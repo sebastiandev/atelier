@@ -192,18 +192,31 @@ Each step is independently shippable and leaves the tree green.
    `target_kind`/`artifact_id`/`plan_run_id`. Additive in SQL.
 3. **Storage migration (Option B)** — manifest reduced to ids, `service._runs`
    reads SQL.
-4. **One command module** — extract the target-agnostic parts of
-   `objective_runs.rerun` (amend-brief construction, task/review stage
-   selection, reusable-status guard) into `domain/loop/`, then collapse the
-   seven planning command modules into thin wrappers.
+4. **One command module, and drop the `objective` prefix.** Extract the
+   target-agnostic parts of `objective_runs.rerun` (amend-brief construction,
+   task/review stage selection, reusable-status guard) into `domain/loop/`,
+   then collapse the seven planning command modules into it. Renames:
+   - `commands/loops/objective_runs.py` → `commands/loops/runs.py`
+   - `domain/loop/objective_start.py` → `domain/loop/start.py`
+   - `domain/loop/objective_store.py` → `domain/loop/store.py`
+   - `ObjectiveLoopRunStore` + `PlanningLoopRunStore` → one `LoopRunStore`
+   - `ObjectiveStartSpec` → `LoopRunStartSpec`;
+     `ObjectiveRunRequest` → `LoopRunRequest`
+   - `ObjectiveRunNotFound` / `ObjectiveWorkNotFound` /
+     `ObjectiveContextMissing` → delete; the generic `LoopRunNotFound` and
+     friends already exist
+   - `OBJECTIVE_TARGET_ID` → delete (a sourceless run needs no target id);
+     `OBJECTIVE_WORKTREE_SLUG` → `DEFAULT_WORKTREE_SLUG`, still `"loop"`
 5. **One route family** — `/works/{slug}/runs/...` for everything, with
    `source` in the create payload. Old story routes become aliases, then are
    removed.
 6. **Delete the `variant` gates** — `frontend/src/LoopRunView.tsx:353`, `:483`.
    `retry-stage` and `rerun` become available to story runs for free.
 
-Steps 1-2 are safe and useful on their own. Step 3 is the one that needs the
-compat decision. Steps 4-6 are mechanical once 1-3 land.
+Steps 1-2 are safe and useful on their own. Step 3 carries the manifest
+shape change. Steps 4-6 are mechanical once 1-3 land — step 4 is a rename
+pass plus a module merge, and should land as its own commit so the
+behavioural steps stay reviewable.
 
 ## Decisions
 
