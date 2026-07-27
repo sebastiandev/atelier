@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning import actions
 from src.domain.planning.dtos import (
     PlanArtifactDetail,
@@ -36,6 +37,7 @@ class LinkArtifactTrackingRequest:
 def execute(
     workstore: WorkStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     req: LinkArtifactTrackingRequest,
 ) -> PlanArtifactDetail:
     """Persist a Jira, PR, blocker, or bug tracking link.
@@ -46,7 +48,7 @@ def execute(
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
     manifest = actions.manifest_or_raise(files, req.work_slug)
-    actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     now = actions.now_iso()
     links = actions.artifact_tracking_for_update(manifest, req.artifact_id)
     links.append(
@@ -63,7 +65,7 @@ def execute(
     )
     manifest["updated_at"] = now
     files.write_manifest(req.work_slug, manifest)
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 __all__ = [

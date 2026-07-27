@@ -1,5 +1,6 @@
 """Finish the planning conversation phase."""
 
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning import actions
 from src.domain.planning.dtos import WorkPlanView
 from src.domain.planning.ports import PlanningFiles
@@ -12,7 +13,10 @@ class WorkNotFound(ValueError):
 
 
 def execute(
-    workstore: WorkStore, files: PlanningFiles, work_slug: str
+    workstore: WorkStore,
+    files: PlanningFiles,
+    loop_runs: LoopRunRepository,
+    work_slug: str
 ) -> WorkPlanView:
     """Move an existing Work plan into the planned overview phase.
 
@@ -24,9 +28,9 @@ def execute(
     manifest = actions.manifest_or_raise(files, work_slug)
     manifest["phase"] = "planned"
     manifest["updated_at"] = actions.now_iso()
-    manifest["source_hashes"] = actions.current_hashes(files, work_slug)
+    manifest["source_hashes"] = actions.current_hashes(files, loop_runs, work_slug)
     files.write_manifest(work_slug, manifest)
-    return actions.get_plan_or_raise(files, work_slug)
+    return actions.get_plan_or_raise(files, loop_runs, work_slug)
 
 
 __all__ = ["PlanningNotStarted", "WorkNotFound", "execute"]

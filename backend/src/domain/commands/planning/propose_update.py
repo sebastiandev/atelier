@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning import actions
 from src.domain.planning.dtos import PlanArtifactDetail
 from src.domain.planning.ports import PlanningFiles
@@ -29,6 +30,7 @@ class ProposeArtifactUpdateRequest:
 def execute(
     workstore: WorkStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     req: ProposeArtifactUpdateRequest,
 ) -> PlanArtifactDetail:
     """Store a reviewable full-document source proposal.
@@ -39,7 +41,7 @@ def execute(
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
     manifest = actions.manifest_or_raise(files, req.work_slug)
-    detail = actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     now = actions.now_iso()
     proposals = actions.artifact_proposals_for_update(manifest, req.artifact_id)
     proposals.append(
@@ -58,7 +60,7 @@ def execute(
     )
     manifest["updated_at"] = now
     files.write_manifest(req.work_slug, manifest)
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 __all__ = [

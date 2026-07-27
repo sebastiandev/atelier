@@ -124,7 +124,7 @@ async def execute(
     if work.work.status != "active":
         raise WorkNotActive(f"work {req.work_slug} is completed; reopen it before starting a run")
     manifest = actions.manifest_or_raise(files, req.work_slug)
-    detail = actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     actions.require_executable(detail.artifact)
     definition = _resolve_definition(
         files,
@@ -288,7 +288,7 @@ async def execute(
         artifact=detail.artifact,
         run=runs[-1],
     )
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 def _resolve_definition(

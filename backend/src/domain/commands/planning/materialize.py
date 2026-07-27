@@ -11,6 +11,7 @@ from src.domain.agents.turn_monitor import observe_turn
 from src.domain.chats import runtime as chat_runtime
 from src.domain.chatstore import ChatRecord
 from src.domain.chatstore.ports import ChatStore
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.models import Provider
 from src.domain.planning import materialization
 from src.domain.planning.dtos import (
@@ -72,6 +73,7 @@ async def execute(
     chatstore: ChatStore,
     projectstore: ProjectStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     planning_sessions: PlanningSessionRepository,
     chat_supervisor: AgentSupervisorService,
     settings: Any,
@@ -90,6 +92,7 @@ async def execute(
         plan = materialization.submit_plan_materialization(
             workstore,
             files,
+            loop_runs,
             work_slug=req.work_slug,
             root_path=req.root_path,
             artifact_root_path=req.artifact_root_path,
@@ -131,7 +134,7 @@ async def execute(
     if chat_slug is None:
         raise RuntimeError("materialization chat has no slug")
 
-    finalized = _try_finalize(workstore, chatstore, files, req, chat_slug)
+    finalized = _try_finalize(workstore, chatstore, files, loop_runs, req, chat_slug)
     if finalized is not None:
         await _restart_planning_chat(chat_supervisor, req)
         return finalized
@@ -167,6 +170,7 @@ async def execute(
             workstore,
             chatstore,
             files,
+            loop_runs,
             chat_supervisor,
             req,
             chat_slug,
@@ -199,6 +203,7 @@ async def _poll_for_report_or_turn_end(
     workstore: WorkStore,
     chatstore: ChatStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     chat_supervisor: AgentSupervisorService,
     req: MaterializePlanRequest,
     chat_slug: str,
@@ -207,7 +212,7 @@ async def _poll_for_report_or_turn_end(
     events = list(chatstore.read_transcript_from_cursor(chat_slug, 0))
     cursor = _last_event_seq(events)
     while True:
-        plan = _try_finalize(workstore, chatstore, files, req, chat_slug)
+        plan = _try_finalize(workstore, chatstore, files, loop_runs, req, chat_slug)
         if plan is not None:
             return plan, None
         observation = observe_turn(events, datetime.now(UTC))
@@ -228,6 +233,7 @@ def _try_finalize(
     workstore: WorkStore,
     chatstore: ChatStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     req: MaterializePlanRequest,
     chat_slug: str,
 ) -> WorkPlanView | None:
@@ -239,6 +245,7 @@ def _try_finalize(
             workstore,
             chatstore,
             files,
+            loop_runs,
             work_slug=req.work_slug,
             chat_slug=chat_slug,
             framework=req.framework,
@@ -278,6 +285,7 @@ async def try_finalize_existing(
     workstore: WorkStore,
     chatstore: ChatStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     chat_supervisor: AgentSupervisorService,
     req: MaterializePlanRequest,
     chat_slug: str,
@@ -290,7 +298,7 @@ async def try_finalize_existing(
     contains a valid ``atelier_plan_materialization`` report; otherwise no state
     is changed.
     """
-    plan = _try_finalize(workstore, chatstore, files, req, chat_slug)
+    plan = _try_finalize(workstore, chatstore, files, loop_runs, req, chat_slug)
     if plan is not None:
         await _restart_planning_chat(chat_supervisor, req)
     return plan

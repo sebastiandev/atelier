@@ -61,7 +61,7 @@ async def execute(
     """
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    detail = actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     actions.require_executable(detail.artifact)
     store = PlanningLoopRunStore(files, loop_runs, req.artifact_id)
     target = store.load(req.work_slug, req.run_id)
@@ -85,7 +85,7 @@ async def execute(
     completed = lifecycle.accept(target)
     if not completed:
         store.save(target)
-        return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+        return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     now = loop_actions.str_or_empty(target.run.get("completed_at"))
     summary_path = f"summaries/{req.artifact_id}-{req.run_id}.md"
     target.run["report_path"] = summary_path
@@ -104,7 +104,7 @@ async def execute(
         "summary_path": summary_path,
     }
     manifest["updated_at"] = now
-    manifest["source_hashes"] = actions.current_hashes(files, req.work_slug)
+    manifest["source_hashes"] = actions.current_hashes(files, loop_runs, req.work_slug)
     files.write_manifest(req.work_slug, manifest)
     await runtime.release_run_agents(
         workstore,
@@ -113,7 +113,7 @@ async def execute(
         run=target.run,
         loop=loop_actions.dict_or_empty(target.run.get("loop")),
     )
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 __all__ = [

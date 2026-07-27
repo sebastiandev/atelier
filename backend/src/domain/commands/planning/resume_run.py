@@ -74,7 +74,7 @@ async def execute(
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
     manifest = actions.manifest_or_raise(files, req.work_slug)
-    detail = actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     actions.require_executable(detail.artifact)
     run = actions.find_run_by_id(
         actions.artifact_runs_for_update(manifest, req.artifact_id),
@@ -107,7 +107,7 @@ async def execute(
     except lifecycle.LoopRunNotResumable as exc:
         raise PlanArtifactRunNotResumable(str(exc)) from exc
     store.save(target)
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 __all__ = [

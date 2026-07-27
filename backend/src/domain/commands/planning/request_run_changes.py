@@ -60,7 +60,7 @@ async def execute(
     """
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     store = PlanningLoopRunStore(files, loop_runs, req.artifact_id)
     target = store.load(req.work_slug, req.run_id)
     if target is None:
@@ -76,7 +76,7 @@ async def execute(
         note=req.note,
     )
     store.save(target)
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 __all__ = [

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning import actions
 from src.domain.planning.dtos import PlanArtifactDetail
 from src.domain.planning.ports import PlanningFiles
@@ -30,6 +31,7 @@ class SavePlanArtifactRequest:
 def execute(
     workstore: WorkStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     req: SavePlanArtifactRequest,
 ) -> PlanArtifactDetail:
     """Replace one plan artifact source file.
@@ -40,14 +42,14 @@ def execute(
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
     manifest = actions.manifest_or_raise(files, req.work_slug)
-    detail = actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     if detail.artifact.source_hash != req.expected_hash:
         raise PlanArtifactConflict("plan artifact changed; reload before saving")
 
     files.write_text(req.work_slug, detail.artifact.path, actions.ensure_newline(req.content))
     now = actions.now_iso()
     manifest["updated_at"] = now
-    manifest["source_hashes"] = actions.current_hashes(files, req.work_slug)
+    manifest["source_hashes"] = actions.current_hashes(files, loop_runs, req.work_slug)
     approved = actions.dict_or_empty(manifest.get("approved_source_hashes"))
     if approved:
         approved[detail.artifact.path] = manifest["source_hashes"][detail.artifact.path]
@@ -62,7 +64,7 @@ def execute(
         }
     )
     files.write_manifest(req.work_slug, manifest)
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 __all__ = [

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from src.domain.agents.turn_monitor import observe_turn, unresolved_permission_events
 from src.domain.chatstore.dtos import ChatRecord
 from src.domain.chatstore.ports import ChatStore
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning.ports import PlanningFiles
 from src.domain.planning.service import PlanningService
 from src.domain.workstore.ports import WorkStore
@@ -70,6 +71,7 @@ def execute(
     workstore: WorkStore,
     chatstore: ChatStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     work_slug: str,
 ) -> MaterializationStatus:
     """Return current materialization state for a Work.
@@ -80,7 +82,7 @@ def execute(
     """
     if workstore.get_work(work_slug) is None:
         raise WorkNotFound(f"work not found: {work_slug}")
-    if PlanningService(files).get_plan(work_slug) is not None:
+    if PlanningService(files, loop_runs).get_plan(work_slug) is not None:
         return MaterializationStatus(
             state="complete",
             message="Source plan is indexed.",

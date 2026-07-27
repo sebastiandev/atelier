@@ -50,8 +50,8 @@ def validate_status(artifact_type: str, status: str) -> None:
 
 __all__ = [
     "DOC_STATUSES",
-    "InvalidStatus",
     "JIRA_STATUSES",
     "PR_STATUSES",
+    "InvalidStatus",
     "validate_status",
 ]

@@ -65,7 +65,7 @@ def create_stage(
     target, store = _target(workstore, files, loop_runs, req)
     pr_lifecycle.add_one_off_stage(target, req.setup)
     store.save(target)
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 def send_feedback(
@@ -78,7 +78,7 @@ def send_feedback(
     target, store = _target(workstore, files, loop_runs, req)
     pr_lifecycle.prepare_feedback(target, req.comments, req.instruction)
     store.save(target)
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 async def refresh(
@@ -92,7 +92,7 @@ async def refresh(
     target, store = _target(workstore, files, loop_runs, req)
     await pr_review.refresh(target, gateway, force=req.force)
     store.save(target)
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 def _target(
@@ -108,7 +108,7 @@ def _target(
     """Load one Planning loop target and its persistence adapter."""
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    detail = actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     actions.require_executable(detail.artifact)
     store = PlanningLoopRunStore(files, loop_runs, req.artifact_id)
     target = store.load(req.work_slug, req.run_id)

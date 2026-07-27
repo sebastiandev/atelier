@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning import materialization
 from src.domain.planning.dtos import (
     PlanArtifactEntry,
@@ -39,6 +40,7 @@ class SubmitPlanMaterializationRequest:
 def execute(
     workstore: WorkStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     req: SubmitPlanMaterializationRequest,
 ) -> WorkPlanView:
     """Persist metadata for framework-generated planning files.
@@ -51,6 +53,7 @@ def execute(
     return materialization.submit_plan_materialization(
         workstore,
         files,
+        loop_runs,
         work_slug=req.work_slug,
         root_path=req.root_path,
         artifact_root_path=req.artifact_root_path,

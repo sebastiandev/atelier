@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.domain.loop.dtos import LoopStatus
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning.dtos import (
     AcceptPlanArtifactRequest,
     PlanArtifactDetail,
@@ -62,25 +63,32 @@ def manifest_or_raise(files: PlanningFiles, work_slug: str) -> dict[str, Any]:
     return manifest
 
 
-def get_plan_or_raise(files: PlanningFiles, work_slug: str) -> WorkPlanView:
+def get_plan_or_raise(
+    files: PlanningFiles, loop_runs: LoopRunRepository, work_slug: str
+) -> WorkPlanView:
     """Project the current source-backed plan.
 
     Preconditions: planning has been started for ``work_slug``.
     Postconditions: no source files are changed.
     """
-    plan = PlanningService(files).get_plan(work_slug)
+    plan = PlanningService(files, loop_runs).get_plan(work_slug)
     if plan is None:
         raise PlanningNotStarted(f"planning not started: {work_slug}")
     return plan
 
 
-def detail_or_raise(files: PlanningFiles, work_slug: str, artifact_id: str) -> PlanArtifactDetail:
+def detail_or_raise(
+    files: PlanningFiles,
+    loop_runs: LoopRunRepository,
+    work_slug: str,
+    artifact_id: str,
+) -> PlanArtifactDetail:
     """Read one source-backed artifact detail.
 
     Preconditions: planning exists and ``artifact_id`` is indexed.
     Postconditions: no source files are changed.
     """
-    detail = PlanningService(files).get_artifact(work_slug, artifact_id)
+    detail = PlanningService(files, loop_runs).get_artifact(work_slug, artifact_id)
     if detail is None:
         raise PlanArtifactNotFound(f"plan artifact not found: {artifact_id}")
     return detail
@@ -96,13 +104,15 @@ def require_executable(artifact: PlanArtifactSummary) -> None:
         raise PlanArtifactNotExecutable(f"plan artifact is not executable: {artifact.id}")
 
 
-def current_hashes(files: PlanningFiles, work_slug: str) -> dict[str, str]:
+def current_hashes(
+    files: PlanningFiles, loop_runs: LoopRunRepository, work_slug: str
+) -> dict[str, str]:
     """Return current source hashes for every indexed plan artifact.
 
     Preconditions: planning files may exist for ``work_slug``.
     Postconditions: no source files are changed.
     """
-    plan = PlanningService(files).get_plan(work_slug)
+    plan = PlanningService(files, loop_runs).get_plan(work_slug)
     if plan is None:
         return {}
     return {row.path: row.source_hash for row in plan.artifacts}
@@ -179,6 +189,7 @@ def proposal_for_update(
 
 def create_artifact_proposal(
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     work_slug: str,
     artifact_id: str,
     title: str,
@@ -191,7 +202,7 @@ def create_artifact_proposal(
     changed.
     """
     manifest = manifest_or_raise(files, work_slug)
-    detail = detail_or_raise(files, work_slug, artifact_id)
+    detail = detail_or_raise(files, loop_runs, work_slug, artifact_id)
     now = now_iso()
     proposals = artifact_proposals_for_update(manifest, artifact_id)
     proposals.append(
@@ -209,7 +220,7 @@ def create_artifact_proposal(
     )
     manifest["updated_at"] = now
     files.write_manifest(work_slug, manifest)
-    return detail_or_raise(files, work_slug, artifact_id)
+    return detail_or_raise(files, loop_runs, work_slug, artifact_id)
 
 
 def find_run(runs: list[dict[str, Any]], agent_slug: str) -> dict[str, Any] | None:

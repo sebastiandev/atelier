@@ -30,7 +30,6 @@ import httpx
 
 from src.domain.artifacts.pr_status import FetchedPrState, PrRef
 
-
 # Pluggable so tests / future "GitHub connection" wiring can swap in a
 # token source without monkey-patching the ``gh`` shell-out.
 TokenSupplier = Callable[[], "str | None"]

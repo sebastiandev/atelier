@@ -314,6 +314,7 @@ def _submit_plan_metadata(
     submit_materialization.execute(
         client.app.state.workstore,
         client.app.state.planningfiles,
+        client.app.state.loop_runs,
         submit_materialization.SubmitPlanMaterializationRequest(
             work_slug="WRK-001",
             root_path=str(root),
@@ -587,6 +588,7 @@ def test_start_plan_rejects_missing_files(app_client: TestClient, test_settings:
         submit_materialization.execute(
             app_client.app.state.workstore,
             app_client.app.state.planningfiles,
+            app_client.app.state.loop_runs,
             submit_materialization.SubmitPlanMaterializationRequest(
                 work_slug="WRK-001",
                 root_path=str(repo_root),
@@ -618,6 +620,7 @@ def test_start_plan_requires_selected_framework_setup(
         submit_materialization.execute(
             app_client.app.state.workstore,
             app_client.app.state.planningfiles,
+            app_client.app.state.loop_runs,
             submit_materialization.SubmitPlanMaterializationRequest(
                 work_slug="WRK-001",
                 root_path=str(repo_root),
@@ -982,6 +985,7 @@ def test_materializer_retries_incomplete_turn(
             chatstore,
             app_client.app.state.projectstore,
             app_client.app.state.planningfiles,
+            app_client.app.state.loop_runs,
             app_client.app.state.planning_sessions,
             fake_supervisor,
             test_settings,
@@ -1040,6 +1044,7 @@ def test_failed_materializer_retry_starts_fresh_provider_session(
             chatstore,
             app_client.app.state.projectstore,
             app_client.app.state.planningfiles,
+            app_client.app.state.loop_runs,
             app_client.app.state.planning_sessions,
             fake_supervisor,
             test_settings,
@@ -1079,6 +1084,7 @@ def test_quiet_materializer_does_not_receive_automatic_input(
                 app_client.app.state.chatstore,
                 app_client.app.state.projectstore,
                 app_client.app.state.planningfiles,
+                app_client.app.state.loop_runs,
                 app_client.app.state.planning_sessions,
                 fake_supervisor,
                 test_settings,
@@ -1144,6 +1150,7 @@ def test_connection_closed_materializer_recovers_once(
             chatstore,
             app_client.app.state.projectstore,
             app_client.app.state.planningfiles,
+            app_client.app.state.loop_runs,
             app_client.app.state.planning_sessions,
             fake_supervisor,
             test_settings,
@@ -1183,6 +1190,7 @@ def test_materializer_resume_does_not_auto_answer_pending_permission(
             app_client.app.state.workstore,
             app_client.app.state.chatstore,
             app_client.app.state.planningfiles,
+            app_client.app.state.loop_runs,
             fake_supervisor,
             materialize.MaterializePlanRequest(
                 work_slug="WRK-001",

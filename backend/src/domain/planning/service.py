@@ -24,6 +24,7 @@ from src.domain.loop.dtos import (
     LoopStepKind,
     LoopStepStatus,
 )
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.loop.snapshots import definition_from_snapshot
 from src.domain.planning.dtos import (
     PlanArtifactDetail,
@@ -138,8 +139,9 @@ class PlanArtifactRunNotFound(ValueError):
 class PlanningService:
     """Source-backed plan projection helper."""
 
-    def __init__(self, files: PlanningFiles) -> None:
+    def __init__(self, files: PlanningFiles, loop_runs: LoopRunRepository) -> None:
         self._files = files
+        self._loop_runs = loop_runs
 
     def get_plan(self, work_slug: str) -> WorkPlanView | None:
         """Index source files into the normalized Plan View.
@@ -340,7 +342,7 @@ class PlanningService:
             executable=executable if executable is not None else kind in _EXECUTABLE_KINDS,
             launchable=False,
             dependencies=dependencies if dependencies is not None else _dependencies(content),
-            runs=_runs(manifest, artifact_id, self._files, work_slug),
+            runs=_runs(manifest, artifact_id, self._files, work_slug, self._loop_runs),
             proposals=_proposals(manifest, artifact_id),
             tracking=_tracking(manifest, artifact_id),
             accepted_summary_path=(
@@ -590,6 +592,7 @@ def _runs(
     artifact_id: str,
     files: PlanningFiles,
     work_slug: str,
+    loop_runs: LoopRunRepository,
 ) -> list[PlanArtifactRun]:
     raw = _dict(manifest.get("artifact_runs")).get(artifact_id)
     if not isinstance(raw, list):

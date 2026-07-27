@@ -29,7 +29,9 @@ class PlanningLoopRunStore:
     def load(self, work_slug: str, run_id: str) -> LoopRunTarget | None:
         """Return one executable artifact run and its prompt-facing metadata."""
         manifest = actions.manifest_or_raise(self._files, work_slug)
-        detail = actions.detail_or_raise(self._files, work_slug, self._artifact_id)
+        detail = actions.detail_or_raise(
+            self._files, self._repository, work_slug, self._artifact_id
+        )
         actions.require_executable(detail.artifact)
         run = actions.find_run_by_id(
             actions.artifact_runs_for_update(manifest, self._artifact_id),
@@ -51,6 +53,7 @@ class PlanningLoopRunStore:
         manifest = actions.manifest_or_raise(self._files, target.work_slug)
         detail = actions.detail_or_raise(
             self._files,
+            self._repository,
             target.work_slug,
             self._artifact_id,
         )

@@ -322,6 +322,7 @@ def test_planning_chat_revision_prompt_lists_source_documents(
     submit_materialization.execute(
         app_client.app.state.workstore,
         app_client.app.state.planningfiles,
+        app_client.app.state.loop_runs,
         submit_materialization.SubmitPlanMaterializationRequest(
             work_slug=work["slug"],
             root_path=str(working_dir),
@@ -394,6 +395,7 @@ def test_planning_chat_input_sends_hidden_current_document_index(
     submit_materialization.execute(
         app_client.app.state.workstore,
         app_client.app.state.planningfiles,
+        app_client.app.state.loop_runs,
         submit_materialization.SubmitPlanMaterializationRequest(
             work_slug=work["slug"],
             root_path=str(working_dir),

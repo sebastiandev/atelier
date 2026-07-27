@@ -1114,6 +1114,7 @@ async def start_work_plan_endpoint(
     chatstore: ChatStoreDep,
     projectstore: ProjectStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
     planning_sessions: PlanningSessionsDep,
     chat_supervisor: ChatSupervisorDep,
     settings: SettingsDep,
@@ -1164,6 +1165,7 @@ async def start_work_plan_endpoint(
             workstore,
             chatstore,
             planningfiles,
+            loop_runs,
             chat_supervisor,
             req,
             record.chat.slug,
@@ -1173,12 +1175,12 @@ async def start_work_plan_endpoint(
                 plan=_to_plan_response(plan),
                 materialization_status=_to_plan_materialization_status_response(
                     planning_materialization_status.execute(
-                        workstore, chatstore, planningfiles, work_slug
+                        workstore, chatstore, planningfiles, loop_runs, work_slug
                     )
                 ),
             )
         materialization_view = planning_materialization_status.execute(
-            workstore, chatstore, planningfiles, work_slug
+            workstore, chatstore, planningfiles, loop_runs, work_slug
         )
         await _ensure_plan_materialization_task(
             request,
@@ -1186,13 +1188,16 @@ async def start_work_plan_endpoint(
             chatstore,
             projectstore,
             planningfiles,
+            loop_runs,
             planning_sessions,
             chat_supervisor,
             settings,
             req,
             replace_existing=materialization_view.state in {"stalled", "failed"},
         )
-        return _to_start_work_plan_response(workstore, chatstore, planningfiles, work_slug)
+        return _to_start_work_plan_response(
+            workstore, chatstore, planningfiles, loop_runs, work_slug
+        )
     except (
         planning_submit_materialization.WorkNotFound,
         planning_materialization_chat.WorkNotFound,
@@ -1216,6 +1221,7 @@ async def _ensure_plan_materialization_task(
     chatstore: ChatStore,
     projectstore: ProjectStore,
     planningfiles: PlanningFiles,
+    loop_runs: LoopRunRepository,
     planning_sessions: PlanningSessionRepository,
     chat_supervisor: AgentSupervisorService,
     settings: Settings,
@@ -1246,6 +1252,7 @@ async def _ensure_plan_materialization_task(
             chatstore,
             projectstore,
             planningfiles,
+            loop_runs,
             planning_sessions,
             chat_supervisor,
             settings,
@@ -1401,15 +1408,18 @@ def _to_start_work_plan_response(
     workstore: WorkStore,
     chatstore: ChatStore,
     planningfiles: PlanningFiles,
+    loop_runs: LoopRunRepository,
     work_slug: str,
 ) -> StartWorkPlanResponse:
     materialization = planning_materialization_status.execute(
-        workstore, chatstore, planningfiles, work_slug
+        workstore, chatstore, planningfiles, loop_runs, work_slug
     )
     plan = None
     if materialization.state == "complete":
         try:
-            plan = _to_plan_response(planning_get.execute(workstore, planningfiles, work_slug))
+            plan = _to_plan_response(
+                planning_get.execute(workstore, planningfiles, loop_runs, work_slug)
+            )
         except (planning_get.WorkNotFound, planning_get.PlanNotFound):
             plan = None
     return StartWorkPlanResponse(
@@ -1423,9 +1433,10 @@ def get_work_plan_endpoint(
     work_slug: str,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> WorkPlanResponse:
     try:
-        view = planning_get.execute(workstore, planningfiles, work_slug)
+        view = planning_get.execute(workstore, planningfiles, loop_runs, work_slug)
     except (planning_get.WorkNotFound, planning_get.PlanNotFound) as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     return _to_plan_response(view)
@@ -1440,10 +1451,11 @@ def get_work_plan_materialization_status_endpoint(
     workstore: WorkStoreDep,
     chatstore: ChatStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> PlanMaterializationStatusResponse:
     try:
         view = planning_materialization_status.execute(
-            workstore, chatstore, planningfiles, work_slug
+            workstore, chatstore, planningfiles, loop_runs, work_slug
         )
     except planning_materialization_status.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
@@ -1485,9 +1497,10 @@ def approve_work_plan_endpoint(
     work_slug: str,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> WorkPlanResponse:
     try:
-        view = planning_approve.execute(workstore, planningfiles, work_slug)
+        view = planning_approve.execute(workstore, planningfiles, loop_runs, work_slug)
     except (planning_approve.WorkNotFound, planning_approve.PlanningNotStarted) as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     return _to_plan_response(view)
@@ -1498,9 +1511,10 @@ def finish_work_plan_conversation_endpoint(
     work_slug: str,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> WorkPlanResponse:
     try:
-        view = planning_finish.execute(workstore, planningfiles, work_slug)
+        view = planning_finish.execute(workstore, planningfiles, loop_runs, work_slug)
     except (planning_finish.WorkNotFound, planning_finish.PlanningNotStarted) as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     return _to_plan_response(view)
@@ -1515,9 +1529,12 @@ def get_work_plan_artifact_endpoint(
     artifact_id: str,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> PlanArtifactDetailResponse:
     try:
-        detail = planning_get.artifact(workstore, planningfiles, work_slug, artifact_id)
+        detail = planning_get.artifact(
+            workstore, planningfiles, loop_runs, work_slug, artifact_id
+        )
     except (
         planning_get.WorkNotFound,
         planning_get.PlanNotFound,
@@ -1584,11 +1601,13 @@ def update_work_plan_artifact_endpoint(
     payload: UpdatePlanArtifactRequest,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> PlanArtifactDetailResponse:
     try:
         detail = planning_update_artifact.execute(
             workstore,
             planningfiles,
+            loop_runs,
             planning_update_artifact.SavePlanArtifactRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
@@ -1617,11 +1636,13 @@ def propose_work_plan_artifact_update_endpoint(
     payload: CreatePlanArtifactProposalRequest,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> PlanArtifactDetailResponse:
     try:
         detail = planning_propose_update.execute(
             workstore,
             planningfiles,
+            loop_runs,
             planning_propose_update.ProposeArtifactUpdateRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
@@ -1648,11 +1669,13 @@ def accept_work_plan_artifact_proposal_endpoint(
     proposal_id: str,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> PlanArtifactDetailResponse:
     try:
         detail = planning_resolve_proposal.execute(
             workstore,
             planningfiles,
+            loop_runs,
             planning_resolve_proposal.ResolveArtifactProposalRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
@@ -1682,11 +1705,13 @@ def reject_work_plan_artifact_proposal_endpoint(
     proposal_id: str,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> PlanArtifactDetailResponse:
     try:
         detail = planning_resolve_proposal.execute(
             workstore,
             planningfiles,
+            loop_runs,
             planning_resolve_proposal.ResolveArtifactProposalRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
@@ -1808,11 +1833,13 @@ def list_work_plan_artifact_runs_endpoint(
     artifact_id: str,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> list[PlanArtifactRunResponse]:
     try:
         runs = planning_list_runs.execute(
             workstore,
             planningfiles,
+            loop_runs,
             planning_list_runs.ListArtifactRunsRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
@@ -1837,11 +1864,13 @@ def get_work_plan_artifact_run_endpoint(
     run_id: str,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> PlanArtifactRunResponse:
     try:
         run = planning_get_run.execute(
             workstore,
             planningfiles,
+            loop_runs,
             planning_get_run.GetArtifactRunRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
@@ -2323,11 +2352,13 @@ def link_work_plan_artifact_tracking_endpoint(
     payload: LinkPlanArtifactTrackingRequest,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> PlanArtifactDetailResponse:
     try:
         detail = planning_link_tracking.execute(
             workstore,
             planningfiles,
+            loop_runs,
             planning_link_tracking.LinkArtifactTrackingRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
@@ -2358,11 +2389,13 @@ def create_work_plan_bug_endpoint(
     payload: CreatePlanBugRequest,
     workstore: WorkStoreDep,
     planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> PlanArtifactDetailResponse:
     try:
         detail = planning_create_bug.execute(
             workstore,
             planningfiles,
+            loop_runs,
             planning_create_bug.CreateArtifactBugRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,

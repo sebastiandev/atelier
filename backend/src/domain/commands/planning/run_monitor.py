@@ -82,7 +82,7 @@ async def execute(
     if pr_gateway is not None:
         await pr_review.post_addressed_replies(target, pr_gateway)
         store.save(target)
-    return actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
 __all__ = ["MonitorArtifactRunRequest", "execute"]

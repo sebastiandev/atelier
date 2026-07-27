@@ -73,7 +73,7 @@ class UpdateCheckPoller:
                         self._stop_event.wait(), timeout=self._interval
                     )
                     return
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
 
                 try:

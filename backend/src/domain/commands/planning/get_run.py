@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.planning import actions
 from src.domain.planning.dtos import PlanArtifactRun
 from src.domain.planning.ports import PlanningFiles
@@ -31,6 +32,7 @@ class GetArtifactRunRequest:
 def execute(
     workstore: WorkStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     req: GetArtifactRunRequest,
 ) -> PlanArtifactRun:
     """Read one projected artifact run.
@@ -40,7 +42,7 @@ def execute(
     """
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
-    detail = actions.detail_or_raise(files, req.work_slug, req.artifact_id)
+    detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     for run in detail.artifact.runs:
         if run.id == req.run_id:
             return run

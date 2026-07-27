@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from src.domain.agents import SPECS, CommonAgentConfig
 from src.domain.chatstore.dtos import ChatGrounding, ChatRecord, CreateChatRequest
 from src.domain.chatstore.ports import ChatStore
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.models import Provider
 from src.domain.planning.dtos import (
     PlanArtifactEntry,
@@ -78,6 +79,7 @@ class InvalidMaterializationReport(ValueError):
 def submit_plan_materialization(
     workstore: WorkStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     *,
     work_slug: str,
     root_path: str,
@@ -130,7 +132,7 @@ def submit_plan_materialization(
     manifest["artifacts"] = [_entry_to_manifest(entry) for entry in artifacts]
     files.write_manifest(stored_work_slug, manifest)
 
-    index = PlanningService(files)
+    index = PlanningService(files, loop_runs)
     plan = index.get_plan(stored_work_slug)
     if plan is None:
         raise PlanningNotStarted(f"planning not started: {stored_work_slug}")
@@ -263,6 +265,7 @@ def finalize_materialization_report(
     workstore: WorkStore,
     chatstore: ChatStore,
     files: PlanningFiles,
+    loop_runs: LoopRunRepository,
     *,
     work_slug: str,
     chat_slug: str,
@@ -296,6 +299,7 @@ def finalize_materialization_report(
     return submit_plan_materialization(
         workstore,
         files,
+        loop_runs,
         work_slug=work_slug,
         root_path=chat.working_directory,
         framework=framework,
