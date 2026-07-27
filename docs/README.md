@@ -16,6 +16,7 @@ the code wins — but please update the doc.
 | [`api-flows.md`](api-flows.md) | One sequence diagram per HTTP/WS endpoint — what each route does, which command runs, which ports get touched |
 | [`frontend.md`](frontend.md) | Frontend-specific: routing, `AgentTile` modes, `useAgentStream`, state, dialog conventions |
 | [`design-system.md`](design-system.md) | Visual conventions: brand mark, section headers, card rhythm, inline icons, time formats, stat badges |
+| [`unified-loop-runs.md`](unified-loop-runs.md) | **Proposal, not implemented.** Collapsing objective and story runs into one entity with a nullable source |
 
 ## Other authoritative sources
 
