@@ -81,6 +81,9 @@ from src.infrastructure.agents.atelier_mcp_tools import (
     scan_text_for_artifact_markers,
 )
 from src.infrastructure.agents.factory import build_adapter
+from src.infrastructure.agents.permission_wait import (
+    await_permission_decision,
+)
 from src.infrastructure.agents.tool_canonical import canonicalize_tool
 from src.settings import Settings
 
@@ -268,12 +271,13 @@ class ClaudeCodeAdapter:
             )
         )
         try:
-            try:
-                decision = await fut
-            except asyncio.CancelledError:
-                # Turn was cancelled (Esc / supervisor shutdown). Treat
-                # as deny so the SDK doesn't run the tool.
-                decision = "deny"
+            decision = await await_permission_decision(
+                fut,
+                request_id=request_id,
+                tool_name=canon_name,
+                cancelled="deny",
+                expired="deny",
+            )
         finally:
             self._pending.pop(request_id, None)
         # ``close()`` may have already published a synthetic deny for this

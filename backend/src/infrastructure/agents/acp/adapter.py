@@ -70,6 +70,9 @@ from src.domain.agents import (
 )
 from src.infrastructure.agents.acp.mapping import AcpUpdateMapper
 from src.infrastructure.agents.atelier_mcp_tools import MCP_SERVER_NAME
+from src.infrastructure.agents.permission_wait import (
+    await_permission_decision,
+)
 from src.infrastructure.agents.tool_canonical import canonicalize_tool
 
 logger = logging.getLogger(__name__)
@@ -406,10 +409,13 @@ class AcpAdapter:
             )
         )
         try:
-            try:
-                decision = await fut
-            except asyncio.CancelledError:
-                decision = _CANCELLED
+            decision = await await_permission_decision(
+                fut,
+                request_id=request_id,
+                tool_name=canon_name,
+                cancelled=_CANCELLED,
+                expired="deny",
+            )
         finally:
             self._pending.pop(request_id, None)
             option_pool = self._pending_options.pop(request_id, list(options))
