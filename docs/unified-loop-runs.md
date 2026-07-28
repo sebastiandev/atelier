@@ -247,6 +247,15 @@ Each step is independently shippable and leaves the tree green.
    through the brief, not by skipping stages, so it needs no entry-stage
    support.
 
+   The fork-from-parent-agent seeding that looked like step 5's main risk
+   is **gone**: it served the superseded handoff flow, its only caller always
+   passed `null`, and handoff itself forks through `POST /works/{slug}/agents`
+   instead. So `loop/start.py` and the planning start now do the same thing
+   with a workspace -- plain `ensure` from a root. Merging them means moving
+   the story-specific bits into `loop/start.py` (source-driven `target_kind` /
+   `target_ref` / worktree slug / run-id allocation / manifest id write), not
+   teaching it to fork.
+
    Shared seeding already landed in `domain/loop/followups.py`
    (`require_reusable`, `entry_stage_id`, `seeded_brief`, `seed_label`), with
    the objective `rerun` rewired onto it. What remains for story follow-ups
