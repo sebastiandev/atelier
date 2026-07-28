@@ -19,7 +19,6 @@ from src.domain.loop import actions as loop_actions
 from src.domain.loop import briefs
 from src.domain.loop import runtime as _loop_runtime
 from src.domain.loop.agent_policy import (
-    can_reuse_initial_agent,
     resolve_stage_agent_config,
     validate_stage_agent_policies,
 )
@@ -78,7 +77,7 @@ class WorkNotFound(ValueError):
 
 
 class AgentNotFound(ValueError):
-    """The agent_slug doesn't belong to the work."""
+    """A stage agent could not be resolved while launching the run."""
 
 
 class LoopContextMissing(ValueError):
@@ -91,7 +90,6 @@ class StartArtifactRunRequest:
 
     work_slug: str
     artifact_id: str
-    agent_slug: str | None = None
     loop_definition_id: str | None = None
     loop_revision: str | None = None
     brief_note: str = ""
@@ -136,43 +134,19 @@ async def execute(
         req,
     )
     brief = _planning_brief(detail, definition, req.brief_note)
-    if req.agent_slug is None:
-        session = planning_sessions.get_by_work_slug(req.work_slug)
-        if session is None:
-            raise PlanningNotStarted(f"planning session not found: {req.work_slug}")
-        parent_provider = session.provider
-        parent_model = session.model
-        parent_options = dict(session.options or {})
-        parent_folder = Path(session.root_path).expanduser()
-    else:
-        parent_agent = next(
-            (
-                agent
-                for agent in workstore.list_agents_for_work(req.work_slug)
-                if agent.slug == req.agent_slug
-            ),
-            None,
-        )
-        if parent_agent is None:
-            raise AgentNotFound(f"agent not found on work: {req.agent_slug}")
-        parent_provider = parent_agent.provider
-        parent_model = parent_agent.model
-        parent_options = dict(parent_agent.options or {})
-        parent_folder = parent_agent.folder
-    reuse_initial_agent = req.agent_slug is not None and can_reuse_initial_agent(
-        definition,
-        parent_provider=parent_provider,
-        parent_model=parent_model,
-        parent_options=parent_options,
-        parent_folder=parent_folder,
-    )
+    session = planning_sessions.get_by_work_slug(req.work_slug)
+    if session is None:
+        raise PlanningNotStarted(f"planning session not found: {req.work_slug}")
+    parent_provider = session.provider
+    parent_model = session.model
+    parent_options = dict(session.options or {})
+    parent_folder = Path(session.root_path).expanduser()
     validate_stage_agent_policies(
         definition,
         parent_provider=parent_provider,
         parent_model=parent_model,
         parent_options=parent_options,
         parent_folder=parent_folder,
-        reuse_initial_agent=reuse_initial_agent,
     )
     resolutions = _resolve_contexts(
         files,
@@ -194,26 +168,22 @@ async def execute(
     ]
     if missing:
         raise LoopContextMissing("Required loop context is missing: " + "; ".join(missing))
-    agent_slug = req.agent_slug
-    if not reuse_initial_agent:
-        agent_slug = await _launch_initial_agent(
-            workstore,
-            supervisor,
-            worktree_manager,
-            connection_store,
-            sharestore,
-            share_provisioner,
-            adapter_factory,
-            req,
-            definition,
-            brief,
-            parent_provider=parent_provider,
-            parent_model=parent_model,
-            parent_options=parent_options,
-            parent_folder=parent_folder,
-            fork_from_agent=req.agent_slug,
-        )
-    assert agent_slug is not None
+    agent_slug = await _launch_initial_agent(
+        workstore,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        req,
+        definition,
+        brief,
+        parent_provider=parent_provider,
+        parent_model=parent_model,
+        parent_options=parent_options,
+        parent_folder=parent_folder,
+    )
     run_id = actions.next_run_id(
         artifact_run_rows(loop_runs, req.work_slug, req.artifact_id)
     )
@@ -342,7 +312,6 @@ async def _launch_initial_agent(
     parent_model: str,
     parent_options: dict[str, object],
     parent_folder: Path,
-    fork_from_agent: str | None,
 ) -> str:
     """Launch the first stage from persisted Planning runtime settings."""
     stage = definition.stages[0]
@@ -372,7 +341,6 @@ async def _launch_initial_agent(
             folder=parent_folder,
             options=options,
             worktree_slug=loop_actions.sourced_worktree_slug(req.artifact_id),
-            fork_from_agent=fork_from_agent,
             approved_command_prefixes=briefs.resolved_approved_command_prefixes(
                 definition,
                 brief,

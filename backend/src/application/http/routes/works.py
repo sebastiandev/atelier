@@ -1776,7 +1776,6 @@ async def start_work_plan_artifact_run_endpoint(
             planning_start_run.StartArtifactRunRequest(
                 work_slug=work_slug,
                 artifact_id=artifact_id,
-                agent_slug=payload.agent_slug,
                 loop_definition_id=payload.loop_definition_id,
                 loop_revision=payload.loop_revision,
                 brief_note=payload.brief_note,

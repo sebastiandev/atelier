@@ -836,7 +836,6 @@ class AcceptPlanArtifactRequest(BaseModel):
 
 
 class StartPlanArtifactRunRequest(BaseModel):
-    agent_slug: str | None = Field(default=None, min_length=1)
     loop_definition_id: str | None = None
     loop_revision: str | None = None
     brief_note: str = ""

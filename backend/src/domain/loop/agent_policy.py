@@ -18,7 +18,6 @@ from src.domain.agents.configs import (
 )
 from src.domain.agents.launch import InvalidProviderConfig
 from src.domain.agents.specs import SPECS, EnumOption
-from src.domain.loop.definitions import LoopDefinitionInvalid
 from src.domain.loop.dtos import (
     LoopAgentPolicy,
     LoopBriefAgent,
@@ -251,39 +250,6 @@ def resolve_stage_agent_config(
     return provider, model, options
 
 
-def can_reuse_initial_agent(
-    definition: LoopDefinition,
-    *,
-    parent_provider: Provider,
-    parent_model: str,
-    parent_options: dict[str, object],
-    parent_folder: Path,
-) -> bool:
-    """Return whether a supplied agent matches the first stage policy.
-
-    Preconditions: the parent config belongs to the target Work agent.
-    Postconditions: provider settings are validated without changing runtime state.
-    """
-    stage = definition.stages[0]
-    if stage.agent is None:
-        raise LoopDefinitionInvalid("The first loop stage needs an agent policy.")
-    if stage.agent.session != LoopSessionPolicy.REUSE:
-        return False
-    common = CommonAgentConfig(workdir=parent_folder, system_prompt="")
-    try:
-        provider, model, options = resolve_stage_agent_config(
-            stage.agent,
-            parent_provider=parent_provider,
-            parent_model=parent_model,
-            parent_options=parent_options,
-        )
-        current = SPECS[parent_provider].build(common, parent_model, parent_options)
-        desired = SPECS[provider].build(common, model, options)
-    except (KeyError, ValueError) as exc:
-        raise InvalidProviderConfig(f"{stage.name}: {exc}") from exc
-    return current == desired
-
-
 def validate_stage_agent_policies(
     definition: LoopDefinition,
     *,
@@ -291,7 +257,6 @@ def validate_stage_agent_policies(
     parent_model: str,
     parent_options: dict[str, object],
     parent_folder: Path,
-    reuse_initial_agent: bool,
     overrides: dict[str, LoopBriefAgent] | None = None,
 ) -> None:
     """Preflight every reachable agent stage against its effective parent.
@@ -304,12 +269,6 @@ def validate_stage_agent_policies(
     stages = {stage.step_id: stage for stage in definition.stages}
     first_id = definition.stages[0].step_id
     launched: dict[str, StageAgentConfig] = {}
-    if reuse_initial_agent:
-        launched[first_id] = (
-            parent_provider,
-            parent_model,
-            dict(parent_options),
-        )
     pending = [
         (
             first_id,
@@ -398,7 +357,6 @@ def validate_stage_agent_policies(
 __all__ = [
     "StageAgentConfig",
     "apply_stage_agent_policy",
-    "can_reuse_initial_agent",
     "resolve_stage_agent_config",
     "resolve_stage_model",
     "validate_stage_agent_policies",

@@ -160,7 +160,6 @@ async def start(
         parent_model=spec.model,
         parent_options=parent_options,
         parent_folder=root,
-        reuse_initial_agent=False,
         overrides={item.stage_id: item.agent for item in brief.stages if item.agent is not None},
     )
     resolutions = _resolve_contexts(

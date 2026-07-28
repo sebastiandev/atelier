@@ -1475,7 +1475,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       const linked = await startPlanArtifactRun(
         workSlug,
         detail.artifact.id,
-        null,
         definition,
         briefNote,
       );

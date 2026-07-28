@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime
@@ -48,6 +49,7 @@ def _start_plan(client: TestClient, root: Path) -> dict[str, object]:
     artifacts = _write_default_plan_sources(root)
     res = _submit_plan_metadata(client, root, "bmad", "refactor", artifacts)
     assert res.status_code == 200, res.text
+    _create_planning_session(client, root, provider="amp", model="smart")
     return res.json()
 
 
@@ -204,10 +206,9 @@ def _start_artifact_run(
     settings: Settings,
     artifact_id: str = "story-001",
 ) -> tuple[dict[str, object], str]:
-    source_agent = _create_agent(client, settings.workspace_root / "repo")
     res = client.post(
         f"/api/works/WRK-001/plan/artifacts/{artifact_id}/runs",
-        json={"agent_slug": source_agent["slug"]},
+        json={},
     )
     assert res.status_code == 200, res.text
     run = res.json()["artifact"]["runs"][0]
@@ -1564,7 +1565,7 @@ def test_default_run_uses_builtin_loop_when_definition_is_omitted(
 
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={"agent_slug": agent["slug"]},
+        json={},
     )
 
     assert started.status_code == 200, started.text
@@ -1617,7 +1618,6 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
-            "agent_slug": implementation["slug"],
             "loop_definition_id": overlay["id"],
             "loop_revision": overlay["revision"],
         },
@@ -1777,7 +1777,6 @@ def test_custom_loop_executes_deterministic_check_stage(
     _create_work(app_client)
     root = test_settings.workspace_root / "repo"
     _start_plan(app_client, root)
-    _create_planning_session(app_client, root)
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     implementation = _create_agent(app_client, root)
     forked = app_client.post(
@@ -2291,7 +2290,7 @@ def test_background_run_monitor_auto_continues_incomplete_report(
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={"agent_slug": agent["slug"]},
+        json={},
     )
     assert started.status_code == 200, started.text
     run_id = started.json()["artifact"]["runs"][0]["id"]
@@ -2408,7 +2407,7 @@ def test_resume_rejects_non_blocked_run(app_client: TestClient, test_settings: S
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={"agent_slug": agent["slug"]},
+        json={},
     )
     assert started.status_code == 200, started.text
     run_id = started.json()["artifact"]["runs"][0]["id"]
@@ -2949,9 +2948,15 @@ def test_story_runs_share_one_worktree_per_story(
     is updated in place" to hold. Defaulting to the agent slug gave every run
     its own worktree, so a second run would fork a fresh branch and open a
     second PR.
+
+    Needs a real git root: WorktreeManager.ensure hands back the source
+    folder unchanged when it is not a repository, so a non-git root proves
+    nothing about slugs.
     """
     _create_work(app_client)
-    _start_plan(app_client, test_settings.workspace_root / "repo")
+    root = test_settings.workspace_root / "repo"
+    _init_git_repo(root)
+    _start_plan(app_client, root)
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
 
     agent, _run_id = _start_artifact_run(app_client, test_settings)
@@ -2959,6 +2964,18 @@ def test_story_runs_share_one_worktree_per_story(
     worktree = Path(str(agent["worktree_path"]))
     assert worktree.name == "loop-story-001"
     assert worktree.name != agent["slug"]
+
+
+def _init_git_repo(root: Path) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "master"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"], cwd=root, check=True
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
+    (root / "README.md").write_text("test repository\n")
+    subprocess.run(["git", "add", "README.md"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=root, check=True)
 
 
 def test_manifest_holds_run_ids_not_run_state(

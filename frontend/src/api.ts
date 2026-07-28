@@ -1164,7 +1164,6 @@ export type AcceptPlanArtifactRunPayload = {
 export function startPlanArtifactRun(
   workSlug: string,
   artifactId: string,
-  agentSlug: string | null,
   definition?: Pick<LoopDefinition, "id" | "revision">,
   briefNote?: string,
 ): Promise<PlanArtifactDetail> {
@@ -1172,7 +1171,6 @@ export function startPlanArtifactRun(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      agent_slug: agentSlug ?? undefined,
       loop_definition_id: definition?.id,
       loop_revision: definition?.revision,
       brief_note: briefNote || undefined,
