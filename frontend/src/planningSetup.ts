@@ -208,10 +208,3 @@ export function planningProfileDefinition(
   );
 }
 
-export function planningFrameworkLabel(framework: PlanningFrameworkId): string {
-  return planningFrameworkDefinition(framework).name;
-}
-
-export function planningProfileLabel(profile: PlanningProfile): string {
-  return planningProfileDefinition(profile).name;
-}

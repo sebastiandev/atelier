@@ -248,14 +248,6 @@ export async function reconnectAgent(slug: string): Promise<void> {
   }
 }
 
-export function sendChatMessage(slug: string, body: string): Promise<ChatDetail> {
-  return fetch(`/api/chats/${slug}/messages`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ body }),
-  }).then((r) => jsonOrThrow<ChatDetail>(r));
-}
-
 export function promoteChat(
   slug: string,
   payload: { name: string; description: string; project_slug?: string | null },
@@ -1186,59 +1178,6 @@ export function startPlanArtifactRun(
   }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
-export function createPlanArtifactProposal(
-  workSlug: string,
-  artifactId: string,
-  payload: { title?: string; proposed_content: string },
-): Promise<PlanArtifactDetail> {
-  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/proposals`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
-}
-
-export function acceptPlanArtifactProposal(
-  workSlug: string,
-  artifactId: string,
-  proposalId: string,
-): Promise<PlanArtifactDetail> {
-  return fetch(
-    `/api/works/${workSlug}/plan/artifacts/${artifactId}/proposals/${proposalId}/accept`,
-    { method: "POST" },
-  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
-}
-
-export function rejectPlanArtifactProposal(
-  workSlug: string,
-  artifactId: string,
-  proposalId: string,
-): Promise<PlanArtifactDetail> {
-  return fetch(
-    `/api/works/${workSlug}/plan/artifacts/${artifactId}/proposals/${proposalId}/reject`,
-    { method: "POST" },
-  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
-}
-
-export function linkPlanArtifactTracking(
-  workSlug: string,
-  artifactId: string,
-  payload: {
-    kind: PlanTrackingKind;
-    title?: string;
-    url?: string;
-    status?: string;
-    ref?: string;
-    notes?: string;
-  },
-): Promise<PlanArtifactDetail> {
-  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/tracking`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
-}
-
 export function createPlanBug(
   workSlug: string,
   artifactId: string,
@@ -1272,17 +1211,6 @@ export function resumePlanArtifactRun(
   ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
-export function markPlanRunCleaned(
-  workSlug: string,
-  artifactId: string,
-  runId: string,
-): Promise<PlanArtifactDetail> {
-  return fetch(
-    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/cleanup`,
-    { method: "POST" },
-  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
-}
-
 function loopsPath(
   workSlug: string | null,
   rootPath?: string | null,
@@ -1305,18 +1233,6 @@ export function listLoopDefinitions(
   );
 }
 
-export function getLoopDefinition(
-  workSlug: string,
-  definitionId: string,
-  rootPath?: string | null,
-  scope?: LoopDefinitionScope,
-): Promise<LoopDefinition> {
-  const query = loopsPath(workSlug, rootPath, scope).split("?")[1];
-  return fetch(`/api/loops/${encodeURIComponent(definitionId)}${query ? `?${query}` : ""}`).then(
-    (response) => jsonOrThrow<LoopDefinition>(response),
-  );
-}
-
 export function saveLoopDefinition(
   workSlug: string | null,
   payload: SaveLoopDefinitionPayload,
@@ -1328,19 +1244,6 @@ export function saveLoopDefinition(
     : "/api/loops";
   return fetch(url, {
     method: updating ? "PUT" : "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...payload, work_slug: workSlug, root_path: rootPath }),
-  }).then((response) => jsonOrThrow<LoopDefinition>(response));
-}
-
-export function forkLoopDefinition(
-  workSlug: string,
-  sourceId: string,
-  payload: { id: string; name: string },
-  rootPath?: string | null,
-): Promise<LoopDefinition> {
-  return fetch(`/api/loops/${encodeURIComponent(sourceId)}/fork`, {
-    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, work_slug: workSlug, root_path: rootPath }),
   }).then((response) => jsonOrThrow<LoopDefinition>(response));
@@ -1424,18 +1327,6 @@ export function deleteStageDefinition(
   const query = stagesPath(rootPath).split("?")[1];
   return fetch(`/api/stages/${encodeURIComponent(stageId)}${query ? `?${query}` : ""}`, {
     method: "DELETE",
-  }).then((response) => {
-    if (!response.ok) return jsonOrThrow<never>(response);
-  });
-}
-
-export function revealStageDefinition(
-  stageId: string,
-  rootPath?: string | null,
-): Promise<void> {
-  const query = stagesPath(rootPath).split("?")[1];
-  return fetch(`/api/stages/${encodeURIComponent(stageId)}/reveal${query ? `?${query}` : ""}`, {
-    method: "POST",
   }).then((response) => {
     if (!response.ok) return jsonOrThrow<never>(response);
   });

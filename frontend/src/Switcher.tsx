@@ -181,36 +181,3 @@ function SearchIcon() {
 // Small affordance shown next to a breadcrumb crumb. Clicking it opens
 // the switcher (callers wire the onClick + open state). Distinct from
 // the crumb link itself so the link still navigates on plain click.
-export function SwitcherChevron({
-  onClick,
-  title,
-}: {
-  onClick: () => void;
-  title: string;
-}) {
-  return (
-    <button
-      type="button"
-      className="crumb-switch"
-      onClick={onClick}
-      title={title}
-      aria-label={title}
-    >
-      <svg
-        width="10"
-        height="10"
-        viewBox="0 0 12 12"
-        fill="none"
-        aria-hidden="true"
-      >
-        <path
-          d="M3 4.5 L6 7.5 L9 4.5"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </button>
-  );
-}
