@@ -82,6 +82,10 @@ class AgentNotFound(ValueError):
     """A stage agent could not be resolved while launching the run."""
 
 
+class StageAgentUnresolved(ValueError):
+    """The entry stage has no provider to run under, and nothing to inherit."""
+
+
 class LoopContextMissing(ValueError):
     """One or more required loop context references could not be resolved."""
 
@@ -153,6 +157,7 @@ async def execute(
             req.follow_up_note,
         )
     entry = followups.resolve_entry(definition, req.entry_stage_id)
+    _require_entry_agent(entry, brief)
     session = planning_sessions.get_by_work_slug(req.work_slug)
     if session is None:
         raise PlanningNotStarted(f"planning session not found: {req.work_slug}")
@@ -412,6 +417,41 @@ def _initial_stage_prompt(
             brief_note=brief_note,
             brief_context=brief_context,
         )
+    )
+
+
+def _require_entry_agent(
+    entry: LoopStepDefinition,
+    brief: LoopBrief | None,
+) -> None:
+    """Reject a story run whose entry stage has no provider of its own.
+
+    A goal-driven run inherits from the provider chosen for the run; a story
+    run has no such parent. It used to fall back to the Planning session's
+    provider, which is the agent that *wrote* the plan -- a coincidence, not
+    a decision, and usually the wrong model for implementation.
+
+    Only the entry stage is checked: later stages inherit from the run's
+    first write-capable agent (``_write_stage_agent_slug``), so pinning that
+    one resolves the whole chain.
+    """
+    if not followups.entry_needs_agent(entry) or entry.agent is None:
+        return
+    if entry.agent.provider:
+        return
+    override = next(
+        (
+            stage.agent
+            for stage in (brief.stages if brief else ())
+            if stage.stage_id == entry.step_id and stage.agent is not None
+        ),
+        None,
+    )
+    if override is not None and override.provider:
+        return
+    raise StageAgentUnresolved(
+        f"{entry.name} does not pin a provider. Choose one in run setup: a "
+        "story run has no parent agent to inherit from."
     )
 
 

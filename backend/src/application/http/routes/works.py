@@ -1801,6 +1801,7 @@ async def start_work_plan_artifact_run_endpoint(
         planning_start_run.LoopContextMissing,
         planning_start_run.AgentFolderMissing,
         planning_start_run.InvalidProviderConfig,
+        planning_start_run.StageAgentUnresolved,
     ) as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except AgentTerminated as e:
@@ -1900,6 +1901,7 @@ async def rerun_work_plan_artifact_run_endpoint(
         planning_start_run.LoopContextMissing,
         planning_start_run.AgentFolderMissing,
         planning_start_run.InvalidProviderConfig,
+        planning_start_run.StageAgentUnresolved,
     ) as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except AgentTerminated as e:

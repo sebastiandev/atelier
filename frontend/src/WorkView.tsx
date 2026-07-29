@@ -106,7 +106,6 @@ import { MoveWorkDialog } from "./MoveWorkDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
 import { NewWorkDialog } from "./NewWorkDialog";
 import { LoopMode } from "./LoopMode";
-import { LoopSelectorDialog } from "./LoopUI";
 import {
   type LoopStartSeed,
   loopStartStorageKey,
@@ -215,8 +214,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [focusedSlug, setFocusedSlug] = useState<string | null>(null);
   const [openChatSlugs, setOpenChatSlugs] = useState<string[]>([]);
   const [agentDialogOpen, setAgentDialogOpen] = useState(false);
-  const [pendingLoopTarget, setPendingLoopTarget] =
-    useState<PlanArtifactDetail | null>(null);
   // When the new-agent dialog is opened from the handoff/chat flow, we
   // pre-fill it with either the source agent handoff doc or chat context
   // file. Null in the regular flow.
@@ -383,7 +380,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     setPlanningEntryIssue(null);
     planningStartConsumedRef.current = false;
     setPlanChatOpen(true);
-    setPendingLoopTarget(null);
   }, [workSlug]);
 
   useEffect(() => {
@@ -1545,35 +1541,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       setPlanError(detail.artifact.launch_blockers[0] ?? "Artifact is not launchable yet.");
       return;
     }
-    setPendingLoopTarget(detail);
-  }
-
-  async function handleLoopSelected(
-    detail: PlanArtifactDetail,
-    definition: LoopDefinition,
-    briefNote?: string,
-  ): Promise<void> {
-    setPlanSaving(true);
-    setPlanError(null);
-    try {
-      const linked = await startPlanArtifactRun(
-        workSlug,
-        detail.artifact.id,
-        definition,
-        briefNote,
-      );
-      setPendingLoopTarget(null);
-      setPlanArtifactDetail(linked);
-      setPlanDraft(linked.content);
-      await Promise.all([refreshAgents(), refreshPlan(linked.artifact.id)]);
-      openPlanningView({ kind: "run", id: linked.artifact.id });
-      showToast(`Started ${definition.name}.`);
-    } catch (err) {
-      setPlanError(err instanceof Error ? err.message : String(err));
-      throw err;
-    } finally {
-      setPlanSaving(false);
-    }
+    // Run setup, not a bare picker: a story stage has no parent agent to
+    // inherit a provider from, so the loop has to be configured first.
+    openPlanningView({ kind: "setup", id: detail.artifact.id });
   }
 
   async function handleCreateAgent(payload: CreateAgentPayload) {
@@ -1886,17 +1856,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             work={work}
             onClose={() => setCompleteOpen(false)}
             onCompleted={() => window.location.assign("/")}
-          />
-        )}
-        {pendingLoopTarget && (
-          <LoopSelectorDialog
-            workSlug={work.slug}
-            rootPath={planningRoot}
-            target={pendingLoopTarget}
-            onClose={() => setPendingLoopTarget(null)}
-            onStart={(definition, briefNote) =>
-              handleLoopSelected(pendingLoopTarget, definition, briefNote)
-            }
           />
         )}
         {work.status === "active" && agentDialogOpen && (

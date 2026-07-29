@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any
 
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.connections.ports import ConnectionStore
-from src.domain.loop import followups
-from src.domain.loop.dtos import LoopRunKind
+from src.domain.loop import briefs, followups
+from src.domain.loop.dtos import (
+    LoopBrief,
+    LoopBriefAgent,
+    LoopRunKind,
+    LoopStageBrief,
+)
 from src.domain.loop.ports import (
     LoopContextResolver,
     LoopDefinitionLocations,
@@ -77,6 +83,19 @@ async def execute(
         req.run_id,
     )
     definition = definition_from_snapshot(loop.get("definition_snapshot"))
+    # Carry the source run's pinned brief: a follow-up continues that run, so
+    # it keeps its per-stage notes, context and -- crucially -- the providers
+    # chosen for it. Without this the entry stage would have no provider,
+    # because a story run has no parent agent to inherit one from.
+    source_brief = briefs.optional_brief_from_snapshot(source.get("brief"))
+    entry_id = followups.entry_stage_id(definition, req.kind)
+    brief = _with_inherited_entry_agent(
+        workstore,
+        req.work_slug,
+        source,
+        source_brief or LoopBrief(goal=detail_title(source)),
+        followups.resolve_entry(definition, entry_id).step_id,
+    )
     return await start_run.execute(
         workstore,
         files,
@@ -99,9 +118,60 @@ async def execute(
             # it does not adopt whatever the library has since become.
             loop_definition_id=actions.str_or_empty(loop.get("definition_id")) or None,
             loop_revision=actions.str_or_empty(loop.get("definition_revision")) or None,
+            brief=brief,
             run_kind=req.kind,
             follow_up_note=req.note,
-            entry_stage_id=followups.entry_stage_id(definition, req.kind),
+            entry_stage_id=entry_id,
+        ),
+    )
+
+
+def detail_title(source: dict[str, Any]) -> str:
+    """Fall back to the source run's own goal when it pinned no brief."""
+    return actions.str_or_empty(source.get("summary")) or "Follow-up run"
+
+
+def _with_inherited_entry_agent(
+    workstore: WorkStore,
+    work_slug: str,
+    source: dict[str, Any],
+    brief: LoopBrief,
+    entry_step_id: str,
+) -> LoopBrief:
+    """Pin the source run's provider on the entry stage when nothing else does.
+
+    A follow-up's parent is the run it continues, so it should execute on the
+    same provider. Without this, a VERIFY follow-up entering at a review stage
+    that pins no provider would be rejected for having nothing to inherit --
+    true of a fresh story run, but not of one continuing an existing run.
+    """
+    existing = next(
+        (item for item in brief.stages if item.stage_id == entry_step_id), None
+    )
+    if existing is not None and existing.agent is not None and existing.agent.provider:
+        return brief
+    agent_slug = actions.str_or_empty(source.get("agent_slug"))
+    agent = next(
+        (
+            item
+            for item in workstore.list_agents_for_work(work_slug)
+            if item.slug == agent_slug
+        ),
+        None,
+    )
+    if agent is None:
+        return brief
+    inherited = LoopBriefAgent(provider=agent.provider, model=agent.model)
+    if existing is None:
+        return replace(
+            brief,
+            stages=(*brief.stages, LoopStageBrief(stage_id=entry_step_id, agent=inherited)),
+        )
+    return replace(
+        brief,
+        stages=tuple(
+            replace(item, agent=inherited) if item.stage_id == entry_step_id else item
+            for item in brief.stages
         ),
     )
 

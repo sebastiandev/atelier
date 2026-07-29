@@ -201,6 +201,23 @@ def _wait_stage(
     raise AssertionError(f"run {run_id} did not reach {stage_id}/{status}: {last}")
 
 
+def _entry_agent_brief(
+    stage_id: str = "implementation",
+    *,
+    provider: str = "amp",
+    model: str = "smart",
+) -> dict:
+    """A brief pinning the entry stage's provider.
+
+    A story run has nothing to inherit a provider from, so the entry stage
+    must name one -- either in the loop definition or here.
+    """
+    return {
+        "goal": "Story run",
+        "stages": [{"stage_id": stage_id, "agent": {"provider": provider, "model": model}}],
+    }
+
+
 def _start_artifact_run(
     client: TestClient,
     settings: Settings,
@@ -208,7 +225,7 @@ def _start_artifact_run(
 ) -> tuple[dict[str, object], str]:
     res = client.post(
         f"/api/works/WRK-001/plan/artifacts/{artifact_id}/runs",
-        json={},
+        json={"brief": _entry_agent_brief()},
     )
     assert res.status_code == 200, res.text
     run = res.json()["artifact"]["runs"][0]
@@ -1564,7 +1581,7 @@ def test_default_run_uses_builtin_loop_when_definition_is_omitted(
 
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={},
+        json={"brief": _entry_agent_brief()},
     )
 
     assert started.status_code == 200, started.text
@@ -1617,6 +1634,7 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
+            "brief": _entry_agent_brief(),
             "loop_definition_id": overlay["id"],
             "loop_revision": overlay["revision"],
         },
@@ -1822,6 +1840,7 @@ def test_custom_loop_executes_deterministic_check_stage(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
+            "brief": _entry_agent_brief(),
             "agent_slug": implementation["slug"],
             "loop_definition_id": selected["id"],
             "loop_revision": selected["revision"],
@@ -1878,6 +1897,7 @@ def test_secure_loop_runs_code_and_security_review(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
+            "brief": _entry_agent_brief(),
             "agent_slug": implementation["slug"],
             "loop_definition_id": secure.definition_id,
             "loop_revision": secure.revision,
@@ -1938,6 +1958,7 @@ def test_active_loop_recovers_after_backend_restart(
         started = first.post(
             "/api/works/WRK-001/plan/artifacts/story-001/runs",
             json={
+                "brief": _entry_agent_brief(),
                 "agent_slug": implementation["slug"],
                 "loop_definition_id": fast.definition_id,
                 "loop_revision": fast.revision,
@@ -2011,6 +2032,7 @@ def test_required_loop_context_blocks_before_agent_launch(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
+            "brief": _entry_agent_brief(),
             "loop_definition_id": saved.json()["id"],
             "loop_revision": saved.json()["revision"],
         },
@@ -2055,6 +2077,7 @@ def test_selected_loop_launches_first_agent_from_planning_session(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
+            "brief": _entry_agent_brief(),
             "loop_definition_id": selected["id"],
             "loop_revision": selected["revision"],
         },
@@ -2099,7 +2122,17 @@ def test_selected_loop_pins_optional_planning_brief_note(
         json={
             "loop_definition_id": definition["id"],
             "loop_revision": definition["revision"],
-            "brief_note": note,
+            "brief": {
+                "goal": "Story run",
+                "stages": [
+                    {
+                        "stage_id": "implementation",
+                        "note": note,
+                        "agent": {"provider": "amp", "model": "smart"},
+                    },
+                    {"stage_id": "code-review", "note": note},
+                ],
+            },
         },
     )
 
@@ -2158,6 +2191,7 @@ def test_selected_loop_forks_supplied_agent_for_first_stage_override(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
+            "brief": _entry_agent_brief(),
             "agent_slug": existing["slug"],
             "loop_definition_id": saved.json()["id"],
             "loop_revision": saved.json()["revision"],
@@ -2218,6 +2252,7 @@ def test_selected_loop_preflight_remembers_reused_stage_config(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
+            "brief": _entry_agent_brief(),
             "loop_definition_id": saved.json()["id"],
             "loop_revision": saved.json()["revision"],
         },
@@ -2267,6 +2302,7 @@ def test_selected_loop_preflights_inherited_stage_policy(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
+            "brief": _entry_agent_brief(),
             "loop_definition_id": saved.json()["id"],
             "loop_revision": saved.json()["revision"],
         },
@@ -2288,7 +2324,7 @@ def test_background_run_monitor_auto_continues_incomplete_report(
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={},
+        json={"brief": _entry_agent_brief()},
     )
     assert started.status_code == 200, started.text
     run_id = started.json()["artifact"]["runs"][0]["id"]
@@ -2352,6 +2388,7 @@ def test_failed_selected_loop_stage_retries_with_new_agent_in_same_worktree(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
+            "brief": _entry_agent_brief(),
             "loop_definition_id": definition.definition_id,
             "loop_revision": definition.revision,
         },
@@ -2404,14 +2441,14 @@ def test_resume_rejects_non_blocked_run(app_client: TestClient, test_settings: S
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={},
+        json={"brief": _entry_agent_brief()},
     )
     assert started.status_code == 200, started.text
     run_id = started.json()["artifact"]["runs"][0]["id"]
 
     resumed = app_client.post(
         f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/resume",
-        json={},
+        json={"brief": _entry_agent_brief()},
     )
 
     assert resumed.status_code == 422, resumed.text
@@ -3044,7 +3081,10 @@ def test_story_follow_up_verify_skips_the_task_stages(
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
-        json={"loop_definition_id": "atelier-reviewed"},
+        json={
+            "loop_definition_id": "atelier-reviewed",
+            "brief": _entry_agent_brief(),
+        },
     )
     assert started.status_code == 200, started.text
     run_id = str(started.json()["artifact"]["runs"][-1]["id"])
@@ -3148,7 +3188,11 @@ def test_story_run_pins_a_full_brief_from_the_setup_screen(
             "brief": {
                 "goal": "Ship the picker",
                 "stages": [
-                    {"stage_id": "implementation", "note": "keep the public API"},
+                    {
+                        "stage_id": "implementation",
+                        "note": "keep the public API",
+                        "agent": {"provider": "amp", "model": "smart"},
+                    },
                     {"stage_id": "code-review", "note": "focus on concurrency"},
                 ],
             },
@@ -3167,3 +3211,51 @@ def test_story_run_pins_a_full_brief_from_the_setup_screen(
         "implementation": "keep the public API",
         "code-review": "focus on concurrency",
     }
+
+
+def test_story_run_requires_a_provider_on_its_entry_stage(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """A story has no parent agent, so the loop's entry stage must name one.
+
+    It used to fall back to the Planning session's provider -- the agent that
+    wrote the plan, which is a coincidence rather than a choice, and usually
+    the wrong model to implement with.
+    """
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+
+    res = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={"loop_definition_id": "atelier-fast"},
+    )
+
+    assert res.status_code == 422, res.text
+    assert "does not pin a provider" in res.json()["detail"]
+
+
+def test_story_follow_up_inherits_the_provider_of_the_run_it_continues(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """A follow-up's parent is that run, so it need not re-pin the provider."""
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    agent, run_id = _start_artifact_run(app_client, test_settings)
+    _accept_story_run(app_client, str(agent["slug"]), run_id)
+
+    res = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/rerun",
+        json={"kind": "amend", "note": "apply the review"},
+    )
+
+    assert res.status_code == 201, res.text
+    follow_up = res.json()["artifact"]["runs"][-1]
+    started = next(
+        item
+        for item in app_client.get("/api/works/WRK-001/agents").json()
+        if item["slug"] == follow_up["agent_slug"]
+    )
+    assert started["provider"] == agent["provider"]
+    assert started["model"] == agent["model"]
