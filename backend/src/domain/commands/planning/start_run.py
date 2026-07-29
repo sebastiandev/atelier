@@ -16,7 +16,7 @@ from src.domain.agents.launch import (
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.connections import ConnectionStore
 from src.domain.loop import actions as loop_actions
-from src.domain.loop import briefs
+from src.domain.loop import briefs, followups
 from src.domain.loop import runtime as _loop_runtime
 from src.domain.loop.agent_policy import (
     resolve_stage_agent_config,
@@ -35,7 +35,9 @@ from src.domain.loop.dtos import (
     LoopContextResolution,
     LoopContextResolutionRequest,
     LoopDefinition,
+    LoopRunKind,
     LoopStageBrief,
+    LoopStepDefinition,
     LoopStepKind,
 )
 from src.domain.loop.ports import (
@@ -93,6 +95,11 @@ class StartArtifactRunRequest:
     loop_definition_id: str | None = None
     loop_revision: str | None = None
     brief_note: str = ""
+    # A follow-up re-enters a finished run's loop on its branch. INITIAL
+    # starts at the loop's own first stage.
+    run_kind: LoopRunKind = LoopRunKind.INITIAL
+    follow_up_note: str = ""
+    entry_stage_id: str | None = None
 
 
 async def execute(
@@ -134,6 +141,14 @@ async def execute(
         req,
     )
     brief = _planning_brief(detail, definition, req.brief_note)
+    if req.run_kind is not LoopRunKind.INITIAL:
+        brief = followups.seeded_brief(
+            brief or LoopBrief(goal=detail.artifact.title),
+            definition,
+            req.run_kind,
+            req.follow_up_note,
+        )
+    entry = followups.resolve_entry(definition, req.entry_stage_id)
     session = planning_sessions.get_by_work_slug(req.work_slug)
     if session is None:
         raise PlanningNotStarted(f"planning session not found: {req.work_slug}")
@@ -183,6 +198,7 @@ async def execute(
         parent_model=parent_model,
         parent_options=parent_options,
         parent_folder=parent_folder,
+        entry=entry,
     )
     run_id = actions.next_run_id(
         artifact_run_rows(loop_runs, req.work_slug, req.artifact_id)
@@ -198,7 +214,7 @@ async def execute(
         run_id,
         definition,
         detail,
-        resolutions[definition.stages[0].step_id],
+        resolutions[entry.step_id],
         brief,
         (
             _loop_runtime.workspace_prompt_context(
@@ -208,10 +224,11 @@ async def execute(
                 agent_slug=agent_slug,
             )
             if any(
-                item.kind == LoopContextKind.WORKSPACE_DIFF for item in definition.stages[0].context
+                item.kind == LoopContextKind.WORKSPACE_DIFF for item in entry.context
             )
             else ""
         ),
+        entry,
     )
     try:
         await _loop_runtime.send_loop_prompt(
@@ -234,6 +251,9 @@ async def execute(
         agent_slug=agent_slug,
         run_id=run_id,
         definition=definition,
+        entry_step_id=entry.step_id,
+        entry_agent_slug=agent_slug,
+        entry_is_agent=followups.entry_needs_agent(entry),
     )
     loop["last_checked_seq"] = cursor
     for stage_row in loop["stages"]:
@@ -312,9 +332,10 @@ async def _launch_initial_agent(
     parent_model: str,
     parent_options: dict[str, object],
     parent_folder: Path,
+    entry: LoopStepDefinition,
 ) -> str:
-    """Launch the first stage from persisted Planning runtime settings."""
-    stage = definition.stages[0]
+    """Launch the entry stage from persisted Planning runtime settings."""
+    stage = entry
     if stage.agent is None:
         raise LoopDefinitionInvalid("The first loop stage needs an agent policy.")
     provider, model, options = resolve_stage_agent_config(
@@ -361,9 +382,10 @@ def _initial_stage_prompt(
     resolution: LoopContextResolution,
     brief: LoopBrief | None,
     workspace_diff: str,
+    entry: LoopStepDefinition,
 ) -> str:
-    """Render the first provider-facing prompt from the selected definition."""
-    stage = definition.stages[0]
+    """Render the entry stage's provider-facing prompt."""
+    stage = entry
     prompt_type: type[TaskStagePrompt] | type[ReviewStagePrompt]
     if stage.kind == LoopStepKind.AGENT_TASK:
         prompt_type = TaskStagePrompt

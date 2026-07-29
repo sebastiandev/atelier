@@ -14,7 +14,7 @@ from src.domain.agents.launch import (
 )
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.connections import ConnectionStore
-from src.domain.loop import actions, briefs, pr_lifecycle, runtime
+from src.domain.loop import actions, briefs, followups, pr_lifecycle, runtime
 from src.domain.loop.agent_policy import (
     resolve_stage_agent_config,
     validate_stage_agent_policies,
@@ -182,16 +182,7 @@ async def start(
     if missing:
         raise ContextMissing("Required loop context is missing: " + "; ".join(missing))
 
-    entry = next(
-        (
-            stage
-            for stage in definition.stages
-            if stage.step_id == (spec.entry_stage_id or definition.stages[0].step_id)
-        ),
-        None,
-    )
-    if entry is None:
-        raise LoopDefinitionInvalid(f"Loop entry stage not found: {spec.entry_stage_id}")
+    entry = followups.resolve_entry(definition, spec.entry_stage_id)
     source_loop = actions.dict_or_empty(source.state.get("loop")) if source else {}
     source_agent_slug = actions.str_or_none(source_loop.get("source_agent_slug"))
     if source is not None and source_agent_slug is None:
@@ -223,7 +214,7 @@ async def start(
     entry_agent_slug: str | None = None
     run_agent_slug = source_agent_slug
     cursor = 0
-    if entry.kind in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW}:
+    if followups.entry_needs_agent(entry):
         if entry.agent is None:
             raise LoopDefinitionInvalid(f"Agent policy missing for stage: {entry.step_id}")
         stage_brief = briefs.stage_brief(brief, entry.step_id)
@@ -329,7 +320,7 @@ async def start(
         entry_step_id=entry.step_id,
         entry_agent_slug=entry_agent_slug,
         source_agent_slug=source_agent_slug or entry_agent_slug,
-        entry_is_agent=entry.kind in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW},
+        entry_is_agent=followups.entry_needs_agent(entry),
     )
     if source is not None:
         pr_lifecycle.inherit_existing_pr(loop, source_loop)

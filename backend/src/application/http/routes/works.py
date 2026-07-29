@@ -120,6 +120,7 @@ from src.domain.commands.planning import (
 from src.domain.commands.planning import (
     request_run_changes as planning_request_run_changes,
 )
+from src.domain.commands.planning import rerun_run as planning_rerun_run
 from src.domain.commands.planning import (
     resolve_materialization_permission as planning_resolve_materialization_permission,
 )
@@ -161,7 +162,7 @@ from src.domain.commands.works import (
 from src.domain.commands.works.list_artifacts import ArtifactView
 from src.domain.connections import ConnectionStore
 from src.domain.loop import actions as loop_actions
-from src.domain.loop import lifecycle, pr_lifecycle, pr_review
+from src.domain.loop import followups, lifecycle, pr_lifecycle, pr_review
 from src.domain.loop.briefs import brief_snapshot, optional_brief_from_snapshot
 from src.domain.loop.dtos import (
     LoopBrief,
@@ -1793,6 +1794,105 @@ async def start_work_plan_artifact_run_endpoint(
     except planning_start_run.WorkNotActive as e:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     except (
+        planning_start_run.PlanArtifactNotExecutable,
+        planning_start_run.LoopDefinitionConflict,
+        planning_start_run.LoopDefinitionInvalid,
+        planning_start_run.LoopContextMissing,
+        planning_start_run.AgentFolderMissing,
+        planning_start_run.InvalidProviderConfig,
+    ) as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
+    except AgentTerminated as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    run = detail.artifact.runs[-1]
+    _ensure_plan_run_monitor_task(
+        request,
+        workstore,
+        planningfiles,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        planning_run_monitor.MonitorArtifactRunRequest(
+            work_slug=work_slug,
+            artifact_id=artifact_id,
+            run_id=run.id,
+        ),
+    )
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/rerun",
+    response_model=PlanArtifactDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def rerun_work_plan_artifact_run_endpoint(
+    request: Request,
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    payload: RerunWorkLoopRunRequest,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    planning_sessions: PlanningSessionsDep,
+    loop_definitions: LoopDefinitionsDep,
+    loop_locations: LoopDefinitionLocationsDep,
+    loop_runs: LoopRunRepositoryDep,
+    context_resolver: LoopContextResolverDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    settings: SettingsDep,
+) -> PlanArtifactDetailResponse:
+    """Start a follow-up run from a terminal story run's kept workspace."""
+    try:
+        detail = await planning_rerun_run.execute(
+            workstore,
+            planningfiles,
+            planning_sessions,
+            loop_definitions,
+            loop_locations,
+            loop_runs,
+            context_resolver,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            settings,
+            planning_rerun_run.RerunArtifactRunRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                kind=LoopRunKind(payload.kind),
+                note=payload.note,
+            ),
+        )
+    except (
+        planning_start_run.WorkNotFound,
+        planning_start_run.AgentNotFound,
+        planning_start_run.PlanningNotStarted,
+        planning_start_run.PlanArtifactNotFound,
+        planning_rerun_run.PlanArtifactRunNotFound,
+    ) as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except planning_start_run.LoopDefinitionNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except planning_start_run.WorkNotActive as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except (
+        followups.FollowUpNotAvailable,
         planning_start_run.PlanArtifactNotExecutable,
         planning_start_run.LoopDefinitionConflict,
         planning_start_run.LoopDefinitionInvalid,

@@ -480,7 +480,6 @@ function RunSurfaceContent({
 
             {data.accepted
               && selectedOccurrence?.sourceStageId === finalApprovalStageId
-              && variant === "loop"
               && onFollowUp && (
               <FollowUpChooser
                 busy={busy}
@@ -685,6 +684,7 @@ type LoopRunViewProps = {
   onResolveReviewGate: (decision: "send_back" | "approve_as_is", enforcedFindings: number[], instruction: string) => void;
   onRetry: (agentSlug: string) => void;
   onCreatePr?: RunSurfaceProps["onCreatePr"];
+  onFollowUp?: RunSurfaceProps["onFollowUp"];
   onSendPrFeedback?: RunSurfaceProps["onSendPrFeedback"];
   onRefreshPr?: RunSurfaceProps["onRefreshPr"];
   readOnly?: boolean;
@@ -711,6 +711,7 @@ export function LoopRunView({ artifact, run, ...props }: LoopRunViewProps) {
       onBack={props.onBack}
       onCancel={props.readOnly ? undefined : props.onCancel}
       onCreatePr={props.readOnly ? undefined : props.onCreatePr}
+      onFollowUp={props.readOnly ? undefined : props.onFollowUp}
       onDock={props.onDock}
       onRequestChanges={props.readOnly ? undefined : props.onRequestChanges}
       onRerun={props.readOnly ? undefined : async () => props.onRerun()}

@@ -58,6 +58,7 @@ import {
   listArtifacts,
   refreshPrStatuses,
   refreshPlanArtifactRunPr,
+  rerunPlanArtifactRun,
   listProjectShares,
   listProjects,
   listWorks,
@@ -1396,6 +1397,32 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
   }
 
+  async function handleFollowUpPlanRun(
+    artifact: PlanArtifact,
+    runId: string,
+    kind: "amend" | "verify",
+    note: string,
+  ) {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const saved = await rerunPlanArtifactRun(workSlug, artifact.id, runId, {
+        kind,
+        note: note || undefined,
+      });
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      await Promise.all([refreshAgents(), refreshPlan(saved.artifact.id)]);
+      const started = saved.artifact.runs.at(-1);
+      if (started) openPlanningView({ kind: "run", id: saved.artifact.id, runId: started.id });
+      showToast(kind === "amend" ? "Applying feedback." : "Verifying current state.");
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
   async function handleRefreshPlanRunPr(
     artifact: PlanArtifact,
     runId: string,
@@ -1790,6 +1817,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             handleRequestPlanRunChanges(artifact, runId, note)
           }
           onCreateRunPr={handleCreatePlanRunPr}
+          onFollowUpRun={handleFollowUpPlanRun}
           onSendRunPrFeedback={handleSendPlanRunPrFeedback}
           onRefreshRunPr={handleRefreshPlanRunPr}
           onChatOpen={setPlanChatOpen}

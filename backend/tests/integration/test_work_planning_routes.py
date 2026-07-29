@@ -3001,3 +3001,128 @@ def test_manifest_holds_run_ids_not_run_state(
     ).json()
     assert [item["id"] for item in runs] == [run_id]
     assert runs[0]["loop_stages"]
+
+
+def _accept_story_run(client: TestClient, agent_slug: str, run_id: str) -> None:
+    _complete_artifact_run(client, agent_slug, run_id)
+    accepted = client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/accept",
+        json={"summary": "Accepted for the follow-up."},
+    )
+    assert accepted.status_code == 200, accepted.text
+
+
+def test_story_follow_up_amend_reenters_the_task_stage(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """Apply feedback: a new run carrying the note, entering where it always does."""
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    agent, run_id = _start_artifact_run(app_client, test_settings)
+    _accept_story_run(app_client, str(agent["slug"]), run_id)
+
+    res = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/rerun",
+        json={"kind": "amend", "note": "the reviewer wants Y handled"},
+    )
+
+    assert res.status_code == 201, res.text
+    runs = res.json()["artifact"]["runs"]
+    assert [item["id"] for item in runs] == [run_id, "run-002"]
+    follow_up = runs[-1]
+    assert follow_up["loop_current_stage_id"] == "implementation"
+    assert "the reviewer wants Y handled" in follow_up["brief_note"]
+
+
+def test_story_follow_up_verify_skips_the_task_stages(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """Verify current state: enters at the first review, task stages skipped."""
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={"loop_definition_id": "atelier-reviewed"},
+    )
+    assert started.status_code == 200, started.text
+    run_id = str(started.json()["artifact"]["runs"][-1]["id"])
+
+    implementer = _active_stage_agent(app_client, run_id)
+    _append_stage_report(
+        app_client,
+        str(implementer["slug"]),
+        outcome="pass",
+        summary="Implemented it.",
+        validation_evidence="pytest passed",
+    )
+    reviewing = _wait_stage(app_client, run_id, "code-review")
+    reviewer = next(
+        item for item in reviewing["loop_stages"] if item["id"] == "code-review"
+    )
+    _append_stage_report(
+        app_client,
+        str(reviewer["agent_slug"]),
+        outcome="pass",
+        summary="Looks right.",
+    )
+    _wait_run(
+        app_client,
+        "story-001",
+        run_id,
+        "completed_pending_review",
+        loop_status="awaiting_approval",
+    )
+    accepted = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/accept",
+        json={"summary": "Accepted for the follow-up."},
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    res = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/rerun",
+        json={"kind": "verify"},
+    )
+
+    assert res.status_code == 201, res.text
+    follow_up = res.json()["artifact"]["runs"][-1]
+    stages = {item["id"]: item["status"] for item in follow_up["loop_stages"]}
+    assert stages["implementation"] == "skipped"
+    assert follow_up["loop_current_stage_id"] == "code-review"
+
+
+def test_story_follow_up_verify_needs_something_to_verify_with(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """atelier-fast has no review or check stage, so Verify is unavailable."""
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    agent, run_id = _start_artifact_run(app_client, test_settings)
+    _accept_story_run(app_client, str(agent["slug"]), run_id)
+
+    res = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/rerun",
+        json={"kind": "verify"},
+    )
+
+    assert res.status_code == 422, res.text
+    assert "review or check stage" in res.json()["detail"]
+
+
+def test_story_follow_up_rejects_a_run_that_has_not_finished(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    _agent, run_id = _start_artifact_run(app_client, test_settings)
+
+    res = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/rerun",
+        json={"kind": "amend", "note": "too early"},
+    )
+
+    assert res.status_code == 422, res.text
+    assert "cannot be reused" in res.json()["detail"]

@@ -1617,6 +1617,22 @@ export function rerunWorkLoopRun(
   }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
 
+export function rerunPlanArtifactRun(
+  workSlug: string,
+  artifactId: string,
+  runId: string,
+  payload: { kind: Exclude<LoopRunKind, "initial">; note?: string },
+): Promise<PlanArtifactDetail> {
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/rerun`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  ).then((response) => jsonOrThrow<PlanArtifactDetail>(response));
+}
+
 export type Persona = "architect" | "developer" | "product" | "ux" | "writer";
 export type AgentStatus =
   | "idle"

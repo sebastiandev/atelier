@@ -127,6 +127,12 @@ type PlanningModeProps = {
     runId: string,
     note: string,
   ) => Promise<void>;
+  onFollowUpRun: (
+    artifact: PlanArtifact,
+    runId: string,
+    kind: "amend" | "verify",
+    note: string,
+  ) => Promise<void>;
   onCreateRunPr: (
     artifact: PlanArtifact,
     runId: string,
@@ -203,6 +209,7 @@ export function PlanningMode({
   onCancelRun,
   onRequestRunChanges,
   onCreateRunPr,
+  onFollowUpRun,
   onSendRunPrFeedback,
   onRefreshRunPr,
   onChatOpen,
@@ -504,6 +511,14 @@ export function PlanningMode({
                   selectedDetail.artifact,
                   selectedRun.id,
                   setup,
+                )
+              }
+              onFollowUp={(kind, note) =>
+                onFollowUpRun(
+                  selectedDetail.artifact,
+                  selectedRun.id,
+                  kind,
+                  note,
                 )
               }
               onSendPrFeedback={(comments, instruction) =>

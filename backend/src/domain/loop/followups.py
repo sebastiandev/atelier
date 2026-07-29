@@ -22,6 +22,7 @@ from src.domain.loop.dtos import (
     LoopRunKind,
     LoopStageBrief,
     LoopStatus,
+    LoopStepDefinition,
     LoopStepKind,
 )
 
@@ -86,6 +87,34 @@ def entry_stage_id(definition: LoopDefinition, kind: LoopRunKind) -> str | None:
     return None
 
 
+def resolve_entry(
+    definition: LoopDefinition, entry_stage_id: str | None
+) -> LoopStepDefinition:
+    """Return the stage a run enters at.
+
+    Preconditions: the definition has at least one stage.
+    Postconditions: raises when ``entry_stage_id`` names a stage the
+    definition does not contain, rather than silently starting at the top.
+    """
+    wanted = entry_stage_id or definition.stages[0].step_id
+    stage = next(
+        (item for item in definition.stages if item.step_id == wanted), None
+    )
+    if stage is None:
+        raise FollowUpNotAvailable(f"loop entry stage not found: {entry_stage_id}")
+    return stage
+
+
+def entry_needs_agent(stage: LoopStepDefinition) -> bool:
+    """Return whether entering at ``stage`` means launching an agent.
+
+    A ``deterministic_check`` entry runs no agent at all -- the monitor
+    executes the command against the retained workspace. Both start paths
+    have to agree on this, which is why it lives here.
+    """
+    return stage.kind in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW}
+
+
 def seed_label(kind: LoopRunKind) -> str:
     """Return the run-history label for a follow-up kind."""
     return _SEED_LABELS.get(kind, "")
@@ -133,8 +162,10 @@ __all__ = [
     "REUSABLE_STATUSES",
     "FollowUpNotAvailable",
     "amend_brief",
+    "entry_needs_agent",
     "entry_stage_id",
     "require_reusable",
+    "resolve_entry",
     "review_stage_id",
     "seed_label",
     "seeded_brief",
