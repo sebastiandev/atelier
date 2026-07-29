@@ -18,6 +18,10 @@ from src.domain.loop.dtos import (
 )
 
 
+class LoopBriefInvalid(ValueError):
+    """A brief that does not fit the loop revision selected for the run."""
+
+
 def validate_brief(definition: LoopDefinition, brief: LoopBrief) -> None:
     """Validate task input against one selected loop definition.
 
@@ -26,31 +30,31 @@ def validate_brief(definition: LoopDefinition, brief: LoopBrief) -> None:
     required note slot is filled; otherwise ``ValueError`` is raised.
     """
     if not brief.goal.strip():
-        raise ValueError("loop brief goal is required")
+        raise LoopBriefInvalid("loop brief goal is required")
     stages = {stage.step_id: stage for stage in definition.stages}
     supplied: dict[str, LoopStageBrief] = {}
     for item in brief.stages:
         if item.stage_id in supplied:
-            raise ValueError(f"loop brief repeats stage: {item.stage_id}")
+            raise LoopBriefInvalid(f"loop brief repeats stage: {item.stage_id}")
         stage = stages.get(item.stage_id)
         if stage is None:
-            raise ValueError(f"loop brief references unknown stage: {item.stage_id}")
+            raise LoopBriefInvalid(f"loop brief references unknown stage: {item.stage_id}")
         if stage.kind not in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW}:
-            raise ValueError(f"loop brief stage does not accept input: {item.stage_id}")
+            raise LoopBriefInvalid(f"loop brief stage does not accept input: {item.stage_id}")
         if any(not context.value.strip() for context in item.context):
-            raise ValueError(f"loop brief context is empty: {item.stage_id}")
+            raise LoopBriefInvalid(f"loop brief context is empty: {item.stage_id}")
         if item.approved_command_prefixes is not None and any(
             not prefix.strip() or "\n" in prefix or "\r" in prefix
             for prefix in item.approved_command_prefixes
         ):
-            raise ValueError(
+            raise LoopBriefInvalid(
                 f"loop brief command prefix is invalid: {item.stage_id}"
             )
         if item.review_gate is not None:
             if stage.kind != LoopStepKind.AGENT_REVIEW or stage.review_gate is None:
-                raise ValueError(f"loop brief stage has no review gate: {item.stage_id}")
+                raise LoopBriefInvalid(f"loop brief stage has no review gate: {item.stage_id}")
             if stage.review_gate.locked and item.review_gate != stage.review_gate.mode:
-                raise ValueError(f"loop review gate is locked: {item.stage_id}")
+                raise LoopBriefInvalid(f"loop review gate is locked: {item.stage_id}")
         supplied[item.stage_id] = item
     missing = [
         stage.name
@@ -59,7 +63,7 @@ def validate_brief(definition: LoopDefinition, brief: LoopBrief) -> None:
         and not supplied.get(stage.step_id, LoopStageBrief(stage.step_id)).note.strip()
     ]
     if missing:
-        raise ValueError("Required loop brief is missing for: " + ", ".join(missing))
+        raise LoopBriefInvalid("Required loop brief is missing for: " + ", ".join(missing))
 
 
 def stage_brief(brief: LoopBrief | None, stage_id: str) -> LoopStageBrief | None:
@@ -282,6 +286,7 @@ def _command_prefixes(value: object) -> tuple[str, ...] | None:
 
 
 __all__ = [
+    "LoopBriefInvalid",
     "brief_from_snapshot",
     "brief_snapshot",
     "optional_brief_from_snapshot",

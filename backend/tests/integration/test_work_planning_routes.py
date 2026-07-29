@@ -206,16 +206,32 @@ def _entry_agent_brief(
     *,
     provider: str = "amp",
     model: str = "smart",
+    notes: dict[str, str] | None = None,
 ) -> dict:
-    """A brief pinning the entry stage's provider.
+    """A brief pinning the entry stage's provider, plus any required notes.
 
     A story run has nothing to inherit a provider from, so the entry stage
-    must name one -- either in the loop definition or here.
+    must name one -- either in the loop definition or here. ``notes`` fills
+    stages the definition marks ``note_required``; run setup will not let a
+    user start without them, so a brief that skips them is rejected.
     """
     return {
         "goal": "Story run",
-        "stages": [{"stage_id": stage_id, "agent": {"provider": provider, "model": model}}],
+        "stages": [
+            {"stage_id": stage_id, "agent": {"provider": provider, "model": model}},
+            *(
+                {"stage_id": key, "note": value}
+                for key, value in (notes or {}).items()
+            ),
+        ],
     }
+
+
+#: Builtin review stages declare ``note_required``. Run setup blocks Start
+#: until they are filled, so a realistic brief carries them -- and only the
+#: ones its loop actually has, since an unknown stage id is itself rejected.
+_REVIEWED_NOTES = {"code-review": "Check the migration boundary."}
+_SECURE_NOTES = {**_REVIEWED_NOTES, "security-review": "Check for secrets."}
 
 
 def _start_artifact_run(
@@ -1634,7 +1650,7 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
-            "brief": _entry_agent_brief(),
+            "brief": _entry_agent_brief(notes=_REVIEWED_NOTES),
             "loop_definition_id": overlay["id"],
             "loop_revision": overlay["revision"],
         },
@@ -1897,7 +1913,7 @@ def test_secure_loop_runs_code_and_security_review(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
-            "brief": _entry_agent_brief(),
+            "brief": _entry_agent_brief(notes=_SECURE_NOTES),
             "agent_slug": implementation["slug"],
             "loop_definition_id": secure.definition_id,
             "loop_revision": secure.revision,
@@ -2032,7 +2048,7 @@ def test_required_loop_context_blocks_before_agent_launch(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
-            "brief": _entry_agent_brief(),
+            "brief": _entry_agent_brief(notes=_REVIEWED_NOTES),
             "loop_definition_id": saved.json()["id"],
             "loop_revision": saved.json()["revision"],
         },
@@ -2082,7 +2098,7 @@ def test_selected_loop_launches_a_fresh_agent_briefed_for_the_stage(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
-            "brief": _entry_agent_brief(),
+            "brief": _entry_agent_brief(notes=_REVIEWED_NOTES),
             "loop_definition_id": selected["id"],
             "loop_revision": selected["revision"],
         },
@@ -2260,7 +2276,7 @@ def test_selected_loop_preflight_remembers_reused_stage_config(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
-            "brief": _entry_agent_brief(),
+            "brief": _entry_agent_brief(notes=_REVIEWED_NOTES),
             "loop_definition_id": saved.json()["id"],
             "loop_revision": saved.json()["revision"],
         },
@@ -3091,7 +3107,7 @@ def test_story_follow_up_verify_skips_the_task_stages(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
             "loop_definition_id": "atelier-reviewed",
-            "brief": _entry_agent_brief(),
+            "brief": _entry_agent_brief(notes=_REVIEWED_NOTES),
         },
     )
     assert started.status_code == 200, started.text
@@ -3291,6 +3307,126 @@ def test_story_run_launches_the_agent_the_brief_pinned(
     assert agent["provider"] == "amp"
     assert agent["model"] == "deep"
     assert agent["options"]["permission_mode"] == "allow_all"
+
+
+@pytest.mark.parametrize(
+    ("entry_extra", "stages", "detail"),
+    [
+        (
+            {},
+            [{"stage_id": "made-up", "note": "hi"}],
+            "loop brief references unknown stage: made-up",
+        ),
+        (
+            {"context": [{"kind": "note", "value": "  "}]},
+            [],
+            "loop brief context is empty: implementation",
+        ),
+        (
+            {},
+            [{"stage_id": "approval", "note": "hi"}],
+            "loop brief stage does not accept input: approval",
+        ),
+        (
+            {},
+            [{"stage_id": "implementation", "note": "twice"}],
+            "loop brief repeats stage: implementation",
+        ),
+    ],
+    ids=["unknown-stage", "empty-context", "not-agent-backed", "repeated-stage"],
+)
+def test_story_run_rejects_a_brief_that_does_not_fit_the_loop(
+    app_client: TestClient,
+    test_settings: Settings,
+    entry_extra: dict,
+    stages: list[dict],
+    detail: str,
+) -> None:
+    """The story path validates the brief the goal-driven path already did.
+
+    It used to accept anything and honour only the parts it happened to read.
+    """
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+
+    res = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "brief": {
+                "goal": "Story run",
+                "stages": [
+                    {
+                        "stage_id": "implementation",
+                        "agent": {"provider": "amp", "model": "smart"},
+                        **entry_extra,
+                    },
+                    *stages,
+                ],
+            }
+        },
+    )
+
+    assert res.status_code == 422, res.text
+    assert detail in res.json()["detail"]
+    assert app_client.get("/api/works/WRK-001/agents").json() == []
+
+
+def test_story_run_rejects_a_brief_missing_a_required_note(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """`note_required` is the definition author's contract, not a suggestion."""
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+
+    res = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "brief": _entry_agent_brief(),
+            "loop_definition_id": "atelier-reviewed",
+        },
+    )
+
+    assert res.status_code == 422, res.text
+    assert "Required loop brief is missing for: Code review" in res.json()["detail"]
+
+
+def test_story_run_shorthand_still_fills_required_notes_for_the_client(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """`brief_note` predates briefs, so Atelier fills the slots it declared.
+
+    Same split the goal-driven path makes: a brief the client sent is held to
+    the loop's contract, a brief Atelier synthesised is completed for it.
+    """
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    payload = app_client.get("/api/loops/atelier-reviewed").json()
+    payload["stages"][0]["agent"]["provider"] = "amp"
+    payload["stages"][0]["agent"]["model"] = "smart"
+    saved = app_client.post(
+        "/api/loops",
+        json={
+            **payload,
+            "scope": "work",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    res = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "brief_note": "keep the public API",
+            "loop_definition_id": saved.json()["id"],
+            "loop_revision": saved.json()["revision"],
+        },
+    )
+
+    assert res.status_code == 200, res.text
 
 
 def test_story_follow_up_inherits_the_provider_of_the_run_it_continues(

@@ -1780,6 +1780,7 @@ async def start_work_plan_artifact_run_endpoint(
                 loop_definition_id=payload.loop_definition_id,
                 loop_revision=payload.loop_revision,
                 brief=_to_loop_brief(payload.brief) if payload.brief is not None else None,
+                brief_explicit=payload.brief is not None,
                 brief_note=payload.brief_note,
             ),
         )
@@ -1799,6 +1800,7 @@ async def start_work_plan_artifact_run_endpoint(
         planning_start_run.LoopDefinitionConflict,
         planning_start_run.LoopDefinitionInvalid,
         planning_start_run.LoopContextMissing,
+        planning_start_run.LoopBriefInvalid,
         planning_start_run.AgentFolderMissing,
         planning_start_run.InvalidProviderConfig,
         planning_start_run.StageAgentUnresolved,

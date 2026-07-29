@@ -24,6 +24,7 @@ from src.domain.loop.agent_policy import (
     resolve_stage_agent_config,
     validate_stage_agent_policies,
 )
+from src.domain.loop.briefs import LoopBriefInvalid
 from src.domain.loop.builtins import builtin_loop_definition
 from src.domain.loop.catalog import LoopDefinitionRoots, locate_definition
 from src.domain.loop.definitions import (
@@ -104,6 +105,10 @@ class StartArtifactRunRequest:
     # overrides, the same shape a goal-driven run pins. `brief_note` remains
     # the shorthand for "one note on every agent stage".
     brief: LoopBrief | None = None
+    # False when Atelier synthesised the brief rather than the client sending
+    # one, which is when the legacy required-slot shim applies -- same split
+    # the goal-driven path makes.
+    brief_explicit: bool = False
     brief_note: str = ""
     # A follow-up re-enters a finished run's loop on its branch. INITIAL
     # starts at the loop's own first stage.
@@ -158,6 +163,10 @@ async def execute(
             req.run_kind,
             req.follow_up_note,
         )
+    if brief is not None:
+        if not req.brief_explicit:
+            brief = briefs.with_legacy_required_defaults(definition, brief)
+        briefs.validate_brief(definition, brief)
     entry = followups.resolve_entry(definition, req.entry_stage_id)
     entry_provider, entry_model, entry_options = _entry_agent_config(entry, brief)
     session = planning_sessions.get_by_work_slug(req.work_slug)
@@ -527,6 +536,7 @@ __all__ = [
     "AgentFolderMissing",
     "AgentNotFound",
     "InvalidProviderConfig",
+    "LoopBriefInvalid",
     "LoopContextMissing",
     "LoopDefinitionConflict",
     "LoopDefinitionInvalid",
@@ -534,6 +544,7 @@ __all__ = [
     "PlanArtifactNotExecutable",
     "PlanArtifactNotFound",
     "PlanningNotStarted",
+    "StageAgentUnresolved",
     "StartArtifactRunRequest",
     "WorkNotActive",
     "WorkNotFound",
