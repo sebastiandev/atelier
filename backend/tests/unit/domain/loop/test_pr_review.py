@@ -23,8 +23,16 @@ def anyio_backend() -> str:
 class _Gateway:
     """Return one stable lifecycle and record contextual replies."""
 
-    def __init__(self, comment: PrComment) -> None:
+    def __init__(
+        self,
+        comment: PrComment,
+        *,
+        head_sha: str = "",
+        head_commit_url: str = "",
+    ) -> None:
         self.comment = comment
+        self.head_sha = head_sha
+        self.head_commit_url = head_commit_url
         self.fetches: list[tuple[str | None, bool]] = []
         self.replies: list[str] = []
 
@@ -45,6 +53,8 @@ class _Gateway:
                 title="Handle empty transfers",
                 head_branch="feat/empty-transfers",
                 base_branch="main",
+                head_sha=self.head_sha,
+                head_commit_url=self.head_commit_url,
             ),
             etag='"review-v2"',
             not_modified=False,
@@ -200,3 +210,87 @@ async def test_post_addressed_replies_does_not_wait_for_a_refresh() -> None:
         "Addressed in Atelier pass 2. Applied instruction: Add a regression test."
     ]
     assert [row["id"] for row in comments] == ["comment-1", "reply-1"]
+
+
+def _target_with_addressed_comment() -> LoopRunTarget:
+    return LoopRunTarget(
+        work_slug="WRK-016",
+        run_id="run-6",
+        target_id="story-1",
+        title="Handle transfers",
+        source_ref="story-1.md",
+        run={
+            "loop": {
+                "pr": {"url": "https://github.com/acme/repo/pull/7"},
+                "pr_comments": [{"id": "comment-1", "addressed_in_pass": 2}],
+                "stages": [{"id": "implement", "addressed_comments": []}],
+            }
+        },
+    )
+
+
+def _reviewer_comment() -> PrComment:
+    return PrComment(
+        id="comment-1",
+        author="reviewer",
+        location="src/app.py:12",
+        body="Handle the empty case.",
+        created_at="2026-07-20T10:00:00Z",
+        url="https://github.com/acme/repo/pull/7#discussion_r1",
+        kind="review",
+        reply_target_id="thread-1",
+    )
+
+
+@pytest.mark.anyio
+async def test_reply_points_at_the_commit_that_carried_the_change() -> None:
+    """A reviewer can act on a commit link; "pass 3" means nothing to them."""
+    gateway = _Gateway(
+        _reviewer_comment(),
+        head_sha="9fceb02d1b2c3d4e5f60718293a4b5c6d7e8f901",
+        head_commit_url="https://github.com/acme/repo/commit/9fceb02",
+    )
+    target = _target_with_addressed_comment()
+
+    await pr_review.refresh(target, gateway)
+
+    assert gateway.replies == [
+        "Addressed in [`9fceb02`](https://github.com/acme/repo/commit/9fceb02)."
+    ]
+
+
+@pytest.mark.anyio
+async def test_reply_uses_the_bare_sha_when_the_commit_url_is_unknown() -> None:
+    gateway = _Gateway(_reviewer_comment(), head_sha="9fceb02d1b2c3d4e5")
+    target = _target_with_addressed_comment()
+
+    await pr_review.refresh(target, gateway)
+
+    assert gateway.replies == ["Addressed in `9fceb02`."]
+
+
+@pytest.mark.anyio
+async def test_reply_falls_back_to_the_pass_number_without_a_head_commit() -> None:
+    """Older runs have no head commit recorded; they still get a reply."""
+    gateway = _Gateway(_reviewer_comment())
+    target = _target_with_addressed_comment()
+
+    await pr_review.refresh(target, gateway)
+
+    assert gateway.replies == ["Addressed in Atelier pass 2."]
+
+
+@pytest.mark.anyio
+async def test_refresh_records_the_head_commit_on_the_run() -> None:
+    gateway = _Gateway(
+        _reviewer_comment(),
+        head_sha="9fceb02d1b2c",
+        head_commit_url="https://github.com/acme/repo/commit/9fceb02",
+    )
+    target = _target_with_addressed_comment()
+
+    await pr_review.refresh(target, gateway)
+
+    pr = target.run["loop"]["pr"]
+    assert pr["head_sha"] == "9fceb02d1b2c"
+    assert pr["head_commit_url"] == "https://github.com/acme/repo/commit/9fceb02"

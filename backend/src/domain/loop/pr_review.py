@@ -65,6 +65,10 @@ async def refresh(
             pr["branch"] = fetched.lifecycle.head_branch
         if fetched.lifecycle.base_branch:
             pr["base"] = fetched.lifecycle.base_branch
+        if fetched.lifecycle.head_sha:
+            pr["head_sha"] = fetched.lifecycle.head_sha
+        if fetched.lifecycle.head_commit_url:
+            pr["head_commit_url"] = fetched.lifecycle.head_commit_url
     if fetched.etag:
         pr["etag"] = fetched.etag
 
@@ -135,6 +139,28 @@ def _merge_comments(
     return merged
 
 
+def _addressed_body(loop: dict[str, Any], pass_number: int, note: str) -> str:
+    """Return the reply posted to a comment the loop has addressed.
+
+    Points at the commit that carried the change rather than an Atelier pass
+    number: a reviewer can act on a commit link, and "pass 3" means nothing
+    outside this tool. Falls back to the pass number when the commit is
+    unknown -- an older run, or a PR whose head we could not read.
+    """
+    pr = actions.dict_or_empty(loop.get("pr"))
+    url = actions.str_or_empty(pr.get("head_commit_url"))
+    sha = actions.str_or_empty(pr.get("head_sha"))
+    if url and sha:
+        body = f"Addressed in [`{sha[:7]}`]({url})."
+    elif sha:
+        body = f"Addressed in `{sha[:7]}`."
+    else:
+        body = f"Addressed in Atelier pass {pass_number}."
+    if note:
+        body += f" Applied instruction: {note}"
+    return body
+
+
 async def _post_addressed_replies(
     gateway: PrLifecycleGateway,
     ref: PrRef,
@@ -149,9 +175,7 @@ async def _post_addressed_replies(
         if comment is None:
             continue
         note = _addressed_instruction(loop, comment.id)
-        body = f"Addressed in Atelier pass {pass_number}."
-        if note:
-            body += f" Applied instruction: {note}"
+        body = _addressed_body(loop, pass_number, note)
         reply = await reply_to_pr_comment(gateway, ref, comment, body)
         if reply is None:
             continue

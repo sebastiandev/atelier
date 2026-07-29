@@ -148,6 +148,11 @@ class PrLifecycle:
     title: str = ""
     head_branch: str = ""
     base_branch: str = ""
+    # Tip of the PR branch at fetch time. A refresh follows the push that
+    # addressed a comment, so this is the commit that carried the change --
+    # which is what a reviewer wants to be pointed at.
+    head_sha: str = ""
+    head_commit_url: str = ""
 
 
 @dataclass(frozen=True)

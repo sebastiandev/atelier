@@ -52,6 +52,8 @@ query PullRequestLifecycle($owner: String!, $repo: String!, $number: Int!) {
       commits(last: 1) {
         nodes {
           commit {
+            oid
+            url
             statusCheckRollup {
               state
               contexts(first: 100) {
@@ -263,7 +265,21 @@ def _parse_lifecycle(pr: dict[str, Any], *, viewer_login: str | None = None) -> 
         title=str(pr.get("title") or ""),
         head_branch=str(pr.get("headRefName") or ""),
         base_branch=str(pr.get("baseRefName") or ""),
+        head_sha=_head_commit(pr).get("oid", ""),
+        head_commit_url=_head_commit(pr).get("url", ""),
     )
+
+
+def _head_commit(pr: dict[str, Any]) -> dict[str, str]:
+    """Return the tip commit of the PR branch, or blanks when absent."""
+    nodes = (pr.get("commits") or {}).get("nodes") or []
+    node = nodes[0] if nodes and isinstance(nodes[0], dict) else {}
+    raw = node.get("commit")
+    commit: dict[str, Any] = raw if isinstance(raw, dict) else {}
+    return {
+        "oid": str(commit.get("oid") or ""),
+        "url": str(commit.get("url") or ""),
+    }
 
 
 def _map_status(pr: dict[str, Any]) -> PrStatus | None:
