@@ -151,7 +151,13 @@ def _sync_latest_pr_stage(loop: dict[str, Any], pr: dict[str, Any]) -> None:
     later refresh learns -- check counts, review state, the head commit --
     never reaches the panel the user is looking at.
 
-    Only the latest PR stage is updated; earlier passes keep their history.
+    The same lifecycle is held in three places: the run, the stage row, and
+    the stage's per-pass report. The run view resolves an occurrence's PR as
+    ``report.pr ?? stage.pr``, so the report copy is the one actually
+    rendered and both have to be refreshed.
+
+    Only the latest PR stage and its newest report are updated; earlier
+    passes keep showing the PR as it was on their pass.
     """
     rows = loop.get("stages")
     if not isinstance(rows, list):
@@ -164,8 +170,18 @@ def _sync_latest_pr_stage(loop: dict[str, Any], pr: dict[str, Any]) -> None:
         ),
         None,
     )
-    if stage is not None:
-        stage["pr"] = deepcopy(pr)
+    if stage is None:
+        return
+    stage["pr"] = deepcopy(pr)
+    reports = stage.get("reports")
+    if not isinstance(reports, list):
+        return
+    latest = next(
+        (row for row in reversed(reports) if isinstance(row, dict) and row.get("pr")),
+        None,
+    )
+    if latest is not None:
+        latest["pr"] = deepcopy(pr)
 
 
 def _addressed_body(loop: dict[str, Any], pass_number: int, note: str) -> str:

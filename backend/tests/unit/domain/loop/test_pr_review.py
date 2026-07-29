@@ -327,6 +327,15 @@ async def test_refresh_updates_the_latest_pr_stage_snapshot() -> None:
                             "url": "https://github.com/acme/repo/pull/7",
                             "status": "draft",
                         },
+                        "reports": [
+                            {
+                                "pass_number": 1,
+                                "pr": {
+                                    "url": "https://github.com/acme/repo/pull/7",
+                                    "status": "draft",
+                                },
+                            }
+                        ],
                     }
                 ],
             }
@@ -335,10 +344,14 @@ async def test_refresh_updates_the_latest_pr_stage_snapshot() -> None:
 
     await pr_review.refresh(target, gateway)
 
-    stage_pr = target.run["loop"]["stages"][0]["pr"]
-    assert stage_pr["head_sha"] == "9fceb02d1b2c"
-    assert stage_pr["status"] == "open"
-    assert stage_pr["checks"]["total"] == 2
+    stage = target.run["loop"]["stages"][0]
+    assert stage["pr"]["head_sha"] == "9fceb02d1b2c"
+    assert stage["pr"]["status"] == "open"
+    assert stage["pr"]["checks"]["total"] == 2
+    # The run view resolves `report.pr ?? stage.pr`, so the report copy is
+    # the one rendered.
+    assert stage["reports"][-1]["pr"]["head_sha"] == "9fceb02d1b2c"
+    assert stage["reports"][-1]["pr"]["checks"]["total"] == 2
 
 
 @pytest.mark.anyio
