@@ -31,7 +31,7 @@ import { LoopStructureEditor } from "./LoopUI";
 import { LoopBriefSetup } from "./LoopBriefSetup";
 import {
   AgentIcon,
-  BranchIcon,
+  BoltIcon,
   BugIcon,
   ChatIcon,
   CheckIcon,
@@ -726,9 +726,14 @@ export function PlanningMode({
 export function PlanningAgentControls({
   value,
   onChange,
+  pinned,
 }: {
   value: PlanningAgentConfig | null;
   onChange: (value: PlanningAgentConfig) => void;
+  /** What the loop or stage already pins. Shown as the effective value
+   *  when this run overrides nothing, because that is what the backend
+   *  resolves to -- the provider's own default would be a fiction. */
+  pinned?: { effort?: string | null; fast?: boolean | null; permissions?: string | null };
 }) {
   const { descriptors, loading, error } = useProviderDescriptors();
   const providers = descriptors ?? [];
@@ -858,9 +863,13 @@ export function PlanningAgentControls({
       </label>
       {effortOption && (
         <label className="pm-mini-select" title={effortOption.field.label}>
-          <BranchIcon size={10} />
+          <BoltIcon size={10} />
           <select
-            value={currentOptions[effortOption.key] ?? effortOption.field.default}
+            value={
+              currentOptions[effortOption.key]
+              ?? pinned?.effort
+              ?? effortOption.field.default
+            }
             onChange={(event) => changeOption(effortOption.key, event.target.value)}
           >
             {effortOption.field.values.map((item) => (
@@ -877,7 +886,11 @@ export function PlanningAgentControls({
           <input
             type="checkbox"
             aria-label={fastOption.field.label}
-            checked={(currentOptions[fastOption.key] ?? fastOption.field.default) === "on"}
+            checked={
+              (currentOptions[fastOption.key]
+                ?? (pinned?.fast === true ? "on" : pinned?.fast === false ? "off" : null)
+                ?? fastOption.field.default) === "on"
+            }
             onChange={(event) =>
               changeOption(fastOption.key, event.target.checked ? "on" : "off")
             }
@@ -890,7 +903,11 @@ export function PlanningAgentControls({
         <label className="pm-mini-select" title={permissionOption.field.label}>
           <EyeIcon size={10} />
           <select
-            value={currentOptions[permissionOption.key] ?? permissionOption.field.default}
+            value={
+              currentOptions[permissionOption.key]
+              ?? pinned?.permissions
+              ?? permissionOption.field.default
+            }
             onChange={(event) =>
               changeOption(permissionOption.key, event.target.value)
             }

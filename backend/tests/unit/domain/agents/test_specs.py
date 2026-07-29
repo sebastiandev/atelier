@@ -393,3 +393,17 @@ def test_specs_registry_lists_legacy_providers_first() -> None:
     """Wire-compat: older frontends index providers by order; the legacy
     trio must stay in front of the ACP additions."""
     assert list(SPECS)[:3] == ["claude-code", "amp", "codex"]
+
+
+def test_opus_5_is_selectable_for_claude_code() -> None:
+    assert "claude-opus-5" in SPECS["claude-code"].describe().primary_field.values
+
+
+def test_opus_5_reports_no_invented_pricing() -> None:
+    """A missing figure renders "—"; a guessed one would feed wrong costs."""
+    meta = SPECS["claude-code"].describe().model_meta["claude-opus-5"]
+
+    assert meta.input_per_mtok is None
+    assert meta.output_per_mtok is None
+    assert meta.context_window is None
+    assert meta.effort_values

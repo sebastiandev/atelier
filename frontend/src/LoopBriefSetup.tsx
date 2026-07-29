@@ -294,6 +294,14 @@ function StageBriefCard({
   const overrideConfig = completeAgent(brief.agent, agentConfig);
   const execution = overrideConfig ?? agentConfig;
   const pinned = pinnedExecution(stage);
+  // What this stage's policy already fixes. The controls show these as the
+  // effective values so an inherited-but-pinned effort reads as itself
+  // rather than as the provider default.
+  const pinnedPolicy = {
+    effort: stage.agent?.effort ?? null,
+    fast: stage.agent?.fast ?? null,
+    permissions: stage.agent?.permissions ?? null,
+  };
   const templateCommandPrefixes = baseStage
     ? stage.agent?.approved_command_prefixes ?? []
     : stage.agent?.approved_command_prefixes ?? inheritedCommandPrefixes;
@@ -343,12 +351,12 @@ function StageBriefCard({
       {baseStage ? (
         <div className="loop-brief-execution base">
           <label>Execution <span>this run · later stages inherit from here</span></label>
-          <PlanningAgentControls value={agentConfig} onChange={onBaseAgent} />
+          <PlanningAgentControls value={agentConfig} onChange={onBaseAgent} pinned={pinnedPolicy} />
         </div>
       ) : brief.agent ? (
         <div className="loop-brief-execution override">
           <label>Execution <span>run override</span></label>
-          <PlanningAgentControls value={overrideConfig} onChange={onAgent} />
+          <PlanningAgentControls value={overrideConfig} onChange={onAgent} pinned={pinnedPolicy} />
           <button type="button" onClick={() => onAgent(null)}>reset to inherit</button>
         </div>
       ) : (
