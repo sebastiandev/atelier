@@ -322,6 +322,15 @@ class ClaudeAcpFastMode(str, Enum):
     ON = "on"
 
 
+ACP_EFFORT_CONFIG_ID = "effort"
+"""ACP config id for reasoning effort on agents that don't reuse their
+own spec key. claude-acp and opencode both publish the dial under this
+id; codex-acp happens to name it ``reasoning_effort``, matching its spec
+key exactly. Shared with ``domain.agents.effort`` so the emitters below
+and the reverse (live config id -> stored option key) mapping cannot
+drift apart."""
+
+
 @dataclass(frozen=True, kw_only=True)
 class AcpAgentConfig:
     """Shared base for providers driven through the ACP client adapter.
@@ -371,7 +380,7 @@ class ClaudeAcpAgentConfig(AcpAgentConfig):
     def acp_config_values(self) -> tuple[tuple[str, str], ...]:
         return (
             ("model", self.model.value),
-            ("effort", self.thinking_effort.value),
+            (ACP_EFFORT_CONFIG_ID, self.thinking_effort.value),
             ("mode", self.permission_mode.value),
             ("fast", self.fast_mode.value),
         )
@@ -508,7 +517,7 @@ class OpenCodeAgentConfig(AcpAgentConfig):
         if self.model != OPENCODE_CONFIGURED_MODEL:
             values.append(("model", self.model))
         if self.effort is not OpenCodeEffort.DEFAULT:
-            values.append(("effort", self.effort.value))
+            values.append((ACP_EFFORT_CONFIG_ID, self.effort.value))
         values.append(("mode", self.mode.value))
         return tuple(values)
 
@@ -517,6 +526,7 @@ AgentConfig = ClaudeAgentConfig | AmpAgentConfig | CodexAgentConfig | AcpAgentCo
 
 
 __all__ = [
+    "ACP_EFFORT_CONFIG_ID",
     "AMP_DEFAULT_AUTO_ALLOWED_TOOLS",
     "DEFAULT_ALLOWED_TOOLS",
     "OPENCODE_CONFIGURED_MODEL",

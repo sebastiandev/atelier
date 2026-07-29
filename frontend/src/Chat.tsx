@@ -12,7 +12,6 @@ import {
 import {
   TranscriptUnits,
   TurnMetricsBar,
-  EFFORT_SESSION_CONFIG_IDS,
   type ContextSnapshot,
   contextSnapshotFor,
   contextToneFor,
@@ -76,6 +75,7 @@ import { FolderPickerDialog } from "./FolderPickerDialog";
 import { ModelPicker } from "./ModelPicker";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
 import {
+  EFFORT_OPTION_KEYS,
   coerceProviderOptionsForModel,
   modelPickerOptions,
   optionLabel,
@@ -2449,7 +2449,7 @@ function LiveEffortSelect({
   onChange: (configId: string, value: string) => void;
 }) {
   const config = useMemo(
-    () => latestSessionConfigOptionByIds(events, EFFORT_SESSION_CONFIG_IDS),
+    () => latestSessionConfigOptionByIds(events, EFFORT_OPTION_KEYS),
     [events],
   );
   const value = typeof config?.currentValue === "string" ? config.currentValue : null;

@@ -43,7 +43,11 @@ import { PaperclipIcon } from "./Icons";
 import { MarkdownText } from "./MarkdownText";
 import { shortenPath } from "./pathFormat";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
-import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
+import {
+  EFFORT_OPTION_KEYS,
+  lookupModelMeta,
+  useProviderDescriptors,
+} from "./providerDescriptors";
 import { SessionModelPicker } from "./SessionModelPicker";
 import {
   isSimpleContextType,
@@ -65,12 +69,6 @@ const COMPACTION_RECOMMENDED_PCT = 75;
 const COMPACTION_URGENT_PCT = 86;
 const COMPACTION_BLOCKED_PCT = 100;
 const RUNTIME_STALL_MS = 5 * 60 * 1000;
-
-export const EFFORT_SESSION_CONFIG_IDS = [
-  "thinking_effort",
-  "reasoning_effort",
-  "effort",
-];
 
 type AgentTileProps = {
   agentSlug: string;
@@ -372,7 +370,7 @@ export function AgentTile({
     [events],
   );
   const sessionEffortConfig = useMemo(
-    () => latestSessionConfigOptionByIds(events, EFFORT_SESSION_CONFIG_IDS),
+    () => latestSessionConfigOptionByIds(events, EFFORT_OPTION_KEYS),
     [events],
   );
   const liveSessionModelValue =

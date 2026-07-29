@@ -16,6 +16,7 @@ from src.domain.agents.configs import (
     CommonAgentConfig,
     OpenCodeMode,
 )
+from src.domain.agents.effort import effort_option
 from src.domain.agents.launch import InvalidProviderConfig
 from src.domain.agents.specs import SPECS, EnumOption
 from src.domain.loop.dtos import (
@@ -82,7 +83,7 @@ def _apply_effort(
     *,
     strict: bool,
 ) -> None:
-    target = _option(provider, ("thinking_effort", "reasoning_effort"))
+    target = effort_option(provider)
     if target is None:
         if strict:
             raise ValueError(f"provider {provider!r} does not support effort")
@@ -99,7 +100,7 @@ def _effective_effort(
     options: dict[str, object],
     model: str | None,
 ) -> str | None:
-    source = _option(provider, ("thinking_effort", "reasoning_effort"))
+    source = effort_option(provider)
     if source is None:
         return None
     descriptor = SPECS[provider].describe()

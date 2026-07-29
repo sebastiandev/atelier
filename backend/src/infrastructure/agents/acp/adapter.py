@@ -158,7 +158,6 @@ class AcpAdapter:
         self._pending_warning: str | None = None
         self._mapper = AcpUpdateMapper()
         self._session_config_options: tuple[dict[str, Any], ...] = ()
-        self._advertised_config_values: dict[str, set[str | bool]] = {}
         self._replaying = False
         self._user_inputs: asyncio.Queue[str | object] = asyncio.Queue()
         self._outgoing: asyncio.Queue[AgentEvent | object] = asyncio.Queue()
@@ -202,7 +201,6 @@ class AcpAdapter:
             self._session_id = session_response.session_id
             self._fresh_session = True
         self._session_config_options = _config_options_payload(session_response)
-        self._advertised_config_values = _advertised_options(session_response)
         await self._apply_session_settings(session_response)
 
     async def send_input(self, text: str) -> None:
@@ -231,10 +229,31 @@ class AcpAdapter:
             return  # stale / duplicate frame after a WS reconnect
         fut.set_result(decision)
 
+    def _advertised_values(self, config_id: str) -> set[str | bool] | None:
+        """Values the session currently advertises for ``config_id``, or
+        ``None`` when it doesn't advertise the option at all.
+
+        Derived from ``_session_config_options`` on every read rather than
+        cached alongside it: applying one option can reveal or reshape
+        another (OpenCode publishes ``effort`` only once the selected model
+        has variants), and a cached copy would answer for the session as it
+        used to be. ``None`` and the empty set mean different things — an
+        unadvertised id is applied optimistically, an advertised one with
+        no listed choices accepts anything.
+        """
+        option = _find_config_option(self._session_config_options, config_id)
+        if option is None:
+            return None
+        return {
+            choice["value"]
+            for choice in option.get("options", ())
+            if isinstance(choice.get("value"), (str, bool))
+        }
+
     async def set_config_option(self, config_id: str, value: str | bool) -> None:
         if self._conn is None or self._closed or self._session_id is None:
             raise RuntimeError("ACP session is not running")
-        allowed = self._advertised_config_values.get(config_id)
+        allowed = self._advertised_values(config_id)
         if allowed is None:
             raise ValueError(f"session config option is not advertised: {config_id}")
         if allowed and value not in allowed:
@@ -576,10 +595,11 @@ class AcpAdapter:
         """Apply config options + mode from the typed config, tolerantly."""
         assert self._conn is not None and self._session_id is not None
         for config_id, value in self._config.acp_config_values():
-            # Re-read per iteration: applying one option can reveal another.
-            # OpenCode only advertises `effort` once a model with variants is
-            # selected, so the model pair has to land before effort is judged.
-            allowed = self._advertised_config_values.get(config_id)
+            # Read per iteration, never snapshot: applying one option can
+            # reveal or reshape another. OpenCode only advertises `effort`
+            # once a model with variants is selected, so the model pair has
+            # to land before effort can be judged.
+            allowed = self._advertised_values(config_id)
             if allowed is not None and value not in allowed:
                 logger.debug(
                     "acp: skipping config option %s=%s (agent advertises %s)",
@@ -626,7 +646,6 @@ class AcpAdapter:
         options = _config_options_payload(response)
         if options:
             self._session_config_options = options
-            self._advertised_config_values = _advertised_options(response)
             return True
         if fallback_config_id is None or fallback_value is None:
             return False
@@ -797,7 +816,6 @@ class AcpAdapter:
                 SessionEstablished(ts=_now(), session_id=self._session_id)
             )
         self._session_config_options = _config_options_payload(response)
-        self._advertised_config_values = _advertised_options(response)
         await self._apply_session_settings(response)
         return True
 
@@ -926,23 +944,6 @@ def _string_attr(obj: Any, name: str) -> str | None:
 
 def _is_terminal_connection_error(exc: BaseException) -> bool:
     return isinstance(exc, ConnectionError)
-
-
-def _advertised_options(session_response: Any) -> dict[str, set[str | bool]]:
-    """``{config_id: allowed values}`` from a session response, tolerant
-    of agents that return no configOptions at all."""
-    out: dict[str, set[str | bool]] = {}
-    for option in getattr(session_response, "config_options", None) or []:
-        option_id = getattr(option, "id", None)
-        if not isinstance(option_id, str) or not option_id:
-            continue
-        values: set[str | bool] = set()
-        for choice in getattr(option, "options", None) or []:
-            value = getattr(choice, "value", None)
-            if isinstance(value, (str, bool)):
-                values.add(value)
-        out[option_id] = values
-    return out
 
 
 def _pick_option(

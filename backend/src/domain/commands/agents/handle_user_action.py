@@ -19,7 +19,6 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from src.domain.agents import (
-    SPECS,
     RefreshSessionConfigOptions,
     ResolvePermission,
     SendInput,
@@ -28,6 +27,7 @@ from src.domain.agents import (
     UserAction,
     context_updates,
 )
+from src.domain.agents.effort import spec_option_key
 from src.domain.connections import ConnectionStore
 from src.domain.workstore.ports import WorkStore
 
@@ -118,6 +118,7 @@ def _prepend_context_hint(
 def _stored_option_key(
     workstore: WorkStore, agent_slug: str, config_id: str
 ) -> str | None:
+    """Spec option key a live config change should persist under."""
     work_slug = workstore.get_work_slug_for_agent(agent_slug)
     if work_slug is None:
         return None
@@ -127,14 +128,7 @@ def _stored_option_key(
     )
     if agent is None:
         return None
-    option_keys = SPECS[agent.provider].describe().options.keys()
-    if config_id in option_keys:
-        return config_id
-    if config_id == "effort":
-        for key in ("thinking_effort", "reasoning_effort"):
-            if key in option_keys:
-                return key
-    return None
+    return spec_option_key(agent.provider, config_id)
 
 
 __all__ = ["WorkNotActive", "execute"]

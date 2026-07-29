@@ -97,7 +97,17 @@ export type ProviderOptionSelection = {
   field: ProviderField;
 };
 
-export const PROVIDER_EFFORT_OPTION_KEYS = [
+/**
+ * Every spelling of the reasoning-effort dial, across both the static
+ * provider descriptors (`thinking_effort` for the Claude family,
+ * `reasoning_effort` for Codex and OpenCode) and the live ACP session
+ * config ids (`effort` for claude-acp and opencode, `reasoning_effort`
+ * for codex-acp). Mirrors `EFFORT_OPTION_KEYS` + `ACP_EFFORT_CONFIG_ID`
+ * in `backend/src/domain/agents/effort.py`; the pre-launch form and the
+ * running-session picker read the same list so a provider can't light
+ * up in one surface and stay dark in the other.
+ */
+export const EFFORT_OPTION_KEYS = [
   "thinking_effort",
   "reasoning_effort",
   "effort",
@@ -167,7 +177,7 @@ export function optionFieldForModel(
   key: string,
   field: ProviderField,
 ): ProviderField {
-  if (!PROVIDER_EFFORT_OPTION_KEYS.some((item) => item === key) || !model) {
+  if (!EFFORT_OPTION_KEYS.some((item) => item === key) || !model) {
     return field;
   }
   const meta = provider.model_meta?.[model];
@@ -194,7 +204,7 @@ export function providerEffortOption(
   provider: ProviderDescriptor,
   model: string | null,
 ): ProviderOptionSelection | null {
-  for (const key of PROVIDER_EFFORT_OPTION_KEYS) {
+  for (const key of EFFORT_OPTION_KEYS) {
     const field = provider.options[key];
     if (!field) continue;
     const effective = optionFieldForModel(provider, model, key, field);

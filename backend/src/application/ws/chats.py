@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.domain.agents import (
-    SPECS,
     RefreshSessionConfigOptions,
     ResolvePermission,
     SendInput,
@@ -18,6 +17,7 @@ from src.domain.agents import (
     StopTurn,
     parse_user_action,
 )
+from src.domain.agents.effort import spec_option_key
 from src.domain.chatstore import ChatStore
 from src.domain.commands.chats import connect
 from src.domain.commands.chats import send_input as send_chat_input
@@ -249,14 +249,8 @@ def _parse_cursor(value: str | None) -> int:
 def _stored_chat_option_key(
     chatstore: ChatStore, chat_slug: str, config_id: str
 ) -> str | None:
+    """Spec option key a live config change should persist under."""
     record = chatstore.get_chat(chat_slug)
     if record is None:
         return None
-    option_keys = SPECS[record.chat.provider].describe().options.keys()
-    if config_id in option_keys:
-        return config_id
-    if config_id == "effort":
-        for key in ("thinking_effort", "reasoning_effort"):
-            if key in option_keys:
-                return key
-    return None
+    return spec_option_key(record.chat.provider, config_id)
