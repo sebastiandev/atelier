@@ -297,12 +297,12 @@ async def test_refresh_records_the_head_commit_on_the_run() -> None:
 
 
 @pytest.mark.anyio
-async def test_refresh_updates_the_latest_pr_stage_snapshot() -> None:
-    """The run view renders the stage's copy, so a refresh has to reach it.
+async def test_refresh_keeps_one_copy_of_the_lifecycle() -> None:
+    """The run holds the PR; stages and reports do not copy it.
 
-    capture_completion deep-copies the lifecycle onto the stage row when the
-    stage passes. Leaving that copy frozen means check counts, review state
-    and the head commit never appear in the panel the user is looking at.
+    Three copies used to exist and the run view rendered the least
+    maintained one, so the panel showed the PR as it looked when the stage
+    finished -- stale checks, stale review state, no head commit.
     """
     gateway = _Gateway(
         _reviewer_comment(),
@@ -323,19 +323,8 @@ async def test_refresh_updates_the_latest_pr_stage_snapshot() -> None:
                     {
                         "id": "create-pr",
                         "kind": "pr",
-                        "pr": {
-                            "url": "https://github.com/acme/repo/pull/7",
-                            "status": "draft",
-                        },
-                        "reports": [
-                            {
-                                "pass_number": 1,
-                                "pr": {
-                                    "url": "https://github.com/acme/repo/pull/7",
-                                    "status": "draft",
-                                },
-                            }
-                        ],
+                        "push_at": "2026-07-20T09:00:00Z",
+                        "reports": [{"pass_number": 1}],
                     }
                 ],
             }
@@ -344,48 +333,11 @@ async def test_refresh_updates_the_latest_pr_stage_snapshot() -> None:
 
     await pr_review.refresh(target, gateway)
 
-    stage = target.run["loop"]["stages"][0]
-    assert stage["pr"]["head_sha"] == "9fceb02d1b2c"
-    assert stage["pr"]["status"] == "open"
-    assert stage["pr"]["checks"]["total"] == 2
-    # The run view resolves `report.pr ?? stage.pr`, so the report copy is
-    # the one rendered.
-    assert stage["reports"][-1]["pr"]["head_sha"] == "9fceb02d1b2c"
-    assert stage["reports"][-1]["pr"]["checks"]["total"] == 2
-
-
-@pytest.mark.anyio
-async def test_refresh_leaves_earlier_pr_passes_as_history() -> None:
-    """An earlier pass shows the PR as it was on that pass, not as it is now."""
-    gateway = _Gateway(_reviewer_comment(), head_sha="9fceb02d1b2c")
-    target = LoopRunTarget(
-        work_slug="WRK-016",
-        run_id="run-6",
-        target_id="story-1",
-        title="Handle transfers",
-        source_ref="story-1.md",
-        run={
-            "loop": {
-                "pr": {"url": "https://github.com/acme/repo/pull/7"},
-                "pr_comments": [],
-                "stages": [
-                    {
-                        "id": "create-pr",
-                        "kind": "pr",
-                        "pr": {"url": "https://github.com/acme/repo/pull/7", "status": "draft"},
-                    },
-                    {
-                        "id": "create-pr",
-                        "kind": "pr",
-                        "pr": {"url": "https://github.com/acme/repo/pull/7", "status": "open"},
-                    },
-                ],
-            }
-        },
-    )
-
-    await pr_review.refresh(target, gateway)
-
-    first, latest = target.run["loop"]["stages"]
-    assert "head_sha" not in first["pr"]
-    assert latest["pr"]["head_sha"] == "9fceb02d1b2c"
+    loop = target.run["loop"]
+    assert loop["pr"]["head_sha"] == "9fceb02d1b2c"
+    assert loop["pr"]["checks"]["total"] == 2
+    stage = loop["stages"][0]
+    assert "pr" not in stage
+    assert "pr" not in stage["reports"][-1]
+    # What a pass pushed is per-pass, and survives.
+    assert stage["push_at"] == "2026-07-20T09:00:00Z"

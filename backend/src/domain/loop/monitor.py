@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -1634,7 +1633,12 @@ def _record_stage_report(
         "seq": report_seq,
         "recorded_at": actions.now_iso(),
         "push_at": actions.str_or_none(stage_row.get("push_at")),
-        "pr": deepcopy(stage_row["pr"]) if isinstance(stage_row.get("pr"), dict) else None,
+        # No PR snapshot here. One remote resource, one copy: `loop["pr"]`.
+        # A per-pass copy cannot stay true -- checks, review state and the
+        # head commit all move after the report is written -- and the run
+        # view was rendering this one, so it showed the PR as it looked when
+        # the stage finished. `push_at` and `addressed_comments` stay because
+        # what a pass pushed and answered really is per-pass.
         "addressed_comments": [
             dict(item) for item in stage_row.get("addressed_comments", []) if isinstance(item, dict)
         ]

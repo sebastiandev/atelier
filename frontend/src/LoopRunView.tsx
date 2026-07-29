@@ -444,7 +444,7 @@ function RunSurfaceContent({
                     busy={busy}
                     definition={data.definition}
                     events={selectedOccurrence.occurrenceId === currentOccurrence?.occurrenceId ? events : []}
-                    pr={selectedOccurrence.pr ?? data.pr}
+                    pr={data.pr}
                     prComments={data.prComments}
                     runStatus={data.status}
                     stage={selectedOccurrence}
@@ -466,7 +466,7 @@ function RunSurfaceContent({
                 busy={busy}
                 definition={data.definition}
                 events={selectedOccurrence.occurrenceId === currentOccurrence?.occurrenceId ? events : []}
-                pr={selectedOccurrence.pr ?? data.pr}
+                pr={data.pr}
                 prComments={data.prComments}
                 runStatus={data.status}
                 stage={selectedOccurrence}
@@ -1404,7 +1404,6 @@ function stageOccurrences(data: RunSurfaceData): RunStageOccurrence[] {
     occurrenceId: `${stage.id}:${report.pass_number || 1}:${report.seq || index + 1}`,
     passNumber: report.pass_number || index + 1,
     push_at: report.push_at ?? stage.push_at,
-    pr: report.pr ?? stage.pr,
     addressed_comments: report.addressed_comments ?? stage.addressed_comments,
     feedback_instruction: report.feedback_instruction ?? stage.feedback_instruction,
     recordedAt: report.recorded_at,

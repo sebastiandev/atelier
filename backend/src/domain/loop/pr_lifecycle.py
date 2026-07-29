@@ -389,7 +389,6 @@ def capture_completion(
     }
     pass_number = max(1, actions.int_or_default(loop.get("pass_number"), 1))
     stage_row["push_at"] = now
-    stage_row["pr"] = deepcopy(pr)
     pending = actions.dict_or_empty(loop.get("pending_pr_feedback"))
     pending_for_completion = bool(pending)
     addressed = pending.get("comments") if pending_for_completion else []

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
 
@@ -77,7 +76,6 @@ async def refresh(
     pr["last_synced_at"] = actions.now_iso()
     loop["pr"] = pr
     loop["pr_comments"] = comments
-    _sync_latest_pr_stage(loop, pr)
     target.run["loop"] = loop
 
 
@@ -139,49 +137,6 @@ def _merge_comments(
         and item.get("addressed_in_pass") is not None
     )
     return merged
-
-
-def _sync_latest_pr_stage(loop: dict[str, Any], pr: dict[str, Any]) -> None:
-    """Copy the refreshed lifecycle onto the newest PR stage's snapshot.
-
-    ``capture_completion`` deep-copies the lifecycle onto the stage row when
-    the stage passes, and the run view renders that copy in preference to the
-    run-level one (a historical occurrence must keep showing the PR as it was
-    on *its* pass). Without this the copy freezes at completion, so anything a
-    later refresh learns -- check counts, review state, the head commit --
-    never reaches the panel the user is looking at.
-
-    The same lifecycle is held in three places: the run, the stage row, and
-    the stage's per-pass report. The run view resolves an occurrence's PR as
-    ``report.pr ?? stage.pr``, so the report copy is the one actually
-    rendered and both have to be refreshed.
-
-    Only the latest PR stage and its newest report are updated; earlier
-    passes keep showing the PR as it was on their pass.
-    """
-    rows = loop.get("stages")
-    if not isinstance(rows, list):
-        return
-    stage = next(
-        (
-            row
-            for row in reversed(rows)
-            if isinstance(row, dict) and row.get("kind") == "pr" and row.get("pr")
-        ),
-        None,
-    )
-    if stage is None:
-        return
-    stage["pr"] = deepcopy(pr)
-    reports = stage.get("reports")
-    if not isinstance(reports, list):
-        return
-    latest = next(
-        (row for row in reversed(reports) if isinstance(row, dict) and row.get("pr")),
-        None,
-    )
-    if latest is not None:
-        latest["pr"] = deepcopy(pr)
 
 
 def _addressed_body(loop: dict[str, Any], pass_number: int, note: str) -> str:
