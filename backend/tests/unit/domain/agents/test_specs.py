@@ -405,5 +405,5 @@ def test_opus_5_reports_no_invented_pricing() -> None:
 
     assert meta.input_per_mtok is None
     assert meta.output_per_mtok is None
-    assert meta.context_window is None
+    assert meta.context_window == 1_000_000
     assert meta.effort_values

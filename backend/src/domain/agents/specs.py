@@ -200,10 +200,11 @@ _CLAUDE_MODEL_META: dict[str, ModelMeta] = {
         effort_default=ClaudeEffort.XHIGH.value,
     ),
     ClaudeModel.OPUS_5.value: ModelMeta(
-        # Pricing and window deliberately blank: Atelier has no published
-        # figures for this model yet, and ModelMeta's contract is that a
-        # missing field renders "—" rather than a guess that would feed
-        # wrong cost estimates.
+        context_window=1_000_000,
+        # Pricing deliberately blank: Atelier has no published figures for
+        # this model yet, and ModelMeta's contract is that a missing field
+        # renders "—" rather than a guess that would feed wrong cost
+        # estimates. The window is 1M, as for Opus 4.8.
         effort_values=(
             ClaudeEffort.LOW.value,
             ClaudeEffort.MEDIUM.value,

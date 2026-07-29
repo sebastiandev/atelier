@@ -5,6 +5,7 @@ import {
   type OpenCodeModelOption,
   type ProviderDescriptor,
   type ProviderField,
+  listOpenCodeModels,
   listProviders,
 } from "./api";
 
@@ -35,8 +36,27 @@ export function useProviderDescriptors(): {
   useEffect(() => {
     let cancelled = false;
     getProviderDescriptors()
-      .then((data) => {
-        if (!cancelled) setDescriptors(data);
+      .then(async (data) => {
+        if (cancelled) return;
+        setDescriptors(data);
+        // OpenCode's model list depends on which providers the user has
+        // authenticated, so the descriptor ships a placeholder and the real
+        // list comes from `opencode models`. Enriching here means every
+        // consumer of this hook gets it, rather than each caller
+        // rediscovering it.
+        if (!data.some((item) => item.name === "opencode")) return;
+        try {
+          const rows = await listOpenCodeModels();
+          if (cancelled || rows.length === 0) return;
+          setDescriptors((current) =>
+            (current ?? data).map((item) =>
+              item.name === "opencode" ? withOpenCodeModelOptions(item, rows) : item,
+            ),
+          );
+        } catch {
+          // Leave the placeholder in place: the CLI may not be installed,
+          // which is not an error for users on other providers.
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
