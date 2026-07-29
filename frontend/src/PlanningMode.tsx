@@ -292,8 +292,8 @@ export function PlanningMode({
       setSetupAgentConfig(null);
       return;
     }
-    const seeded = setupSource?.brief
-      ?? { goal: selectedDetail?.artifact.title ?? "", stages: [] };
+    const title = selectedDetail?.artifact.title ?? "";
+    const seeded: LoopBrief = { ...(setupSource?.brief ?? { stages: [] }), goal: title };
     setSetupBrief((current) => current ?? seeded);
     setSetupAgentConfig((current) => {
       if (current) return current;
@@ -643,7 +643,6 @@ export function PlanningMode({
               definitions={setupDefinitions}
               error={error}
               folder={plan?.root_path ?? ""}
-              goal={selectedDetail.artifact.title}
               goalLabel="Story"
               workSlug={work.slug}
               onAgentConfig={setSetupAgentConfig}

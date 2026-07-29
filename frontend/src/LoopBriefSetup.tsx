@@ -36,7 +36,6 @@ type Props = {
   definitions: LoopDefinition[] | null;
   error: string | null;
   folder: string;
-  goal: string;
   workSlug: string;
   onAgentConfig: (config: PlanningAgentConfig) => void;
   onBrief: (brief: LoopBrief) => void;
@@ -44,8 +43,8 @@ type Props = {
   onSelectDefinition: (definition: LoopDefinition) => void;
   onChooseFolder?: () => void;
   onEditLoop: () => void;
-  /** Omit when the caller owns the goal — it renders read-only. */
-  onGoal?: (goal: string) => void;
+  /** The goal lives on the brief; leave false when the caller owns it. */
+  goalEditable?: boolean;
   /** Caption for the goal field. */
   goalLabel?: string;
   onStart: () => void;
@@ -60,17 +59,17 @@ export function LoopBriefSetup({
   definitions,
   error,
   folder,
-  goal,
   workSlug,
   onAgentConfig,
   onBrief,
   onSelectDefinition,
   onChooseFolder,
   onEditLoop,
-  onGoal,
+  goalEditable = false,
   goalLabel = "Goal",
   onStart,
 }: Props) {
+  const goal = brief.goal;
   const [expandedStageId, setExpandedStageId] = useState<string | null>(null);
   const [picker, setPicker] = useState<{
     kind: "file" | "folder";
@@ -98,7 +97,6 @@ export function LoopBriefSetup({
     const next = { ...current, ...patch };
     onBrief({
       ...brief,
-      goal,
       stages: [...brief.stages.filter((stage) => stage.stage_id !== stageId), next],
     });
   }
@@ -136,14 +134,11 @@ export function LoopBriefSetup({
 
       <section className="loop-brief-goal">
         <label>{goalLabel}</label>
-        {onGoal ? (
+        {goalEditable ? (
           <textarea
             rows={2}
             value={goal}
-            onChange={(event) => {
-              onGoal(event.target.value);
-              onBrief({ ...brief, goal: event.target.value });
-            }}
+            onChange={(event) => onBrief({ ...brief, goal: event.target.value })}
           />
         ) : (
           <p className="loop-brief-goal-fixed">{goal}</p>
@@ -223,7 +218,7 @@ export function LoopBriefSetup({
           </span>
         )}
         <span />
-        {onGoal && !goal.trim() ? (
+        {goalEditable && !goal.trim() ? (
           <em>Goal is required</em>
         ) : missing.length > 0 ? (
           <em>{missing[0].name} needs a brief before this run can start</em>

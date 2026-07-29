@@ -74,18 +74,13 @@ export function LoopMode({
   project,
   work,
 }: Props) {
-  const [goal, setGoal] = useState(
-    initialSeed?.goal || work.description || work.name,
-  );
+  const defaultGoal = initialSeed?.goal || work.description || work.name;
   const [folder, setFolder] = useState(initialSeed?.folder ?? "");
   const [definitions, setDefinitions] = useState<LoopDefinition[] | null>(null);
   const [selectedDefinition, setSelectedDefinition] =
     useState<LoopDefinition | null>(null);
   const [agentConfig, setAgentConfig] = useState<PlanningAgentConfig | null>(null);
-  const [brief, setBrief] = useState<LoopBrief>({
-    goal: initialSeed?.goal || work.description || work.name,
-    stages: [],
-  });
+  const [brief, setBrief] = useState<LoopBrief>({ goal: defaultGoal, stages: [] });
   const [briefPersistenceReady, setBriefPersistenceReady] = useState(false);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(initialSeed?.createDefinition ?? false);
@@ -153,10 +148,7 @@ export function LoopMode({
       .then((saved) => {
         if (cancelled) return;
         setBriefPersistenceReady(true);
-        if (saved) {
-          setBrief(saved);
-          if (saved.goal.trim()) setGoal(saved.goal);
-        }
+        if (saved) setBrief(saved.goal.trim() ? saved : { ...saved, goal: defaultGoal });
       })
       .catch(() => {
         // Older backends and works without a saved draft keep the local defaults.
@@ -169,12 +161,12 @@ export function LoopMode({
   useEffect(() => {
     if (!briefPersistenceReady) return;
     const timer = window.setTimeout(() => {
-      void saveWorkLoopBrief(work.slug, { ...brief, goal }).catch(() => {
+      void saveWorkLoopBrief(work.slug, brief).catch(() => {
         // Starting the run performs a final save and surfaces actionable errors.
       });
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [brief, briefPersistenceReady, goal, work.slug]);
+  }, [brief, briefPersistenceReady, work.slug]);
 
   useEffect(() => {
     if (!selectedDefinition || agentConfig) return;
@@ -205,14 +197,14 @@ export function LoopMode({
   }
 
   async function start() {
-    if (!selectedDefinition || !agentConfig || !goal.trim() || !folder.trim()) return;
+    if (!selectedDefinition || !agentConfig || !brief.goal.trim() || !folder.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const runBrief = normalizedBrief(brief, selectedDefinition, goal, agentConfig);
+      const runBrief = normalizedBrief(brief, selectedDefinition, agentConfig);
       await saveWorkLoopBrief(work.slug, runBrief).catch(() => runBrief);
       const created = await startWorkLoopRun(work.slug, {
-        goal: goal.trim(),
+        goal: brief.goal.trim(),
         root_path: folder.trim(),
         loop_definition_id: selectedDefinition.id,
         loop_revision: selectedDefinition.revision,
@@ -262,10 +254,9 @@ export function LoopMode({
 
   async function prepareNewRun(run: WorkLoopRun) {
     const snapshot = run.loop_definition;
-    setGoal(run.goal);
     setFolder(run.root_path);
     setAgentConfig({ provider: run.provider, model: run.model, options: run.options });
-    setBrief(run.brief ?? { goal: run.goal, stages: [] });
+    setBrief({ ...(run.brief ?? { stages: [] }), goal: run.goal });
     setSelectedDefinition(
       definitions?.find((definition) => definition.id === run.loop_definition_id && definition.valid)
         ?? (snapshot ? definitionFromSnapshot(snapshot) : null),
@@ -322,7 +313,7 @@ export function LoopMode({
       <div className="loop-mode-shell">
         <LoopModeRail
           work={work}
-          goal={goal}
+          goal={brief.goal}
           folder={folder}
           definition={selectedDefinition}
           runs={runs}
@@ -376,10 +367,9 @@ export function LoopMode({
               onSendPrFeedback={canActOnRun ? (comments, instruction) => act(() => sendWorkLoopRunPrFeedback(work.slug, activeRun.id, { comments, instruction })) : undefined}
               onEditLoop={canActOnRun ? () => {
                 const snapshot = activeRun.loop_definition;
-                setGoal(activeRun.goal);
                 setFolder(activeRun.root_path);
                 setAgentConfig({ provider: activeRun.provider, model: activeRun.model, options: activeRun.options });
-                setBrief(activeRun.brief ?? { goal: activeRun.goal, stages: [] });
+                setBrief({ ...(activeRun.brief ?? { stages: [] }), goal: activeRun.goal });
                 setEditorDefinition(
                   (snapshot
                     ? definitions?.find((definition) => definition.id === snapshot.id)
@@ -394,7 +384,6 @@ export function LoopMode({
           ) : (
             <LoopBriefSetup
               workSlug={work.slug}
-              goal={goal}
               folder={folder}
               definitions={definitions}
               definition={selectedDefinition}
@@ -402,7 +391,7 @@ export function LoopMode({
               brief={brief}
               busy={busy || workStatus !== "active"}
               error={workStatus === "active" ? error : "Reopen this work to start another run."}
-              onGoal={setGoal}
+              goalEditable
               onBrief={setBrief}
               onAgentConfig={setAgentConfig}
               onChooseFolder={() => setFolderPickerOpen(true)}
@@ -598,12 +587,11 @@ function workLoopRunData(run: WorkLoopRun): RunSurfaceData {
 function normalizedBrief(
   brief: LoopBrief,
   definition: LoopDefinition,
-  goal: string,
   baseAgent: PlanningAgentConfig,
 ): LoopBrief {
   const firstAgentId = definition.stages.find((stage) => stage.agent !== null)?.id;
   return {
-    goal: goal.trim(),
+    goal: brief.goal.trim(),
     stages: definition.stages
       .filter((stage) => stage.agent !== null)
       .map((stage) => {
