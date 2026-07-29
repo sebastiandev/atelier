@@ -220,22 +220,26 @@ def resolve_stage_agent_config(
     Preconditions: the parent config belongs to a registered provider.
     Postconditions: inherited and overridden values are returned without
     mutating the parent options.
+
+    A provider switch invalidates the stage's own model and fast flag --
+    they describe a provider that is no longer in play. Re-picking the
+    *same* provider is not a switch, so those still stand: a run setup that
+    confirms the stage's provider while leaving its model alone should not
+    silently drop the model the definition pinned.
     """
+    switched = (
+        override is not None
+        and override.provider is not None
+        and override.provider != (policy.provider or parent_provider)
+    )
     effective = replace(
         policy,
         provider=(override.provider or policy.provider) if override else policy.provider,
         model=(
-            override.model or (None if override.provider else policy.model)
-            if override
-            else policy.model
+            (override.model if override else None)
+            or (None if switched else policy.model)
         ),
-        fast=(
-            None
-            if override is not None
-            and override.provider is not None
-            and override.provider != policy.provider
-            else policy.fast
-        ),
+        fast=None if switched else policy.fast,
     )
     provider = cast(Provider, effective.provider or parent_provider)
     model = resolve_stage_model(provider, parent_provider, parent_model, effective)

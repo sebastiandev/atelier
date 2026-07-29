@@ -142,6 +142,65 @@ def test_run_provider_override_replaces_template_fast_mode() -> None:
     assert "fast-mode" not in options
 
 
+def test_confirming_the_same_provider_keeps_the_stage_model_and_fast_flag() -> None:
+    """Re-picking a stage's own provider is not a switch.
+
+    Run setup sends whatever the picker shows, so a brief routinely names the
+    provider the definition already pinned. Treating that as a switch dropped
+    the definition's model and fast flag on the floor.
+    """
+    provider, model, options = resolve_stage_agent_config(
+        LoopAgentPolicy(provider="codex-acp", model="gpt-5.4", fast=True),
+        parent_provider="amp",
+        parent_model="smart",
+        parent_options={},
+        override=LoopBriefAgent(provider="codex-acp"),
+    )
+
+    assert (provider, model) == ("codex-acp", "gpt-5.4")
+    assert options["fast-mode"] == "on"
+
+
+def test_switching_provider_still_drops_the_stage_model_and_fast_flag() -> None:
+    """They describe a provider that is no longer in play."""
+    provider, model, options = resolve_stage_agent_config(
+        LoopAgentPolicy(provider="codex-acp", model="gpt-5.4", fast=True),
+        parent_provider="amp",
+        parent_model="smart",
+        parent_options={},
+        override=LoopBriefAgent(provider="claude-acp"),
+    )
+
+    assert provider == "claude-acp"
+    assert model != "gpt-5.4"
+    assert "fast-mode" not in options
+
+
+def test_a_brief_model_wins_over_the_stage_model() -> None:
+    _, model, _ = resolve_stage_agent_config(
+        LoopAgentPolicy(provider="codex-acp", model="gpt-5.4"),
+        parent_provider="amp",
+        parent_model="smart",
+        parent_options={},
+        override=LoopBriefAgent(provider="codex-acp", model="gpt-5.5"),
+    )
+
+    assert model == "gpt-5.5"
+
+
+def test_an_unpinned_stage_confirming_the_inherited_provider_keeps_its_model() -> None:
+    """The stage's model belongs to the provider it inherits when it pins none."""
+    _, model, _ = resolve_stage_agent_config(
+        LoopAgentPolicy(model="gpt-5.4"),
+        parent_provider="codex-acp",
+        parent_model="gpt-5.5",
+        parent_options={},
+        override=LoopBriefAgent(provider="codex-acp"),
+    )
+
+    assert model == "gpt-5.4"
+
+
 def test_amp_read_permission_rejects_mutating_tools() -> None:
     resolved = apply_stage_agent_policy(
         "amp",

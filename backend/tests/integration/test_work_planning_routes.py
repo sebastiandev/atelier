@@ -3429,6 +3429,50 @@ def test_story_run_shorthand_still_fills_required_notes_for_the_client(
     assert res.status_code == 200, res.text
 
 
+def test_a_run_started_without_a_brief_still_gets_one(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """Every run carries a brief, so the loop's contract always applies.
+
+    A story run may omit the brief entirely when the definition pins the
+    entry provider itself. That used to skip validation and leave the run
+    with no brief to inherit from, so `note_required` was enforced against
+    callers who sent a brief and ignored for callers who sent none.
+    """
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    payload = app_client.get("/api/loops/atelier-reviewed").json()
+    payload["stages"][0]["agent"]["provider"] = "amp"
+    payload["stages"][0]["agent"]["model"] = "smart"
+    saved = app_client.post(
+        "/api/loops",
+        json={
+            **payload,
+            "scope": "work",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "loop_definition_id": saved.json()["id"],
+            "loop_revision": saved.json()["revision"],
+        },
+    )
+
+    assert started.status_code == 200, started.text
+    run = started.json()["artifact"]["runs"][0]
+    assert run["brief"] is not None
+    assert run["brief"]["goal"]
+    # The required review slot was filled for the client rather than refused.
+    filled = {stage["stage_id"] for stage in run["brief"]["stages"] if stage["note"]}
+    assert "code-review" in filled
+
+
 def test_story_follow_up_inherits_the_provider_of_the_run_it_continues(
     app_client: TestClient, test_settings: Settings
 ) -> None:

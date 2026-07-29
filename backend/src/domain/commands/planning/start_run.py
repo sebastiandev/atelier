@@ -158,15 +158,11 @@ async def execute(
     brief = req.brief or _planning_brief(detail, definition, req.brief_note)
     if req.run_kind is not LoopRunKind.INITIAL:
         brief = followups.seeded_brief(
-            brief or LoopBrief(goal=detail.artifact.title),
-            definition,
-            req.run_kind,
-            req.follow_up_note,
+            brief, definition, req.run_kind, req.follow_up_note
         )
-    if brief is not None:
-        if not req.brief_explicit:
-            brief = briefs.with_legacy_required_defaults(definition, brief)
-        briefs.validate_brief(definition, brief)
+    if not req.brief_explicit:
+        brief = briefs.with_legacy_required_defaults(definition, brief)
+    briefs.validate_brief(definition, brief)
     entry = followups.resolve_entry(definition, req.entry_stage_id)
     entry_provider, entry_model, entry_options = _entry_agent_config(entry, brief)
     session = planning_sessions.get_by_work_slug(req.work_slug)
@@ -294,8 +290,7 @@ async def execute(
         "completed_at": None,
         "loop": loop,
     }
-    if brief is not None:
-        run["brief"] = briefs.brief_snapshot(brief)
+    run["brief"] = briefs.brief_snapshot(brief)
     persist_artifact_run(
         loop_runs,
         work_slug=req.work_slug,
@@ -349,7 +344,7 @@ async def _launch_initial_agent(
     adapter_factory: AgentAdapterFactory,
     req: StartArtifactRunRequest,
     definition: LoopDefinition,
-    brief: LoopBrief | None,
+    brief: LoopBrief,
     *,
     agent_config: StageAgentConfig,
     workspace_root: Path,
@@ -399,7 +394,7 @@ def _initial_stage_prompt(
     definition: LoopDefinition,
     detail: PlanArtifactDetail,
     resolution: LoopContextResolution,
-    brief: LoopBrief | None,
+    brief: LoopBrief,
     workspace_diff: str,
     entry: LoopStepDefinition,
 ) -> str:
@@ -432,7 +427,7 @@ def _initial_stage_prompt(
 
 def _entry_agent_config(
     entry: LoopStepDefinition,
-    brief: LoopBrief | None,
+    brief: LoopBrief,
 ) -> StageAgentConfig:
     """Resolve the entry stage's agent from the run's own inputs alone.
 
@@ -483,17 +478,24 @@ def _planning_brief(
     detail: PlanArtifactDetail,
     definition: LoopDefinition,
     note: str,
-) -> LoopBrief | None:
-    """Pin one optional user note to every agent-backed Planning stage.
+) -> LoopBrief:
+    """Build the brief for a run started without the setup screen.
 
-    The shorthand for a run started without the setup screen; an explicit
-    brief on the request takes precedence.
+    ``brief_note`` is the shorthand: one note pinned to every agent-backed
+    stage. With no note there is still a brief, just an empty one -- a run
+    always has one so it is always validated and always snapshotted, rather
+    than the loop's contract applying only to callers that happened to send
+    something. An explicit brief on the request takes precedence.
+
+    Preconditions: ``definition`` is the revision selected for the run.
+    Postconditions: the goal is non-empty, so the brief can be validated.
     """
+    goal = detail.artifact.title.strip() or detail.artifact.id
     value = note.strip()
     if not value:
-        return None
+        return LoopBrief(goal=goal)
     return LoopBrief(
-        goal=detail.artifact.title,
+        goal=goal,
         stages=tuple(
             LoopStageBrief(stage_id=stage.step_id, note=value)
             for stage in definition.stages
