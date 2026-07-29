@@ -3126,3 +3126,44 @@ def test_story_follow_up_rejects_a_run_that_has_not_finished(
 
     assert res.status_code == 422, res.text
     assert "cannot be reused" in res.json()["detail"]
+
+
+def test_story_run_pins_a_full_brief_from_the_setup_screen(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """Planning starts a run from the same brief shape a Loop-mode run does.
+
+    Before this, the story route accepted only `brief_note` -- one string
+    applied to every agent stage -- so per-stage notes and provider
+    overrides configured in setup had nowhere to go.
+    """
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "loop_definition_id": "atelier-reviewed",
+            "brief": {
+                "goal": "Ship the picker",
+                "stages": [
+                    {"stage_id": "implementation", "note": "keep the public API"},
+                    {"stage_id": "code-review", "note": "focus on concurrency"},
+                ],
+            },
+        },
+    )
+
+    assert started.status_code == 200, started.text
+    run_id = str(started.json()["artifact"]["runs"][-1]["id"])
+    stored = next(
+        record
+        for record in app_client.app.state.loop_runs.list_for_work("WRK-001")
+        if record.plan_run_id == run_id
+    )
+    pinned = stored.state["brief"]
+    assert {stage["stage_id"]: stage["note"] for stage in pinned["stages"]} == {
+        "implementation": "keep the public API",
+        "code-review": "focus on concurrency",
+    }

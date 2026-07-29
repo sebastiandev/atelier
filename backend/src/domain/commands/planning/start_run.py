@@ -94,6 +94,10 @@ class StartArtifactRunRequest:
     artifact_id: str
     loop_definition_id: str | None = None
     loop_revision: str | None = None
+    # A full brief from the setup screen: per-stage notes, context and agent
+    # overrides, the same shape a goal-driven run pins. `brief_note` remains
+    # the shorthand for "one note on every agent stage".
+    brief: LoopBrief | None = None
     brief_note: str = ""
     # A follow-up re-enters a finished run's loop on its branch. INITIAL
     # starts at the loop's own first stage.
@@ -140,7 +144,7 @@ async def execute(
         loop_locations,
         req,
     )
-    brief = _planning_brief(detail, definition, req.brief_note)
+    brief = req.brief or _planning_brief(detail, definition, req.brief_note)
     if req.run_kind is not LoopRunKind.INITIAL:
         brief = followups.seeded_brief(
             brief or LoopBrief(goal=detail.artifact.title),
@@ -416,7 +420,11 @@ def _planning_brief(
     definition: LoopDefinition,
     note: str,
 ) -> LoopBrief | None:
-    """Pin one optional user note to every agent-backed Planning stage."""
+    """Pin one optional user note to every agent-backed Planning stage.
+
+    The shorthand for a run started without the setup screen; an explicit
+    brief on the request takes precedence.
+    """
     value = note.strip()
     if not value:
         return None

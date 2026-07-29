@@ -1779,6 +1779,7 @@ async def start_work_plan_artifact_run_endpoint(
                 artifact_id=artifact_id,
                 loop_definition_id=payload.loop_definition_id,
                 loop_revision=payload.loop_revision,
+                brief=_to_loop_brief(payload.brief) if payload.brief is not None else None,
                 brief_note=payload.brief_note,
             ),
         )

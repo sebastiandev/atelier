@@ -835,12 +835,6 @@ class AcceptPlanArtifactRequest(BaseModel):
     validation_evidence: str = ""
 
 
-class StartPlanArtifactRunRequest(BaseModel):
-    loop_definition_id: str | None = None
-    loop_revision: str | None = None
-    brief_note: str = ""
-
-
 class ResumePlanArtifactRunRequest(BaseModel):
     resolution_note: str = ""
     retry_failed: bool = False
@@ -893,6 +887,13 @@ class StartWorkLoopRunRequest(BaseModel):
     options: dict[str, str] = Field(default_factory=dict)
     brief: LoopBriefSchema | None = None
     source_run_id: str | None = None
+
+
+class StartPlanArtifactRunRequest(BaseModel):
+    loop_definition_id: str | None = None
+    loop_revision: str | None = None
+    brief: LoopBriefSchema | None = None
+    brief_note: str = ""
 
 
 class RerunWorkLoopRunRequest(BaseModel):
