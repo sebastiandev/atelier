@@ -15,6 +15,7 @@ import {
   listLoopDefinitions,
   listAvailableStageDefinitions,
   revealLoopDefinition,
+  revealStageDefinition,
   saveLoopDefinition,
   saveStageDefinition,
 } from "./api";
@@ -467,6 +468,23 @@ function StageEditorScreen({
   const setInspectorWidth = useLayoutStore((state) => state.setLoopInspectorWidth);
   const local = Boolean(onApplyLocal);
   const availableStages = local ? [...loopStages, draft.stage] : [draft.stage];
+  // A library stage always lives in the repo scope (`saveToLibrary` pins it),
+  // so there is no work-scoped branch here as there is for a loop. A local
+  // stage has no folder at all until it is saved, and says so in its own card.
+  //
+  // `unsaved` also covers builtins, which have no folder to reveal: opening
+  // one seeds a fork with a null expected revision, so the button is disabled
+  // rather than 404ing on the backend.
+  const storage = local
+    ? undefined
+    : {
+        path: `${rootPath ? `${rootPath.replace(/[\\/]+$/, "")}/` : ""}.atelier/stages/${draft.id}`,
+        unsaved: seed.expectedRevision === null,
+        onReveal: () =>
+          void revealStageDefinition(draft.id, rootPath).catch((reason) =>
+            setError(reason instanceof Error ? reason.message : String(reason)),
+          ),
+      };
 
   function patchStage(patch: Partial<LoopStepDefinition>) {
     setDraft((current) => {
@@ -553,7 +571,7 @@ function StageEditorScreen({
         </div>
       </main>
       <PaneResizeHandle defaultValue={384} edge="left" label="Resize stage inspector" min={LOOP_INSPECTOR_MIN} max={LOOP_INSPECTOR_MAX} value={inspectorWidth} onChange={setInspectorWidth} />
-      <StageDefinitionInspector stage={draft.stage} stages={availableStages} outcomes={draft.outcomes} advanced={advanced} local={local} saving={saving} onAdvanced={() => setAdvanced((value) => !value)} onKindChange={changeStageKind} onPatch={patchStage} onOutcomes={(outcomes) => { setDraft((current) => ({ ...current, outcomes })); setDirty(true); }} onKeepLocal={local ? applyLocal : undefined} onSaveToLibrary={local ? () => void saveToLibrary() : undefined} />
+      <StageDefinitionInspector stage={draft.stage} stages={availableStages} outcomes={draft.outcomes} advanced={advanced} local={local} saving={saving} storage={storage} onAdvanced={() => setAdvanced((value) => !value)} onKindChange={changeStageKind} onPatch={patchStage} onOutcomes={(outcomes) => { setDraft((current) => ({ ...current, outcomes })); setDirty(true); }} onKeepLocal={local ? applyLocal : undefined} onSaveToLibrary={local ? () => void saveToLibrary() : undefined} />
     </div>
   </div>;
 }
@@ -713,13 +731,15 @@ function ContextSubsetPanel({ stage, stages, rootPath, kinds, label, hint, addLa
   />;
 }
 
-function StageDefinitionInspector({ stage, stages, outcomes, advanced, local, saving, onAdvanced, onKindChange, onPatch, onOutcomes, onKeepLocal, onSaveToLibrary }: {
+function StageDefinitionInspector({ stage, stages, outcomes, advanced, local, saving, storage, onAdvanced, onKindChange, onPatch, onOutcomes, onKeepLocal, onSaveToLibrary }: {
   stage: LoopStepDefinition;
   stages: LoopStepDefinition[];
   outcomes: LoopOutcome[];
   advanced: boolean;
   local: boolean;
   saving: boolean;
+  /** Omitted for a loop-local stage: it has no library folder yet. */
+  storage?: { path: string; unsaved: boolean; onReveal: () => void };
   onAdvanced: () => void;
   onKindChange: (kind: LoopStepKind) => void;
   onPatch: (patch: Partial<LoopStepDefinition>) => void;
@@ -745,6 +765,20 @@ function StageDefinitionInspector({ stage, stages, outcomes, advanced, local, sa
       <StageOutcomeContract stage={stage} outcomes={outcomes} onChange={onOutcomes} />
       {stage.kind !== "pr" && <div className="stage-outcome-note"><ReturnIcon size={12} /><span>A stage declares what it can return. It has no graph of its own. Each loop maps these outcomes to stages, pause, or fail.</span></div>}
       {stage.kind !== "user_approval" && stage.kind !== "pr" && <><button className={"loop-advanced-toggle" + (advanced ? " open" : "")} onClick={onAdvanced}><ChevronRightIcon size={11} /> Advanced · retry limit · timeout · report preset</button>{advanced && <AdvancedPanel stage={stage} onPatch={onPatch} />}</>}
+      {storage && <section className="stage-editor-rail-group">
+        <header><strong>Storage folder</strong><small>where the library keeps this stage</small></header>
+        <div className="loop-storage-field">
+          <button
+            type="button"
+            disabled={storage.unsaved}
+            title={storage.unsaved ? "Save before opening this folder" : storage.path}
+            onClick={storage.onReveal}
+          >
+            <FolderIcon size={13} />
+            <code>{storage.path}</code>
+          </button>
+        </div>
+      </section>}
       {local ? <section className="stage-linked-banner local stage-save-card">
         <span><strong>◇ Local to this loop</strong><em>unsaved</em></span>
         <small>Only this loop can select the stage until it is saved to the library.</small>

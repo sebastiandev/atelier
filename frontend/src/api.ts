@@ -1332,6 +1332,18 @@ export function deleteStageDefinition(
   });
 }
 
+export function revealStageDefinition(
+  stageId: string,
+  rootPath?: string | null,
+): Promise<void> {
+  const query = stagesPath(rootPath).split("?")[1];
+  return fetch(`/api/stages/${encodeURIComponent(stageId)}/reveal${query ? `?${query}` : ""}`, {
+    method: "POST",
+  }).then((response) => {
+    if (!response.ok) return jsonOrThrow<never>(response);
+  });
+}
+
 export function listWorkLoopRuns(workSlug: string): Promise<WorkLoopRun[]> {
   return fetch(`/api/works/${workSlug}/runs`).then((response) =>
     jsonOrThrow<WorkLoopRun[]>(response),
