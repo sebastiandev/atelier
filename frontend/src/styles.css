@@ -13942,6 +13942,31 @@ select:disabled {
 }
 .run-pr-comment.selected { border-color: var(--accent-line); background: var(--accent-soft); opacity: 1; }
 .run-pr-comment.acknowledged { background: var(--bg-2); }
+/* Comments the panel keeps for history rather than action: addressed in an
+   earlier pass, or predating the latest push. Folded away by default. */
+.run-pr-history { display: grid; gap: 6px; margin-top: 4px; }
+.run-pr-history > button {
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-3);
+  font: 11px var(--font-ui);
+  cursor: pointer;
+}
+.run-pr-history > button:hover { color: var(--fg-2); }
+.run-pr-history .run-pr-comment > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.run-pr-history .run-pr-comment p {
+  margin: 4px 0 0;
+  color: var(--fg-2);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
 .run-pr-thread-state { display: grid; width: 16px; height: 16px; place-items: center; color: var(--good); }
 .run-pr-comment-content { display: grid; gap: 10px; min-width: 0; }
 .run-pr-comment-summary {

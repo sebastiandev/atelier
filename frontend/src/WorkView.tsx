@@ -806,8 +806,34 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     };
   }, [workSlug, selectedPlanArtifactId]);
 
+  // A run is settled once it can no longer change on its own. Accepted and
+  // cleaned are done; cancelled and failed need a user action to move, and
+  // that action refreshes on its own.
+  const planDetailRef = useRef<PlanArtifactDetail | null>(null);
+  planDetailRef.current = planArtifactDetail;
+
+  const planHasUnsettledRun = useMemo(
+    () =>
+      (plan?.artifacts ?? []).some((artifact) =>
+        artifact.runs.some(
+          (run) =>
+            !run.loop_status
+            || !["accepted", "cleaned", "cancelled", "failed"].includes(
+              run.loop_status,
+            ),
+        ),
+      ),
+    [plan],
+  );
+
   useEffect(() => {
-    if (workMode !== "planning" || !plan || plan.overview.running === 0) return;
+    // Poll until every run has settled, not just while one is `running`.
+    // The stage transition a user is waiting for is often the thing that
+    // ends `running` -- approving a review moves the run to
+    // awaiting_approval -- so gating on it tore the interval down at
+    // exactly the moment there was something new to show, and the change
+    // only appeared on a manual refresh.
+    if (workMode !== "planning" || !plan || !planHasUnsettledRun) return;
     let cancelled = false;
     let inFlight = false;
 
@@ -824,13 +850,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         if (cancelled) return;
         setPlan(next);
         if (detail) {
+          const previous = planDetailRef.current;
           setPlanArtifactDetail(detail);
-          setPlanDraft((currentDraft) => {
-            if (!planArtifactDetail || currentDraft === planArtifactDetail.content) {
-              return detail.content;
-            }
-            return currentDraft;
-          });
+          setPlanDraft((currentDraft) =>
+            !previous || currentDraft === previous.content
+              ? detail.content
+              : currentDraft,
+          );
         }
       } catch {
         // Polling is opportunistic; explicit user actions still surface errors.
@@ -839,6 +865,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       }
     }
 
+    // Lead with one fetch: an action that changes run state should show up
+    // now, not on the next tick.
+    void pollPlanRuns();
     const timer = window.setInterval(() => void pollPlanRuns(), 3000);
     return () => {
       cancelled = true;
@@ -847,9 +876,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   }, [
     workMode,
     workSlug,
-    plan?.overview.running,
+    planHasUnsettledRun,
     selectedPlanArtifactId,
-    planArtifactDetail,
   ]);
 
   useEffect(() => {

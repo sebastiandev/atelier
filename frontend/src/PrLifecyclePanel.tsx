@@ -4,12 +4,21 @@ import type { PrComment, PrLifecycle } from "./api";
 import { BranchIcon, CheckIcon, ChevronRightIcon, CopyIcon, LoopIcon, ReturnIcon } from "./Icons";
 
 type FeedbackItem = { comment_id: string; instruction: string };
+/** `open` still needs a decision; the rest are kept for history.
+ *
+ *  `addressed` was sent back through the loop. `superseded` predates the
+ *  latest push without having been sent, so the push probably covered it --
+ *  we don't claim it did. Neither is selectable, and neither is dropped:
+ *  a comment vanishing from the panel after a push reads as data loss. */
+type PrThreadState = "open" | "addressed" | "superseded";
+
 type PrCommentThread = {
   action: PrComment;
   actionable: boolean;
   id: string;
   replies: PrComment[];
   root: PrComment;
+  state: PrThreadState;
 };
 
 export function PrLifecyclePanel({
@@ -35,7 +44,10 @@ export function PrLifecyclePanel({
     () => prCommentThreads(comments, pushAt),
     [comments, pushAt],
   );
-  const actionable = visible.filter((thread) => thread.actionable);
+  const open_ = visible.filter((thread) => thread.state === "open");
+  const actionable = open_.filter((thread) => thread.actionable);
+  const history = visible.filter((thread) => thread.state !== "open");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [open, setOpen] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [toggledThreads, setToggledThreads] = useState<Set<string>>(() => new Set());
@@ -112,7 +124,8 @@ export function PrLifecyclePanel({
       <header className="run-pr-comments-head">
         <button type="button" onClick={() => setOpen((value) => !value)}>{open ? "▾" : "▸"} PR comments</button>
         <em className={actionable.length > 0 ? "tag warn" : "tag"}>{actionable.length} open</em>
-        {visible.length > actionable.length && <em className="tag good">{visible.length - actionable.length} you replied</em>}
+        {open_.length > actionable.length && <em className="tag good">{open_.length - actionable.length} you replied</em>}
+        {history.length > 0 && <em className="tag">{history.length} earlier</em>}
         <span>since this push{pr.last_synced_at && <> · synced {relativeTime(pr.last_synced_at)}</>}</span>
         {actionable.length > 0 && <label><input
           type="checkbox"
@@ -126,7 +139,7 @@ export function PrLifecyclePanel({
 
       {open && (
         <div className="run-pr-comments-body">
-          {visible.map((thread) => {
+          {open_.map((thread) => {
             const comment = thread.action;
             const checked = selected.has(comment.id);
             const expanded = thread.actionable !== toggledThreads.has(thread.id);
@@ -169,7 +182,27 @@ export function PrLifecyclePanel({
               </div>
             );
           })}
-          {visible.length === 0 && <p className="dim">No new comments since this push.</p>}
+          {open_.length === 0 && <p className="dim">No new comments since this push.</p>}
+          {history.length > 0 && (
+            <div className="run-pr-history">
+              <button type="button" onClick={() => setHistoryOpen((value) => !value)}>
+                {historyOpen ? "▾" : "▸"} {history.length} earlier comment{history.length === 1 ? "" : "s"}
+              </button>
+              {historyOpen && history.map((thread) => (
+                <div className="run-pr-comment acknowledged" key={thread.id}>
+                  <div>
+                    <span className={thread.state === "addressed" ? "tag good" : "tag"}>
+                      <CheckIcon size={9} /> {thread.state === "addressed" ? "sent to implement" : "before latest push"}
+                    </span>
+                    <strong>{thread.action.author}</strong>
+                    {thread.action.location && <small>{thread.action.location}</small>}
+                    <small>{relativeTime(thread.action.created_at)}</small>
+                  </div>
+                  <p>{thread.action.body}</p>
+                </div>
+              ))}
+            </div>
+          )}
           {onSendFeedback && <label className="run-pr-free-instruction"><span>Your instruction <small>no comment needed — refactors, missed scope, changed requirements</small></span><textarea rows={2} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Additional work for the next implementation pass" /></label>}
           {onSendFeedback && <footer>
             <span>Unselected comments stay open.</span>
@@ -199,14 +232,22 @@ function prCommentThreads(
       : comment.id;
     grouped.set(id, [...(grouped.get(id) ?? []), comment]);
   }
-  return [...grouped.entries()].flatMap(([id, rows]) => {
+  return [...grouped.entries()].map(([id, rows]) => {
     const ordered = rows.sort((left, right) => left.created_at.localeCompare(right.created_at));
     const latest = ordered.at(-1)!;
-    if (
-      latest.addressed_in_pass != null
-      || !createdAfter(latest.created_at, pushedAt)
-    ) return [];
-    return [{ id, root: ordered[0], replies: ordered.slice(1), action: latest, actionable: !latest.is_viewer }];
+    const state: PrThreadState = latest.addressed_in_pass != null
+      ? "addressed"
+      : createdAfter(latest.created_at, pushedAt)
+        ? "open"
+        : "superseded";
+    return {
+      id,
+      root: ordered[0],
+      replies: ordered.slice(1),
+      action: latest,
+      actionable: state === "open" && !latest.is_viewer,
+      state,
+    };
   });
 }
 
