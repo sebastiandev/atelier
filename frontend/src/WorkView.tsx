@@ -580,7 +580,14 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
   function openPlanningView(next: PlanningView) {
     setPlanningView(next);
-    if (next.kind === "artifact" || next.kind === "source" || next.kind === "run") {
+    // Every view that shows one artifact has to select it, or its detail is
+    // never fetched and the view renders nothing.
+    if (
+      next.kind === "artifact"
+      || next.kind === "source"
+      || next.kind === "run"
+      || next.kind === "setup"
+    ) {
       setSelectedPlanArtifactId(next.id);
       setFocusedSlug(`plan:${next.id}`);
     } else {

@@ -233,7 +233,7 @@ export function PlanningMode({
   const activeId = "id" in view ? view.id : null;
   const source = view.kind === "source" ? findArtifact(plan, view.id) : null;
   const artifact =
-    view.kind === "artifact" || view.kind === "run"
+    view.kind === "artifact" || view.kind === "run" || view.kind === "setup"
       ? findArtifact(plan, view.id)
       : null;
   const epic = plan ? buildPlanEpic(work, plan, tree, counts) : null;
@@ -625,6 +625,9 @@ export function PlanningMode({
             onReset={onReset}
             onApprovePlan={onApprovePlan}
           />
+        )}
+        {view.kind === "setup" && !selectedDetail && (
+          <div className="pm-loading">Loading story…</div>
         )}
         {view.kind === "setup" && selectedDetail && (
           <LoopBriefSetup
