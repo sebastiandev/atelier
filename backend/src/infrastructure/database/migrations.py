@@ -25,7 +25,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 24
+CURRENT_SCHEMA_VERSION = 25
 
 
 class SchemaMismatchError(RuntimeError):
@@ -287,6 +287,21 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
                     )
                 )
             existing = 24
+        if existing == 24:
+            # v24 -> v25: `artifact_root_path` held whichever of two things
+            # the caller happened to mean -- the folder setting a user typed
+            # (relative or absolute) on the session, the resolved absolute
+            # path in the manifest. The column is the former, so it takes the
+            # former's name. Rename rather than add-and-backfill: there is one
+            # column, one meaning, and no reader left on the old spelling.
+            if _has_column(conn, "planning_sessions", "artifact_root_path"):
+                conn.execute(
+                    text(
+                        "ALTER TABLE planning_sessions "
+                        "RENAME COLUMN artifact_root_path TO plan_artifacts_dir"
+                    )
+                )
+            existing = 25
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

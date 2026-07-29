@@ -335,7 +335,7 @@ def _planning_turn_context(
     manifest = planningfiles.read_manifest(chat.grounding_ref)
     if manifest is None or manifest.get("phase") != "planned":
         return None
-    source_path = planningfiles.artifact_root_path(chat.grounding_ref)
+    source_path = planningfiles.plan_artifacts_path(chat.grounding_ref)
     return build_prompt(
         PlanningChatTurnContextPrompt(
             source_path=source_path,
@@ -586,7 +586,7 @@ def _with_planning_runtime(
     framework = _planning_framework(manifest.get("framework"))
     profile = _planning_profile(manifest.get("profile"))
     documents = _planning_documents(manifest)
-    source_path = planningfiles.artifact_root_path(chat.grounding_ref)
+    source_path = planningfiles.plan_artifacts_path(chat.grounding_ref)
     planning_workdir = Path(source_path)
     if manifest.get("phase") == "planned" and planning_workdir.exists():
         return ChatRuntimeContext(

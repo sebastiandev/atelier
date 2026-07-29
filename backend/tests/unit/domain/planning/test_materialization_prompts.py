@@ -16,7 +16,7 @@ def test_materializer_prompt_keeps_framework_separate_from_output_path() -> None
             work_name="Migrate data",
             root_path="/repo",
             atelier_planning_path="/repo/.atelier/planning/WRK-002",
-            artifact_root="bmad/di_migration",
+            plan_artifacts_dir="bmad/di_migration",
             framework="openspec",
             profile="feature",
             planning_chat_slug="CHT-001",
@@ -33,7 +33,7 @@ def test_materializer_runtime_prompt_is_bounded_and_framework_authoritative() ->
         PlanningMaterializerRuntimePrompt(
             framework="openspec",
             root_path="/repo",
-            artifact_root="bmad/di_migration",
+            plan_artifacts_dir="bmad/di_migration",
         )
     )
 
@@ -47,7 +47,7 @@ def test_materializer_recovery_prompt_reseeds_original_brief() -> None:
     prompt = build_prompt(
         PlanningMaterializationRecoveryPrompt(
             framework="spec",
-            artifact_root="bmad/di_migration",
+            plan_artifacts_dir="bmad/di_migration",
             original_brief="Original discovery and materialization requirements.",
         )
     )
@@ -64,7 +64,7 @@ def test_materializer_report_prompt_forbids_replanning() -> None:
     prompt = build_prompt(
         PlanningMaterializationReportPrompt(
             framework="spec",
-            artifact_root="bmad/di_migration",
+            plan_artifacts_dir="bmad/di_migration",
         )
     )
 

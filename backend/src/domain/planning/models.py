@@ -18,7 +18,7 @@ class PlanningSession:
     work_slug: str
     planning_chat_slug: str | None
     root_path: str
-    artifact_root_path: str | None
+    plan_artifacts_dir: str | None
     framework: PlanningFramework
     profile: PlanningProfile
     provider: Provider

@@ -335,7 +335,7 @@ class WorkPlanView:
     depth: PlanningDepth
     root_path: str
     planning_path: str
-    artifact_root_path: str
+    plan_artifacts_path: str
     approved_at: str | None
     stale: bool
     artifacts: list[PlanArtifactSummary] = field(default_factory=list)

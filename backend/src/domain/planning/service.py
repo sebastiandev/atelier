@@ -166,7 +166,7 @@ class PlanningService:
             depth=_depth(manifest.get("depth"), _depth_for_profile(profile)),
             root_path=root_path,
             planning_path=self._files.planning_path(work_slug),
-            artifact_root_path=self._files.artifact_root_path(work_slug),
+            plan_artifacts_path=self._files.plan_artifacts_path(work_slug),
             approved_at=_str_or_none(manifest.get("approved_at")),
             stale=_is_stale(artifacts, manifest),
             artifacts=artifacts,

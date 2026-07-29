@@ -16,7 +16,7 @@ from src.domain.planning.dtos import (
     PlanningFrameworkStatus,
     PlanningProfile,
 )
-from src.domain.planning.frameworks import artifact_root_rel_path, check_framework_status
+from src.domain.planning.frameworks import check_framework_status, default_plan_artifacts_dir
 from src.domain.planning.models import PlanningSession
 from src.domain.planning.ports import PlanningSessionRepository
 from src.domain.planning.prompts import PlanningChatInitialPrompt
@@ -47,7 +47,7 @@ class StartPlanningChatRequest:
     profile: PlanningProfile
     provider: Provider
     model: str
-    artifact_root_path: str | None = None
+    plan_artifacts_dir: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
 
 
@@ -168,8 +168,8 @@ def _planning_session(
         work_slug=req.work_slug,
         planning_chat_slug=planning_chat_slug,
         root_path=req.root_path,
-        artifact_root_path=req.artifact_root_path
-        or artifact_root_rel_path(req.framework, req.work_slug),
+        plan_artifacts_dir=req.plan_artifacts_dir
+        or default_plan_artifacts_dir(req.framework, req.work_slug),
         framework=req.framework,
         profile=req.profile,
         provider=req.provider,

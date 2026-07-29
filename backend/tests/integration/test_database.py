@@ -218,3 +218,51 @@ def test_db_file_lives_under_workspace_root(
     settings = test_settings  # cast at runtime; conftest has the real Settings
     expected = settings.workspace_root / "atelier.db"  # type: ignore[attr-defined]
     assert expected.exists()
+
+
+def test_v25_upgrade_renames_the_plan_artifacts_column(
+    isolated_engine: Engine,
+) -> None:
+    """`artifact_root_path` held the folder setting, not a resolved path.
+
+    Live rows carried both spellings of the same idea -- one work stored
+    `bmad/port_lpn`, another the absolute resolution of it -- which is what the
+    old name invited. Renaming has to carry the value across untouched.
+    """
+    with isolated_engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE planning_sessions "
+                "RENAME COLUMN plan_artifacts_dir TO artifact_root_path"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO works (slug, name, description, status, created_at) "
+                "VALUES ('WRK-001', 'W', '', 'active', '2026-01-01')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO planning_sessions "
+                "(work_slug, root_path, artifact_root_path, framework, profile, "
+                " provider, model, options, created_at, updated_at) "
+                "VALUES ('WRK-001', '/repo', 'bmad/port_lpn', 'bmad', 'feature', "
+                "        'amp', 'smart', '{}', '2026-01-01', '2026-01-01')"
+            )
+        )
+        conn.execute(schema_version_table.update().values(version=24))
+
+    initialize_database(isolated_engine)
+
+    columns = {
+        column["name"]
+        for column in inspect(isolated_engine).get_columns("planning_sessions")
+    }
+    assert "plan_artifacts_dir" in columns
+    assert "artifact_root_path" not in columns
+    with isolated_engine.begin() as conn:
+        value = conn.execute(
+            text("SELECT plan_artifacts_dir FROM planning_sessions")
+        ).scalar_one()
+    assert value == "bmad/port_lpn"

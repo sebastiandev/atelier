@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.domain.planning import manifest_keys
 from src.infrastructure.filesystem.atomic import atomic_write_json, atomic_write_text
 from src.infrastructure.filesystem.paths import WorkspacePaths
 
@@ -35,8 +36,8 @@ class FsPlanningFiles:
     def planning_path(self, work_slug: str) -> str:
         return str(self._planning_dir(work_slug))
 
-    def artifact_root_path(self, work_slug: str) -> str:
-        return str(self._artifact_root_dir(work_slug))
+    def plan_artifacts_path(self, work_slug: str) -> str:
+        return str(self._plan_artifacts_path(work_slug))
 
     def ensure_plan_dir(self, work_slug: str) -> None:
         self._planning_dir(work_slug).mkdir(parents=True, exist_ok=True)
@@ -81,7 +82,7 @@ class FsPlanningFiles:
         return str(self._resolve(work_slug, rel_path))
 
     def _resolve(self, work_slug: str, rel_path: str) -> Path:
-        return _resolve_under_root(str(self._artifact_root_dir(work_slug)), rel_path)
+        return _resolve_under_root(str(self._plan_artifacts_path(work_slug)), rel_path)
 
     def _planning_dir(self, work_slug: str) -> Path:
         root = self.working_root(work_slug)
@@ -89,18 +90,18 @@ class FsPlanningFiles:
             raise ValueError(f"planning root is not bound: {work_slug}")
         return _planning_dir_from_root(root, work_slug)
 
-    def _artifact_root_dir(self, work_slug: str) -> Path:
+    def _plan_artifacts_path(self, work_slug: str) -> Path:
         root = self.working_root(work_slug)
         if root is None:
             raise ValueError(f"planning root is not bound: {work_slug}")
         manifest = self.read_manifest(work_slug)
-        artifact_root = _str_or_none((manifest or {}).get("artifact_root"))
-        artifact_root_path = _str_or_none((manifest or {}).get("artifact_root_path"))
-        if artifact_root_path:
-            path = Path(artifact_root_path).expanduser()
+        dir_value = _str_or_none(manifest_keys.plan_artifacts_dir(manifest))
+        path_value = _str_or_none(manifest_keys.plan_artifacts_path(manifest))
+        if path_value:
+            path = Path(path_value).expanduser()
             return path if path.is_absolute() else Path(root).expanduser().resolve() / path
-        if artifact_root:
-            return _resolve_under_root(root, artifact_root)
+        if dir_value:
+            return _resolve_under_root(root, dir_value)
         return _planning_dir_from_root(root, work_slug)
 
 

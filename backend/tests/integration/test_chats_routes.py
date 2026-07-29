@@ -34,7 +34,7 @@ from src.domain.commands.planning import (
     submit_materialization,
 )
 from src.domain.planning.dtos import PlanArtifactEntry
-from src.domain.planning.frameworks import artifact_root_rel_path
+from src.domain.planning.frameworks import default_plan_artifacts_dir
 from src.settings import Settings
 
 
@@ -69,7 +69,7 @@ def _new_project(name: str = "Atelier", glyph: str = "AT") -> dict[str, object]:
 
 
 def _artifact_root(root: Path, work_slug: str) -> Path:
-    return root / artifact_root_rel_path("bmad", work_slug)
+    return root / default_plan_artifacts_dir("bmad", work_slug)
 
 
 class _FakeCompactionSessionClient:

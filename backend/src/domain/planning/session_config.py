@@ -13,7 +13,7 @@ def planning_config_option(session: PlanningSession) -> dict[str, Any]:
     """Return a JSON-safe copy of persisted planning setup."""
     return {
         "root_path": session.root_path,
-        "artifact_root_path": session.artifact_root_path,
+        "plan_artifacts_dir": session.plan_artifacts_dir,
         "framework": session.framework,
         "profile": session.profile,
         "provider": session.provider,

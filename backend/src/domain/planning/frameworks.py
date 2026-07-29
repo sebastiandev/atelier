@@ -33,7 +33,7 @@ class PlanningFrameworkDefinition:
     setup_hint: str
     discovery_focus: str
     revision_focus: str
-    artifact_root_template: str
+    plan_artifacts_dir_template: str
     roles: tuple[PlanningRole, ...]
 
 
@@ -53,7 +53,7 @@ _FRAMEWORKS: dict[PlanningFramework, PlanningFrameworkDefinition] = {
             "Use BMAD roles to refine the source-backed brief, design guide, "
             "architecture notes, and executable stories."
         ),
-        artifact_root_template="_bmad-output/{work_slug}",
+        plan_artifacts_dir_template="_bmad-output/{work_slug}",
         roles=(
             PlanningRole("Analyst", "Clarifies problem framing, goals, and constraints."),
             PlanningRole("Product Manager", "Shapes outcomes, scope, and acceptance."),
@@ -82,7 +82,7 @@ _FRAMEWORKS: dict[PlanningFramework, PlanningFrameworkDefinition] = {
         revision_focus=(
             "Keep the living spec, scenarios, acceptance criteria, and tasks aligned."
         ),
-        artifact_root_template="specs/{work_slug}",
+        plan_artifacts_dir_template="specs/{work_slug}",
         roles=(
             PlanningRole("Spec Steward", "Keeps behavior and non-goals precise."),
             PlanningRole("Scenario Writer", "Expands examples, edge cases, and flows."),
@@ -104,7 +104,7 @@ _FRAMEWORKS: dict[PlanningFramework, PlanningFrameworkDefinition] = {
         revision_focus=(
             "Keep OpenSpec proposal, spec deltas, tasks, and validation coherent."
         ),
-        artifact_root_template=".openspec/changes/{work_slug}",
+        plan_artifacts_dir_template=".openspec/changes/{work_slug}",
         roles=(
             PlanningRole("Proposal Author", "Frames the change and rationale."),
             PlanningRole("Spec Editor", "Maintains source-of-truth behavior."),
@@ -124,7 +124,7 @@ _FRAMEWORKS: dict[PlanningFramework, PlanningFrameworkDefinition] = {
             "before committing to a plan shape."
         ),
         revision_focus="Refine the user-selected source-backed planning artifacts.",
-        artifact_root_template="planning/{work_slug}",
+        plan_artifacts_dir_template="planning/{work_slug}",
         roles=(
             PlanningRole("Artifact Elicitor", "Asks which docs and gates are needed."),
             PlanningRole("Scope Reviewer", "Checks that the chosen structure is enough."),
@@ -141,7 +141,7 @@ def framework_definition(
     return _FRAMEWORKS.get(framework or "bmad", _FRAMEWORKS["bmad"])
 
 
-def artifact_root_rel_path(
+def default_plan_artifacts_dir(
     framework: PlanningFramework | None, work_slug: str
 ) -> str:
     """Return where framework-generated planning files should live.
@@ -151,7 +151,7 @@ def artifact_root_rel_path(
     """
     definition = framework_definition(framework)
     return _safe_rel_path(
-        definition.artifact_root_template.format(work_slug=_safe_segment(work_slug))
+        definition.plan_artifacts_dir_template.format(work_slug=_safe_segment(work_slug))
     )
 
 
@@ -231,8 +231,8 @@ def _safe_rel_path(value: str) -> str:
 __all__ = [
     "PlanningFrameworkDefinition",
     "PlanningRole",
-    "artifact_root_rel_path",
     "check_framework_status",
+    "default_plan_artifacts_dir",
     "depth_for_profile",
     "framework_definition",
 ]

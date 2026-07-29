@@ -906,7 +906,7 @@ export type WorkPlan = {
   depth: PlanningDepth;
   root_path: string;
   planning_path: string;
-  artifact_root_path: string;
+  plan_artifacts_path: string;
   approved_at: string | null;
   stale: boolean;
   overview: PlanOverview;
@@ -1007,7 +1007,7 @@ export function startWorkPlan(
   workSlug: string,
   payload: {
     root_path?: string | null;
-    artifact_root_path?: string | null;
+    plan_artifacts_dir?: string | null;
     framework?: PlanningFramework | null;
     profile?: PlanningProfile | null;
     provider?: string | null;
@@ -1039,7 +1039,7 @@ export function startPlanningChat(
   payload: {
     root_path: string;
     idea: string;
-    artifact_root_path?: string | null;
+    plan_artifacts_dir?: string | null;
     framework: PlanningFramework;
     profile: PlanningProfile;
     provider: string;

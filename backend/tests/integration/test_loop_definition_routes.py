@@ -26,7 +26,7 @@ def _create_work_with_planning_root(client: TestClient, root: Path) -> None:
             work_slug="WRK-001",
             planning_chat_slug=None,
             root_path=str(root),
-            artifact_root_path="_bmad-output/WRK-001",
+            plan_artifacts_dir="_bmad-output/WRK-001",
             framework="bmad",
             profile="feature",
             provider="amp",

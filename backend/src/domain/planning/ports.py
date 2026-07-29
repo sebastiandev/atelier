@@ -39,7 +39,7 @@ class PlanningFiles(Protocol):
         """Absolute path to the work's planning folder."""
         ...
 
-    def artifact_root_path(self, work_slug: str) -> str:
+    def plan_artifacts_path(self, work_slug: str) -> str:
         """Absolute path to framework-generated planning artifacts."""
         ...
 

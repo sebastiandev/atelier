@@ -86,7 +86,7 @@ class PlanningMaterializationPrompt:
     work_name: str
     root_path: str
     atelier_planning_path: str
-    artifact_root: str
+    plan_artifacts_dir: str
     framework: PlanningFramework
     profile: PlanningProfile
     planning_chat_slug: str | None
@@ -99,7 +99,7 @@ class PlanningMaterializerRuntimePrompt:
 
     framework: PlanningFramework
     root_path: str
-    artifact_root: str
+    plan_artifacts_dir: str
 
 
 @dataclass(frozen=True)
@@ -107,7 +107,7 @@ class PlanningMaterializationRecoveryPrompt:
     """Inputs for resuming materialization in a fresh provider session."""
 
     framework: PlanningFramework
-    artifact_root: str
+    plan_artifacts_dir: str
     original_brief: str
 
 
@@ -116,7 +116,7 @@ class PlanningMaterializationReportPrompt:
     """Inputs for requesting a missing report after materialization ends."""
 
     framework: PlanningFramework
-    artifact_root: str
+    plan_artifacts_dir: str
 
 
 @build_prompt.register
@@ -151,7 +151,7 @@ def _(req: PlanningMaterializationPrompt) -> str:
         f"- Profile: {req.profile}",
         f"- Working folder: {req.root_path}",
         f"- Atelier state folder: {req.atelier_planning_path}",
-        f"- Framework output folder: {req.artifact_root}",
+        f"- Framework output folder: {req.plan_artifacts_dir}",
         "",
         f"{fw.label} is the authoritative framework for this run. Do not load, "
         "invoke, or adopt conventions from another planning framework.",
@@ -165,7 +165,7 @@ def _(req: PlanningMaterializationPrompt) -> str:
         "",
         "Requirements:",
         "- Write every framework-generated planning source file under "
-        f"`{req.artifact_root}/`.",
+        f"`{req.plan_artifacts_dir}/`.",
         "- Do not write framework artifacts under the Atelier state folder; "
         "Atelier uses that folder for manifest and index metadata.",
         "- Generate the complete plan now: include all framework-level grouping "
@@ -221,7 +221,7 @@ def _(req: PlanningMaterializerRuntimePrompt) -> str:
         "Never infer or switch planning frameworks from a directory or file "
         "name. Planning folders and files are paths only.\n"
         f"Repository root: {req.root_path}\n"
-        f"Planning output path: {req.artifact_root}\n\n"
+        f"Planning output path: {req.plan_artifacts_dir}\n\n"
         "Follow the materialization brief supplied as user input. Preserve "
         "valid files already written by an earlier session. Inventory the "
         "planning output once, use targeted reads for concrete gaps, validate "
@@ -241,7 +241,7 @@ def _(req: PlanningMaterializationRecoveryPrompt) -> str:
         "Resume an interrupted Atelier Planning materialization in this fresh "
         "provider session.\n"
         f"The selected framework is {fw.label}; it remains authoritative.\n"
-        f"The output folder `{req.artifact_root}` is only a path. Its name does "
+        f"The output folder `{req.plan_artifacts_dir}` is only a path. Its name does "
         "not select or imply a framework.\n"
         "Treat files already present there as prior completed work. Inventory "
         "that folder once, preserve valid content, and inspect only the sources "
@@ -270,7 +270,7 @@ def _(req: PlanningMaterializationReportPrompt) -> str:
         "The materialization turn ended without its required "
         "atelier_plan_materialization report.\n"
         f"The selected framework remains {fw.label}. The output folder "
-        f"`{req.artifact_root}` is only a path and has no framework meaning.\n"
+        f"`{req.plan_artifacts_dir}` is only a path and has no framework meaning.\n"
         "Do not restart planning, scan the repository, or load framework "
         "skills. Treat the planning files as finished. Inspect only the output "
         "folder as needed to enumerate its Markdown artifacts, then emit "

@@ -29,7 +29,7 @@ from src.domain.planning.dtos import (
     PlanningFramework,
     PlanningProfile,
 )
-from src.domain.planning.frameworks import artifact_root_rel_path
+from src.domain.planning.frameworks import default_plan_artifacts_dir
 from src.domain.planning.models import PlanningSession
 from src.main import create_app
 from src.settings import Settings
@@ -343,7 +343,7 @@ def _submit_plan_metadata(
     framework: PlanningFramework,
     profile: PlanningProfile,
     artifacts: list[dict[str, object]],
-    artifact_root_path: str | None = None,
+    plan_artifacts_dir: str | None = None,
 ) -> Any:
     submit_materialization.execute(
         client.app.state.workstore,
@@ -352,7 +352,7 @@ def _submit_plan_metadata(
         submit_materialization.SubmitPlanMaterializationRequest(
             work_slug="WRK-001",
             root_path=str(root),
-            artifact_root_path=artifact_root_path,
+            plan_artifacts_dir=plan_artifacts_dir,
             framework=framework,
             profile=profile,
             artifacts=tuple(_artifact_entry(item) for item in artifacts),
@@ -394,7 +394,7 @@ def test_start_plan_indexes_precreated_bmad_sources(
     assert body["work_slug"] == "WRK-001"
     assert body["root_path"] == str(repo_root)
     assert body["planning_path"] == str(planning_dir)
-    assert body["artifact_root_path"] == str(artifact_dir)
+    assert body["plan_artifacts_path"] == str(artifact_dir)
     assert body["framework"] == "bmad"
     assert body["profile"] == "refactor"
     assert body["phase"] == "planned"
@@ -422,7 +422,7 @@ def test_start_plan_indexes_precreated_bmad_sources(
     assert all("content" not in item for item in manifest["artifacts"])
 
 
-def test_start_plan_accepts_custom_artifact_root(
+def test_start_plan_accepts_a_custom_plan_artifacts_dir(
     app_client: TestClient, test_settings: Settings
 ) -> None:
     _create_work(app_client)
@@ -457,16 +457,16 @@ def test_start_plan_accepts_custom_artifact_root(
                 "dependencies": [],
             },
         ],
-        artifact_root_path="bmad/WRK-001",
+        plan_artifacts_dir="bmad/WRK-001",
     )
 
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["artifact_root_path"] == str(artifact_dir)
+    assert body["plan_artifacts_path"] == str(artifact_dir)
     manifest = json.loads(
         (repo_root / ".atelier" / "planning" / "WRK-001" / "manifest.json").read_text()
     )
-    assert manifest["artifact_root"] == "bmad/WRK-001"
+    assert manifest["plan_artifacts_dir"] == "bmad/WRK-001"
     assert {item["path"] for item in manifest["artifacts"]} == {
         "intent.md",
         "stories/story-001.md",
@@ -524,7 +524,7 @@ def test_start_plan_records_framework_and_profile_depth(
                 "dependencies": ["spec.md"],
             },
         ],
-        artifact_root_path="plans/spec-import",
+        plan_artifacts_dir="plans/spec-import",
     )
 
     assert res.status_code == 200, res.text
@@ -758,7 +758,7 @@ def test_start_planning_chat_uses_backend_prompt_and_framework_gate(
         json={
             "root_path": str(repo_root),
             "idea": "Plan a CSV import feature.",
-            "artifact_root_path": "bmad/csv-import",
+            "plan_artifacts_dir": "bmad/csv-import",
             "framework": "bmad",
             "profile": "feature",
             "provider": "codex",
@@ -781,11 +781,11 @@ def test_start_planning_chat_uses_backend_prompt_and_framework_gate(
     assert session.work_slug == "WRK-001"
     assert session.planning_chat_slug == body["slug"]
     assert session.root_path == str(repo_root)
-    assert session.artifact_root_path == "bmad/csv-import"
+    assert session.plan_artifacts_dir == "bmad/csv-import"
     assert session.provider == "codex"
     assert session.model == "gpt-5.4"
     assert session.options == {"approval_mode": "never"}
-    assert body["options"]["planning_config"]["artifact_root_path"] == "bmad/csv-import"
+    assert body["options"]["planning_config"]["plan_artifacts_dir"] == "bmad/csv-import"
 
 
 def test_start_planning_setup_chat_creates_visible_installer_chat(
@@ -847,7 +847,7 @@ def test_start_plan_finalizes_existing_materializer_report(
         profile="feature",
         provider="codex",
         model="gpt-5.4",
-        artifact_root_path="plans/spec-import",
+        plan_artifacts_dir="plans/spec-import",
     )
     artifact_dir = repo_root / "plans" / "spec-import"
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -895,7 +895,7 @@ def test_start_plan_finalizes_existing_materializer_report(
     assert body["materialization_status"]["state"] == "complete"
     plan = body["plan"]
     assert plan["framework"] == "spec"
-    assert plan["artifact_root_path"] == str(artifact_dir)
+    assert plan["plan_artifacts_path"] == str(artifact_dir)
     assert plan["phase"] == "planned"
     assert {artifact["id"] for artifact in plan["artifacts"]} == {
         "spec",
@@ -968,7 +968,7 @@ def test_start_plan_rejects_artifact_root_outside_work_folder(
         profile="feature",
         provider="codex",
         model="gpt-5.4",
-        artifact_root_path="../outside",
+        plan_artifacts_dir="../outside",
     )
 
     finalized = app_client.post(
@@ -2898,7 +2898,7 @@ def _create_planning_session(
     model: str = "gpt-5.4",
     options: dict[str, object] | None = None,
     planning_chat_slug: str | None = None,
-    artifact_root_path: str | None = None,
+    plan_artifacts_dir: str | None = None,
 ) -> None:
     now = datetime.now(UTC)
     client.app.state.planning_sessions.upsert_session(
@@ -2906,7 +2906,9 @@ def _create_planning_session(
             work_slug="WRK-001",
             planning_chat_slug=planning_chat_slug,
             root_path=str(root),
-            artifact_root_path=artifact_root_path or artifact_root_rel_path(framework, "WRK-001"),
+            plan_artifacts_dir=(
+                plan_artifacts_dir or default_plan_artifacts_dir(framework, "WRK-001")
+            ),
             framework=framework,
             profile=profile,
             provider=provider,  # type: ignore[arg-type]
@@ -2994,7 +2996,7 @@ def _planning_file(settings: Settings, rel_path: str) -> Path:
 def _artifact_root(
     root: Path, framework: PlanningFramework = "bmad", work_slug: str = "WRK-001"
 ) -> Path:
-    return root / artifact_root_rel_path(framework, work_slug)
+    return root / default_plan_artifacts_dir(framework, work_slug)
 
 
 def test_story_runs_share_one_worktree_per_story(

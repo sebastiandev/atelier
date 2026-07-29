@@ -256,7 +256,7 @@ planning_sessions_table = Table(
         index=True,
     ),
     Column("root_path", String, nullable=False),
-    Column("artifact_root_path", String, nullable=True),
+    Column("plan_artifacts_dir", String, nullable=True),
     Column("framework", String, nullable=False),
     Column("profile", String, nullable=False),
     Column("provider", String, nullable=False),

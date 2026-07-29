@@ -27,9 +27,13 @@ from src.domain.planning.dtos import (
     WorkPlanView,
 )
 from src.domain.planning.frameworks import (
-    artifact_root_rel_path,
     check_framework_status,
+    default_plan_artifacts_dir,
     depth_for_profile,
+)
+from src.domain.planning.manifest_keys import (
+    PLAN_ARTIFACTS_DIR_KEY,
+    PLAN_ARTIFACTS_PATH_KEY,
 )
 from src.domain.planning.paths import atelier_planning_rel_path
 from src.domain.planning.ports import PlanningFiles
@@ -86,7 +90,7 @@ def submit_plan_materialization(
     framework: PlanningFramework,
     profile: PlanningProfile,
     artifacts: tuple[PlanArtifactEntry, ...],
-    artifact_root_path: str | None = None,
+    plan_artifacts_dir: str | None = None,
 ) -> WorkPlanView:
     """Persist metadata for framework-generated planning files.
 
@@ -112,10 +116,10 @@ def submit_plan_materialization(
 
     bound_root_path = files.bind_working_root(stored_work_slug, root_path)
     files.ensure_plan_dir(stored_work_slug)
-    artifact_root, absolute_artifact_root = resolve_artifact_root(
-        bound_root_path, framework, stored_work_slug, artifact_root_path
+    plan_artifacts_dir, plan_artifacts_path = resolve_plan_artifacts_dir(
+        bound_root_path, framework, stored_work_slug, plan_artifacts_dir
     )
-    _validate_entries(files, absolute_artifact_root, artifacts)
+    _validate_entries(files, plan_artifacts_path, artifacts)
     now = _now_iso()
     depth = depth_for_profile(profile)
     manifest = files.read_manifest(stored_work_slug) or _new_manifest(
@@ -126,8 +130,8 @@ def submit_plan_materialization(
     manifest["depth"] = depth
     manifest["phase"] = "planned"
     manifest["root_path"] = bound_root_path
-    manifest["artifact_root"] = artifact_root
-    manifest["artifact_root_path"] = absolute_artifact_root
+    manifest[PLAN_ARTIFACTS_DIR_KEY] = plan_artifacts_dir
+    manifest[PLAN_ARTIFACTS_PATH_KEY] = plan_artifacts_path
     manifest["updated_at"] = now
     manifest["artifacts"] = [_entry_to_manifest(entry) for entry in artifacts]
     files.write_manifest(stored_work_slug, manifest)
@@ -156,7 +160,7 @@ def start_materialization_chat(
     model: str,
     options: dict[str, Any],
     planning_chat_slug: str | None,
-    artifact_root_path: str | None = None,
+    plan_artifacts_dir: str | None = None,
 ) -> tuple[ChatRecord, PlanningFrameworkStatus]:
     """Create or return a Planning materialization chat.
 
@@ -189,8 +193,8 @@ def start_materialization_chat(
         return existing, status
 
     planning_chat = _planning_chat(chatstore, work_slug, planning_chat_slug)
-    artifact_root, _absolute_artifact_root_path = resolve_artifact_root(
-        status.root_path, framework, work_slug, artifact_root_path
+    plan_artifacts_dir, _absolute = resolve_plan_artifacts_dir(
+        status.root_path, framework, work_slug, plan_artifacts_dir
     )
     first_message = build_prompt(
         PlanningMaterializationPrompt(
@@ -198,7 +202,7 @@ def start_materialization_chat(
             work_name=record.work.name,
             root_path=status.root_path,
             atelier_planning_path=atelier_planning_rel_path(work_slug),
-            artifact_root=artifact_root,
+            plan_artifacts_dir=plan_artifacts_dir,
             framework=framework,
             profile=profile,
             planning_chat_slug=(
@@ -271,7 +275,7 @@ def finalize_materialization_report(
     chat_slug: str,
     framework: PlanningFramework,
     profile: PlanningProfile,
-    artifact_root_path: str | None = None,
+    plan_artifacts_dir: str | None = None,
 ) -> WorkPlanView:
     """Finalize the latest materializer report for a Work.
 
@@ -305,7 +309,7 @@ def finalize_materialization_report(
         framework=framework,
         profile=profile,
         artifacts=_entries_from_report(report),
-        artifact_root_path=artifact_root_path,
+        plan_artifacts_dir=plan_artifacts_dir,
     )
 
 
@@ -329,7 +333,7 @@ def materialization_options(provider: Provider, options: dict[str, Any]) -> dict
 
 
 def _validate_entries(
-    files: PlanningFiles, artifact_root_path: str, entries: tuple[PlanArtifactEntry, ...]
+    files: PlanningFiles, plan_artifacts_path: str, entries: tuple[PlanArtifactEntry, ...]
 ) -> None:
     if not entries:
         raise InvalidPlanMaterialization("at least one artifact is required")
@@ -341,7 +345,7 @@ def _validate_entries(
             raise InvalidPlanMaterialization(f"duplicate artifact path: {entry.path}")
         if not entry.title.strip():
             raise InvalidPlanMaterialization(f"artifact title is required: {entry.path}")
-        if files.read_text_at(artifact_root_path, entry.path) is None:
+        if files.read_text_at(plan_artifacts_path, entry.path) is None:
             raise InvalidPlanMaterialization(f"artifact file is missing: {entry.path}")
         paths.add(entry.path)
     for entry in entries:
@@ -375,8 +379,8 @@ def _new_manifest(
         "phase": "planned",
         "depth": depth,
         "root_path": root_path,
-        "artifact_root": "",
-        "artifact_root_path": "",
+        PLAN_ARTIFACTS_DIR_KEY: "",
+        PLAN_ARTIFACTS_PATH_KEY: "",
         "created_at": created_at,
         "updated_at": created_at,
         "source_hashes": {},
@@ -391,26 +395,26 @@ def _new_manifest(
     }
 
 
-def resolve_artifact_root(
+def resolve_plan_artifacts_dir(
     root_path: str,
     framework: PlanningFramework,
     work_slug: str,
-    artifact_root_path: str | None = None,
+    plan_artifacts_dir: str | None = None,
 ) -> tuple[str, str]:
     """Resolve the framework artifact root from a default or user override.
 
     Preconditions: ``root_path`` is the selected work folder and
-    ``artifact_root_path`` is either empty, root-relative, or absolute inside
+    ``plan_artifacts_dir`` is either empty, root-relative, or absolute inside
     ``root_path``.
     Postconditions: returns ``(relative_posix_path, absolute_path)`` and raises
     if the folder escapes ``root_path``.
     """
-    if not artifact_root_path or not artifact_root_path.strip():
-        rel = artifact_root_rel_path(framework, work_slug)
-        return rel, _absolute_artifact_root(root_path, rel)
+    if not plan_artifacts_dir or not plan_artifacts_dir.strip():
+        rel = default_plan_artifacts_dir(framework, work_slug)
+        return rel, _absolute_plan_artifacts_path(root_path, rel)
 
     root = Path(root_path).expanduser().resolve()
-    raw = artifact_root_path.strip()
+    raw = plan_artifacts_dir.strip()
     raw_path = Path(raw).expanduser()
     if raw_path.is_absolute():
         absolute = raw_path.resolve()
@@ -420,7 +424,7 @@ def resolve_artifact_root(
             part in {"", ".", ".."} for part in relative.parts
         ):
             raise InvalidPlanMaterialization(
-                f"invalid framework output folder: {artifact_root_path}"
+                f"invalid framework output folder: {plan_artifacts_dir}"
             )
         absolute = root.joinpath(*relative.parts).resolve()
     try:
@@ -431,18 +435,18 @@ def resolve_artifact_root(
         ) from exc
     if not rel_path.parts:
         raise InvalidPlanMaterialization(
-            f"invalid framework output folder: {artifact_root_path}"
+            f"invalid framework output folder: {plan_artifacts_dir}"
         )
     rel_posix = PurePosixPath(*rel_path.parts).as_posix()
     return rel_posix, str(absolute)
 
 
-def _absolute_artifact_root(root_path: str, artifact_root: str) -> str:
+def _absolute_plan_artifacts_path(root_path: str, plan_artifacts_dir: str) -> str:
     root = Path(root_path).expanduser().resolve()
-    rel = PurePosixPath(artifact_root)
+    rel = PurePosixPath(plan_artifacts_dir)
     if rel.is_absolute() or any(part in {"", ".", ".."} for part in rel.parts):
         raise InvalidPlanMaterialization(
-            f"invalid framework output folder: {artifact_root}"
+            f"invalid framework output folder: {plan_artifacts_dir}"
         )
     return str(root.joinpath(*rel.parts))
 
@@ -620,7 +624,7 @@ __all__ = [
     "WorkNotFound",
     "finalize_materialization_report",
     "materialization_options",
-    "resolve_artifact_root",
+    "resolve_plan_artifacts_dir",
     "start_materialization_chat",
     "submit_plan_materialization",
     "validate_materialization_provider_config",

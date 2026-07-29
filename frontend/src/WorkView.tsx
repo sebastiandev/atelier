@@ -163,7 +163,7 @@ type PlanningStartOverrides = {
   prompt?: string;
   framework?: PlanningFrameworkId;
   profile?: PlanningProfile;
-  artifactRootPath?: string | null;
+  planArtifactsDir?: string | null;
   agentConfig?: PlanningAgentConfig | null;
 };
 
@@ -439,7 +439,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       prompt: seed.idea || work.description || work.name,
       framework: seed.framework,
       profile: seed.profile,
-      artifactRootPath: seed.planDir,
+      planArtifactsDir: seed.planDir,
       agentConfig: seed.agentConfig,
     }).catch(() => {});
   }, [work, workSlug]);
@@ -556,7 +556,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       prompt: seed.idea,
       framework: seed.framework,
       profile: seed.profile,
-      artifactRootPath: seed.planDir,
+      planArtifactsDir: seed.planDir,
       agentConfig: seed.agentConfig,
     });
     setPlanningDialogOpen(false);
@@ -1082,9 +1082,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     const framework = overrides.framework ?? planFramework;
     const profile = overrides.profile ?? planProfile;
     const agentConfig = overrides.agentConfig ?? planAgentConfig;
-    const artifactRootPath =
-      overrides.artifactRootPath !== undefined
-        ? overrides.artifactRootPath
+    const planArtifactsDir =
+      overrides.planArtifactsDir !== undefined
+        ? overrides.planArtifactsDir
         : planArtifactRootDraft ?? defaultPlanningArtifactRoot(framework, work.slug);
     setPlanSelectedRoot(rootPath);
     setPlanRootCleared(false);
@@ -1110,7 +1110,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       const created = await startPlanningChat(work.slug, {
         root_path: rootPath,
         idea: prompt || work.name,
-        artifact_root_path: artifactRootPath?.trim() || null,
+        plan_artifacts_dir: planArtifactsDir?.trim() || null,
         framework,
         profile,
         provider: agent.provider.name,

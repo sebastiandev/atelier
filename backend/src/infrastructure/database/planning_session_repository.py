@@ -43,7 +43,7 @@ class SqlPlanningSessionRepository:
                 return session
             existing.planning_chat_slug = session.planning_chat_slug
             existing.root_path = session.root_path
-            existing.artifact_root_path = session.artifact_root_path
+            existing.plan_artifacts_dir = session.plan_artifacts_dir
             existing.framework = session.framework
             existing.profile = session.profile
             existing.provider = session.provider

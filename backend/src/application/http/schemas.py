@@ -9,7 +9,7 @@ side has to do filesystem-existence validation.
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from src.domain.chats.posture import ChatRole
 from src.domain.loop.dtos import (
@@ -552,9 +552,16 @@ class PlanningFrameworkStatusResponse(BaseModel):
 
 
 class StartPlanningChatRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     root_path: str = Field(min_length=1)
     idea: str = ""
-    artifact_root_path: str | None = None
+    # `artifact_root_path` is what this field was called before the rename;
+    # a browser tab loaded from an older build still posts it.
+    plan_artifacts_dir: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("plan_artifacts_dir", "artifact_root_path"),
+    )
     framework: PlanningFramework
     profile: PlanningProfile
     provider: Provider
@@ -572,8 +579,13 @@ class StartPlanningSetupChatRequest(BaseModel):
 
 
 class StartWorkPlanRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     root_path: str | None = None
-    artifact_root_path: str | None = None
+    plan_artifacts_dir: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("plan_artifacts_dir", "artifact_root_path"),
+    )
     framework: PlanningFramework | None = None
     profile: PlanningProfile | None = None
     provider: Provider | None = None
@@ -803,7 +815,7 @@ class WorkPlanResponse(BaseModel):
     depth: PlanningDepth
     root_path: str
     planning_path: str
-    artifact_root_path: str
+    plan_artifacts_path: str
     approved_at: str | None = None
     stale: bool
     overview: PlanOverviewResponse

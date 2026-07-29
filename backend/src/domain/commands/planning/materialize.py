@@ -61,7 +61,7 @@ class MaterializePlanRequest:
     profile: PlanningProfile | None = None
     provider: Provider | None = None
     model: str | None = None
-    artifact_root_path: str | None = None
+    plan_artifacts_dir: str | None = None
     options: dict[str, Any] = field(default_factory=dict)
     planning_chat_slug: str | None = None
     artifacts: tuple[PlanArtifactEntry, ...] = ()
@@ -95,7 +95,7 @@ async def execute(
             loop_runs,
             work_slug=req.work_slug,
             root_path=req.root_path,
-            artifact_root_path=req.artifact_root_path,
+            plan_artifacts_dir=req.plan_artifacts_dir,
             framework=req.framework,
             profile=req.profile,
             artifacts=req.artifacts,
@@ -122,7 +122,7 @@ async def execute(
         chatstore,
         work_slug=req.work_slug,
         root_path=req.root_path,
-        artifact_root_path=req.artifact_root_path,
+        plan_artifacts_dir=req.plan_artifacts_dir,
         framework=req.framework,
         profile=req.profile,
         provider=req.provider,
@@ -250,7 +250,7 @@ def _try_finalize(
             chat_slug=chat_slug,
             framework=req.framework,
             profile=req.profile,
-            artifact_root_path=req.artifact_root_path,
+            plan_artifacts_dir=req.plan_artifacts_dir,
         )
     except materialization.MaterializationReportNotFound:
         return None
@@ -330,7 +330,7 @@ def resolve_from_planning_session(
     return replace(
         req,
         root_path=session.root_path,
-        artifact_root_path=session.artifact_root_path,
+        plan_artifacts_dir=session.plan_artifacts_dir,
         framework=session.framework,
         profile=session.profile,
         provider=session.provider,
@@ -348,14 +348,14 @@ async def _restart_planning_chat(
         await chat_supervisor.stop_agent(req.planning_chat_slug)
 
 
-def _artifact_root(req: MaterializePlanRequest) -> str:
+def _plan_artifacts_dir(req: MaterializePlanRequest) -> str:
     """Resolve the configured materialization output path."""
     if req.root_path is None or req.framework is None:
         raise ValueError("root_path and framework are required for materialization")
-    artifact_root, _absolute_artifact_root = materialization.resolve_artifact_root(
-        req.root_path, req.framework, req.work_slug, req.artifact_root_path
+    plan_artifacts_dir, _absolute_plan_artifacts_path = materialization.resolve_plan_artifacts_dir(
+        req.root_path, req.framework, req.work_slug, req.plan_artifacts_dir
     )
-    return artifact_root
+    return plan_artifacts_dir
 
 
 def _runtime_prompt(req: MaterializePlanRequest) -> str:
@@ -366,7 +366,7 @@ def _runtime_prompt(req: MaterializePlanRequest) -> str:
         PlanningMaterializerRuntimePrompt(
             framework=req.framework,
             root_path=req.root_path,
-            artifact_root=_artifact_root(req),
+            plan_artifacts_dir=_plan_artifacts_dir(req),
         )
     )
 
@@ -378,7 +378,7 @@ def _recovery_prompt(req: MaterializePlanRequest, original_brief: str) -> str:
     return build_prompt(
         PlanningMaterializationRecoveryPrompt(
             framework=req.framework,
-            artifact_root=_artifact_root(req),
+            plan_artifacts_dir=_plan_artifacts_dir(req),
             original_brief=original_brief,
         )
     )
@@ -391,7 +391,7 @@ def _report_prompt(req: MaterializePlanRequest) -> str:
     return build_prompt(
         PlanningMaterializationReportPrompt(
             framework=req.framework,
-            artifact_root=_artifact_root(req),
+            plan_artifacts_dir=_plan_artifacts_dir(req),
         )
     )
 

@@ -34,7 +34,7 @@ class SubmitPlanMaterializationRequest:
     framework: PlanningFramework
     profile: PlanningProfile
     artifacts: tuple[PlanArtifactEntry, ...]
-    artifact_root_path: str | None = None
+    plan_artifacts_dir: str | None = None
 
 
 def execute(
@@ -56,7 +56,7 @@ def execute(
         loop_runs,
         work_slug=req.work_slug,
         root_path=req.root_path,
-        artifact_root_path=req.artifact_root_path,
+        plan_artifacts_dir=req.plan_artifacts_dir,
         framework=req.framework,
         profile=req.profile,
         artifacts=req.artifacts,
