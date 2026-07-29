@@ -269,13 +269,12 @@ export function PlanningMode({
       .then((rows) => {
         if (cancelled) return;
         setSetupDefinitions(rows);
+        // Only a previous run pre-selects. A fresh story starts with nothing
+        // chosen, so the picker is the obvious first decision.
         setSetupDefinition((current) => {
           if (current) return current;
           const pinned = setupSource?.loop_definition_id;
-          return rows.find((row) => row.id === pinned && row.valid)
-            ?? rows.find((row) => row.id === "atelier-reviewed" && row.valid)
-            ?? rows.find((row) => row.valid)
-            ?? null;
+          return rows.find((row) => row.id === pinned && row.valid) ?? null;
         });
       })
       .catch(() => {
@@ -311,7 +310,12 @@ export function PlanningMode({
     ["--shell-left-width" as string]: `${planningRailWidth}px`,
   };
   const hasPlanningChat = planningChatSlug !== null;
-  const showChatDock = !readOnly && chatOpen && hasPlanningChat && view.kind !== "run";
+  const showChatDock =
+    !readOnly
+    && chatOpen
+    && hasPlanningChat
+    && view.kind !== "run"
+    && view.kind !== "setup";
   const planningReady = Boolean(planningChatSummary?.planning_readiness?.ready);
   const planReferences = plan?.artifacts ?? [];
   const materializerActive = materializationStatus?.state === "running";
@@ -630,26 +634,28 @@ export function PlanningMode({
           <div className="pm-loading">Loading story…</div>
         )}
         {view.kind === "setup" && selectedDetail && (
-          <LoopBriefSetup
-            agentConfig={setupAgentConfig}
-            brief={setupBrief ?? { goal: selectedDetail.artifact.title, stages: [] }}
-            busy={saving || readOnly}
-            definition={setupDefinition}
-            definitions={setupDefinitions}
-            error={error}
-            folder={plan?.root_path ?? ""}
-            goal={selectedDetail.artifact.title}
-            goalLabel="Story"
-            workSlug={work.slug}
-            onAgentConfig={setSetupAgentConfig}
-            onBrief={setSetupBrief}
-            onSelectDefinition={setSetupDefinition}
-            onEditLoop={() => setSetupEditorOpen(true)}
-            onStart={() => {
-              if (!setupDefinition || !setupBrief) return;
-              void onStartRun(selectedDetail, setupDefinition, setupBrief);
-            }}
-          />
+          <div className="pm-setup-body themed-scrollbar">
+            <LoopBriefSetup
+              agentConfig={setupAgentConfig}
+              brief={setupBrief ?? { goal: selectedDetail.artifact.title, stages: [] }}
+              busy={saving || readOnly}
+              definition={setupDefinition}
+              definitions={setupDefinitions}
+              error={error}
+              folder={plan?.root_path ?? ""}
+              goal={selectedDetail.artifact.title}
+              goalLabel="Story"
+              workSlug={work.slug}
+              onAgentConfig={setSetupAgentConfig}
+              onBrief={setSetupBrief}
+              onSelectDefinition={setSetupDefinition}
+              onEditLoop={() => setSetupEditorOpen(true)}
+              onStart={() => {
+                if (!setupDefinition || !setupBrief) return;
+                void onStartRun(selectedDetail, setupDefinition, setupBrief);
+              }}
+            />
+          </div>
         )}
         {setupEditorOpen && (
           <LoopStructureEditor

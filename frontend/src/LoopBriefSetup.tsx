@@ -209,7 +209,10 @@ export function LoopBriefSetup({
       )}
 
       {error && <div className="form-error">{error}</div>}
-      <footer className="loop-brief-footer">
+      {!definition && definitions && (
+        <p className="loop-brief-pending">Choose a loop above to brief its stages.</p>
+      )}
+      {definition && <footer className="loop-brief-footer">
         {onChooseFolder ? (
           <button type="button" className="loop-brief-workdir" onClick={onChooseFolder} title="Choose work folder">
             <FolderIcon size={11} /> {folder ? compactPath(folder) : "choose workdir"} · isolated worktree
@@ -230,7 +233,7 @@ export function LoopBriefSetup({
         <button className="btn primary" disabled={busy || !ready} onClick={onStart}>
           <PlayIcon size={12} /> {busy ? "Starting..." : "Start loop"}
         </button>
-      </footer>
+      </footer>}
 
       {picker && (
         <FolderPickerDialog
