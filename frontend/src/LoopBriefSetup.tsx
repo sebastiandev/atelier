@@ -19,12 +19,12 @@ import {
   EyeIcon,
   FlaskIcon,
   FolderIcon,
-  LoopIcon,
   PaperclipIcon,
   PlayIcon,
   ReturnIcon,
   UserCheckIcon,
 } from "./Icons";
+import { LoopPicker } from "./LoopUI";
 import { PlanningAgentControls } from "./PlanningMode";
 import type { PlanningAgentConfig } from "./planningSetup";
 
@@ -40,7 +40,8 @@ type Props = {
   workSlug: string;
   onAgentConfig: (config: PlanningAgentConfig) => void;
   onBrief: (brief: LoopBrief) => void;
-  onChangeLoop: () => void;
+  /** Choosing a loop reconfigures every section below. */
+  onSelectDefinition: (definition: LoopDefinition) => void;
   onChooseFolder?: () => void;
   onEditLoop: () => void;
   /** Omit when the caller owns the goal — it renders read-only. */
@@ -63,7 +64,7 @@ export function LoopBriefSetup({
   workSlug,
   onAgentConfig,
   onBrief,
-  onChangeLoop,
+  onSelectDefinition,
   onChooseFolder,
   onEditLoop,
   onGoal,
@@ -156,18 +157,16 @@ export function LoopBriefSetup({
             <span>{definition.name} · {scopeLabel(definition)} · rev {definition.revision}</span>
           )}
           <span className="loop-brief-definition-actions">
-            <button type="button" onClick={onChangeLoop}><ReturnIcon size={10} /> choose another</button>
             <button type="button" disabled={!definition} onClick={onEditLoop}><EditIcon size={10} /> edit {definition?.scope === "builtin" ? "(forks)" : ""}</button>
           </span>
         </header>
-        {definition ? (
-          <StageStrip stages={definition.stages} />
-        ) : (
-          <button className="loop-mode-empty-definition" onClick={onChangeLoop}>
-            <LoopIcon size={15} />
-            <span><strong>{definitions ? "Choose a loop" : "Loading loops..."}</strong><small>Select reusable stages for this goal.</small></span>
-          </button>
-        )}
+        <LoopPicker
+          definitions={definitions}
+          selectedId={definition?.id ?? null}
+          onSelect={onSelectDefinition}
+          onCreate={onEditLoop}
+        />
+        {definition && <StageStrip stages={definition.stages} />}
       </section>
 
       {definition && (

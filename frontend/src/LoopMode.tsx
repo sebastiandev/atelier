@@ -31,7 +31,6 @@ import { FolderPickerDialog } from "./FolderPickerDialog";
 import { CheckIcon, LoopIcon } from "./Icons";
 import { LoopBriefSetup } from "./LoopBriefSetup";
 import {
-  LoopDefinitionPickerDialog,
   LoopStructureEditor,
 } from "./LoopUI";
 import {
@@ -89,8 +88,6 @@ export function LoopMode({
   });
   const [briefPersistenceReady, setBriefPersistenceReady] = useState(false);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
-  const [selectorOpen, setSelectorOpen] = useState(false);
-  const [selectorDefinitionId, setSelectorDefinitionId] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(initialSeed?.createDefinition ?? false);
   const [editorDefinition, setEditorDefinition] = useState<LoopDefinition | null>(null);
   const [editReturnsToSetup, setEditReturnsToSetup] = useState(false);
@@ -263,7 +260,7 @@ export function LoopMode({
     }
   }
 
-  async function prepareNewRun(run: WorkLoopRun, chooseLoop = false) {
+  async function prepareNewRun(run: WorkLoopRun) {
     const snapshot = run.loop_definition;
     setGoal(run.goal);
     setFolder(run.root_path);
@@ -275,10 +272,6 @@ export function LoopMode({
     );
     setRunDock(null);
     setPreparingRun(true);
-    if (chooseLoop) {
-      setSelectorDefinitionId(run.loop_definition_id);
-      setSelectorOpen(true);
-    }
   }
 
   const style = {
@@ -376,7 +369,7 @@ export function LoopMode({
               onApprove={canActOnRun ? () => act(() => acceptWorkLoopRun(work.slug, activeRun.id)) : undefined}
               onCancel={canActOnRun ? () => act(() => cancelWorkLoopRun(work.slug, activeRun.id)) : undefined}
               onCreatePr={canActOnRun ? (setup) => act(() => createWorkLoopRunPrStage(work.slug, activeRun.id, setup)) : undefined}
-              onChangeLoop={canActOnRun ? () => prepareNewRun(activeRun, true) : undefined}
+              onChangeLoop={canActOnRun ? () => prepareNewRun(activeRun) : undefined}
               onFollowUp={canActOnRun ? (kind, note) => act(() => rerunWorkLoopRun(work.slug, activeRun.id, { kind, note: note || undefined })) : undefined}
               onRerun={canActOnRun ? () => prepareNewRun(activeRun) : undefined}
               onRetry={canActOnRun && activeRun.status === "failed" ? () => act(() => retryWorkLoopRunStage(work.slug, activeRun.id)) : undefined}
@@ -413,10 +406,7 @@ export function LoopMode({
               onBrief={setBrief}
               onAgentConfig={setAgentConfig}
               onChooseFolder={() => setFolderPickerOpen(true)}
-              onChangeLoop={() => {
-                setSelectorDefinitionId(selectedDefinition?.id ?? null);
-                setSelectorOpen(true);
-              }}
+              onSelectDefinition={setSelectedDefinition}
               onEditLoop={() => {
                 if (!selectedDefinition) return;
                 setEditorDefinition(selectedDefinition);
@@ -445,23 +435,6 @@ export function LoopMode({
           onPick={(path) => {
             setFolder(path);
             setFolderPickerOpen(false);
-          }}
-        />
-      )}
-      {selectorOpen && (
-        <LoopDefinitionPickerDialog
-          workSlug={work.slug}
-          rootPath={folder}
-          goal={goal}
-          initialDefinitionId={selectorDefinitionId ?? selectedDefinition?.id}
-          onClose={() => {
-            setSelectorDefinitionId(null);
-            setSelectorOpen(false);
-          }}
-          onSelect={async (definition) => {
-            setSelectedDefinition(definition);
-            setSelectorDefinitionId(null);
-            setSelectorOpen(false);
           }}
         />
       )}

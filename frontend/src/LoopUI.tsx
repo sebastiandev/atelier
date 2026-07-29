@@ -120,6 +120,75 @@ const OUTCOMES: Array<{ key: LoopOutcome; label: string }> = [
   { key: "failed", label: "failed" },
 ];
 
+/** Search + choose a loop, inline. Lives in the run-setup flow so choosing
+ *  a loop is a section of the form rather than a modal detour: the sections
+ *  below it reconfigure from whatever is selected. */
+export function LoopPicker({
+  definitions,
+  selectedId,
+  onSelect,
+  onCreate,
+}: {
+  definitions: LoopDefinition[] | null;
+  selectedId: string | null;
+  onSelect: (definition: LoopDefinition) => void;
+  onCreate?: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const launchable = definitions?.filter((row) => row.valid) ?? [];
+  const needle = query.trim().toLowerCase();
+  const visible = needle
+    ? launchable.filter((definition) =>
+        [
+          definition.name,
+          definition.description,
+          definition.scope,
+          definition.stages.map((stage) => stage.name).join(" "),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(needle),
+      )
+    : launchable;
+  return (
+    <div className="loop-picker">
+      <div className="loop-section-label">
+        <span>Choose a loop</span>
+        <span>{visible.length} of {launchable.length}</span>
+      </div>
+      <label className={"loop-search" + (query ? " active" : "")}>
+        <SearchIcon size={13} />
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filter loops by name, description, or stage…"
+        />
+        {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear search">×</button>}
+      </label>
+      {!definitions && <div className="loop-loading">Loading loops…</div>}
+      <div className="loop-selector-list">
+        {visible.map((definition) => (
+          <LoopDefinitionChoice
+            key={definition.id}
+            definition={definition}
+            query={needle}
+            selected={definition.id === selectedId}
+            onSelect={() => onSelect(definition)}
+          />
+        ))}
+        {definitions && visible.length === 0 && (
+          <div className="loop-search-empty">
+            <SearchIcon size={18} />
+            <span>No loops match “{query}”.</span>
+            {onCreate && <button className="btn sm" onClick={onCreate}>+ Create a loop</button>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 export function LoopSelectorDialog({
   workSlug,
   rootPath,

@@ -27,8 +27,8 @@ import {
   listLoopDefinitions,
 } from "./api";
 import { ChatTile } from "./Chat";
+import { LoopStructureEditor } from "./LoopUI";
 import { LoopBriefSetup } from "./LoopBriefSetup";
-import { LoopSelectorDialog } from "./LoopUI";
 import {
   AgentIcon,
   BranchIcon,
@@ -245,10 +245,10 @@ export function PlanningMode({
   const [setupDefinitions, setSetupDefinitions] = useState<LoopDefinition[] | null>(null);
   const [setupDefinition, setSetupDefinition] = useState<LoopDefinition | null>(null);
   const [setupBrief, setSetupBrief] = useState<LoopBrief | null>(null);
-  const [setupPickerOpen, setSetupPickerOpen] = useState(false);
   // The provider the entry stage runs on. Null until chosen, which is what
   // keeps Start disabled: a story has no parent agent to inherit from.
   const [setupAgentConfig, setSetupAgentConfig] = useState<PlanningAgentConfig | null>(null);
+  const [setupEditorOpen, setSetupEditorOpen] = useState(false);
   const selectedRun = view.kind === "run"
     ? selectedDetail?.artifact.runs.find((run) => run.id === view.runId)
       ?? selectedDetail?.artifact.runs.at(-1)
@@ -643,27 +643,27 @@ export function PlanningMode({
             workSlug={work.slug}
             onAgentConfig={setSetupAgentConfig}
             onBrief={setSetupBrief}
-            onChangeLoop={() => setSetupPickerOpen(true)}
-            onEditLoop={() => setSetupPickerOpen(true)}
+            onSelectDefinition={setSetupDefinition}
+            onEditLoop={() => setSetupEditorOpen(true)}
             onStart={() => {
               if (!setupDefinition || !setupBrief) return;
               void onStartRun(selectedDetail, setupDefinition, setupBrief);
             }}
           />
         )}
-        {setupPickerOpen && selectedDetail && (
-          <LoopSelectorDialog
+        {setupEditorOpen && (
+          <LoopStructureEditor
             workSlug={work.slug}
             rootPath={plan?.root_path ?? null}
-            target={selectedDetail}
-            confirmLabel="Use this loop"
-            initialDefinitionId={setupDefinition?.id ?? null}
-            onClose={() => setSetupPickerOpen(false)}
-            onStart={async (definition: LoopDefinition) => {
-              // Picking here selects the loop for setup; the run starts from
-              // the setup screen, so the user can still brief its stages.
+            definition={setupDefinition ?? undefined}
+            onClose={() => setSetupEditorOpen(false)}
+            onSaved={(definition) => {
               setSetupDefinition(definition);
-              setSetupPickerOpen(false);
+              setSetupDefinitions((rows) => [
+                definition,
+                ...(rows ?? []).filter((row) => row.id !== definition.id),
+              ]);
+              setSetupEditorOpen(false);
             }}
           />
         )}

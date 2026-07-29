@@ -12290,6 +12290,10 @@ a.pm-track-row:hover strong {
 .loop-search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--fg); font: 12px var(--font-ui); }
 .loop-search button { border: 0; background: transparent; color: var(--fg-4); cursor: pointer; }
 .loop-selector-list { display: grid; gap: 9px; max-height: 435px; overflow-y: auto; padding: 1px 3px 1px 1px; }
+/* Inline in run setup rather than a modal, so the list is shorter — the
+   sections it reconfigures need to stay visible below it. */
+.loop-picker { display: grid; gap: 8px; }
+.loop-picker .loop-selector-list { max-height: 236px; }
 .loop-card {
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-tile);
