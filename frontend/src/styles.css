@@ -9396,13 +9396,6 @@ h5.md-h {
   min-height: 0;
   overflow: auto;
 }
-/* Wider and centred here than in Loop mode, whose rail is narrower: at
-   1440px+ a 780px column pinned left reads as a stranded form. */
-.pm-setup-body > .loop-brief-setup {
-  width: min(960px, calc(100% - 56px));
-  margin: 0 auto;
-  padding: 22px 0 34px;
-}
 .loop-brief-pending {
   margin: 0;
   padding: 14px 16px;
@@ -15388,11 +15381,12 @@ select:disabled {
 
 .loop-brief-setup {
   display: flex;
-  width: min(780px, 100%);
+  width: min(960px, calc(100% - 56px));
   min-height: 100%;
   flex-direction: column;
+  margin: 0 auto;
   gap: 15px;
-  padding: 22px 28px;
+  padding: 22px 0 34px;
 }
 .loop-brief-goal,
 .loop-brief-definition,
@@ -15984,11 +15978,11 @@ select:disabled {
 }
 
 @media (max-width: 900px) {
-  .loop-brief-setup { padding-inline: 20px; }
+  .loop-brief-setup { width: 100%; padding-inline: 20px; }
 }
 
 @media (max-width: 760px) {
-  .loop-brief-setup { padding: 16px 14px 24px; }
+  .loop-brief-setup { width: 100%; padding: 16px 14px 24px; }
   .loop-brief-footer { flex-wrap: wrap; }
   .loop-brief-footer > span { display: none; }
   .loop-brief-workdir { width: 100%; max-width: none; }
