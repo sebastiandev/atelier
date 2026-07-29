@@ -246,6 +246,9 @@ export function PlanningMode({
   const [setupDefinition, setSetupDefinition] = useState<LoopDefinition | null>(null);
   const [setupBrief, setSetupBrief] = useState<LoopBrief | null>(null);
   const [setupPickerOpen, setSetupPickerOpen] = useState(false);
+  // The provider the entry stage runs on. Null until chosen, which is what
+  // keeps Start disabled: a story has no parent agent to inherit from.
+  const [setupAgentConfig, setSetupAgentConfig] = useState<PlanningAgentConfig | null>(null);
   const selectedRun = view.kind === "run"
     ? selectedDetail?.artifact.runs.find((run) => run.id === view.runId)
       ?? selectedDetail?.artifact.runs.at(-1)
@@ -287,13 +290,19 @@ export function PlanningMode({
     if (view.kind !== "setup") {
       setSetupDefinition(null);
       setSetupBrief(null);
+      setSetupAgentConfig(null);
       return;
     }
-    setSetupBrief((current) =>
-      current
-        ?? setupSource?.brief
-        ?? { goal: selectedDetail?.artifact.title ?? "", stages: [] },
-    );
+    const seeded = setupSource?.brief
+      ?? { goal: selectedDetail?.artifact.title ?? "", stages: [] };
+    setSetupBrief((current) => current ?? seeded);
+    setSetupAgentConfig((current) => {
+      if (current) return current;
+      const pinned = seeded.stages.find((stage) => stage.agent?.provider)?.agent;
+      return pinned?.provider && pinned.model
+        ? { provider: pinned.provider, model: pinned.model, options: pinned.options ?? {} }
+        : null;
+    });
   }, [view.kind, setupSource, selectedDetail?.artifact.title]);
 
   const planningStyle: CSSProperties = {
@@ -619,17 +628,17 @@ export function PlanningMode({
         )}
         {view.kind === "setup" && selectedDetail && (
           <LoopBriefSetup
-            agentConfig={null}
+            agentConfig={setupAgentConfig}
             brief={setupBrief ?? { goal: selectedDetail.artifact.title, stages: [] }}
             busy={saving || readOnly}
             definition={setupDefinition}
             definitions={setupDefinitions}
             error={error}
-            folder={plan?.artifact_root_path ?? plan?.root_path ?? ""}
+            folder={plan?.root_path ?? ""}
             goal={selectedDetail.artifact.title}
             goalLabel="Story"
             workSlug={work.slug}
-            onAgentConfig={() => undefined}
+            onAgentConfig={setSetupAgentConfig}
             onBrief={setSetupBrief}
             onChangeLoop={() => setSetupPickerOpen(true)}
             onEditLoop={() => setSetupPickerOpen(true)}

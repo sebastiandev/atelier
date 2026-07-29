@@ -93,7 +93,7 @@ async def execute(
         workstore,
         req.work_slug,
         source,
-        source_brief or LoopBrief(goal=detail_title(source)),
+        source_brief or LoopBrief(goal=req.artifact_id),
         followups.resolve_entry(definition, entry_id).step_id,
     )
     return await start_run.execute(
@@ -124,11 +124,6 @@ async def execute(
             entry_stage_id=entry_id,
         ),
     )
-
-
-def detail_title(source: dict[str, Any]) -> str:
-    """Fall back to the source run's own goal when it pinned no brief."""
-    return actions.str_or_empty(source.get("summary")) or "Follow-up run"
 
 
 def _with_inherited_entry_agent(
