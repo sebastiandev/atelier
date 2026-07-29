@@ -343,15 +343,22 @@ async def _launch_initial_agent(
     parent_folder: Path,
     entry: LoopStepDefinition,
 ) -> str:
-    """Launch the entry stage from persisted Planning runtime settings."""
+    """Launch the entry stage from the brief, the stage policy, then Planning.
+
+    Preconditions: ``brief`` belongs to ``definition``; the parent config is
+    the Planning session's, used only for whatever the first two leave unset.
+    Postconditions: the returned agent runs the provider the run setup chose.
+    """
     stage = entry
     if stage.agent is None:
         raise LoopDefinitionInvalid("The first loop stage needs an agent policy.")
+    stage_brief = briefs.stage_brief(brief, stage.step_id)
     provider, model, options = resolve_stage_agent_config(
         stage.agent,
         parent_provider=parent_provider,
         parent_model=parent_model,
         parent_options=parent_options,
+        override=stage_brief.agent if stage_brief is not None else None,
     )
     agent = await launch_agent(
         workstore,

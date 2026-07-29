@@ -2043,10 +2043,15 @@ def test_required_loop_context_blocks_before_agent_launch(
     assert app_client.get("/api/works/WRK-001/agents").json() == []
 
 
-def test_selected_loop_launches_first_agent_from_planning_session(
+def test_selected_loop_launches_a_fresh_agent_briefed_for_the_stage(
     app_client: TestClient,
     test_settings: Settings,
 ) -> None:
+    """The Planning session supplies the workspace, the brief the agent.
+
+    It used to supply both, so a story run implemented with whatever model
+    happened to write the plan.
+    """
     _create_work(app_client)
     root = test_settings.workspace_root / "repo"
     _start_plan(app_client, root)
@@ -2094,7 +2099,8 @@ def test_selected_loop_launches_first_agent_from_planning_session(
     agents = app_client.get("/api/works/WRK-001/agents").json()
     launched = next(agent for agent in agents if agent["slug"] == run["agent_slug"])
     assert launched["provider"] == "amp"
-    assert launched["model"] == "rush"
+    assert launched["model"] == "smart"  # the brief's, not the session's "rush"
+    assert launched["folder"] == str(root)
     stored = app_client.app.state.loop_runs.list_active()[0]
     assert stored.definition_snapshot["name"] == "Work reviewed"
 
@@ -2191,7 +2197,9 @@ def test_selected_loop_forks_supplied_agent_for_first_stage_override(
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
-            "brief": _entry_agent_brief(),
+            # Same config the stage pins, so this stays a test about forking
+            # rather than about brief-over-definition precedence.
+            "brief": _entry_agent_brief(model="rush"),
             "agent_slug": existing["slug"],
             "loop_definition_id": saved.json()["id"],
             "loop_revision": saved.json()["revision"],
@@ -3233,6 +3241,56 @@ def test_story_run_requires_a_provider_on_its_entry_stage(
 
     assert res.status_code == 422, res.text
     assert "does not pin a provider" in res.json()["detail"]
+
+
+def test_story_run_launches_the_agent_the_brief_pinned(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """The entry stage runs the brief's agent, not the Planning session's.
+
+    Regression: the brief reached the launch and was read only for command
+    prefixes, so the run silently inherited the agent that *wrote* the plan.
+    The 422 guard above made it invisible -- it accepts the run *because* of
+    the override that was then dropped. Assert the launched agent, not the
+    status code.
+    """
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    _create_planning_session(
+        app_client,
+        test_settings.workspace_root / "repo",
+        provider="amp",
+        model="rush",
+        options={"permission_mode": "default"},
+    )
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "brief": {
+                "goal": "Story run",
+                "stages": [
+                    {
+                        "stage_id": "implementation",
+                        "agent": {
+                            "provider": "amp",
+                            "model": "deep",
+                            "options": {"permission_mode": "allow_all"},
+                        },
+                    }
+                ],
+            }
+        },
+    )
+    assert started.status_code == 200, started.text
+
+    run_id = str(started.json()["artifact"]["runs"][0]["id"])
+    agent = _active_stage_agent(app_client, run_id)
+
+    assert agent["provider"] == "amp"
+    assert agent["model"] == "deep"
+    assert agent["options"]["permission_mode"] == "allow_all"
 
 
 def test_story_follow_up_inherits_the_provider_of_the_run_it_continues(
