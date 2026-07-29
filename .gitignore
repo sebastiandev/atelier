@@ -45,5 +45,6 @@ docs/screenshots/*.mov
 # not the directory itself — git refuses to re-include a path whose
 # parent dir was excluded as a unit.
 .claude/*
-!.claude/skills/
-!.claude/skills/**
+.claude/skills/wds-**
+.claude/skills/bmad-**
+.atelier/*
