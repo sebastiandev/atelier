@@ -295,6 +295,39 @@ def test_config_options_applied_only_when_advertised() -> None:
 
     asyncio.run(scenario())
 
+def test_applying_one_option_can_widen_another_before_it_is_judged() -> None:
+    """OpenCode publishes the effort ladder of the *currently selected*
+    model, so the ladder that matters only exists after the model pair
+    lands. Judging a later option against the session/new snapshot drops
+    values the agent would have accepted."""
+
+    async def scenario() -> None:
+        config = _config(desired_options=(("model", "opus"), ("effort", "xhigh")))
+        adapter, fake = _build(
+            config,
+            # At session/new the session sits on a model whose ladder
+            # stops at "high".
+            config_options=[
+                _select_option("model", "default", "opus"),
+                _select_option("effort", "low", "high"),
+            ],
+            # Selecting "opus" reveals a longer ladder.
+            set_config_response_options=[
+                _select_option("model", "default", "opus", current="opus"),
+                _select_option("effort", "low", "high", "xhigh"),
+            ],
+        )
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        assert fake.called("set_config_option") == [
+            {"config_id": "model", "value": "opus"},
+            {"config_id": "effort", "value": "xhigh"},
+        ]
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
 def test_config_value_not_advertised_is_skipped() -> None:
     async def scenario() -> None:
         config = _config(desired_options=(("model", "gpt-9000"),))

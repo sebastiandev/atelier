@@ -144,7 +144,12 @@ def test_opencode_models_endpoint_lists_cli_models(
     def fake_list(*, refresh: bool = False):
         assert refresh is True
         return [
-            OpenCodeModelOption(value="openai/gpt-5.5", label="OpenAI / GPT 5.5")
+            OpenCodeModelOption(
+                value="openai/gpt-5.5",
+                label="OpenAI / GPT 5.5",
+                effort_values=("low", "high"),
+            ),
+            OpenCodeModelOption(value="opencode/big-pickle", label="OpenCode / Big Pickle"),
         ]
 
     monkeypatch.setattr(
@@ -156,7 +161,16 @@ def test_opencode_models_endpoint_lists_cli_models(
 
     assert response.status_code == 200
     assert response.json() == [
-        {"value": "openai/gpt-5.5", "label": "OpenAI / GPT 5.5"}
+        {
+            "value": "openai/gpt-5.5",
+            "label": "OpenAI / GPT 5.5",
+            "effort_values": ["low", "high"],
+        },
+        {
+            "value": "opencode/big-pickle",
+            "label": "OpenCode / Big Pickle",
+            "effort_values": [],
+        },
     ]
 
 

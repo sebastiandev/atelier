@@ -575,9 +575,11 @@ class AcpAdapter:
     async def _apply_session_settings(self, session_response: Any) -> None:
         """Apply config options + mode from the typed config, tolerantly."""
         assert self._conn is not None and self._session_id is not None
-        advertised = self._advertised_config_values
         for config_id, value in self._config.acp_config_values():
-            allowed = advertised.get(config_id)
+            # Re-read per iteration: applying one option can reveal another.
+            # OpenCode only advertises `effort` once a model with variants is
+            # selected, so the model pair has to land before effort is judged.
+            allowed = self._advertised_config_values.get(config_id)
             if allowed is not None and value not in allowed:
                 logger.debug(
                     "acp: skipping config option %s=%s (agent advertises %s)",

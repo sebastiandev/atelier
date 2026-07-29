@@ -31,6 +31,7 @@ from src.domain.agents import (
     CodexSpec,
     CommonAgentConfig,
 )
+from src.domain.agents.configs import OPENCODE_CONFIGURED_MODEL
 
 
 def _common() -> CommonAgentConfig:
@@ -407,3 +408,39 @@ def test_opus_5_reports_no_invented_pricing() -> None:
     assert meta.output_per_mtok is None
     assert meta.context_window == 1_000_000
     assert meta.effort_values
+
+
+# ---------------------------------------------------------------------------
+# OpenCode effort (= OpenCode "variants")
+# ---------------------------------------------------------------------------
+
+
+def test_opencode_omits_effort_when_left_at_the_default() -> None:
+    """`default` means "say nothing" — OpenCode then applies whatever the
+    user's own config selects."""
+    config = SPECS["opencode"].build(_common(), OPENCODE_CONFIGURED_MODEL, {})
+
+    assert config.acp_config_values() == (("mode", "build"),)
+
+
+def test_opencode_sends_effort_after_the_model() -> None:
+    """OpenCode only advertises the effort option once a model with
+    variants is selected, so the model pair has to land first."""
+    config = SPECS["opencode"].build(
+        _common(),
+        "anthropic/claude-opus-5",
+        {"reasoning_effort": "xhigh"},
+    )
+
+    assert config.acp_config_values() == (
+        ("model", "anthropic/claude-opus-5"),
+        ("effort", "xhigh"),
+        ("mode", "build"),
+    )
+
+
+def test_opencode_rejects_an_effort_outside_the_union_ladder() -> None:
+    with pytest.raises(ValueError):
+        SPECS["opencode"].build(
+            _common(), OPENCODE_CONFIGURED_MODEL, {"reasoning_effort": "turbo"}
+        )

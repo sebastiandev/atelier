@@ -171,8 +171,14 @@ export function optionFieldForModel(
     return field;
   }
   const meta = provider.model_meta?.[model];
-  const values = meta?.effort_values?.filter(Boolean);
-  if (!values || values.length === 0) return field;
+  const declared = meta?.effort_values;
+  // Absent means "no opinion" — keep the provider-wide ladder. An empty
+  // list is an opinion: this model has no effort dial (OpenCode models
+  // without variants), so hand back an empty field and let callers hide
+  // the control rather than offer a value the agent would ignore.
+  if (declared === undefined || declared === null) return field;
+  const values = declared.filter(Boolean);
+  if (values.length === 0) return { ...field, values: [] };
   const defaultValue =
     meta?.effort_default && values.includes(meta.effort_default)
       ? meta.effort_default
@@ -190,7 +196,9 @@ export function providerEffortOption(
 ): ProviderOptionSelection | null {
   for (const key of PROVIDER_EFFORT_OPTION_KEYS) {
     const field = provider.options[key];
-    if (field) return { key, field: optionFieldForModel(provider, model, key, field) };
+    if (!field) continue;
+    const effective = optionFieldForModel(provider, model, key, field);
+    return effective.values.length > 0 ? { key, field: effective } : null;
   }
   return null;
 }
@@ -226,11 +234,29 @@ export function withOpenCodeModelOptions(
   const values = [baseValue];
   const valueLabels = [baseLabel];
   const seen = new Set(values);
+  // OpenCode calls reasoning effort a "variant" and defines the ladder
+  // per model, so the CLI listing is the only source for it. Publishing
+  // it as model_meta lets the existing per-model narrowing apply.
+  const modelMeta: Record<string, ModelMeta> = { ...(provider.model_meta ?? {}) };
+  // The sentinel routes to whatever the user's OpenCode config selects,
+  // so its variant ladder is unknowable — declare no effort rather than
+  // offer the union and hope.
+  modelMeta[baseValue] = { ...emptyModelMeta, ...modelMeta[baseValue], effort_values: [] };
   for (const option of models) {
     if (seen.has(option.value)) continue;
     seen.add(option.value);
     values.push(option.value);
     valueLabels.push(option.label);
+    if (option.effort_values === undefined) continue;
+    modelMeta[option.value] = {
+      ...emptyModelMeta,
+      ...modelMeta[option.value],
+      effort_values:
+        option.effort_values.length > 0
+          ? [defaultEffort, ...option.effort_values]
+          : [],
+      effort_default: defaultEffort,
+    };
   }
   return {
     ...provider,
@@ -239,8 +265,21 @@ export function withOpenCodeModelOptions(
       values,
       value_labels: valueLabels,
     },
+    model_meta: modelMeta,
   };
 }
+
+/** OpenCode's "leave it alone" effort — must match `OpenCodeEffort.DEFAULT`
+ *  so the option is omitted from the launch payload when it's selected. */
+const defaultEffort = "default";
+
+const emptyModelMeta: ModelMeta = {
+  context_window: null,
+  input_per_mtok: null,
+  output_per_mtok: null,
+  cache_read_per_mtok: null,
+  cache_write_per_mtok: null,
+};
 
 export function modelPickerOptions(provider: ProviderDescriptor) {
   return provider.primary_field.values.map((value, index) => ({

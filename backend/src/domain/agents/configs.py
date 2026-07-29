@@ -467,6 +467,25 @@ class OpenCodeMode(str, Enum):
     PLAN = "plan"
 
 
+class OpenCodeEffort(str, Enum):
+    """Reasoning effort of the OpenCode ACP ``effort`` option.
+
+    OpenCode calls these *variants* and defines them per model, so this
+    enum is the union of every ladder we've seen; which subset a given
+    model actually accepts arrives with the model list (``opencode
+    models --verbose``). ``default`` means "send nothing" — OpenCode
+    then applies whatever the user's own config selects.
+    """
+
+    DEFAULT = "default"
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
+
+
 @dataclass(frozen=True, kw_only=True)
 class OpenCodeAgentConfig(AcpAgentConfig):
     """OpenCode via its native ``opencode acp`` server.
@@ -474,15 +493,23 @@ class OpenCodeAgentConfig(AcpAgentConfig):
     ``configured-default`` suppresses the model config option so OpenCode
     uses its own default. Any explicit ``provider/model`` value travels
     as ACP ``model`` when the session advertises it.
+
+    ``effort`` must follow ``model``: OpenCode only advertises the effort
+    option once the selected model is one with variants, so a session
+    that starts on a variant-less default gains the option mid-apply.
     """
 
     model: str = OPENCODE_CONFIGURED_MODEL
     mode: OpenCodeMode = OpenCodeMode.BUILD
+    effort: OpenCodeEffort = OpenCodeEffort.DEFAULT
 
     def acp_config_values(self) -> tuple[tuple[str, str], ...]:
-        values: list[tuple[str, str]] = [("mode", self.mode.value)]
+        values: list[tuple[str, str]] = []
         if self.model != OPENCODE_CONFIGURED_MODEL:
-            values.insert(0, ("model", self.model))
+            values.append(("model", self.model))
+        if self.effort is not OpenCodeEffort.DEFAULT:
+            values.append(("effort", self.effort.value))
+        values.append(("mode", self.mode.value))
         return tuple(values)
 
 
@@ -519,5 +546,6 @@ __all__ = [
     "CodexSandbox",
     "CommonAgentConfig",
     "OpenCodeAgentConfig",
+    "OpenCodeEffort",
     "OpenCodeMode",
 ]

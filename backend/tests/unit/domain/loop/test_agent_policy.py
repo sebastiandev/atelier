@@ -8,7 +8,6 @@ from src.domain.loop.agent_policy import (
     resolve_stage_model,
 )
 from src.domain.loop.dtos import LoopAgentPolicy, LoopBriefAgent, LoopPermission
-from src.domain.models import Provider
 
 
 def test_inherited_permission_preserves_parent_options() -> None:
@@ -75,17 +74,27 @@ def test_cross_provider_inheritance_uses_parent_model_effort_default() -> None:
     assert resolved["reasoning_effort"] == "xhigh"
 
 
-@pytest.mark.parametrize("provider", ["amp", "opencode"])
-def test_unsupported_target_does_not_receive_effort(provider: Provider) -> None:
+def test_unsupported_target_does_not_receive_effort() -> None:
     resolved = apply_stage_agent_policy(
-        provider,
+        "amp",
         {"reasoning_effort": "high", "sandbox": "workspace-write"},
-        LoopAgentPolicy(provider=provider, permissions=None, effort=None),
+        LoopAgentPolicy(provider="amp", permissions=None, effort=None),
         parent_provider="codex",
     )
 
     assert "thinking_effort" not in resolved
     assert "reasoning_effort" not in resolved
+
+
+def test_opencode_inherits_effort_as_a_variant() -> None:
+    resolved = apply_stage_agent_policy(
+        "opencode",
+        {"reasoning_effort": "high"},
+        LoopAgentPolicy(provider="opencode", permissions=None, effort=None),
+        parent_provider="codex",
+    )
+
+    assert resolved["reasoning_effort"] == "high"
 
 
 def test_explicit_effort_requires_provider_support() -> None:

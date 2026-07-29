@@ -53,6 +53,7 @@ from src.domain.agents.configs import (
     CodexSandbox,
     CommonAgentConfig,
     OpenCodeAgentConfig,
+    OpenCodeEffort,
     OpenCodeMode,
 )
 from src.domain.models import Provider
@@ -806,7 +807,7 @@ class OpenCodeSpec:
     name: ClassVar[Provider] = "opencode"
     label: ClassVar[str] = "OpenCode"
 
-    _allowed_options: ClassVar[set[str]] = {"mode"}
+    _allowed_options: ClassVar[set[str]] = {"mode", "reasoning_effort"}
 
     _ADVANCED_INTRO: ClassVar[str] = (
         "Runs OpenCode through the Agent Client Protocol. The model is "
@@ -837,6 +838,24 @@ class OpenCodeSpec:
                         "Plan (design only, no execution)",
                     ],
                 ),
+                # Union of every variant ladder OpenCode ships. Which
+                # subset applies is per-model and only knowable from the
+                # CLI, so the model list carries effort_values and the
+                # picker narrows this field to them.
+                "reasoning_effort": EnumOption(
+                    label="Effort",
+                    values=_enum_values(OpenCodeEffort),
+                    default=OpenCodeEffort.DEFAULT.value,
+                    value_labels=[
+                        "OpenCode default",
+                        "None",
+                        "Low",
+                        "Medium",
+                        "High",
+                        "Extra high",
+                        "Max",
+                    ],
+                ),
             },
             advanced_intro=self._ADVANCED_INTRO,
             # No pricing/window meta: the underlying model is unknown to
@@ -852,6 +871,9 @@ class OpenCodeSpec:
             common=common,
             model=model,
             mode=OpenCodeMode(options.get("mode", OpenCodeMode.BUILD.value)),
+            effort=OpenCodeEffort(
+                options.get("reasoning_effort", OpenCodeEffort.DEFAULT.value)
+            ),
         )
 
 

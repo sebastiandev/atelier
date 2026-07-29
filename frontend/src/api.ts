@@ -1792,6 +1792,9 @@ export function listProviders(): Promise<ProviderDescriptor[]> {
 export type OpenCodeModelOption = {
   value: string;
   label: string;
+  /** OpenCode's per-model "variants" — its name for reasoning effort.
+   *  Absent on older backends; empty means the model has no effort dial. */
+  effort_values?: string[];
 };
 
 export function listOpenCodeModels(
