@@ -21,7 +21,7 @@ from src.domain.agents import (
     ClaudeAcpAgentConfig,
     CodexAcpAgentConfig,
 )
-from src.domain.agents.configs import OpenCodeAgentConfig
+from src.domain.agents.configs import OpenCodeAgentConfig, OpenCodeMode
 from src.infrastructure.agents.acp.adapter import AcpAdapter
 from src.infrastructure.agents.factory import build_adapter
 from src.settings import Settings
@@ -84,15 +84,23 @@ def _build_codex_acp(config: CodexAcpAgentConfig, settings: Settings) -> AgentAd
 def _build_opencode(config: OpenCodeAgentConfig, settings: Settings) -> AgentAdapter:
     # No model_label: the underlying model is OpenCode's configured
     # default and unknown to Atelier; usage_update supplies runtime data.
-    rules = _glob_command_prefixes(config.common.approved_command_prefixes)
+    #
+    # The config layer is always sent, never only when a stage pins command
+    # prefixes: an unpinned write stage would otherwise fall through to the
+    # user's own OpenCode permissions and behave unlike a pinned one.
     return AcpAdapter(
         config,
         OPENCODE_ARGV,
-        environment=(
-            {"OPENCODE_CONFIG_CONTENT": _opencode_config(rules)}
-            if rules
-            else None
-        ),
+        environment={
+            "OPENCODE_CONFIG_CONTENT": _opencode_config(
+                _glob_command_prefixes(config.common.approved_command_prefixes),
+                write=config.mode is OpenCodeMode.BUILD,
+                readable_roots=(
+                    *config.common.readable_roots,
+                    *config.common.writable_roots,
+                ),
+            )
+        },
     )
 
 
@@ -126,8 +134,30 @@ def _glob_command_prefixes(prefixes: tuple[str, ...]) -> tuple[str, ...]:
     )
 
 
-def _opencode_config(rules: tuple[str, ...]) -> str:
-    """Merge stage Bash approvals into OpenCode's process-local config."""
+def _opencode_config(
+    rules: tuple[str, ...],
+    *,
+    write: bool,
+    readable_roots: tuple[Path, ...] = (),
+) -> str:
+    """Express the stage's permission posture in OpenCode's config layer.
+
+    OpenCode is the one provider whose session mode does not carry the
+    posture: ``build`` only means "not plan", so a write stage still gates
+    every command and every read outside its cwd, while claude-acp gets
+    ``bypassPermissions`` and codex-acp ``agent-full-access``. The same loop
+    stage would be silently far more interruptive here. So write says allow.
+
+    Stage command prefixes are *additive*. On a write stage everything is
+    allowed already and they only document intent; on a read stage they are
+    the exceptions to an otherwise-``ask`` default. Either way, naming a
+    prefix widens what the agent may do -- it never narrows it.
+
+    ``readable_roots`` are the directories outside the worktree that Atelier
+    itself points the run at. Write stays bounded to the workspace; reads
+    have to reach the source repository, because that is where the plan
+    artifact a run is briefed against lives.
+    """
     try:
         current = json.loads(os.environ.get("OPENCODE_CONFIG_CONTENT", "{}"))
     except json.JSONDecodeError:
@@ -142,11 +172,25 @@ def _opencode_config(rules: tuple[str, ...]) -> str:
     if isinstance(bash, str):
         bash = {"*": bash}
     elif not isinstance(bash, dict):
-        bash = {"*": "ask"}
+        bash = {}
+    bash["*"] = "allow" if write else bash.get("*", "ask")
     for rule in rules:
         bash[rule] = "allow"
         bash[f"{rule} *"] = "allow"
     permission["bash"] = bash
+    if write:
+        permission["edit"] = "allow"
+    external = permission.get("external_directory")
+    if isinstance(external, str):
+        external = {"*": external}
+    elif not isinstance(external, dict):
+        external = {}
+    for root in dict.fromkeys(readable_roots):
+        external[str(root)] = "allow"
+        external[f"{root}/*"] = "allow"
+        external[f"{root}/**"] = "allow"
+    if external:
+        permission["external_directory"] = external
     config["permission"] = permission
     return json.dumps(config, separators=(",", ":"))
 

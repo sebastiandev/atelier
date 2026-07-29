@@ -224,9 +224,14 @@ def test_claude_acp_passes_stage_prefixes_as_session_metadata() -> None:
     }
 
 
-def test_opencode_acp_merges_stage_prefixes_into_process_config(
+def test_opencode_write_stage_allows_commands_and_keeps_user_denials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """`build` alone does not carry write posture, so the config must.
+
+    Stage prefixes are additive: they widen what is allowed, never narrow
+    it. The user's own explicit denials survive alongside the catch-all.
+    """
     monkeypatch.setenv(
         "OPENCODE_CONFIG_CONTENT",
         '{"theme":"system","permission":{"bash":{"rm *":"deny"}}}',
@@ -239,10 +244,55 @@ def test_opencode_acp_merges_stage_prefixes_into_process_config(
     config = json.loads(adapter._environment["OPENCODE_CONFIG_CONTENT"])
     assert config["theme"] == "system"
     assert config["permission"]["bash"] == {
+        "*": "allow",
         "rm *": "deny",
         "dt ty": "allow",
         "dt ty *": "allow",
     }
+    assert config["permission"]["edit"] == "allow"
+
+
+def test_opencode_read_stage_keeps_ask_and_treats_prefixes_as_exceptions() -> None:
+    adapter = build_adapter(
+        OpenCodeAgentConfig(common=_common("dt ty"), mode=OpenCodeMode.PLAN),
+        Settings(),
+    )
+
+    config = json.loads(adapter._environment["OPENCODE_CONFIG_CONTENT"])
+    assert config["permission"]["bash"] == {
+        "*": "ask",
+        "dt ty": "allow",
+        "dt ty *": "allow",
+    }
+    assert "edit" not in config["permission"]
+
+
+def test_opencode_reads_the_roots_atelier_points_the_run_at() -> None:
+    """A run's plan artifact lives in the source repo, not the worktree."""
+    common = CommonAgentConfig(
+        workdir=WORKDIR,
+        system_prompt="prompt",
+        readable_roots=(Path("/src/repo"),),
+        writable_roots=(Path("/shares/design"),),
+    )
+
+    adapter = build_adapter(OpenCodeAgentConfig(common=common), Settings())
+
+    external = json.loads(
+        adapter._environment["OPENCODE_CONFIG_CONTENT"]
+    )["permission"]["external_directory"]
+    assert external["/src/repo"] == "allow"
+    assert external["/src/repo/**"] == "allow"
+    assert external["/shares/design/**"] == "allow"
+    assert "*" not in external
+
+
+def test_opencode_config_is_sent_even_without_stage_prefixes() -> None:
+    """Otherwise an unpinned write stage silently inherits user defaults."""
+    adapter = build_adapter(OpenCodeAgentConfig(common=_common()), Settings())
+
+    config = json.loads(adapter._environment["OPENCODE_CONFIG_CONTENT"])
+    assert config["permission"]["bash"]["*"] == "allow"
 
 
 def test_codex_acp_uses_temporary_config_layer_for_stage_rules(

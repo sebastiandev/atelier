@@ -177,6 +177,10 @@ async def launch_agent(
             writable_roots=agent_writable_roots(
                 mounted_shares, worktree_manager, workdir
             ),
+            # The worktree is cut from req.folder, and a run's plan artifacts
+            # live there rather than in the worktree, so every briefed run
+            # reads outside its own workspace by design.
+            readable_roots=(req.folder.resolve(strict=False),),
             approved_command_prefixes=req.approved_command_prefixes,
             system_prompt=render_system_prompt(
                 req.persona,

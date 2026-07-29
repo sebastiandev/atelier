@@ -143,6 +143,12 @@ class CommonAgentConfig:
     # used by Codex so workspace-write agents can write project shared
     # folders whose symlink targets live outside the per-agent worktree.
     writable_roots: tuple[Path, ...] = ()
+    # Directories outside the workspace the agent legitimately needs to
+    # *read*: the source repository a worktree was cut from, where the plan
+    # artifacts a run is briefed against live. Providers that gate reads by
+    # location (OpenCode's `external_directory`) allow these; the rest ignore
+    # the field. Writable roots are readable too and need not be repeated.
+    readable_roots: tuple[Path, ...] = ()
     # Loop stages may pre-approve narrow command prefixes in provider-native
     # policy. Empty for interactive agents and providers without this support.
     approved_command_prefixes: tuple[str, ...] = ()
