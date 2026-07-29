@@ -294,3 +294,85 @@ async def test_refresh_records_the_head_commit_on_the_run() -> None:
     pr = target.run["loop"]["pr"]
     assert pr["head_sha"] == "9fceb02d1b2c"
     assert pr["head_commit_url"] == "https://github.com/acme/repo/commit/9fceb02"
+
+
+@pytest.mark.anyio
+async def test_refresh_updates_the_latest_pr_stage_snapshot() -> None:
+    """The run view renders the stage's copy, so a refresh has to reach it.
+
+    capture_completion deep-copies the lifecycle onto the stage row when the
+    stage passes. Leaving that copy frozen means check counts, review state
+    and the head commit never appear in the panel the user is looking at.
+    """
+    gateway = _Gateway(
+        _reviewer_comment(),
+        head_sha="9fceb02d1b2c",
+        head_commit_url="https://github.com/acme/repo/commit/9fceb02",
+    )
+    target = LoopRunTarget(
+        work_slug="WRK-016",
+        run_id="run-6",
+        target_id="story-1",
+        title="Handle transfers",
+        source_ref="story-1.md",
+        run={
+            "loop": {
+                "pr": {"url": "https://github.com/acme/repo/pull/7"},
+                "pr_comments": [],
+                "stages": [
+                    {
+                        "id": "create-pr",
+                        "kind": "pr",
+                        "pr": {
+                            "url": "https://github.com/acme/repo/pull/7",
+                            "status": "draft",
+                        },
+                    }
+                ],
+            }
+        },
+    )
+
+    await pr_review.refresh(target, gateway)
+
+    stage_pr = target.run["loop"]["stages"][0]["pr"]
+    assert stage_pr["head_sha"] == "9fceb02d1b2c"
+    assert stage_pr["status"] == "open"
+    assert stage_pr["checks"]["total"] == 2
+
+
+@pytest.mark.anyio
+async def test_refresh_leaves_earlier_pr_passes_as_history() -> None:
+    """An earlier pass shows the PR as it was on that pass, not as it is now."""
+    gateway = _Gateway(_reviewer_comment(), head_sha="9fceb02d1b2c")
+    target = LoopRunTarget(
+        work_slug="WRK-016",
+        run_id="run-6",
+        target_id="story-1",
+        title="Handle transfers",
+        source_ref="story-1.md",
+        run={
+            "loop": {
+                "pr": {"url": "https://github.com/acme/repo/pull/7"},
+                "pr_comments": [],
+                "stages": [
+                    {
+                        "id": "create-pr",
+                        "kind": "pr",
+                        "pr": {"url": "https://github.com/acme/repo/pull/7", "status": "draft"},
+                    },
+                    {
+                        "id": "create-pr",
+                        "kind": "pr",
+                        "pr": {"url": "https://github.com/acme/repo/pull/7", "status": "open"},
+                    },
+                ],
+            }
+        },
+    )
+
+    await pr_review.refresh(target, gateway)
+
+    first, latest = target.run["loop"]["stages"]
+    assert "head_sha" not in first["pr"]
+    assert latest["pr"]["head_sha"] == "9fceb02d1b2c"

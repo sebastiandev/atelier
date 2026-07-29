@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict
 from typing import Any
 
@@ -76,6 +77,7 @@ async def refresh(
     pr["last_synced_at"] = actions.now_iso()
     loop["pr"] = pr
     loop["pr_comments"] = comments
+    _sync_latest_pr_stage(loop, pr)
     target.run["loop"] = loop
 
 
@@ -137,6 +139,33 @@ def _merge_comments(
         and item.get("addressed_in_pass") is not None
     )
     return merged
+
+
+def _sync_latest_pr_stage(loop: dict[str, Any], pr: dict[str, Any]) -> None:
+    """Copy the refreshed lifecycle onto the newest PR stage's snapshot.
+
+    ``capture_completion`` deep-copies the lifecycle onto the stage row when
+    the stage passes, and the run view renders that copy in preference to the
+    run-level one (a historical occurrence must keep showing the PR as it was
+    on *its* pass). Without this the copy freezes at completion, so anything a
+    later refresh learns -- check counts, review state, the head commit --
+    never reaches the panel the user is looking at.
+
+    Only the latest PR stage is updated; earlier passes keep their history.
+    """
+    rows = loop.get("stages")
+    if not isinstance(rows, list):
+        return
+    stage = next(
+        (
+            row
+            for row in reversed(rows)
+            if isinstance(row, dict) and row.get("kind") == "pr" and row.get("pr")
+        ),
+        None,
+    )
+    if stage is not None:
+        stage["pr"] = deepcopy(pr)
 
 
 def _addressed_body(loop: dict[str, Any], pass_number: int, note: str) -> str:
