@@ -29,7 +29,6 @@ import { PlanningAgentControls } from "./PlanningMode";
 import type { PlanningAgentConfig } from "./planningSetup";
 
 type Props = {
-  agentConfig: PlanningAgentConfig | null;
   brief: LoopBrief;
   busy: boolean;
   definition: LoopDefinition | null;
@@ -37,7 +36,6 @@ type Props = {
   error: string | null;
   folder: string;
   workSlug: string;
-  onAgentConfig: (config: PlanningAgentConfig) => void;
   onBrief: (brief: LoopBrief) => void;
   /** Choosing a loop reconfigures every section below. */
   onSelectDefinition: (definition: LoopDefinition) => void;
@@ -52,7 +50,6 @@ type Props = {
 
 /** Collect the per-work inputs and execution overrides for one Loop run. */
 export function LoopBriefSetup({
-  agentConfig,
   brief,
   busy,
   definition,
@@ -60,7 +57,6 @@ export function LoopBriefSetup({
   error,
   folder,
   workSlug,
-  onAgentConfig,
   onBrief,
   onSelectDefinition,
   onChooseFolder,
@@ -78,6 +74,11 @@ export function LoopBriefSetup({
   const agentStages = definition?.stages.filter((stage) => stage.agent !== null) ?? [];
   const firstAgentStage = agentStages[0] ?? null;
   const firstStageBrief = firstAgentStage ? stageBrief(brief, firstAgentStage.id) : null;
+  // The base execution config lives on the brief's entry stage and nowhere
+  // else. It used to also live in a caller-held state that the controls
+  // rendered from while Start sent the brief, so the screen could show one
+  // config and launch another.
+  const agentConfig = completeAgent(firstStageBrief?.agent ?? null, null);
   const baseCommandPrefixes = firstStageBrief?.approved_command_prefixes
     ?? firstAgentStage?.agent?.approved_command_prefixes
     ?? [];
@@ -102,7 +103,6 @@ export function LoopBriefSetup({
   }
 
   function setBaseConfig(config: PlanningAgentConfig) {
-    onAgentConfig(config);
     if (firstAgentStage) patchStage(firstAgentStage.id, { agent: config });
   }
 

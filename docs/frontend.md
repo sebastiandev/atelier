@@ -329,6 +329,8 @@ Current stores:
 - `settings.ts` — `{ theme, editor, terminal, accentHue, editorOptions, terminalOptions }`, hydrated from backend `GET /api/settings` and written through with `PUT /api/settings`. The backend owns the selectable editor/console descriptors (`label`, `command`, `url_template`); the FE only renders them and interpolates path tokens for editor URL handlers. Legacy `atelier:tweaks` / `atelier:theme` localStorage blobs are migrated into the backend once on boot.
 - `closed.ts` — `{ byWork: Record<workSlug, agentSlug[]> }`, persisted under `atelier:closed`. `WorkView` filters closed agents out of the canvas; clicking a closed rail entry restores the tile (which reopens its WS and resumes the provider session). Replaces the prior "minimized" model — there is no "delete".
 
+**One home per value.** `LoopBriefSetup` renders the run's inputs and its caller starts the run from them, so anything the screen edits has to live in exactly one place or the two can disagree — the screen showing one setting while Start sends another. The goal and the base execution config both live on the `LoopBrief`: the goal is `brief.goal` (no separate `goal` state), and the provider/model/options are the entry stage's `brief.stages[entry].agent`, derived on read rather than mirrored into a caller-held `agentConfig`. Both were parallel states once, and both drifted. `LoopMode` and `PlanningMode` now hold only the brief.
+
 When adding a new store: keep it narrow (one concern per file), put presentation-only state here (per CLAUDE.md → "UI state is frontend-local"), and don't reach into it from outside React-tree code unless you have a reason — `useStore.getState()` is a synchronous read, fine inside a `useEffect`.
 
 ## Build / typecheck

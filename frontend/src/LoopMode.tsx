@@ -79,7 +79,6 @@ export function LoopMode({
   const [definitions, setDefinitions] = useState<LoopDefinition[] | null>(null);
   const [selectedDefinition, setSelectedDefinition] =
     useState<LoopDefinition | null>(null);
-  const [agentConfig, setAgentConfig] = useState<PlanningAgentConfig | null>(null);
   const [brief, setBrief] = useState<LoopBrief>({ goal: defaultGoal, stages: [] });
   const [briefPersistenceReady, setBriefPersistenceReady] = useState(false);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
@@ -101,6 +100,11 @@ export function LoopMode({
   const setRailWidth = useLayoutStore((state) => state.setWorkRailWidth);
   const { descriptors } = useProviderDescriptors();
   const requestSequence = useRef(0);
+
+  // The base execution config lives on the brief's first agent stage. It is
+  // not mirrored in local state: the setup screen renders from the brief and
+  // starts from the brief, so the two cannot disagree.
+  const agentConfig = baseAgent(brief, selectedDefinition);
 
   const activeRun = useMemo(
     () => preparingRun ? null : runs.find((run) => run.id === selectedRunId) ?? runs[0] ?? null,
@@ -167,13 +171,6 @@ export function LoopMode({
     }, 600);
     return () => window.clearTimeout(timer);
   }, [brief, briefPersistenceReady, work.slug]);
-
-  useEffect(() => {
-    if (!selectedDefinition || agentConfig) return;
-    const firstAgent = selectedDefinition.stages.find((stage) => stage.agent !== null);
-    const saved = brief.stages.find((stage) => stage.stage_id === firstAgent?.id)?.agent;
-    if (saved?.provider && saved.model) setAgentConfig({ ...saved, provider: saved.provider, model: saved.model });
-  }, [agentConfig, brief.stages, selectedDefinition]);
 
   useEffect(() => {
     if (!activeRun || !ACTIVE_RUN_STATUSES.has(activeRun.status)) return;
@@ -255,8 +252,13 @@ export function LoopMode({
   async function prepareNewRun(run: WorkLoopRun) {
     const snapshot = run.loop_definition;
     setFolder(run.root_path);
-    setAgentConfig({ provider: run.provider, model: run.model, options: run.options });
-    setBrief({ ...(run.brief ?? { stages: [] }), goal: run.goal });
+    setBrief(
+      withBaseAgent(
+        { ...(run.brief ?? { stages: [] }), goal: run.goal },
+        run.loop_definition ? definitionFromSnapshot(run.loop_definition) : null,
+        { provider: run.provider, model: run.model, options: run.options },
+      ),
+    );
     setSelectedDefinition(
       definitions?.find((definition) => definition.id === run.loop_definition_id && definition.valid)
         ?? (snapshot ? definitionFromSnapshot(snapshot) : null),
@@ -368,8 +370,13 @@ export function LoopMode({
               onEditLoop={canActOnRun ? () => {
                 const snapshot = activeRun.loop_definition;
                 setFolder(activeRun.root_path);
-                setAgentConfig({ provider: activeRun.provider, model: activeRun.model, options: activeRun.options });
-                setBrief({ ...(activeRun.brief ?? { stages: [] }), goal: activeRun.goal });
+                setBrief(
+                  withBaseAgent(
+                    { ...(activeRun.brief ?? { stages: [] }), goal: activeRun.goal },
+                    snapshot ? definitionFromSnapshot(snapshot) : null,
+                    { provider: activeRun.provider, model: activeRun.model, options: activeRun.options },
+                  ),
+                );
                 setEditorDefinition(
                   (snapshot
                     ? definitions?.find((definition) => definition.id === snapshot.id)
@@ -387,13 +394,11 @@ export function LoopMode({
               folder={folder}
               definitions={definitions}
               definition={selectedDefinition}
-              agentConfig={agentConfig}
               brief={brief}
               busy={busy || workStatus !== "active"}
               error={workStatus === "active" ? error : "Reopen this work to start another run."}
               goalEditable
               onBrief={setBrief}
-              onAgentConfig={setAgentConfig}
               onChooseFolder={() => setFolderPickerOpen(true)}
               onSelectDefinition={setSelectedDefinition}
               onEditLoop={() => {
@@ -605,6 +610,43 @@ function normalizedBrief(
           approved_command_prefixes: saved?.approved_command_prefixes ?? null,
         };
       }),
+  };
+}
+
+/** The brief's entry-stage agent, completed into a launch config. */
+function baseAgent(
+  brief: LoopBrief,
+  definition: LoopDefinition | null,
+): PlanningAgentConfig | null {
+  const entry = definition?.stages.find((stage) => stage.agent !== null);
+  const saved = brief.stages.find((stage) => stage.stage_id === entry?.id)?.agent;
+  return saved?.provider && saved.model
+    ? { provider: saved.provider, model: saved.model, options: saved.options ?? {} }
+    : null;
+}
+
+/** Pin ``agent`` to the brief's entry stage, the one place it is read from. */
+function withBaseAgent(
+  brief: LoopBrief,
+  definition: LoopDefinition | null,
+  agent: PlanningAgentConfig,
+): LoopBrief {
+  const entry = definition?.stages.find((stage) => stage.agent !== null);
+  if (!entry) return brief;
+  const current = brief.stages.find((stage) => stage.stage_id === entry.id);
+  return {
+    ...brief,
+    stages: [
+      ...brief.stages.filter((stage) => stage.stage_id !== entry.id),
+      {
+        stage_id: entry.id,
+        note: current?.note ?? "",
+        context: current?.context ?? [],
+        review_gate: current?.review_gate ?? null,
+        approved_command_prefixes: current?.approved_command_prefixes ?? null,
+        agent,
+      },
+    ],
   };
 }
 

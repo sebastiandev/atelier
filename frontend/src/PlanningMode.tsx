@@ -247,7 +247,6 @@ export function PlanningMode({
   const [setupBrief, setSetupBrief] = useState<LoopBrief | null>(null);
   // The provider the entry stage runs on. Null until chosen, which is what
   // keeps Start disabled: a story has no parent agent to inherit from.
-  const [setupAgentConfig, setSetupAgentConfig] = useState<PlanningAgentConfig | null>(null);
   const [setupEditorOpen, setSetupEditorOpen] = useState(false);
   const selectedRun = view.kind === "run"
     ? selectedDetail?.artifact.runs.find((run) => run.id === view.runId)
@@ -289,19 +288,11 @@ export function PlanningMode({
     if (view.kind !== "setup") {
       setSetupDefinition(null);
       setSetupBrief(null);
-      setSetupAgentConfig(null);
       return;
     }
     const title = selectedDetail?.artifact.title ?? "";
     const seeded: LoopBrief = { ...(setupSource?.brief ?? { stages: [] }), goal: title };
     setSetupBrief((current) => current ?? seeded);
-    setSetupAgentConfig((current) => {
-      if (current) return current;
-      const pinned = seeded.stages.find((stage) => stage.agent?.provider)?.agent;
-      return pinned?.provider && pinned.model
-        ? { provider: pinned.provider, model: pinned.model, options: pinned.options ?? {} }
-        : null;
-    });
   }, [view.kind, setupSource, selectedDetail?.artifact.title]);
 
   const planningStyle: CSSProperties = {
@@ -636,7 +627,6 @@ export function PlanningMode({
         {view.kind === "setup" && selectedDetail && (
           <div className="pm-setup-body themed-scrollbar">
             <LoopBriefSetup
-              agentConfig={setupAgentConfig}
               brief={setupBrief ?? { goal: selectedDetail.artifact.title, stages: [] }}
               busy={saving || readOnly}
               definition={setupDefinition}
@@ -645,7 +635,6 @@ export function PlanningMode({
               folder={plan?.root_path ?? ""}
               goalLabel="Story"
               workSlug={work.slug}
-              onAgentConfig={setSetupAgentConfig}
               onBrief={setSetupBrief}
               onSelectDefinition={setSetupDefinition}
               onEditLoop={() => setSetupEditorOpen(true)}
