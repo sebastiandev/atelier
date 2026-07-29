@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from src.domain.agents.launch import (
     AgentFolderMissing,
@@ -14,11 +14,13 @@ from src.domain.agents.launch import (
     launch_agent,
 )
 from src.domain.agents.ports import AgentAdapterFactory
+from src.domain.agents.specs import SPECS
 from src.domain.connections import ConnectionStore
 from src.domain.loop import actions as loop_actions
 from src.domain.loop import briefs, followups
 from src.domain.loop import runtime as _loop_runtime
 from src.domain.loop.agent_policy import (
+    StageAgentConfig,
     resolve_stage_agent_config,
     validate_stage_agent_policies,
 )
@@ -157,20 +159,25 @@ async def execute(
             req.follow_up_note,
         )
     entry = followups.resolve_entry(definition, req.entry_stage_id)
-    _require_entry_agent(entry, brief)
+    entry_provider, entry_model, entry_options = _entry_agent_config(entry, brief)
     session = planning_sessions.get_by_work_slug(req.work_slug)
     if session is None:
         raise PlanningNotStarted(f"planning session not found: {req.work_slug}")
-    parent_provider = session.provider
-    parent_model = session.model
-    parent_options = dict(session.options or {})
-    parent_folder = Path(session.root_path).expanduser()
+    workspace_root = Path(session.root_path).expanduser()
+    # The entry agent is the run's root config, so later stages preflight
+    # against what will actually run -- matching the monitor, which inherits
+    # from the run's first write-capable agent rather than from Planning.
     validate_stage_agent_policies(
         definition,
-        parent_provider=parent_provider,
-        parent_model=parent_model,
-        parent_options=parent_options,
-        parent_folder=parent_folder,
+        parent_provider=entry_provider,
+        parent_model=entry_model,
+        parent_options=entry_options,
+        parent_folder=workspace_root,
+        overrides={
+            item.stage_id: item.agent for item in brief.stages if item.agent is not None
+        }
+        if brief is not None
+        else None,
     )
     resolutions = _resolve_contexts(
         files,
@@ -203,10 +210,8 @@ async def execute(
         req,
         definition,
         brief,
-        parent_provider=parent_provider,
-        parent_model=parent_model,
-        parent_options=parent_options,
-        parent_folder=parent_folder,
+        agent_config=(entry_provider, entry_model, entry_options),
+        workspace_root=workspace_root,
         entry=entry,
     )
     run_id = actions.next_run_id(
@@ -337,29 +342,18 @@ async def _launch_initial_agent(
     definition: LoopDefinition,
     brief: LoopBrief | None,
     *,
-    parent_provider: Provider,
-    parent_model: str,
-    parent_options: dict[str, object],
-    parent_folder: Path,
+    agent_config: StageAgentConfig,
+    workspace_root: Path,
     entry: LoopStepDefinition,
 ) -> str:
-    """Launch the entry stage from the brief, the stage policy, then Planning.
+    """Launch the entry stage with the config the run resolved for it.
 
-    Preconditions: ``brief`` belongs to ``definition``; the parent config is
-    the Planning session's, used only for whatever the first two leave unset.
-    Postconditions: the returned agent runs the provider the run setup chose.
+    Preconditions: ``agent_config`` came from ``_entry_agent_config``.
+    Postconditions: the returned agent runs that config; Planning supplies
+    only the workspace root.
     """
     stage = entry
-    if stage.agent is None:
-        raise LoopDefinitionInvalid("The first loop stage needs an agent policy.")
-    stage_brief = briefs.stage_brief(brief, stage.step_id)
-    provider, model, options = resolve_stage_agent_config(
-        stage.agent,
-        parent_provider=parent_provider,
-        parent_model=parent_model,
-        parent_options=parent_options,
-        override=stage_brief.agent if stage_brief is not None else None,
-    )
+    provider, model, options = agent_config
     agent = await launch_agent(
         workstore,
         supervisor,
@@ -375,7 +369,7 @@ async def _launch_initial_agent(
             role=stage.instructions,
             provider=provider,
             model=model,
-            folder=parent_folder,
+            folder=workspace_root,
             options=options,
             worktree_slug=loop_actions.sourced_worktree_slug(req.artifact_id),
             approved_command_prefixes=briefs.resolved_approved_command_prefixes(
@@ -427,38 +421,52 @@ def _initial_stage_prompt(
     )
 
 
-def _require_entry_agent(
+def _entry_agent_config(
     entry: LoopStepDefinition,
     brief: LoopBrief | None,
-) -> None:
-    """Reject a story run whose entry stage has no provider of its own.
+) -> StageAgentConfig:
+    """Resolve the entry stage's agent from the run's own inputs alone.
 
     A goal-driven run inherits from the provider chosen for the run; a story
-    run has no such parent. It used to fall back to the Planning session's
-    provider, which is the agent that *wrote* the plan -- a coincidence, not
-    a decision, and usually the wrong model for implementation.
+    run has no such parent. The Planning session is not one either -- it is
+    the agent that *wrote* the plan, a coincidence rather than a decision,
+    and usually the wrong model to implement with. So there is nothing to
+    fall back to, and falling back anyway is how a run silently executes as
+    something nobody picked.
 
-    Only the entry stage is checked: later stages inherit from the run's
-    first write-capable agent (``_write_stage_agent_slug``), so pinning that
-    one resolves the whole chain.
+    Every caller can satisfy this: run setup pins the entry agent, and a
+    follow-up arrives with the source run's agent already written into its
+    brief by ``rerun_run._with_inherited_entry_agent``. If neither did, that
+    is a bug in the caller, not a cue to guess.
+
+    Checking and resolving are deliberately one function. They used to be
+    two, and the check passed on a brief the launch then ignored.
+
+    Preconditions: ``entry`` is the run's entry stage and needs an agent;
+    ``brief`` belongs to the same definition.
+    Postconditions: returns a complete provider/model/options triple built
+    only from the brief and the stage policy, or raises.
     """
-    if not followups.entry_needs_agent(entry) or entry.agent is None:
-        return
-    if entry.agent.provider:
-        return
-    override = next(
-        (
-            stage.agent
-            for stage in (brief.stages if brief else ())
-            if stage.stage_id == entry.step_id and stage.agent is not None
-        ),
-        None,
-    )
-    if override is not None and override.provider:
-        return
-    raise StageAgentUnresolved(
-        f"{entry.name} does not pin a provider. Choose one in run setup: a "
-        "story run has no parent agent to inherit from."
+    if entry.agent is None:
+        raise LoopDefinitionInvalid("The first loop stage needs an agent policy.")
+    stage_brief = briefs.stage_brief(brief, entry.step_id)
+    override = stage_brief.agent if stage_brief is not None else None
+    chosen = (override.provider if override else None) or entry.agent.provider
+    if not chosen:
+        raise StageAgentUnresolved(
+            f"{entry.name} does not pin a provider. Choose one in run setup: a "
+            "story run has no parent agent to inherit from."
+        )
+    provider = cast(Provider, chosen)
+    # The stage is its own parent. That is what keeps Planning's provider,
+    # model, effort and permission posture out of the resolution entirely --
+    # cross-provider inheritance only fires when parent and stage differ.
+    return resolve_stage_agent_config(
+        entry.agent,
+        parent_provider=provider,
+        parent_model=SPECS[provider].describe().primary_field.default,
+        parent_options={},
+        override=override,
     )
 
 
