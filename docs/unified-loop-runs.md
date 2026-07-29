@@ -231,41 +231,40 @@ Each step is independently shippable and leaves the tree green.
    - `OBJECTIVE_TARGET_ID` → delete (a sourceless run needs no target id);
      `OBJECTIVE_WORKTREE_SLUG` → `DEFAULT_WORKTREE_SLUG`, still `"loop"`
 5. **One route family** — `/works/{slug}/runs/...` for everything, with
-   `source` in the create payload. Old story routes become aliases, then are
-   removed. **Not started.** Its hard half is unifying the two start paths:
-   `commands/planning/start_run` hardcodes `definition.stages[0]` when it
-   launches the first agent (twice), while `loop/start.py` branches on the
-   entry stage's kind and handles an entry that needs no agent at all
-   (a deterministic check). Until they are one path, a story run cannot start
-   partway through a loop.
-6. **Delete the `variant` gates** — `frontend/src/LoopRunView.tsx:353`, `:483`.
-   **Blocked on 5, and smaller than it looked.** `retry-stage` is already
-   available to story runs: objective `retry_stage` is just
-   `lifecycle.resume(retry_failed=True)`, and `planning/resume_run` already
-   accepts `retry_failed`. So only the follow-up chooser is genuinely
-   missing, and only its `VERIFY` half needs step 5 -- `AMEND` re-enters
-   through the brief, not by skipping stages, so it needs no entry-stage
-   support.
+   `source` in the create payload. **Still open, but no longer blocking
+   anything.** Its hard half was said to be unifying the two start paths:
+   `commands/planning/start_run` hardcoded `definition.stages[0]` when it
+   launched the first agent and rendered its prompt, while `loop/start.py`
+   resolved an entry stage and handled an entry needing no agent at all
+   (a deterministic check).
 
-   The fork-from-parent-agent seeding that looked like step 5's main risk
+   Rather than merge two ~300-line functions, the *decision* they disagreed
+   on is now shared: `followups.resolve_entry` and
+   `followups.entry_needs_agent`, called by both. A story run can start
+   partway through a loop today, so what remains here is deduplicating the
+   route pairs -- housekeeping against future drift, not capability.
+
+   The fork-from-parent-agent seeding that looked like this step's main risk
    is **gone**: it served the superseded handoff flow, its only caller always
-   passed `null`, and handoff itself forks through `POST /works/{slug}/agents`
-   instead. So `loop/start.py` and the planning start now do the same thing
-   with a workspace -- plain `ensure` from a root. Merging them means moving
-   the story-specific bits into `loop/start.py` (source-driven `target_kind` /
-   `target_ref` / worktree slug / run-id allocation / manifest id write), not
-   teaching it to fork.
+   passed `null`, and handoff itself forks through `POST /works/{slug}/agents`.
+   Both paths now do the same thing with a workspace -- plain `ensure` from a
+   root.
+6. ~~**Delete the `variant` gates.**~~ **Done.** Story runs have both
+   follow-up kinds: `POST /plan/artifacts/{id}/runs/{run_id}/rerun`,
+   `commands/planning/rerun_run.py`, and
+   `run_kind` / `follow_up_note` / `entry_stage_id` on
+   `StartArtifactRunRequest`. The chooser is ungated in `LoopRunView`, and
+   `variant` now survives only for the header back arrow, which is genuinely
+   planning-only.
 
-   Shared seeding already landed in `domain/loop/followups.py`
-   (`require_reusable`, `entry_stage_id`, `seeded_brief`, `seed_label`), with
-   the objective `rerun` rewired onto it. What remains for story follow-ups
-   is a `run_kind`/`note` on `StartArtifactRunRequest`, a rerun route, and
-   the frontend wiring.
+   `retry-stage` needed nothing: it is `lifecycle.resume(retry_failed=True)`,
+   which `planning/resume_run` already accepted, so story runs have had it
+   all along.
 
-Steps 1-2 are safe and useful on their own. Step 3 carries the manifest
-shape change. Steps 4-6 are mechanical once 1-3 land — step 4 is a rename
-pass plus a module merge, and should land as its own commit so the
-behavioural steps stay reviewable.
+Steps 1-4 and 6 have landed. Step 5's remaining half -- collapsing the two
+route families into one -- is deduplication now that both paths share the
+entry-stage decision and the storage model. Worth doing to stop them drifting
+again, but nothing depends on it.
 
 ## Decisions
 
