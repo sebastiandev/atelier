@@ -90,7 +90,22 @@ export function PrLifecyclePanel({
     <section className="run-pr-panel">
       <div className="run-pr-summary">
         <BranchIcon size={14} />
-        <span><strong>{pr.title || `PR #${pr.number ?? ""}`}</strong><small>PR #{pr.number ?? ""} · {pr.branch || "current branch"} → {pr.base}</small></span>
+        <span>
+          <strong>{pr.title || `PR #${pr.number ?? ""}`}</strong>
+          <small>
+            PR #{pr.number ?? ""} · {pr.branch || "current branch"} → {pr.base}
+            {pr.head_sha && <>
+              {" · "}
+              {/* The commit Atelier cites when it replies to a comment, so
+                  the reply is verifiable without leaving the run. */}
+              {pr.head_commit_url ? (
+                <a href={pr.head_commit_url} target="_blank" rel="noreferrer" title="Head commit">
+                  {pr.head_sha.slice(0, 7)}
+                </a>
+              ) : pr.head_sha.slice(0, 7)}
+            </>}
+          </small>
+        </span>
         <em className="tag">{pr.status}</em>
         <em className={`tag ${statusTone(checkState)}`}><CheckIcon size={9} /> checks {checks}</em>
         <em className={`tag ${statusTone(pr.review_state)}`}>review {pr.review_state.replaceAll("_", " ")}</em>

@@ -569,6 +569,10 @@ export type PrLifecycle = {
   title: string;
   branch: string;
   base: string;
+  /** Tip of the PR branch at the last lifecycle fetch — the commit Atelier
+   *  cites when it replies to an addressed comment. */
+  head_sha?: string;
+  head_commit_url?: string;
   status: "draft" | "open" | "merged" | "closed";
   checks: { passed?: number; total?: number; state: string } | string;
   review_state: string;

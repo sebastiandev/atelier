@@ -13913,6 +13913,10 @@ select:disabled {
 .run-pr-summary > span { display: grid; gap: 2px; min-width: 0; margin-right: auto; }
 .run-pr-summary > span > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-size: 12px; }
 .run-pr-summary > span > small { color: var(--fg-4); font: 9.5px var(--font-mono); }
+/* Head-commit link in the PR meta line: reads as part of the mono metadata
+   until hovered, so it does not compete with the PR title. */
+.run-pr-summary > span > small a { color: var(--fg-3); text-decoration: none; }
+.run-pr-summary > span > small a:hover { color: var(--accent); text-decoration: underline; }
 .run-pr-summary > .tag { display: inline-flex; align-items: center; gap: 4px; }
 .run-stage-pr-mode {
   padding: 7px 9px;
