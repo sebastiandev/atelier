@@ -82,7 +82,7 @@ DESCRIPTORS: dict[ConnectionType, ConnectionDescriptor] = {
         type="sentry",
         label="Sentry",
         glyph="SE",
-        docs="Generate an auth token at sentry.io › Settings › Auth Tokens",
+        docs="Generate an auth token at sentry.io > Settings > Auth Tokens",
         config_fields=[
             ConnectionField(
                 id="org",
@@ -98,7 +98,7 @@ DESCRIPTORS: dict[ConnectionType, ConnectionDescriptor] = {
         type="honeycomb",
         label="Honeycomb",
         glyph="HC",
-        docs="Find an environment API key at ui.honeycomb.io › Environment Settings",
+        docs="Find an environment API key at ui.honeycomb.io > Environment Settings",
         config_fields=[
             ConnectionField(
                 id="env",

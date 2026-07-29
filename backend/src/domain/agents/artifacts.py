@@ -107,7 +107,11 @@ def record_artifact(
     # OR directly via the canonical path.
     primary = roots[0].resolve()
     candidate = Path(rel_path)
-    candidate = (primary / candidate).resolve() if not candidate.is_absolute() else candidate.resolve()
+    candidate = (
+        candidate.resolve()
+        if candidate.is_absolute()
+        else (primary / candidate).resolve()
+    )
     # Accept the path if its resolved real path falls inside ANY allowed
     # root — worktree or one of the project's shared folders. Rejecting
     # ``../../etc/passwd`` still works because /etc isn't a registered

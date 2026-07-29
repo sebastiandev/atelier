@@ -1548,7 +1548,6 @@ def test_default_run_uses_builtin_loop_when_definition_is_omitted(
     _create_work(app_client)
     root = test_settings.workspace_root / "repo"
     _start_plan(app_client, root)
-    agent = _create_agent(app_client, root)
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     payload = app_client.get("/api/loops/atelier-fast").json()
     saved = app_client.post(
@@ -2286,7 +2285,6 @@ def test_background_run_monitor_auto_continues_incomplete_report(
 ) -> None:
     _create_work(app_client)
     _start_plan(app_client, test_settings.workspace_root / "repo")
-    agent = _create_agent(app_client, test_settings.workspace_root / "repo")
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
@@ -2403,7 +2401,6 @@ def test_failed_selected_loop_stage_retries_with_new_agent_in_same_worktree(
 def test_resume_rejects_non_blocked_run(app_client: TestClient, test_settings: Settings) -> None:
     _create_work(app_client)
     _start_plan(app_client, test_settings.workspace_root / "repo")
-    agent = _create_agent(app_client, test_settings.workspace_root / "repo")
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",

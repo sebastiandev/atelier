@@ -20,5 +20,5 @@ def test_unsupported_config_type_raises_with_clear_message() -> None:
         config=HoneycombConfig(env="prod"),
     )
     ctx = Context(type="honeycomb", value="anything", conn_id="con-1")
-    with pytest.raises(ContextFetchError, match="not yet supported.*HoneycombConfig"):
+    with pytest.raises(ContextFetchError, match=r"not yet supported.*HoneycombConfig"):
         fetch_context(connection, ctx, "tok")
