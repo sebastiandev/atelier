@@ -23,6 +23,7 @@ import {
   type ContextEntry,
   type CreateAgentPayload,
   type HandoffSummary,
+  type LoopBrief,
   type LoopDefinition,
   type PlanArtifact,
   type PlanArtifactDetail,
@@ -1511,6 +1512,34 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
   }
 
+  async function handleStartPlanRunFromSetup(
+    detail: PlanArtifactDetail,
+    definition: LoopDefinition,
+    brief: LoopBrief,
+  ): Promise<void> {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const linked = await startPlanArtifactRun(
+        workSlug,
+        detail.artifact.id,
+        definition,
+        undefined,
+        brief,
+      );
+      setPlanArtifactDetail(linked);
+      setPlanDraft(linked.content);
+      await Promise.all([refreshAgents(), refreshPlan(linked.artifact.id)]);
+      const started = linked.artifact.runs.at(-1);
+      openPlanningView({ kind: "run", id: linked.artifact.id, runId: started?.id });
+      showToast(`Started ${definition.name}.`);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
   function handleLaunchPlanArtifact(detail: PlanArtifactDetail) {
     if (!detail.artifact.launchable) {
       setPlanError(detail.artifact.launch_blockers[0] ?? "Artifact is not launchable yet.");
@@ -1824,6 +1853,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           onApprovePlan={handleApprovePlan}
           onCreateBug={handleCreatePlanBug}
           onLaunch={handleLaunchPlanArtifact}
+          onStartRun={handleStartPlanRunFromSetup}
           onResolveLoopBlocker={(artifact, runId, agentSlug, retryFailed, resolutionNote, gateDecision, enforcedFindings) =>
             void handleResolvePlanLoopBlocker(
               artifact,

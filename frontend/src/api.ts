@@ -803,6 +803,8 @@ export type PlanArtifactRun = {
   loop_current_stage_id: string;
   loop_stages: PlanLoopStageRun[];
   brief_note?: string;
+  /** The whole pinned brief, so a new run can seed setup from this one. */
+  brief?: LoopBrief | null;
   loop_review_gate?: LoopReviewGateState | null;
   waived_findings_count?: number;
   loop_pass_number?: number;
@@ -1170,6 +1172,7 @@ export function startPlanArtifactRun(
   artifactId: string,
   definition?: Pick<LoopDefinition, "id" | "revision">,
   briefNote?: string,
+  brief?: LoopBrief,
 ): Promise<PlanArtifactDetail> {
   return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/runs`, {
     method: "POST",
@@ -1177,6 +1180,7 @@ export function startPlanArtifactRun(
     body: JSON.stringify({
       loop_definition_id: definition?.id,
       loop_revision: definition?.revision,
+      brief: brief ?? undefined,
       brief_note: briefNote || undefined,
     }),
   }).then((r) => jsonOrThrow<PlanArtifactDetail>(r));

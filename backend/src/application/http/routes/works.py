@@ -3101,6 +3101,11 @@ def _to_plan_run(run: PlanArtifactRun) -> PlanArtifactRunResponse:
         changes=run.changes,
         validation_evidence=run.validation_evidence,
         brief_note=run.brief_note,
+        brief=(
+            _to_loop_brief_schema(run.brief).model_dump()
+            if run.brief is not None
+            else None
+        ),
         loop_status=run.loop_status,
         loop_status_reason=run.loop_status_reason,
         loop_attempt=run.loop_attempt,

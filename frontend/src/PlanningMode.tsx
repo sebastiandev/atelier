@@ -13,6 +13,8 @@ import {
   type PlanArtifactDetail,
   type PlanArtifactRun,
   type PlanMaterializationStatus,
+  type LoopBrief,
+  type LoopDefinition,
   type PrConfig,
   type PrLifecycle,
   type PrFeedbackPayload,
@@ -22,8 +24,11 @@ import {
   type WorkPlan,
   type WorkSummary,
   resolveWorkPlanMaterializationPermission,
+  listLoopDefinitions,
 } from "./api";
 import { ChatTile } from "./Chat";
+import { LoopBriefSetup } from "./LoopBriefSetup";
+import { LoopSelectorDialog } from "./LoopUI";
 import {
   AgentIcon,
   BranchIcon,
@@ -78,6 +83,7 @@ export type PlanningView =
   | { kind: "epic"; id: string }
   | { kind: "artifact"; id: string }
   | { kind: "run"; id: string; runId?: string }
+  | { kind: "setup"; id: string; sourceRunId?: string }
   | { kind: "source"; id: string }
   | { kind: "accept" };
 
@@ -111,6 +117,11 @@ type PlanningModeProps = {
   onApprovePlan: () => void;
   onCreateBug: (artifactId: string, title: string, description: string) => Promise<void>;
   onLaunch: (detail: PlanArtifactDetail) => void;
+  onStartRun: (
+    detail: PlanArtifactDetail,
+    definition: LoopDefinition,
+    brief: LoopBrief,
+  ) => Promise<void>;
   onResolveLoopBlocker: (
     artifact: PlanArtifact,
     runId: string,
@@ -204,6 +215,7 @@ export function PlanningMode({
   onApprovePlan,
   onCreateBug,
   onLaunch,
+  onStartRun,
   onResolveLoopBlocker,
   onApproveRun,
   onCancelRun,
@@ -230,14 +242,60 @@ export function PlanningMode({
   const setPlanningDockWidth = useLayoutStore((s) => s.setPlanningDockWidth);
   const [bugDialogOpen, setBugDialogOpen] = useState(false);
   const [runDock, setRunDock] = useState<RunDock>(null);
+  const [setupDefinitions, setSetupDefinitions] = useState<LoopDefinition[] | null>(null);
+  const [setupDefinition, setSetupDefinition] = useState<LoopDefinition | null>(null);
+  const [setupBrief, setSetupBrief] = useState<LoopBrief | null>(null);
+  const [setupPickerOpen, setSetupPickerOpen] = useState(false);
   const selectedRun = view.kind === "run"
     ? selectedDetail?.artifact.runs.find((run) => run.id === view.runId)
       ?? selectedDetail?.artifact.runs.at(-1)
       ?? null
     : null;
+  // The run a "Start new run" was launched from: its loop and brief seed the
+  // setup screen, exactly as Loop mode seeds from its previous run.
+  const setupSource = view.kind === "setup" && view.sourceRunId
+    ? selectedDetail?.artifact.runs.find((run) => run.id === view.sourceRunId) ?? null
+    : null;
   const selectedRunData = selectedRun && selectedDetail
     ? planningRunData(selectedDetail.artifact, selectedRun)
     : null;
+  useEffect(() => {
+    if (view.kind !== "setup") return;
+    let cancelled = false;
+    listLoopDefinitions(work.slug, plan?.root_path ?? null)
+      .then((rows) => {
+        if (cancelled) return;
+        setSetupDefinitions(rows);
+        setSetupDefinition((current) => {
+          if (current) return current;
+          const pinned = setupSource?.loop_definition_id;
+          return rows.find((row) => row.id === pinned && row.valid)
+            ?? rows.find((row) => row.id === "atelier-reviewed" && row.valid)
+            ?? rows.find((row) => row.valid)
+            ?? null;
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setSetupDefinitions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view.kind, work.slug, plan?.root_path, setupSource?.loop_definition_id]);
+
+  useEffect(() => {
+    if (view.kind !== "setup") {
+      setSetupDefinition(null);
+      setSetupBrief(null);
+      return;
+    }
+    setSetupBrief((current) =>
+      current
+        ?? setupSource?.brief
+        ?? { goal: selectedDetail?.artifact.title ?? "", stages: [] },
+    );
+  }, [view.kind, setupSource, selectedDetail?.artifact.title]);
+
   const planningStyle: CSSProperties = {
     ["--pm-rail-width" as string]: `${planningRailWidth}px`,
     ["--pm-dock-width" as string]: `${planningDockWidth}px`,
@@ -283,6 +341,10 @@ export function PlanningMode({
     if (view.kind === "run") {
       planningCrumbs.push({ label: artifactIndex, onClick: () => onView({ kind: "artifact", id: view.id }) });
       planningCrumbs.push({ label: `run ${selectedRunData?.number ?? ""}`.trim() });
+    }
+    if (view.kind === "setup") {
+      planningCrumbs.push({ label: artifactIndex, onClick: () => onView({ kind: "artifact", id: view.id }) });
+      planningCrumbs.push({ label: "run setup" });
     }
     if (view.kind === "accept") planningCrumbs.push({ label: "approve plan" });
   }
@@ -493,7 +555,13 @@ export function PlanningMode({
                   note,
                 )
               }
-              onRerun={() => onLaunch(selectedDetail)}
+              onRerun={() =>
+                onView({
+                  kind: "setup",
+                  id: selectedDetail.artifact.id,
+                  sourceRunId: selectedRun.id,
+                })
+              }
               onApprove={() =>
                 onApproveRun(
                   selectedDetail.artifact,
@@ -547,6 +615,44 @@ export function PlanningMode({
             onSave={onSave}
             onReset={onReset}
             onApprovePlan={onApprovePlan}
+          />
+        )}
+        {view.kind === "setup" && selectedDetail && (
+          <LoopBriefSetup
+            agentConfig={null}
+            brief={setupBrief ?? { goal: selectedDetail.artifact.title, stages: [] }}
+            busy={saving || readOnly}
+            definition={setupDefinition}
+            definitions={setupDefinitions}
+            error={error}
+            folder={plan?.artifact_root_path ?? plan?.root_path ?? ""}
+            goal={selectedDetail.artifact.title}
+            goalLabel="Story"
+            workSlug={work.slug}
+            onAgentConfig={() => undefined}
+            onBrief={setSetupBrief}
+            onChangeLoop={() => setSetupPickerOpen(true)}
+            onEditLoop={() => setSetupPickerOpen(true)}
+            onStart={() => {
+              if (!setupDefinition || !setupBrief) return;
+              void onStartRun(selectedDetail, setupDefinition, setupBrief);
+            }}
+          />
+        )}
+        {setupPickerOpen && selectedDetail && (
+          <LoopSelectorDialog
+            workSlug={work.slug}
+            rootPath={plan?.root_path ?? null}
+            target={selectedDetail}
+            confirmLabel="Use this loop"
+            initialDefinitionId={setupDefinition?.id ?? null}
+            onClose={() => setSetupPickerOpen(false)}
+            onStart={async (definition: LoopDefinition) => {
+              // Picking here selects the loop for setup; the run starts from
+              // the setup screen, so the user can still brief its stages.
+              setSetupDefinition(definition);
+              setSetupPickerOpen(false);
+            }}
           />
         )}
         {view.kind === "accept" && (

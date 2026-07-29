@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from src.domain.loop.dtos import (
+    LoopBrief,
     LoopChangedFile,
     LoopCriterionCoverage,
     LoopDefinition,
@@ -173,6 +174,10 @@ class PlanArtifactRun:
     changes: str = ""
     validation_evidence: str = ""
     brief_note: str = ""
+    # The whole pinned brief, so a follow-up or a new run can seed the setup
+    # screen from what this run actually ran with. `brief_note` stays as the
+    # one-line summary the story card shows.
+    brief: LoopBrief | None = None
     loop_status: LoopStatus | None = None
     loop_status_reason: str = ""
     loop_attempt: int = 1

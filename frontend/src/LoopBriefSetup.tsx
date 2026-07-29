@@ -41,9 +41,12 @@ type Props = {
   onAgentConfig: (config: PlanningAgentConfig) => void;
   onBrief: (brief: LoopBrief) => void;
   onChangeLoop: () => void;
-  onChooseFolder: () => void;
+  onChooseFolder?: () => void;
   onEditLoop: () => void;
-  onGoal: (goal: string) => void;
+  /** Omit when the caller owns the goal — it renders read-only. */
+  onGoal?: (goal: string) => void;
+  /** Caption for the goal field. */
+  goalLabel?: string;
   onStart: () => void;
 };
 
@@ -64,6 +67,7 @@ export function LoopBriefSetup({
   onChooseFolder,
   onEditLoop,
   onGoal,
+  goalLabel = "Goal",
   onStart,
 }: Props) {
   const [expandedStageId, setExpandedStageId] = useState<string | null>(null);
@@ -130,15 +134,19 @@ export function LoopBriefSetup({
       </header>
 
       <section className="loop-brief-goal">
-        <label>Goal</label>
-        <textarea
-          rows={2}
-          value={goal}
-          onChange={(event) => {
-            onGoal(event.target.value);
-            onBrief({ ...brief, goal: event.target.value });
-          }}
-        />
+        <label>{goalLabel}</label>
+        {onGoal ? (
+          <textarea
+            rows={2}
+            value={goal}
+            onChange={(event) => {
+              onGoal(event.target.value);
+              onBrief({ ...brief, goal: event.target.value });
+            }}
+          />
+        ) : (
+          <p className="loop-brief-goal-fixed">{goal}</p>
+        )}
       </section>
 
       <section className="loop-brief-definition">
@@ -203,11 +211,17 @@ export function LoopBriefSetup({
 
       {error && <div className="form-error">{error}</div>}
       <footer className="loop-brief-footer">
-        <button type="button" className="loop-brief-workdir" onClick={onChooseFolder} title="Choose work folder">
-          <FolderIcon size={11} /> {folder ? compactPath(folder) : "choose workdir"} · isolated worktree
-        </button>
+        {onChooseFolder ? (
+          <button type="button" className="loop-brief-workdir" onClick={onChooseFolder} title="Choose work folder">
+            <FolderIcon size={11} /> {folder ? compactPath(folder) : "choose workdir"} · isolated worktree
+          </button>
+        ) : (
+          <span className="loop-brief-workdir fixed">
+            <FolderIcon size={11} /> {compactPath(folder)} · isolated worktree
+          </span>
+        )}
         <span />
-        {!goal.trim() ? (
+        {onGoal && !goal.trim() ? (
           <em>Goal is required</em>
         ) : missing.length > 0 ? (
           <em>{missing[0].name} needs a brief before this run can start</em>

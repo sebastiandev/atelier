@@ -742,6 +742,7 @@ class PlanArtifactRunResponse(BaseModel):
     loop_definition_name: str = ""
     loop_definition_revision: str = ""
     loop_definition: dict[str, Any] | None = None
+    brief: dict[str, Any] | None = None
     loop_current_stage_id: str = ""
     loop_stages: list[PlanLoopStageRunResponse] = Field(default_factory=list)
     loop_review_gate: dict[str, Any] | None = None

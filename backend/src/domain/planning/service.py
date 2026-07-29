@@ -639,6 +639,7 @@ def _runs(
                     if brief is not None
                     else ""
                 ),
+                brief=brief,
                 loop_status=loop_status,
                 loop_status_reason=_str_or_empty(loop.get("status_reason")),
                 loop_attempt=_int_or_default(loop.get("attempt"), 1),

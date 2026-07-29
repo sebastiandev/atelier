@@ -15830,6 +15830,20 @@ select:disabled {
   white-space: nowrap;
 }
 .loop-brief-workdir:hover { color: var(--fg-2); }
+/* When the caller owns the workdir or the goal there is nothing to click, so
+   the field reads as metadata rather than a disabled control. */
+.loop-brief-workdir.fixed { cursor: default; }
+.loop-brief-workdir.fixed:hover { color: var(--fg-4); }
+.loop-brief-goal-fixed {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
 .loop-brief-footer > em {
   color: var(--warn);
   font: 10.5px var(--font-mono);
