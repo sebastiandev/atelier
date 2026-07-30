@@ -478,7 +478,7 @@ function StageEditorScreen({
   const storage = local
     ? undefined
     : {
-        path: `${rootPath ? `${rootPath.replace(/[\\/]+$/, "")}/` : ""}.atelier/stages/${draft.id}`,
+        path: `${rootPath ? `${rootPath.replace(/[\\/]+$/, "")}/` : ""}stages/${draft.id}`,
         unsaved: seed.expectedRevision === null,
         onReveal: () =>
           void revealStageDefinition(draft.id, rootPath).catch((reason) =>
@@ -783,7 +783,7 @@ function StageDefinitionInspector({ stage, stages, outcomes, advanced, local, sa
         <span><strong>◇ Local to this loop</strong><em>unsaved</em></span>
         <small>Only this loop can select the stage until it is saved to the library.</small>
         <input value={stage.name} onChange={(event) => onPatch({ name: event.target.value })} placeholder="Stage name" />
-        <code>→ .atelier/stages/{slugify(stage.name) || "stage-id"}</code>
+        <code>→ stages/{slugify(stage.name) || "stage-id"}</code>
         <div className="stage-save-card-actions"><button className="btn sm" disabled={!stage.name.trim()} onClick={onKeepLocal}>Keep local</button><button className="btn primary sm" disabled={saving || !stage.name.trim()} onClick={onSaveToLibrary}>{saving ? "Saving…" : "↑ Save to library"}</button></div>
       </section> : stage.kind === "pr" ? <small className="stage-editor-footnote stage-editor-revision-note">When a loop contains this stage, the run view's ⇱ Create PR button is hidden. The stage owns it.</small> : <small className="stage-editor-footnote stage-editor-revision-note">Saving bumps the revision. Linked loops pick it up on their next run; loop-local overrides stay.</small>}
     </div>
@@ -905,8 +905,8 @@ function LoopEditorScreen({
   const setLoopInspectorWidth = useLayoutStore((state) => state.setLoopInspectorWidth);
   const selected = draft.stages.find((stage) => stage.id === selectedId) ?? null;
   const storagePath = saveScope === "work" && workSlug
-    ? `works/${workSlug}/.atelier/loops/${draft.id}`
-    : `${rootPath ? `${rootPath.replace(/[\\/]+$/, "")}/` : ""}.atelier/loops/${draft.id}`;
+    ? `works/${workSlug}/loops/${draft.id}`
+    : `${rootPath ? `${rootPath.replace(/[\\/]+$/, "")}/` : ""}loops/${draft.id}`;
 
   const refreshStages = () => listAvailableStageDefinitions(rootPath)
     .then(setStageDefinitions)
@@ -1069,7 +1069,7 @@ function LoopEditorScreen({
       let forkedFrom = draft.forked_from;
       if (promoting) {
         const library = await listLoopDefinitions(null);
-        const baseId = `${draft.id}-library`;
+        const baseId = slugify(draft.name) || draft.id;
         const previousPromotion = library.find((definition) =>
           definition.scope === "library" &&
           definition.forked_from === draft.id &&
@@ -1861,12 +1861,15 @@ function editorSeed(definition: LoopDefinition, duplicate = false, scope: LoopSa
       expectedRevision: null,
     };
   }
-  const suffix = definition.scope === "builtin" && !duplicate ? "repository" : "copy";
+  const name = `${definition.name}${duplicate ? " copy" : ""}`;
   return {
     definition: {
       ...structuredClone(definition),
-      id: `${definition.id}-${suffix}`,
-      name: `${definition.name}${suffix === "repository" ? " — Repository" : " copy"}`,
+      // Id is the slug of the name at creation, then immutable (the editor
+      // keeps them in sync only while unsaved). This is what stops an id
+      // from drifting into a fork artifact like `code-review-repository`.
+      id: slugify(name) || definition.id,
+      name,
       scope,
       revision: "",
       is_default: false,
@@ -1946,12 +1949,13 @@ function stageEditorSeed(definition: StageDefinition, duplicate: boolean): Stage
   if (definition.scope === "library" && !duplicate) {
     return { definition: structuredClone(definition), expectedRevision: definition.revision, source: null };
   }
-  const id = `${definition.id}-${definition.scope === "builtin" && !duplicate ? "repository" : "copy"}`;
+  const name = `${definition.name}${duplicate ? " copy" : ""}`;
+  const id = slugify(name) || definition.id;
   return {
     definition: {
       ...structuredClone(definition),
       id,
-      name: `${definition.name}${duplicate ? " copy" : ""}`,
+      name,
       scope: "library",
       revision: "",
       errors: [],
