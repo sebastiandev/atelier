@@ -33,6 +33,7 @@ import {
   type PlanningProfile,
   type ProviderDescriptor,
   type ProjectSummary,
+  type RetryStageOverride,
   type SharedFolderSummary,
   type WorkPlan,
   type WorkDetail,
@@ -70,6 +71,7 @@ import {
   revealArtifact,
   revealWork,
   resumePlanArtifactRun,
+  retryPlanArtifactRunStage,
   requestPlanArtifactRunChanges,
   sendPlanArtifactRunPrFeedback,
   startPlanningChat,
@@ -1294,7 +1296,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     artifact: PlanArtifact,
     runId: string,
     agentSlug: string,
-    retryFailed = false,
     resolutionNote = "",
     gateDecision?: "send_back" | "approve_as_is",
     enforcedFindings: number[] = [],
@@ -1304,7 +1305,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     try {
       const saved = await resumePlanArtifactRun(workSlug, artifact.id, runId, {
         resolution_note: resolutionNote || undefined,
-        retry_failed: retryFailed,
         gate_decision: gateDecision,
         enforced_findings: enforcedFindings,
       });
@@ -1312,6 +1312,25 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       setPlanDraft(saved.content);
       await refreshPlan(saved.artifact.id);
       setFocusedSlug(agentSlug);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
+  async function handleRetryPlanRunStage(
+    artifact: PlanArtifact,
+    runId: string,
+    override?: RetryStageOverride,
+  ) {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const saved = await retryPlanArtifactRunStage(workSlug, artifact.id, runId, override);
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      await refreshPlan(saved.artifact.id);
     } catch (err) {
       setPlanError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1831,17 +1850,17 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           onCreateBug={handleCreatePlanBug}
           onLaunch={handleLaunchPlanArtifact}
           onStartRun={handleStartPlanRunFromSetup}
-          onResolveLoopBlocker={(artifact, runId, agentSlug, retryFailed, resolutionNote, gateDecision, enforcedFindings) =>
+          onResolveLoopBlocker={(artifact, runId, agentSlug, resolutionNote, gateDecision, enforcedFindings) =>
             void handleResolvePlanLoopBlocker(
               artifact,
               runId,
               agentSlug,
-              retryFailed,
               resolutionNote,
               gateDecision,
               enforcedFindings,
             )
           }
+          onRetryRunStage={handleRetryPlanRunStage}
           onApproveRun={(artifact, runId) =>
             handleApprovePlanRun(artifact, runId)
           }

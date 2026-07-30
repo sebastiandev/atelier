@@ -365,7 +365,7 @@ export function LoopMode({
               onChangeLoop={canActOnRun ? () => prepareNewRun(activeRun) : undefined}
               onFollowUp={canActOnRun ? (kind, note) => act(() => rerunWorkLoopRun(work.slug, activeRun.id, { kind, note: note || undefined })) : undefined}
               onRerun={canActOnRun ? () => prepareNewRun(activeRun) : undefined}
-              onRetry={canActOnRun && activeRun.status === "failed" ? () => act(() => retryWorkLoopRunStage(work.slug, activeRun.id)) : undefined}
+              onRetry={canActOnRun && activeRun.status === "failed" ? (override) => act(() => retryWorkLoopRunStage(work.slug, activeRun.id, override)) : undefined}
               onSendPrFeedback={canActOnRun ? (comments, instruction) => act(() => sendWorkLoopRunPrFeedback(work.slug, activeRun.id, { comments, instruction })) : undefined}
               onEditLoop={canActOnRun ? () => {
                 const snapshot = activeRun.loop_definition;

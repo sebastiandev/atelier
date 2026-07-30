@@ -8,6 +8,7 @@ from src.domain.agents.launch import AgentLaunchRequest, launch_agent
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.connections import ConnectionStore
 from src.domain.loop import actions, briefs, pr_lifecycle, runtime
+from src.domain.loop.agent_policy import apply_retry_overrides
 from src.domain.loop.dtos import (
     LoopContextKind,
     LoopOutcome,
@@ -39,6 +40,22 @@ class LoopAgentNotFound(ValueError):
     """The stage agent does not belong to the run's Work."""
 
 
+RETRY_RESOLUTION_NOTE = (
+    "Retry the failed stage in the existing workspace. A previous attempt may "
+    "have left work in progress here — check the current state (e.g. `git "
+    "status`/`git diff`) before starting, and continue from anything already "
+    "done rather than redoing it from scratch. If nothing was changed yet, "
+    "proceed normally."
+)
+"""Continuation hint every retry gets.
+
+A retry replaces the stage's agent with a fresh transcript, so the new agent
+has no memory of the attempt whose work is already in the workspace. Applied
+here rather than by each caller so every retry path -- standalone Loop and
+Planning alike -- carries it.
+"""
+
+
 class LoopRunNotResumable(ValueError):
     """The run cannot resume from its current state."""
 
@@ -68,6 +85,8 @@ async def resume(
     *,
     resolution_note: str = "",
     retry_failed: bool = False,
+    retry_model: str | None = None,
+    retry_effort: str | None = None,
     gate_decision: str | None = None,
     enforced_findings: tuple[int, ...] = (),
 ) -> None:
@@ -146,6 +165,8 @@ async def resume(
             current_stage_row,
             loop,
             agent_slug,
+            retry_model,
+            retry_effort,
         )
 
     cursor = (
@@ -173,7 +194,7 @@ async def resume(
                     loop,
                     current_stage_row,
                     stage,
-                    resolution_note,
+                    _retry_note(resolution_note) if retry_failed else resolution_note,
                     (
                         runtime.workspace_prompt_context(
                             workstore,
@@ -223,11 +244,15 @@ async def _launch_retry_agent(
     stage_row: dict[str, Any],
     loop: dict[str, Any],
     previous_slug: str,
+    retry_model: str | None = None,
+    retry_effort: str | None = None,
 ) -> str:
     """Launch a retry in a new transcript against the existing worktree.
 
     Preconditions: ``previous_slug`` owns the failed stage workspace.
     Postconditions: the stage points at a fresh agent and keeps its checkout.
+    An optional model/effort override is applied on the same provider; an
+    invalid one raises before the previous agent is replaced.
     """
     previous = next(
         (
@@ -239,6 +264,13 @@ async def _launch_retry_agent(
     )
     if previous is None or previous.slug is None:
         raise LoopAgentNotFound(f"agent not found on work: {previous_slug}")
+    provider, model, options = apply_retry_overrides(
+        previous.provider,
+        previous.model,
+        dict(previous.options or {}),
+        model_override=retry_model,
+        effort_override=retry_effort,
+    )
     await supervisor.stop_agent(previous.slug)
     definition = definition_from_snapshot(loop.get("definition_snapshot"))
     brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
@@ -255,11 +287,11 @@ async def _launch_retry_agent(
             name=previous.name,
             persona=previous.persona,
             role=previous.role,
-            provider=previous.provider,
-            model=previous.model,
+            provider=provider,
+            model=model,
             folder=previous.folder,
             contexts=tuple(workstore.get_agent_contexts(target.work_slug, previous.slug)),
-            options=dict(previous.options or {}),
+            options=options,
             worktree_slug=previous.worktree_slug or previous.slug,
             approved_command_prefixes=tuple(
                 dict.fromkeys(
@@ -485,6 +517,13 @@ def cancel(target: LoopRunTarget) -> None:
     run["completed_at"] = now
     run["cancelled_at"] = now
     run["loop"] = loop
+
+
+def _retry_note(resolution_note: str) -> str:
+    """Lead a retry's resolution with the pick-up-existing-work hint."""
+    return "\n\n".join(
+        value for value in (RETRY_RESOLUTION_NOTE, resolution_note.strip()) if value
+    )
 
 
 def _resume_prompt(

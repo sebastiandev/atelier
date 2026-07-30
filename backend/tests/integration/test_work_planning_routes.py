@@ -2446,8 +2446,7 @@ def test_failed_selected_loop_stage_retries_with_new_agent_in_same_worktree(
     )
 
     retried = app_client.post(
-        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/resume",
-        json={"retry_failed": True},
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/retry-stage",
     )
 
     assert retried.status_code == 200, retried.text
@@ -2461,6 +2460,83 @@ def test_failed_selected_loop_stage_retries_with_new_agent_in_same_worktree(
     assert len(agents) == 2
     retry_agent = next(item for item in agents if item["slug"] == retry_agent_slug)
     assert retry_agent["worktree_path"] == worktree
+    # The retry hint reaches Planning too, now that both surfaces share one
+    # retry verb rather than Planning generalizing /resume with a flag.
+    prompt = next(
+        event["text"]
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", retry_agent_slug, 0
+        )
+        if event.get("type") == "user_input"
+    )
+    assert "previous attempt" in prompt
+    assert "git status" in prompt
+
+
+def _failed_plan_run_for_retry(
+    app_client: TestClient, test_settings: Settings
+) -> tuple[str, str]:
+    """Drive a story run to a retryable failure; return (run_id, agent_slug)."""
+    _create_work(app_client)
+    root = test_settings.workspace_root / "repo"
+    _start_plan(app_client, root)
+    _create_planning_session(
+        app_client,
+        root,
+        provider="amp",
+        model="rush",
+        options={"permission_mode": "default"},
+    )
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    definition = builtin_loop_definition("atelier-fast")
+    assert definition is not None
+    started = app_client.post(
+        "/api/works/WRK-001/plan/artifacts/story-001/runs",
+        json={
+            "brief": _entry_agent_brief(),
+            "loop_definition_id": definition.definition_id,
+            "loop_revision": definition.revision,
+        },
+    )
+    assert started.status_code == 200, started.text
+    run = started.json()["artifact"]["runs"][0]
+    agent_slug = run["loop_stages"][0]["agent_slug"]
+    assert isinstance(agent_slug, str)
+    _wait_for_scripted_agent(app_client, agent_slug)
+    _publish_agent_event(
+        app_client, agent_slug, {"type": "error", "message": "Provider stopped."}
+    )
+    _wait_run(app_client, "story-001", run["id"], "blocked", loop_status="failed")
+    return run["id"], agent_slug
+
+
+def test_plan_run_stage_retry_applies_same_provider_model_override(
+    app_client: TestClient,
+    test_settings: Settings,
+) -> None:
+    """The model/effort override works on Planning runs, not just standalone."""
+    run_id, agent_slug = _failed_plan_run_for_retry(app_client, test_settings)
+
+    # amp has no reasoning-effort dial: rejected cleanly, run stays retryable.
+    rejected = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/retry-stage",
+        json={"effort": "high"},
+    )
+    assert rejected.status_code == 422, rejected.text
+
+    retried = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/retry-stage",
+        json={"model": "smart"},
+    )
+    assert retried.status_code == 200, retried.text
+    retry_agent_slug = retried.json()["artifact"]["runs"][0]["loop_stages"][0]["agent_slug"]
+    assert retry_agent_slug != agent_slug
+    retry_agent = next(
+        item
+        for item in app_client.get("/api/works/WRK-001/agents").json()
+        if item["slug"] == retry_agent_slug
+    )
+    assert retry_agent["model"] == "smart"  # overridden from the run's "rush"
 
 
 def test_resume_rejects_non_blocked_run(app_client: TestClient, test_settings: Settings) -> None:

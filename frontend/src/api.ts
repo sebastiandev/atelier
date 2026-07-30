@@ -1196,7 +1196,6 @@ export function resumePlanArtifactRun(
   runId: string,
   payload: {
     resolution_note?: string;
-    retry_failed?: boolean;
     gate_decision?: "send_back" | "approve_as_is";
     enforced_findings?: number[];
   } = {},
@@ -1208,6 +1207,18 @@ export function resumePlanArtifactRun(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     },
+  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export function retryPlanArtifactRunStage(
+  workSlug: string,
+  artifactId: string,
+  runId: string,
+  override?: RetryStageOverride,
+): Promise<PlanArtifactDetail> {
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/retry-stage`,
+    retryStageInit(override),
   ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
@@ -1619,13 +1630,39 @@ export function resumeWorkLoopRun(
   }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
 
+export interface RetryStageOverride {
+  model?: string | null;
+  effort?: string | null;
+}
+
+/** Shared by the standalone-Loop and Planning retry verbs: the body is sent
+ *  only when something is actually overridden, so a plain retry stays a
+ *  bodyless POST. */
+function retryStageInit(override?: RetryStageOverride): RequestInit {
+  const overriding =
+    override != null &&
+    ((override.model != null && override.model !== "") ||
+      (override.effort != null && override.effort !== ""));
+  if (!overriding) return { method: "POST" };
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: override?.model ?? null,
+      effort: override?.effort ?? null,
+    }),
+  };
+}
+
 export function retryWorkLoopRunStage(
   workSlug: string,
   runId: string,
+  override?: RetryStageOverride,
 ): Promise<WorkLoopRun> {
-  return fetch(`/api/works/${workSlug}/runs/${runId}/retry-stage`, {
-    method: "POST",
-  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+  return fetch(
+    `/api/works/${workSlug}/runs/${runId}/retry-stage`,
+    retryStageInit(override),
+  ).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
 
 export function requestWorkLoopRunChanges(

@@ -116,6 +116,20 @@ class ResumeLoopRunRequest:
 
 
 @dataclass(frozen=True)
+class RetryStageRequest:
+    """Command input for retrying one failed stage in place.
+
+    ``model``/``effort`` optionally override the retry agent on the same
+    provider; both absent reuses the failed attempt's configuration.
+    """
+
+    work_slug: str
+    run_id: str
+    model: str | None = None
+    effort: str | None = None
+
+
+@dataclass(frozen=True)
 class RequestChangesRequest:
     """Command input for returning a loop run to implementation."""
 
@@ -333,17 +347,19 @@ async def retry_stage(
     share_provisioner: ShareProvisioner,
     adapter_factory: AgentAdapterFactory,
     settings: Any,
-    req: LoopRunRequest,
+    req: RetryStageRequest,
 ) -> LoopRunRecord:
     """Retry the failed current stage in its existing run and workspace.
 
     Preconditions: the loop run failed on a retryable pinned stage.
     Postconditions: the same run/worktree and a fresh stage agent are active
-    for one additional attempt.
+    for one additional attempt, optionally with a same-provider model/effort
+    override.
     """
-    get_run(loop_runs, req)
+    key = LoopRunRequest(req.work_slug, req.run_id)
+    get_run(loop_runs, key)
     store = LoopRunStore(loop_runs)
-    target = _target_or_raise(store, req)
+    target = _target_or_raise(store, key)
     await lifecycle.resume(
         target,
         workstore,
@@ -354,11 +370,12 @@ async def retry_stage(
         share_provisioner,
         adapter_factory,
         settings,
-        resolution_note="Retry the failed stage in the existing workspace.",
         retry_failed=True,
+        retry_model=req.model,
+        retry_effort=req.effort,
     )
     store.save(target)
-    return get_run(loop_runs, req)
+    return get_run(loop_runs, key)
 
 
 async def request_changes(
@@ -620,6 +637,7 @@ __all__ = [
     "RefreshPrRequest",
     "RequestChangesRequest",
     "ResumeLoopRunRequest",
+    "RetryStageRequest",
     "RunNotFound",
     "SendPrFeedbackRequest",
     "StartLoopRunRequest",

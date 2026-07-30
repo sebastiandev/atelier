@@ -20,6 +20,7 @@ import {
   type PrFeedbackPayload,
   type ProviderDescriptor,
   type ProjectSummary,
+  type RetryStageOverride,
   type WorkDetail,
   type WorkPlan,
   type WorkSummary,
@@ -126,11 +127,15 @@ type PlanningModeProps = {
     artifact: PlanArtifact,
     runId: string,
     agentSlug: string,
-    retryFailed?: boolean,
     resolutionNote?: string,
     gateDecision?: "send_back" | "approve_as_is",
     enforcedFindings?: number[],
   ) => void;
+  onRetryRunStage: (
+    artifact: PlanArtifact,
+    runId: string,
+    override?: RetryStageOverride,
+  ) => Promise<void>;
   onApproveRun: (artifact: PlanArtifact, runId: string) => Promise<void>;
   onCancelRun: (artifact: PlanArtifact, runId: string) => Promise<void>;
   onRequestRunChanges: (
@@ -217,6 +222,7 @@ export function PlanningMode({
   onLaunch,
   onStartRun,
   onResolveLoopBlocker,
+  onRetryRunStage,
   onApproveRun,
   onCancelRun,
   onRequestRunChanges,
@@ -529,24 +535,17 @@ export function PlanningMode({
                   selectedDetail.artifact,
                   selectedRun.id,
                   agentSlug,
-                  false,
                   note,
                 )
               }
-              onRetry={(agentSlug) =>
-                onResolveLoopBlocker(
-                  selectedDetail.artifact,
-                  selectedRun.id,
-                  agentSlug,
-                  true,
-                )
+              onRetry={(override) =>
+                onRetryRunStage(selectedDetail.artifact, selectedRun.id, override)
               }
               onResolveReviewGate={(decision, enforcedFindings, instruction) =>
                 onResolveLoopBlocker(
                   selectedDetail.artifact,
                   selectedRun.id,
                   selectedRun.agent_slug,
-                  false,
                   instruction,
                   decision,
                   enforcedFindings,

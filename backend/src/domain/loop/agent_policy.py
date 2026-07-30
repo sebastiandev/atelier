@@ -16,9 +16,10 @@ from src.domain.agents.configs import (
     CommonAgentConfig,
     OpenCodeMode,
 )
-from src.domain.agents.effort import effort_option
+from src.domain.agents.effort import effort_option, effort_option_key
 from src.domain.agents.launch import InvalidProviderConfig
 from src.domain.agents.specs import SPECS, EnumOption
+from src.domain.loop.definitions import validate_agent_policy
 from src.domain.loop.dtos import (
     LoopAgentPolicy,
     LoopBriefAgent,
@@ -359,8 +360,46 @@ def validate_stage_agent_policies(
                 )
 
 
+def apply_retry_overrides(
+    provider: Provider,
+    model: str,
+    options: dict[str, object],
+    *,
+    model_override: str | None,
+    effort_override: str | None,
+) -> StageAgentConfig:
+    """Overlay a same-provider model/effort change onto a retry's base config.
+
+    Preconditions: ``(provider, model, options)`` is the failed attempt's
+    resolved config; a retry never switches provider. Postconditions: returns
+    a validated config with the provider unchanged and only the model and/or
+    effort replaced; raises :class:`InvalidProviderConfig` when the requested
+    model or effort is not valid for ``provider``.
+    """
+    if model_override is None and effort_override is None:
+        return provider, model, dict(options)
+    errors = validate_agent_policy(
+        "Retry override",
+        LoopAgentPolicy(
+            provider=provider,
+            model=model_override or model,
+            effort=effort_override,
+        ),
+    )
+    if errors:
+        raise InvalidProviderConfig(" ".join(errors))
+    resolved = dict(options)
+    if effort_override is not None:
+        key = effort_option_key(provider)
+        if key is None:
+            raise InvalidProviderConfig(f"{provider} has no reasoning effort setting")
+        resolved[key] = effort_override
+    return provider, model_override or model, resolved
+
+
 __all__ = [
     "StageAgentConfig",
+    "apply_retry_overrides",
     "apply_stage_agent_policy",
     "resolve_stage_agent_config",
     "resolve_stage_model",

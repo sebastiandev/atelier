@@ -15,6 +15,7 @@ import {
   type PrConfig,
   type PrLifecycle,
   type ProjectSummary,
+  type RetryStageOverride,
   type WorkSummary,
   createChat,
   listAgents,
@@ -39,6 +40,12 @@ import {
 } from "./Icons";
 import { LoopRunInspector } from "./LoopRunInspector";
 import { PaneResizeHandle } from "./PaneResizeHandle";
+import {
+  modelPickerOptions,
+  optionLabel,
+  providerEffortOption,
+  useProviderDescriptors,
+} from "./providerDescriptors";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
 import { PrLifecyclePanel } from "./PrLifecyclePanel";
 import { RunLiveActivity, RunTranscriptDock } from "./RunAgentStream";
@@ -119,7 +126,7 @@ type RunSurfaceProps = {
   onResolveBlocker?: (note: string, agentSlug: string | null) => Promise<void> | void;
   onResolveReviewGate?: (decision: "send_back" | "approve_as_is", enforcedFindings: number[], instruction: string) => Promise<void> | void;
   onRerun?: () => Promise<void>;
-  onRetry?: () => Promise<void>;
+  onRetry?: (override?: RetryStageOverride) => Promise<void>;
   onSendPrFeedback?: (
     comments: Array<{ comment_id: string; instruction: string }>,
     instruction: string,
@@ -127,6 +134,13 @@ type RunSurfaceProps = {
   readOnly?: boolean;
   variant: "loop" | "planning";
   workSlug: string;
+};
+
+/** The failed stage agent's config, seeding the retry model/effort picker. */
+type RetrySeed = {
+  provider: string;
+  model: string;
+  options: Record<string, string>;
 };
 
 /** Shared staged-run surface used by standalone Loop and Planning story runs. */
@@ -288,6 +302,19 @@ function RunSurfaceContent({
   const inspectorStage = data.stages.find((item) => item.id === selectedInspectorStage) ?? null;
   const inspectorAgent = agents.find((item) => item.slug === inspectorStage?.agent_slug) ?? null;
   const workspacePath = data.workspacePath || agent?.worktree_path || "";
+  // Seeds the retry model/effort picker from the agent that actually ran the
+  // failed stage — more accurate than the run-level provider/model, and it
+  // works the same for standalone Loop and Planning runs.
+  const retryAgent = agents.find((item) => item.slug === stage?.agent_slug) ?? null;
+  const retrySeed: RetrySeed | null = retryAgent
+    ? {
+        provider: retryAgent.provider,
+        model: retryAgent.model,
+        options: Object.fromEntries(
+          Object.entries(retryAgent.options ?? {}).map(([key, value]) => [key, String(value)]),
+        ),
+      }
+    : null;
 
   async function sendChangeRequest() {
     const note = changeNote.trim();
@@ -428,6 +455,7 @@ function RunSurfaceContent({
                   busy={busy}
                   stage={stage}
                   onRetry={onRetry}
+                  retrySeed={retrySeed ?? undefined}
                   onChangeLoop={onChangeLoop}
                   onRerun={onRerun}
                   onEditLoop={onEditLoop}
@@ -682,7 +710,7 @@ type LoopRunViewProps = {
   onRerun: () => void;
   onResolveBlocker: (note: string, agentSlug: string) => void;
   onResolveReviewGate: (decision: "send_back" | "approve_as_is", enforcedFindings: number[], instruction: string) => void;
-  onRetry: (agentSlug: string) => void;
+  onRetry: (override?: RetryStageOverride) => Promise<void> | void;
   onCreatePr?: RunSurfaceProps["onCreatePr"];
   onFollowUp?: RunSurfaceProps["onFollowUp"];
   onSendPrFeedback?: RunSurfaceProps["onSendPrFeedback"];
@@ -695,8 +723,6 @@ type LoopRunViewProps = {
 /** Planning adapter for the shared run surface. */
 export function LoopRunView({ artifact, run, ...props }: LoopRunViewProps) {
   const data = planningRunData(artifact, run);
-  const retryAgentSlug = data.stages.find((stage) => stage.id === data.currentStageId)?.agent_slug
-    ?? run.agent_slug;
   return (
     <RunSurface
       busy={props.busy}
@@ -719,7 +745,7 @@ export function LoopRunView({ artifact, run, ...props }: LoopRunViewProps) {
         if (agentSlug) props.onResolveBlocker(note, agentSlug);
       }}
       onResolveReviewGate={props.readOnly ? undefined : props.onResolveReviewGate}
-      onRetry={props.readOnly ? undefined : async () => props.onRetry(retryAgentSlug)}
+      onRetry={props.readOnly ? undefined : async (override) => props.onRetry(override)}
       onRefreshPr={props.readOnly ? undefined : props.onRefreshPr}
       onSendPrFeedback={props.readOnly ? undefined : props.onSendPrFeedback}
     />
@@ -1089,6 +1115,94 @@ function StageOutput({
   );
 }
 
+/** Retry button with an optional same-provider model/effort override. */
+function RetryStageControls({
+  seed,
+  busy,
+  onRetry,
+  label,
+  hint,
+}: {
+  seed: RetrySeed;
+  busy: boolean;
+  onRetry: (override?: RetryStageOverride) => Promise<void>;
+  label: string;
+  hint: string;
+}) {
+  const { byName } = useProviderDescriptors();
+  const descriptor = byName?.[seed.provider] ?? null;
+  const [open, setOpen] = useState(false);
+  const [model, setModel] = useState(seed.model);
+  const [effort, setEffort] = useState<string | null>(null);
+
+  const effortOption = descriptor ? providerEffortOption(descriptor, model) : null;
+  const effortKey = effortOption?.key ?? null;
+  const seedEffort = effortKey ? seed.options[effortKey] ?? null : null;
+  const effortValues = effortOption?.field.values ?? [];
+  // Keep the shown effort valid for the selected model's ladder; fall back to
+  // the run's current effort, then the provider default.
+  const effectiveEffort =
+    effort && effortValues.includes(effort)
+      ? effort
+      : seedEffort && effortValues.includes(seedEffort)
+        ? seedEffort
+        : effortOption?.field.default ?? null;
+
+  const modelChoices = descriptor ? modelPickerOptions(descriptor) : [];
+  const models = modelChoices.some((choice) => choice.value === seed.model)
+    ? modelChoices
+    : [{ value: seed.model, label: seed.model }, ...modelChoices];
+
+  const modelChanged = model !== seed.model;
+  const effortChanged =
+    effortKey !== null && effectiveEffort !== null && effectiveEffort !== seedEffort;
+
+  function retry() {
+    const override: RetryStageOverride = {};
+    if (modelChanged) override.model = model;
+    if (effortChanged) override.effort = effectiveEffort;
+    void onRetry(modelChanged || effortChanged ? override : undefined);
+  }
+
+  return (
+    <>
+      <div className="retry-actions">
+        <button className="btn primary sm" disabled={busy} onClick={retry}>
+          <LoopIcon size={11} /> {label}
+        </button>
+        {descriptor && (
+          <button className="btn ghost sm" disabled={busy} onClick={() => setOpen((value) => !value)}>
+            {open ? "Use current model" : "Change model / effort"}
+          </button>
+        )}
+      </div>
+      <span>{hint}</span>
+      {open && descriptor && (
+        <div className="retry-overrides">
+          <label>
+            <span>Model</span>
+            <select className="input sm" value={model} disabled={busy} onChange={(event) => setModel(event.target.value)}>
+              {models.map((choice) => (
+                <option key={choice.value} value={choice.value}>{choice.label}</option>
+              ))}
+            </select>
+          </label>
+          {effortOption && (
+            <label>
+              <span>Effort</span>
+              <select className="input sm" value={effectiveEffort ?? ""} disabled={busy} onChange={(event) => setEffort(event.target.value)}>
+                {effortValues.map((value) => (
+                  <option key={value} value={value}>{optionLabel(effortOption.field, value)}</option>
+                ))}
+              </select>
+            </label>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 function FailureView({
   busy,
   data,
@@ -1099,6 +1213,7 @@ function FailureView({
   onRetry,
   onSendToImplement,
   onTranscript,
+  retrySeed,
   stage,
 }: {
   busy: boolean;
@@ -1107,9 +1222,10 @@ function FailureView({
   onChangeLoop?: () => Promise<void>;
   onEditLoop?: () => void;
   onRerun?: () => Promise<void>;
-  onRetry?: () => Promise<void>;
+  onRetry?: (override?: RetryStageOverride) => Promise<void>;
   onSendToImplement?: () => Promise<void>;
   onTranscript: () => void;
+  retrySeed?: RetrySeed;
   stage: PlanLoopStageRun | null;
 }) {
   const output = lastAgentOutput(events, data.statusReason);
@@ -1131,7 +1247,19 @@ function FailureView({
           <p>{cancelled ? "The run was stopped." : humanFailure(data.statusReason)} The shared worktree is kept exactly as the stage left it.</p>
           {data.statusReason && <code>{data.statusReason}</code>}
           <div className="run-failure-options">
-            {!cancelled && onRetry && <><button className="btn primary sm" disabled={busy} onClick={() => void onRetry()}><LoopIcon size={11} /> {stage?.kind === "pr" ? "Retry Create PR" : "Retry stage"}</button><span>{stage?.kind === "pr" ? "same worktree · reuses your PR setup · picks up manual fixes" : "one more attempt · resumes the kept workspace"}</span></>}
+            {!cancelled && onRetry && (
+              retrySeed && stage && (stage.kind === "agent_task" || stage.kind === "agent_review" || stage.kind === "pr") ? (
+                <RetryStageControls
+                  seed={retrySeed}
+                  busy={busy}
+                  onRetry={onRetry}
+                  label={stage.kind === "pr" ? "Retry Create PR" : "Retry stage"}
+                  hint={stage.kind === "pr" ? "same worktree · reuses your PR setup · picks up manual fixes" : "one more attempt · resumes the kept workspace"}
+                />
+              ) : (
+                <><button className="btn primary sm" disabled={busy} onClick={() => void onRetry()}><LoopIcon size={11} /> {stage?.kind === "pr" ? "Retry Create PR" : "Retry stage"}</button><span>{stage?.kind === "pr" ? "same worktree · reuses your PR setup · picks up manual fixes" : "one more attempt · resumes the kept workspace"}</span></>
+              )
+            )}
             {!cancelled && stage?.kind === "pr" && onSendToImplement && <><button className="btn sm" disabled={busy} onClick={() => void onSendToImplement()}><ReturnIcon size={11} /> Send to Implement</button><span>runs the loop again · saved PR setup is reused</span></>}
             {onRerun && <><button className="btn sm" disabled={busy} onClick={() => void onRerun()}><ReturnIcon size={11} /> Start new run</button><span>latest saved loop · review setup first</span></>}
             {onChangeLoop && <><button className="btn sm" disabled={busy} onClick={() => void onChangeLoop()}><LoopIcon size={11} /> Change loop → new run</button><span>choose another loop · retained workspace</span></>}

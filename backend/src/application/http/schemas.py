@@ -849,8 +849,9 @@ class AcceptPlanArtifactRequest(BaseModel):
 
 
 class ResumePlanArtifactRunRequest(BaseModel):
+    # Retrying a failed stage is its own verb (.../runs/{id}/retry-stage),
+    # not a flag here.
     resolution_note: str = ""
-    retry_failed: bool = False
     gate_decision: Literal["send_back", "approve_as_is"] | None = None
     enforced_findings: list[int] = Field(default_factory=list)
 
@@ -912,6 +913,13 @@ class StartPlanArtifactRunRequest(BaseModel):
 class RerunWorkLoopRunRequest(BaseModel):
     kind: Literal["amend", "verify"]
     note: str = ""
+
+
+class RetryWorkLoopRunStageRequest(BaseModel):
+    # Optional same-provider overrides for the retry agent; both omitted
+    # reuses the failed attempt's model and effort.
+    model: str | None = None
+    effort: str | None = None
 
 
 class CreatePrStageRequest(BaseModel):

@@ -965,6 +965,11 @@ def test_failed_stage_retry_uses_new_agent_in_same_workspace(
         if event.get("type") == "user_input"
     ]
     assert len(inputs_after) == 1
+    # The fresh retry agent has no memory of the failed attempt; hint that
+    # the workspace may already carry its work so it continues rather than
+    # silently redoing everything from scratch.
+    assert "previous attempt" in inputs_after[0]["text"]
+    assert "git status" in inputs_after[0]["text"]
 
 
 def test_stage_retry_rejects_an_active_run(
@@ -976,6 +981,50 @@ def test_stage_retry_rejects_an_active_run(
     response = app_client.post("/api/works/WRK-001/runs/run-001/retry-stage")
 
     assert response.status_code == 422, response.text
+
+
+def _fail_run_for_retry(app_client: TestClient, tmp_path: Path) -> str:
+    """Drive a run to a retryable failure; return the failed stage's agent."""
+    started = _start_run(app_client, tmp_path)
+    agent_slug = started["stages"][0]["agent_slug"]
+    assert isinstance(agent_slug, str)
+    _wait_for_agent_idle(app_client, agent_slug)
+    app_client.app.state.workstore.append_transcript_event_with_seq(
+        "WRK-001", agent_slug, {"type": "error", "message": "Provider stopped."}
+    )
+    _wait_for_status(app_client, "failed")
+    store = LoopRunStore(app_client.app.state.loop_runs)
+    target = store.load("WRK-001", "run-001")
+    assert target is not None
+    target.run["loop"]["failure_kind"] = LoopFailureKind.PROVIDER_RUNTIME.value
+    store.save(target)
+    return agent_slug
+
+
+def test_stage_retry_applies_same_provider_model_override(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    original_slug = _fail_run_for_retry(app_client, tmp_path)
+
+    # An override the provider rejects fails cleanly and leaves the run
+    # retryable (amp has no reasoning-effort dial), so nothing was torn down.
+    rejected = app_client.post(
+        "/api/works/WRK-001/runs/run-001/retry-stage",
+        json={"effort": "high"},
+    )
+    assert rejected.status_code == 422, rejected.text
+
+    retried = app_client.post(
+        "/api/works/WRK-001/runs/run-001/retry-stage",
+        json={"model": "rush"},
+    )
+    assert retried.status_code == 200, retried.text
+    retry_agent_slug = retried.json()["stages"][0]["agent_slug"]
+    assert retry_agent_slug != original_slug
+    agents = app_client.app.state.workstore.list_agents_for_work("WRK-001")
+    retry_agent = next(agent for agent in agents if agent.slug == retry_agent_slug)
+    assert retry_agent.model == "rush"  # overridden from the run's "smart"
 
 
 def test_intermediate_agent_message_does_not_consume_report_retry(

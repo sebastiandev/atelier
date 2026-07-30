@@ -136,7 +136,6 @@ def test_retry_reseeds_pending_pr_feedback(monkeypatch: Any) -> None:
             None,
             None,
             None,
-            resolution_note="Retry the failed stage in the existing workspace.",
             retry_failed=True,
         )
     )
@@ -145,7 +144,10 @@ def test_retry_reseeds_pending_pr_feedback(monkeypatch: Any) -> None:
     assert "Reduce the number of queries." in prompts[0]
     assert "Keep the public API unchanged." in prompts[0]
     assert "Add focused validation." in prompts[0]
+    # The retry hint comes from lifecycle itself, so every retry path gets it
+    # without the caller passing a note.
     assert "Retry the failed stage" in prompts[0]
+    assert "previous attempt" in prompts[0]
 
 
 def test_retry_reseeds_declared_previous_stage_report(monkeypatch: Any) -> None:

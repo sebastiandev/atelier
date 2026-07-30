@@ -1,4 +1,11 @@
-"""Resume a paused Planning artifact run."""
+"""Retry the failed stage of a Planning artifact run in place.
+
+The Planning twin of ``commands.loops.runs.retry_stage``: both are thin
+adapters over the one shared ``lifecycle.resume(retry_failed=True)``. Retry
+is its own verb here (rather than a flag on ``resume_run``) so a change to
+retry semantics -- the continuation hint, a model/effort override -- lands on
+both surfaces instead of only the standalone one.
+"""
 
 from __future__ import annotations
 
@@ -37,23 +44,22 @@ class AgentNotFound(ValueError):
 
 
 class PlanArtifactRunNotResumable(ValueError):
-    """The run cannot resume from its current state."""
+    """The run cannot retry from its current state."""
 
 
 @dataclass(frozen=True)
-class ResumeArtifactRunRequest:
-    """Command input for resuming one paused artifact run.
+class RetryArtifactStageRequest:
+    """Command input for retrying one failed artifact-run stage.
 
-    Resuming is for a run blocked on user input or a held review gate;
-    retrying a *failed* stage is ``commands.planning.retry_stage``.
+    ``model``/``effort`` optionally override the retry agent on the same
+    provider; both absent reuses the failed attempt's configuration.
     """
 
     work_slug: str
     artifact_id: str
     run_id: str
-    resolution_note: str = ""
-    gate_decision: str | None = None
-    enforced_findings: tuple[int, ...] = ()
+    model: str | None = None
+    effort: str | None = None
 
 
 async def execute(
@@ -67,12 +73,14 @@ async def execute(
     share_provisioner: ShareProvisioner,
     adapter_factory: AgentAdapterFactory,
     settings: Settings,
-    req: ResumeArtifactRunRequest,
+    req: RetryArtifactStageRequest,
 ) -> PlanArtifactDetail:
-    """Resume a Planning artifact through the shared Loop lifecycle.
+    """Retry the failed current stage in its existing run and workspace.
 
-    Preconditions: Work, artifact, and run exist in the requested paused state.
-    Postconditions: the reused stage workspace is running and state is persisted.
+    Preconditions: Work, artifact, and run exist, and the run failed on a
+    retryable pinned stage. Postconditions: the same run/worktree and a fresh
+    stage agent are active for one additional attempt, optionally with a
+    same-provider model/effort override.
     """
     if workstore.get_work(req.work_slug) is None:
         raise WorkNotFound(f"work not found: {req.work_slug}")
@@ -93,9 +101,9 @@ async def execute(
             share_provisioner,
             adapter_factory,
             settings,
-            resolution_note=req.resolution_note,
-            gate_decision=req.gate_decision,
-            enforced_findings=req.enforced_findings,
+            retry_failed=True,
+            retry_model=req.model,
+            retry_effort=req.effort,
         )
     except lifecycle.LoopAgentNotFound as exc:
         raise AgentNotFound(str(exc)) from exc
@@ -112,7 +120,7 @@ __all__ = [
     "PlanArtifactRunNotFound",
     "PlanArtifactRunNotResumable",
     "PlanningNotStarted",
-    "ResumeArtifactRunRequest",
+    "RetryArtifactStageRequest",
     "WorkNotFound",
     "execute",
 ]

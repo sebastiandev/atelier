@@ -2,12 +2,80 @@
 
 import pytest
 
+from src.domain.agents.launch import InvalidProviderConfig
 from src.domain.loop.agent_policy import (
+    apply_retry_overrides,
     apply_stage_agent_policy,
     resolve_stage_agent_config,
     resolve_stage_model,
 )
 from src.domain.loop.dtos import LoopAgentPolicy, LoopBriefAgent, LoopPermission
+
+
+def test_retry_overrides_absent_returns_base_unchanged() -> None:
+    base = {"mode": "build", "reasoning_effort": "medium"}
+
+    provider, model, options = apply_retry_overrides(
+        "opencode",
+        "anthropic/claude-opus-5",
+        base,
+        model_override=None,
+        effort_override=None,
+    )
+
+    assert (provider, model) == ("opencode", "anthropic/claude-opus-5")
+    assert options == base
+    assert options is not base  # never mutates the caller's dict
+
+
+def test_retry_override_changes_model_and_effort_keeping_other_options() -> None:
+    provider, model, options = apply_retry_overrides(
+        "codex-acp",
+        "gpt-5.6-terra",
+        {"mode": "build", "reasoning_effort": "medium"},
+        model_override="gpt-5.6-luna",
+        effort_override="high",
+    )
+
+    assert provider == "codex-acp"
+    assert model == "gpt-5.6-luna"
+    # Effort lands under the provider's own key; unrelated options survive.
+    assert options == {"mode": "build", "reasoning_effort": "high"}
+
+
+def test_retry_override_uses_provider_specific_effort_key() -> None:
+    # claude-acp spells effort "thinking_effort", not "reasoning_effort".
+    _, _, options = apply_retry_overrides(
+        "claude-acp",
+        "default",
+        {"permission_mode": "plan"},
+        model_override=None,
+        effort_override="high",
+    )
+
+    assert options == {"permission_mode": "plan", "thinking_effort": "high"}
+
+
+def test_retry_override_rejects_effort_invalid_for_provider() -> None:
+    with pytest.raises(InvalidProviderConfig):
+        apply_retry_overrides(
+            "codex-acp",
+            "gpt-5.6-terra",
+            {},
+            model_override=None,
+            effort_override="not-a-level",
+        )
+
+
+def test_retry_override_rejects_model_from_another_provider() -> None:
+    with pytest.raises(InvalidProviderConfig):
+        apply_retry_overrides(
+            "codex-acp",
+            "gpt-5.6-terra",
+            {},
+            model_override="opus[1m]",  # a claude model, not codex
+            effort_override=None,
+        )
 
 
 def test_inherited_permission_preserves_parent_options() -> None:

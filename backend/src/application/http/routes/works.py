@@ -52,6 +52,7 @@ from src.application.http.schemas import (
     RerunWorkLoopRunRequest,
     ResolvePlanMaterializationPermissionRequest,
     ResumePlanArtifactRunRequest,
+    RetryWorkLoopRunStageRequest,
     SendPrFeedbackRequest,
     StartPlanArtifactRunRequest,
     StartPlanningChatRequest,
@@ -129,6 +130,9 @@ from src.domain.commands.planning import (
 )
 from src.domain.commands.planning import (
     resume_run as planning_resume_run,
+)
+from src.domain.commands.planning import (
+    retry_stage as planning_retry_stage,
 )
 from src.domain.commands.planning import (
     run_monitor as planning_run_monitor,
@@ -631,6 +635,7 @@ async def retry_work_loop_run_stage_endpoint(
     adapter_factory: AgentAdapterFactoryDep,
     check_runner: LoopCheckRunnerDep,
     settings: SettingsDep,
+    payload: RetryWorkLoopRunStageRequest | None = None,
 ) -> WorkLoopRunResponse:
     """Retry one failed standalone Loop stage in place."""
     try:
@@ -644,7 +649,12 @@ async def retry_work_loop_run_stage_endpoint(
             share_provisioner,
             adapter_factory,
             settings,
-            loop_run_commands.LoopRunRequest(work_slug, run_id),
+            loop_run_commands.RetryStageRequest(
+                work_slug,
+                run_id,
+                model=payload.model if payload is not None else None,
+                effort=payload.effort if payload is not None else None,
+            ),
         )
     except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -2033,7 +2043,6 @@ async def resume_work_plan_artifact_run_endpoint(
                 artifact_id=artifact_id,
                 run_id=run_id,
                 resolution_note=payload.resolution_note,
-                retry_failed=payload.retry_failed,
                 gate_decision=payload.gate_decision,
                 enforced_findings=tuple(payload.enforced_findings),
             ),
@@ -2049,6 +2058,87 @@ async def resume_work_plan_artifact_run_endpoint(
     except (
         planning_resume_run.PlanArtifactNotExecutable,
         planning_resume_run.PlanArtifactRunNotResumable,
+    ) as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
+    except AgentTerminated as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    _ensure_plan_run_monitor_task(
+        request,
+        workstore,
+        planningfiles,
+        supervisor,
+        worktree_manager,
+        connection_store,
+        sharestore,
+        share_provisioner,
+        adapter_factory,
+        check_runner,
+        loop_runs,
+        settings,
+        planning_run_monitor.MonitorArtifactRunRequest(
+            work_slug=work_slug,
+            artifact_id=artifact_id,
+            run_id=run_id,
+        ),
+    )
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/retry-stage",
+    response_model=PlanArtifactDetailResponse,
+)
+async def retry_work_plan_artifact_run_stage_endpoint(
+    request: Request,
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    check_runner: LoopCheckRunnerDep,
+    loop_runs: LoopRunRepositoryDep,
+    settings: SettingsDep,
+    payload: RetryWorkLoopRunStageRequest | None = None,
+) -> PlanArtifactDetailResponse:
+    """Retry one failed Planning story-run stage in place."""
+    try:
+        detail = await planning_retry_stage.execute(
+            workstore,
+            planningfiles,
+            loop_runs,
+            supervisor,
+            worktree_manager,
+            connection_store,
+            sharestore,
+            share_provisioner,
+            adapter_factory,
+            settings,
+            planning_retry_stage.RetryArtifactStageRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                model=payload.model if payload is not None else None,
+                effort=payload.effort if payload is not None else None,
+            ),
+        )
+    except (
+        planning_retry_stage.WorkNotFound,
+        planning_retry_stage.AgentNotFound,
+        planning_retry_stage.PlanningNotStarted,
+        planning_retry_stage.PlanArtifactNotFound,
+        planning_retry_stage.PlanArtifactRunNotFound,
+    ) as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except (
+        planning_retry_stage.PlanArtifactNotExecutable,
+        planning_retry_stage.PlanArtifactRunNotResumable,
+        ValueError,
     ) as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except AgentTerminated as e:

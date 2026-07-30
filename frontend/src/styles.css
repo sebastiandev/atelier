@@ -14329,6 +14329,31 @@ select:disabled {
 }
 .run-failure-options .btn { justify-content: flex-start; }
 .run-failure-options > span { color: var(--fg-4); font: 10.5px var(--font-mono); }
+.run-failure-options .retry-actions { display: inline-flex; gap: 8px; }
+.retry-overrides {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
+}
+.retry-overrides label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 10.5px var(--font-mono);
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.retry-overrides .input.sm {
+  height: var(--ctl-sm);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
 .run-last-output {
   overflow: hidden;
   border-radius: var(--radius-card);
