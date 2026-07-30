@@ -7,6 +7,7 @@ through replay-from-disk + live fan-out, plus exercises the input path.
 """
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ def _create_work(
             "contexts": [],
         },
     )
-    response.raise_for_status()
+    assert response.status_code == 201, response.text
     return response.json()
 
 
@@ -48,8 +49,18 @@ def _create_agent(
             "folder": folder,
         },
     )
-    response.raise_for_status()
+    assert response.status_code == 201, response.text
     return response.json()
+
+
+def _init_git_repo(path: Path) -> None:
+    """Create the minimal repository needed for a managed worktree."""
+    subprocess.run(["git", "init", "-q", "-b", "master"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True)
+    (path / "README.md").write_text("hello\n")
+    subprocess.run(["git", "add", "README.md"], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=path, check=True)
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +79,7 @@ def test_create_agent_returns_summary(app_client: TestClient, tmp_workdir: str) 
             "provider": "amp",
             "model": "smart",
             "folder": tmp_workdir,
+            "options": {"permission_mode": "allow_all", "read_only": "true"},
         },
     )
     assert response.status_code == 201
@@ -77,6 +89,10 @@ def test_create_agent_returns_summary(app_client: TestClient, tmp_workdir: str) 
     assert body["persona"] == "architect"
     assert body["status"] == "idle"
     assert body["folder"] == tmp_workdir
+    assert body["options"] == {
+        "permission_mode": "allow_all",
+        "read_only": "true",
+    }
 
 
 def test_create_agent_422_for_unknown_option(app_client: TestClient, tmp_workdir: str) -> None:
@@ -175,6 +191,32 @@ def test_create_agent_404_for_unknown_work(app_client: TestClient, tmp_workdir: 
     assert response.status_code == 404
 
 
+def test_completed_work_must_be_reopened_before_creating_agent(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    work = _create_work(app_client)
+    assert app_client.post(f"/api/works/{work['slug']}/complete").status_code == 200
+    payload = {
+        "name": "X",
+        "persona": "architect",
+        "role": "x",
+        "provider": "amp",
+        "model": "smart",
+        "folder": tmp_workdir,
+    }
+
+    blocked = app_client.post(f"/api/works/{work['slug']}/agents", json=payload)
+
+    assert blocked.status_code == 409
+    assert "reopen" in blocked.json()["detail"]
+    assert app_client.patch(
+        f"/api/works/{work['slug']}", json={"status": "active"}
+    ).status_code == 200
+    assert app_client.post(
+        f"/api/works/{work['slug']}/agents", json=payload
+    ).status_code == 201
+
+
 def test_list_agents_for_work_returns_summaries(app_client: TestClient, tmp_workdir: str) -> None:
     work = _create_work(app_client)
     _create_agent(app_client, work["slug"], tmp_workdir, name="Architect")
@@ -185,6 +227,45 @@ def test_list_agents_for_work_returns_summaries(app_client: TestClient, tmp_work
     payload = response.json()
     assert [a["name"] for a in payload] == ["Architect", "Developer"]
     assert all(a["work_slug"] == work["slug"] for a in payload)
+    assert all(a["options"] is None for a in payload)
+
+
+def test_get_agent_returns_summary(app_client: TestClient, tmp_workdir: str) -> None:
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+
+    response = app_client.get(f"/api/agents/{agent['slug']}")
+
+    assert response.status_code == 200
+    assert response.json() == agent
+
+
+def test_reconnect_agent_closes_stalled_turn(
+    app_client: TestClient, tmp_workdir: str
+) -> None:
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    supervisor = app_client.app.state.supervisor
+    app_client.portal.call(supervisor.stop_agent, agent["slug"])
+    store = app_client.app.state.workstore
+    store.append_transcript_event_with_seq(
+        work["slug"],
+        agent["slug"],
+        {"type": "user_input", "text": "keep working"},
+    )
+    store.append_transcript_event_with_seq(
+        work["slug"],
+        agent["slug"],
+        {"type": "status_change", "status": "thinking"},
+    )
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/reconnect")
+
+    assert response.status_code == 204
+    events = list(store.read_transcript_from_cursor(work["slug"], agent["slug"], 0))
+    assert [event["type"] for event in events[-2:]] == ["error", "status_change"]
+    assert events[-1]["status"] == "idle"
+    assert not supervisor.is_registered(agent["slug"])
 
 
 def test_list_agents_for_work_404_for_unknown_work(app_client: TestClient) -> None:
@@ -287,6 +368,43 @@ def test_ws_cursor_zero_replays_everything(app_client: TestClient, tmp_workdir: 
     with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream?cursor=0") as ws:
         events = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT)]
     assert [e["seq"] for e in events] == list(range(1, _DEMO_EVENT_COUNT + 1))
+
+
+def test_completed_work_stream_replays_without_recreating_cleaned_workspace(
+    app_client: TestClient,
+    tmp_workdir: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = Path(tmp_workdir)
+    _init_git_repo(source)
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
+        before = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT)]
+
+    completed = app_client.post(
+        f"/api/works/{work['slug']}/complete",
+        json={"remove_workspaces": True},
+    )
+    assert completed.status_code == 200, completed.text
+    worktree = Path(agent["worktree_path"])
+    assert not worktree.exists()
+    assert not app_client.app.state.supervisor.is_registered(agent["slug"])
+
+    def fail_ensure(*_args: object, **_kwargs: object) -> Path:
+        raise AssertionError("archived transcript view must not ensure a worktree")
+
+    monkeypatch.setattr(app_client.app.state.worktree_manager, "ensure", fail_ensure)
+    with app_client.websocket_connect(f"/api/agents/{agent['slug']}/stream") as ws:
+        replay = [ws.receive_json() for _ in range(_DEMO_EVENT_COUNT)]
+        ws.send_text(json.dumps({"type": "input", "text": "mutate archived work"}))
+        blocked = ws.receive_json()
+
+    assert replay == before
+    assert blocked["type"] == "client_error"
+    assert "reopen" in blocked["message"]
+    assert not worktree.exists()
+    assert not app_client.app.state.supervisor.is_registered(agent["slug"])
 
 
 def test_ws_cursor_past_end_yields_nothing_in_replay(
@@ -744,6 +862,35 @@ def test_detach_preserves_amp_allow_all_permission_mode(
     command = response.json()["command"]
     assert "amp --dangerously-allow-all --mode 'deep' threads continue" in command
     assert "'sess-amp-deep'" in command
+
+
+def test_detach_rejects_amp_read_only_loop_stage(
+    app_client: TestClient,
+    tmp_workdir: str,
+) -> None:
+    work = _create_work(app_client)
+    created = app_client.post(
+        f"/api/works/{work['slug']}/agents",
+        json={
+            "name": "Read-only review",
+            "persona": "architect",
+            "role": "Review only",
+            "provider": "amp",
+            "model": "smart",
+            "folder": tmp_workdir,
+            "options": {"permission_mode": "default", "read_only": "true"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    agent = created.json()
+    app_client.app.state.workstore.set_agent_session_id(
+        agent["slug"], "sess-read-only"
+    )
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/detach")
+
+    assert response.status_code == 409, response.text
+    assert "permission boundary" in response.json()["detail"]
 
 
 def test_detach_returns_clipboard_fallback_when_launch_fails(

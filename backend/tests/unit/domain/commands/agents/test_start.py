@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.domain.commands.agents import start
+from src.domain.agents import mounts
 from src.domain.workstore.dtos import WorkChatContextFolder
 
 
@@ -13,7 +13,7 @@ def test_mount_work_chat_contexts_links_folder_and_reports_writable_root(
     target.mkdir(parents=True)
     (target / "context.md").write_text("# Context")
 
-    mounted = start._mount_work_chat_contexts(
+    mounted = mounts.mount_work_chat_contexts(
         workdir=workdir,
         folders=[
             WorkChatContextFolder(
@@ -41,7 +41,7 @@ def test_mount_work_chat_contexts_skips_conflicting_path(tmp_path: Path) -> None
     target.mkdir()
     (workdir / "existing").mkdir()
 
-    mounted = start._mount_work_chat_contexts(
+    mounted = mounts.mount_work_chat_contexts(
         workdir=workdir,
         folders=[
             WorkChatContextFolder(

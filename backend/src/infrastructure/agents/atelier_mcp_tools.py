@@ -17,6 +17,8 @@ import json
 import re
 from typing import Any
 
+import jsonschema
+
 # Server name (mcp_servers key for Claude / mcpConfig key for Amp).
 MCP_SERVER_NAME = "atelier"
 TOOL_RECORDING_ACK = "Artifact will be recorded by Atelier."
@@ -37,10 +39,12 @@ _PR_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "url": {
             "type": "string",
+            "pattern": r"\S",
             "description": "Full URL of the pull request.",
         },
         "title": {
             "type": "string",
+            "pattern": r"\S",
             "description": "Concise human-readable title for the rail.",
         },
         "status": {
@@ -50,6 +54,7 @@ _PR_INPUT_SCHEMA: dict[str, Any] = {
         },
         "repo": {
             "type": "string",
+            "pattern": r"\S",
             "description": "Optional 'owner/name' shorthand for grouping.",
         },
     },
@@ -59,8 +64,8 @@ _PR_INPUT_SCHEMA: dict[str, Any] = {
 _JIRA_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "url": {"type": "string"},
-        "title": {"type": "string"},
+        "url": {"type": "string", "pattern": r"\S"},
+        "title": {"type": "string", "pattern": r"\S"},
         "status": {
             "type": "string",
             "enum": ["todo", "in_progress", "in_review", "done", "blocked"],
@@ -74,12 +79,13 @@ _DOC_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "path": {
             "type": "string",
+            "pattern": r"\S",
             "description": (
                 "Path to the document, relative to your working directory. "
                 "Atelier validates the file exists before recording."
             ),
         },
-        "title": {"type": "string"},
+        "title": {"type": "string", "pattern": r"\S"},
         "status": {
             "type": "string",
             "enum": ["draft"],
@@ -132,6 +138,22 @@ _TOOL_TO_TYPE: dict[str, str] = {
 }
 
 
+def schema_violation(tool_name: str, arguments: dict[str, Any]) -> str | None:
+    """Return why ``arguments`` fail the tool's declared schema, else None.
+
+    Validates against the same ``TOOL_SCHEMAS`` entry the MCP server
+    advertises, so what we enforce is exactly what the model was told.
+    """
+    schema = TOOL_SCHEMAS.get(_strip_known_prefix(tool_name))
+    if schema is None:
+        return None
+    try:
+        jsonschema.validate(instance=arguments, schema=schema)
+    except jsonschema.ValidationError as exc:
+        return str(exc.message)
+    return None
+
+
 def marker_payload_for_tool(
     tool_name: str, arguments: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -140,11 +162,22 @@ def marker_payload_for_tool(
 
     The adapter calls this on every observed ToolUseBlock — a return of
     ``None`` means "fall through to the regular ToolCall event".
+
+    A call that violates the tool's schema also returns ``None``, so the
+    adapter stays quiet and the MCP server's own rejection reaches the
+    model, which can then retry with the missing field. Without that
+    gate the adapter races ahead of the server: it observes the raw
+    tool-call frame and records the artifact *before* the server can
+    reject it. Since ``WorkStore.record_artifact`` is first-write-wins
+    on URL, that pre-emptive write is permanent -- the model's corrected
+    retry is silently discarded as a duplicate.
     """
     tool_name, arguments = _normalize_tool_invocation(tool_name, arguments)
     bare = _strip_known_prefix(tool_name)
     artifact_type = _TOOL_TO_TYPE.get(bare)
     if artifact_type is None:
+        return None
+    if schema_violation(bare, arguments) is not None:
         return None
     payload: dict[str, Any] = {"type": artifact_type, **dict(arguments)}
     return payload
@@ -296,4 +329,5 @@ __all__ = [
     "marker_text_for_tool",
     "scan_text_for_artifact_markers",
     "scan_tool_output_for_artifact_markers",
+    "schema_violation",
 ]

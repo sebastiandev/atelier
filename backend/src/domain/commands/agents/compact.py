@@ -15,6 +15,7 @@ from src.domain.agents import (
     CommonAgentConfig,
     detect_shared_envs,
     render_system_prompt,
+    resume_runtime,
 )
 from src.domain.agents.compactions import (
     CompactionSessionClient,
@@ -26,7 +27,7 @@ from src.domain.agents.handoffs import (
     SummaryContext,
     format_summary_prompt,
 )
-from src.domain.commands.agents import resume
+from src.domain.agents.mounts import agent_writable_roots, mount_project_shares
 from src.domain.models import Agent, AgentStatus, Provider
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.ports import WorkStore
@@ -106,25 +107,20 @@ async def execute(
 
     workdir = worktree_manager.ensure(
         work_slug=work_slug,
-        agent_slug=req.agent_slug,
+        agent_slug=agent.worktree_slug or req.agent_slug,
         source=agent.folder,
     )
 
-    from src.domain.commands.agents.start import (
-        _agent_writable_roots,
-        _mount_project_shares,
-    )
-
-    mounted_shares = _mount_project_shares(
+    mounted_shares = mount_project_shares(
         sharestore=sharestore,
         provisioner=share_provisioner,
         project_slug=record.work.project_slug,
         work_slug=work_slug,
-        agent_slug=req.agent_slug,
+        agent_slug=agent.worktree_slug or req.agent_slug,
     )
     common = CommonAgentConfig(
         workdir=workdir,
-        writable_roots=_agent_writable_roots(
+        writable_roots=agent_writable_roots(
             mounted_shares, worktree_manager, workdir
         ),
         system_prompt=render_system_prompt(
@@ -682,14 +678,14 @@ async def _reregister(
     work_slug: str,
     agent_slug: str,
 ) -> None:
-    await resume.execute(
+    await resume_runtime.resume_agent(
         workstore,
         supervisor,
         worktree_manager,
         sharestore,
         share_provisioner,
         settings,
-        resume.ResumeAgentRequest(work_slug=work_slug, agent_slug=agent_slug),
+        resume_runtime.ResumeAgentRequest(work_slug=work_slug, agent_slug=agent_slug),
     )
 
 

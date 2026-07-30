@@ -45,6 +45,22 @@ docs/screenshots/*.mov
 # not the directory itself — git refuses to re-include a path whose
 # parent dir was excluded as a unit.
 .claude/*
+!.claude/skills/
+!.claude/skills/**
+# ...except the ones vendored in from outside this repo.
 .claude/skills/wds-**
 .claude/skills/bmad-**
+
+# Atelier's own working dir.
 .atelier/*
+
+# Atelier agent worktrees mount dependencies and shared folders as
+# symlinks. The patterns above end in `/`, which only matches real
+# directories — a symlink is a blob to git, so it still shows up as
+# untracked. Repeat them without the trailing slash, and cover the
+# per-work shared mounts (`_bmad-output`, chat contexts).
+.venv
+backend/.venv
+node_modules
+_bmad-output
+*-context

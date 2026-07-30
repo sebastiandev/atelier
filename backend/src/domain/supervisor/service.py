@@ -173,7 +173,17 @@ class AgentSubscription:
         for event in self.replay:
             yield event
         while True:
-            yield await self.queue.get()
+            event_task = asyncio.create_task(self.queue.get())
+            kicked_task = asyncio.create_task(self.kicked.wait())
+            done, pending = await asyncio.wait(
+                {event_task, kicked_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            if kicked_task in done:
+                return
+            yield event_task.result()
 
 
 @dataclasses.dataclass
@@ -305,7 +315,12 @@ class AgentSupervisorService:
             raise
 
     async def send_input(
-        self, agent_slug: str, text: str, *, record_user_input: bool = True
+        self,
+        agent_slug: str,
+        text: str,
+        *,
+        record_user_input: bool = True,
+        transcript_text: str | None = None,
     ) -> None:
         state = self._require_state(agent_slug)
         await self._await_ready(state)
@@ -342,7 +357,15 @@ class AgentSupervisorService:
                         {
                             "type": "user_input",
                             "ts": datetime.now(UTC).isoformat(),
-                            "text": text,
+                            # The transcript can carry a different rendering
+                            # than what the adapter received (a stage brief
+                            # shows its human-readable form, not the
+                            # assembled prompt).
+                            "text": (
+                                transcript_text
+                                if transcript_text is not None
+                                else text
+                            ),
                         },
                     )
         except Exception as exc:
@@ -873,6 +896,11 @@ class AgentSupervisorService:
                     "type": "error",
                     "ts": datetime.now(UTC).isoformat(),
                     "message": f"invalid artifact marker: {exc}",
+                    # Bookkeeping, not the provider dying. The turn is
+                    # unaffected and the artifact this describes may well
+                    # exist already, so this must not read as a terminal
+                    # runtime error and fail the surrounding loop stage.
+                    "recoverable": True,
                 },
             )
             return
@@ -886,6 +914,7 @@ class AgentSupervisorService:
                     "type": "error",
                     "ts": datetime.now(UTC).isoformat(),
                     "message": f"artifact tracker error: {exc!r}",
+                    "recoverable": True,
                 },
             )
             return
@@ -930,6 +959,46 @@ class AgentSupervisorService:
         if state is None:
             raise ValueError(f"agent not running: {agent_slug}")
         return state
+
+
+def build_replay_subscription(
+    replay: list[dict[str, Any]],
+    *,
+    cursor: int,
+    replay_limit: int | None = None,
+) -> AgentSubscription:
+    """Subscription over an already-read transcript, with no live producer.
+
+    Used by the read-only connect paths (completed works, read-only
+    chats), which never register with the supervisor and so can't go
+    through ``subscribe``.
+
+    Preconditions: ``replay`` is ordered by ``seq`` and already filtered to
+    ``seq > cursor``.
+    Postconditions: with ``replay_limit`` set, the replay is the sticky
+    events plus the last ``replay_limit`` entries, and the history markers
+    describe what was left on disk; otherwise the full window is replayed
+    and the markers stay unset.
+    """
+    subscription = AgentSubscription(
+        queue=asyncio.Queue(maxsize=1),
+        kicked=asyncio.Event(),
+        replay=replay,
+    )
+    if replay_limit is None:
+        return subscription
+    limit = max(replay_limit, 0)
+    subscription.replay_limit = limit
+    tail = replay[len(replay) - limit :] if limit else []
+    sticky = [e for e in replay if e.get("type") in STICKY_REPLAY_EVENT_TYPES][
+        -STICKY_REPLAY_LIMIT:
+    ]
+    subscription.replay = _merge_replay_windows(sticky, tail)
+    if tail:
+        oldest = tail[0]["seq"]
+        subscription.history_oldest_seq = oldest
+        subscription.history_has_older = oldest > cursor + 1
+    return subscription
 
 
 def _merge_replay_windows(

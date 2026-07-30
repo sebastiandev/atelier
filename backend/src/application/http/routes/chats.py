@@ -19,6 +19,7 @@ from src.application.http.schemas import (
     CompactChatResponse,
     NewChatRequest,
     PatchChatRequest,
+    PlanningChatReadinessResponse,
     PromoteChatRequest,
     SendChatMessageRequest,
     TranscriptChunkResponse,
@@ -29,6 +30,7 @@ from src.application.http.schemas import (
 from src.domain.agents import SPECS, CommonAgentConfig
 from src.domain.agents.compactions import CompactionSessionClient
 from src.domain.agents.handoffs import Summarizer
+from src.domain.chats.posture import ChatRole
 from src.domain.chatstore import (
     AppendChatMessageRequest,
     ChatGrounding,
@@ -36,10 +38,21 @@ from src.domain.chatstore import (
     ChatStore,
     CreateChatRequest,
 )
-from src.domain.commands.chats import compact, delete, read_compaction_summary, rename
+from src.domain.commands.chats import (
+    compact,
+    delete,
+    read_compaction_summary,
+    reconnect,
+    rename,
+)
 from src.domain.commands.projects import get as projects_get
 from src.domain.commands.works import create as works_create
 from src.domain.models import Chat, ChatMessage
+from src.domain.planning.ports import PlanningFiles
+from src.domain.planning.readiness import (
+    PlanningChatReadiness,
+    planning_readiness_from_record,
+)
 from src.domain.projectstore.ports import ProjectStore
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.dtos import (
@@ -70,6 +83,10 @@ def get_projectstore(request: Request) -> ProjectStore:
     return request.app.state.projectstore  # type: ignore[no-any-return]
 
 
+def get_planningfiles(request: Request) -> PlanningFiles:
+    return request.app.state.planningfiles  # type: ignore[no-any-return]
+
+
 def get_settings_dep(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
 
@@ -94,6 +111,7 @@ ChatStoreDep = Annotated[ChatStore, Depends(get_chatstore)]
 ChatTranscriptLogDep = Annotated[TranscriptLog, Depends(get_chat_transcript_log)]
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
 ProjectStoreDep = Annotated[ProjectStore, Depends(get_projectstore)]
+PlanningFilesDep = Annotated[PlanningFiles, Depends(get_planningfiles)]
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 ChatSupervisorDep = Annotated[AgentSupervisorService, Depends(get_chat_supervisor)]
 SummarizerDep = Annotated[Summarizer, Depends(get_summarizer)]
@@ -129,26 +147,30 @@ def create_chat_endpoint(
 ) -> ChatDetail:
     try:
         _validate_chat_provider_config(payload, settings)
+        record = chatstore.create_chat(
+            CreateChatRequest(
+                provider=payload.provider,
+                model=payload.model,
+                first_message=payload.first_message,
+                title=payload.title,
+                grounding=(
+                    ChatGrounding(
+                        kind=payload.grounding.kind,
+                        ref=payload.grounding.ref,
+                    )
+                    if payload.grounding is not None
+                    else None
+                ),
+                working_directory=payload.working_directory,
+                options=payload.options or None,
+                discussion_only=payload.discussion_only,
+                context_seed=payload.context_seed,
+                discussion_key=payload.discussion_key,
+                role=payload.role,
+            )
+        )
     except ValueError as e:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
-    record = chatstore.create_chat(
-        CreateChatRequest(
-            provider=payload.provider,
-            model=payload.model,
-            first_message=payload.first_message,
-            title=payload.title,
-            grounding=(
-                ChatGrounding(
-                    kind=payload.grounding.kind,
-                    ref=payload.grounding.ref,
-                )
-                if payload.grounding is not None
-                else None
-            ),
-            working_directory=payload.working_directory,
-            options=payload.options or None,
-        )
-    )
     return _to_detail(record)
 
 
@@ -225,6 +247,22 @@ async def delete_chat_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
 
 
+@router.post("/chats/{chat_slug}/reconnect", status_code=status.HTTP_204_NO_CONTENT)
+async def reconnect_chat_endpoint(
+    chat_slug: str,
+    chatstore: ChatStoreDep,
+    supervisor: ChatSupervisorDep,
+) -> None:
+    try:
+        await reconnect.execute(
+            chatstore,
+            supervisor,
+            reconnect.ReconnectChatRequest(chat_slug=chat_slug),
+        )
+    except reconnect.ChatNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+
+
 @router.post("/chats/{chat_slug}/compact", response_model=CompactChatResponse)
 async def compact_chat_endpoint(
     chat_slug: str,
@@ -233,6 +271,7 @@ async def compact_chat_endpoint(
     supervisor: ChatSupervisorDep,
     workstore: WorkStoreDep,
     projectstore: ProjectStoreDep,
+    planningfiles: PlanningFilesDep,
     settings: SettingsDep,
     summarizer: SummarizerDep,
     session_client: CompactionSessionClientDep,
@@ -243,6 +282,7 @@ async def compact_chat_endpoint(
             supervisor,
             workstore,
             projectstore,
+            planningfiles,
             settings,
             summarizer,
             session_client,
@@ -579,6 +619,10 @@ def _to_summary(record: ChatRecord) -> ChatSummary:
         title=chat.title,
         provider=chat.provider,
         model=chat.model,
+        options=chat.options or {},
+        discussion_only=bool(chat.discussion_only),
+        discussion_key=chat.discussion_key,
+        role=ChatRole(chat.role),
         grounding=(
             ChatGroundingSchema(kind=chat.grounding_kind, ref=chat.grounding_ref)
             if chat.grounding_kind is not None and chat.grounding_ref is not None
@@ -589,6 +633,9 @@ def _to_summary(record: ChatRecord) -> ChatSummary:
         updated_at=chat.updated_at,
         promoted_to_work_slug=chat.promoted_to_work_slug,
         message_count=len(record.transcript),
+        planning_readiness=_planning_readiness_to_schema(
+            planning_readiness_from_record(record)
+        ),
     )
 
 
@@ -622,6 +669,17 @@ def _message_to_schema(message: ChatMessage) -> ChatMessageSchema:
         role=message.role,
         body=message.body,
         created_at=message.created_at,
+    )
+
+
+def _planning_readiness_to_schema(
+    readiness: PlanningChatReadiness | None,
+) -> PlanningChatReadinessResponse | None:
+    if readiness is None:
+        return None
+    return PlanningChatReadinessResponse(
+        ready=readiness.ready,
+        summary=readiness.summary,
     )
 
 

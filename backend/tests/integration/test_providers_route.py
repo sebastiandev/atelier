@@ -20,6 +20,7 @@ def test_acp_descriptors_are_wire_complete(app_client: TestClient) -> None:
     assert claude_acp["label"] == "Claude Code (Anthropic)"
     assert claude_acp["primary_field"]["default"] == "default"
     assert "permission_mode" in claude_acp["options"]
+    assert claude_acp["options"]["fast-mode"]["values"] == ["off", "on"]
     codex_acp = by_name["codex-acp"]
     assert codex_acp["label"] == "Codex (OpenAI)"
     assert "mode" in codex_acp["options"]
@@ -63,18 +64,18 @@ def test_claude_descriptor_exposes_model_meta(app_client: TestClient) -> None:
     meta = claude["model_meta"]
     assert set(meta.keys()) == {
         "default",
+        "opus[1m]",
         "claude-fable-5[1m]",
         "sonnet",
-        "sonnet[1m]",
         "haiku",
     }
     assert claude["primary_field"]["default"] == "default"
     fable = meta["claude-fable-5[1m]"]
     assert fable["context_window"] == 1_000_000
-    assert fable["input_per_mtok"] == 15.0
-    assert fable["output_per_mtok"] == 75.0
-    assert fable["cache_read_per_mtok"] == 1.5
-    assert fable["cache_write_per_mtok"] == 18.75
+    assert fable["input_per_mtok"] == 10.0
+    assert fable["output_per_mtok"] == 50.0
+    assert fable["cache_read_per_mtok"] is None
+    assert fable["cache_write_per_mtok"] is None
     assert fable["effort_values"] is None
     assert fable["effort_default"] == "xhigh"
     default = meta["default"]
@@ -85,8 +86,8 @@ def test_claude_descriptor_exposes_model_meta(app_client: TestClient) -> None:
     assert sonnet["context_window"] == 200_000
     assert sonnet["input_per_mtok"] == 3.0
     assert sonnet["output_per_mtok"] == 15.0
-    sonnet_1m = meta["sonnet[1m]"]
-    assert sonnet_1m["context_window"] == 1_000_000
+    opus = meta["opus[1m]"]
+    assert opus["context_window"] == 1_000_000
 
 
 def test_amp_descriptor_exposes_per_mode_context_window(app_client: TestClient) -> None:
@@ -121,14 +122,12 @@ def test_codex_descriptor_has_acp_mode_and_reasoning(app_client: TestClient) -> 
         "medium",
         "high",
         "xhigh",
-        "max",
         "extra",
         "ultra",
     ]
     assert codex["options"]["reasoning_effort"]["default"] == "medium"
-    assert codex["options"]["mode"]["default"] == "auto"
     assert codex["options"]["fast-mode"]["values"] == ["off", "on"]
-    assert codex["options"]["fast-mode"]["default"] == "off"
+    assert codex["options"]["mode"]["default"] == "agent"
     assert "Mode" in codex["advanced_intro"]
     assert codex["model_meta"]["gpt-5.6-terra"]["input_per_mtok"] is None
     assert codex["model_meta"]["gpt-5.6-luna"]["input_per_mtok"] is None
@@ -146,7 +145,12 @@ def test_opencode_models_endpoint_lists_cli_models(
     def fake_list(*, refresh: bool = False):
         assert refresh is True
         return [
-            OpenCodeModelOption(value="openai/gpt-5.5", label="OpenAI / GPT 5.5")
+            OpenCodeModelOption(
+                value="openai/gpt-5.5",
+                label="OpenAI / GPT 5.5",
+                effort_values=("low", "high"),
+            ),
+            OpenCodeModelOption(value="opencode/big-pickle", label="OpenCode / Big Pickle"),
         ]
 
     monkeypatch.setattr(
@@ -158,7 +162,16 @@ def test_opencode_models_endpoint_lists_cli_models(
 
     assert response.status_code == 200
     assert response.json() == [
-        {"value": "openai/gpt-5.5", "label": "OpenAI / GPT 5.5"}
+        {
+            "value": "openai/gpt-5.5",
+            "label": "OpenAI / GPT 5.5",
+            "effort_values": ["low", "high"],
+        },
+        {
+            "value": "opencode/big-pickle",
+            "label": "OpenCode / Big Pickle",
+            "effort_values": [],
+        },
     ]
 
 

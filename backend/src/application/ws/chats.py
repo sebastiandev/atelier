@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.domain.agents import (
-    SPECS,
     RefreshSessionConfigOptions,
     ResolvePermission,
     SendInput,
@@ -17,13 +17,18 @@ from src.domain.agents import (
     StopTurn,
     parse_user_action,
 )
+from src.domain.agents.effort import spec_option_key
 from src.domain.chatstore import ChatStore
 from src.domain.commands.chats import connect
+from src.domain.commands.chats import send_input as send_chat_input
+from src.domain.commands.planning import mark_ready as planning_mark_ready
+from src.domain.planning.ports import PlanningFiles
 from src.domain.supervisor import (
     AgentSubscription,
     AgentSupervisorService,
     AgentTerminated,
 )
+from src.domain.workstore.ports import WorkStore
 
 router = APIRouter()
 
@@ -39,10 +44,12 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
     supervisor = websocket.app.state.chat_supervisor
     workstore = websocket.app.state.workstore
     projectstore = websocket.app.state.projectstore
+    planningfiles = websocket.app.state.planningfiles
     settings = websocket.app.state.settings
 
     cursor = _parse_cursor(websocket.query_params.get("cursor"))
     replay_limit = _parse_limit(websocket.query_params.get("replay_limit"))
+    read_only = websocket.query_params.get("read_only") == "1"
 
     try:
         async with connect.execute(
@@ -50,17 +57,27 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
             supervisor,
             workstore,
             projectstore,
+            planningfiles,
             settings,
             connect.ConnectChatRequest(
-                    chat_slug=chat_slug,
-                    cursor=cursor,
-                    replay_limit=replay_limit,
-                ),
+                chat_slug=chat_slug,
+                cursor=cursor,
+                replay_limit=replay_limit,
+                read_only=read_only,
+            ),
         ) as sub:
             await websocket.accept()
-            send_task = asyncio.create_task(_drain(sub, websocket))
+            send_task = asyncio.create_task(_drain(sub, websocket, chatstore, chat_slug))
             recv_task = asyncio.create_task(
-                _receive_inputs(websocket, supervisor, chatstore, chat_slug)
+                _receive_inputs(
+                    websocket,
+                    supervisor,
+                    chatstore,
+                    workstore,
+                    planningfiles,
+                    chat_slug,
+                    read_only,
+                )
             )
             kick_task = asyncio.create_task(sub.kicked.wait())
             try:
@@ -91,7 +108,12 @@ async def stream_chat(websocket: WebSocket, chat_slug: str) -> None:
         pass
 
 
-async def _drain(sub: AgentSubscription, websocket: WebSocket) -> None:
+async def _drain(
+    sub: AgentSubscription,
+    websocket: WebSocket,
+    chatstore: ChatStore,
+    chat_slug: str,
+) -> None:
     if sub.replay_limit is not None:
         await websocket.send_json(
             {
@@ -103,16 +125,54 @@ async def _drain(sub: AgentSubscription, websocket: WebSocket) -> None:
         )
     async for event in sub.stream():
         await websocket.send_json(event)
+        readiness_event = _planning_readiness_event(chatstore, chat_slug, event)
+        if readiness_event is not None:
+            await websocket.send_json(readiness_event)
+
+
+def _planning_readiness_event(
+    chatstore: ChatStore,
+    chat_slug: str,
+    event: dict[str, object],
+) -> dict[str, object] | None:
+    """Persist and render a Planning readiness event from a completed message."""
+    if event.get("type") != "message_complete":
+        return None
+    text = event.get("text")
+    if not isinstance(text, str):
+        return None
+    result = planning_mark_ready.execute(
+        chatstore,
+        planning_mark_ready.MarkPlanningChatReadyRequest(
+            chat_slug=chat_slug,
+            assistant_text=text,
+        ),
+    )
+    if result is None or not result.changed:
+        return None
+    payload = {
+        "type": "planning_readiness",
+        "ts": datetime.now(UTC).isoformat(),
+        "ready": result.readiness.ready,
+        "summary": result.readiness.summary,
+    }
+    seq = chatstore.append_transcript_event_with_seq(chat_slug, payload)
+    return {"seq": seq, **payload}
 
 
 async def _receive_inputs(
     websocket: WebSocket,
     supervisor: AgentSupervisorService,
     chatstore: ChatStore,
+    workstore: WorkStore,
+    planningfiles: PlanningFiles,
     chat_slug: str,
+    read_only: bool,
 ) -> None:
     while True:
         msg = await websocket.receive_text()
+        if read_only:
+            continue
         try:
             data = json.loads(msg)
         except json.JSONDecodeError:
@@ -135,7 +195,16 @@ async def _receive_inputs(
                             }
                         )
                     else:
-                        await supervisor.send_input(chat_slug, text)
+                        await send_chat_input.execute(
+                            chatstore,
+                            supervisor,
+                            planningfiles,
+                            workstore,
+                            send_chat_input.SendChatInputRequest(
+                                chat_slug=chat_slug,
+                                text=text,
+                            ),
+                        )
                 case StopTurn():
                     await supervisor.stop_turn(chat_slug)
                 case ResolvePermission(request_id=request_id, decision=decision):
@@ -150,6 +219,9 @@ async def _receive_inputs(
                             chatstore.set_chat_option(chat_slug, key, value)
                 case RefreshSessionConfigOptions(config_id=config_id):
                     await supervisor.refresh_config_options(chat_slug, config_id)
+        except send_chat_input.WorkNotActive as exc:
+            with suppress(Exception):
+                await websocket.send_json({"type": "client_error", "message": str(exc)})
         except AgentTerminated:
             with suppress(Exception):
                 await websocket.send_json(
@@ -199,14 +271,8 @@ def _parse_limit(value: str | None) -> int | None:
 def _stored_chat_option_key(
     chatstore: ChatStore, chat_slug: str, config_id: str
 ) -> str | None:
+    """Spec option key a live config change should persist under."""
     record = chatstore.get_chat(chat_slug)
     if record is None:
         return None
-    option_keys = SPECS[record.chat.provider].describe().options.keys()
-    if config_id in option_keys:
-        return config_id
-    if config_id == "effort":
-        for key in ("thinking_effort", "reasoning_effort"):
-            if key in option_keys:
-                return key
-    return None
+    return spec_option_key(record.chat.provider, config_id)

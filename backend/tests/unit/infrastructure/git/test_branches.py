@@ -1,7 +1,7 @@
 import subprocess
 from pathlib import Path
 
-from src.infrastructure.git.branches import list_branches
+from src.infrastructure.git.branches import branch_state, list_branches
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -29,6 +29,28 @@ def test_list_branches_returns_empty_for_non_git_folder(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
     assert list_branches(plain) == []
+
+
+def test_branch_state_distinguishes_branch_and_detached_head(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "-q", "-b", "main", cwd=repo)
+    _git("config", "user.email", "test@example.com", cwd=repo)
+    _git("config", "user.name", "Test", cwd=repo)
+    (repo / "tracked.txt").write_text("one\n")
+    _git("add", "tracked.txt", cwd=repo)
+    _git("commit", "-q", "-m", "initial", cwd=repo)
+
+    attached = branch_state(repo)
+    assert attached.is_git_repo is True
+    assert attached.branch
+    assert attached.detached is False
+
+    _git("checkout", "-q", "--detach", cwd=repo)
+    detached = branch_state(repo)
+    assert detached.is_git_repo is True
+    assert detached.branch is None
+    assert detached.detached is True
 
 
 def test_list_branches_returns_empty_for_missing_path(tmp_path: Path) -> None:

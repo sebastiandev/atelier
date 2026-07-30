@@ -20,6 +20,10 @@ router = APIRouter()
 class OpenCodeModelResponse(BaseModel):
     value: str
     label: str
+    # OpenCode's per-model "variants". Empty means the model has no
+    # effort dial. Added after the first release of this route, so
+    # older frontends simply ignore it.
+    effort_values: list[str] = []
 
 
 @router.get("/providers", response_model=list[ProviderDescriptor])
@@ -34,6 +38,10 @@ def list_opencode_provider_models(refresh: bool = False) -> list[OpenCodeModelRe
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return [
-        OpenCodeModelResponse(value=item.value, label=item.label)
+        OpenCodeModelResponse(
+            value=item.value,
+            label=item.label,
+            effort_values=list(item.effort_values),
+        )
         for item in models
     ]

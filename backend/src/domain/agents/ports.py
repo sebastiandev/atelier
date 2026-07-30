@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from src.domain.agents.configs import AgentConfig
 from src.domain.agents.events import AgentEvent, PermissionDecisionValue
 
 
@@ -72,4 +73,10 @@ class AgentAdapter(Protocol):
     async def close(self) -> None: ...
 
 
-__all__ = ["AgentAdapter", "AgentStartContext"]
+class AgentAdapterFactory(Protocol):
+    """Build a provider adapter from a validated domain config."""
+
+    def build(self, config: AgentConfig) -> AgentAdapter: ...
+
+
+__all__ = ["AgentAdapter", "AgentAdapterFactory", "AgentStartContext"]

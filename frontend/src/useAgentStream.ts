@@ -98,11 +98,16 @@ function isAgentEvent(value: unknown): value is AgentEvent {
 
 export function useAgentStream(
   agentSlug: string,
-  options: { resource?: StreamResource; initialReplayLimit?: number } = {},
+  options: {
+    resource?: StreamResource;
+    initialReplayLimit?: number;
+    readOnly?: boolean;
+  } = {},
 ) {
   const resource = options.resource ?? "agents";
   const initialReplayLimit =
     options.initialReplayLimit ?? DEFAULT_INITIAL_REPLAY_LIMIT;
+  const readOnly = options.readOnly ?? false;
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [history, setHistory] = useState<StreamHistoryState>(initialHistoryState);
@@ -213,6 +218,7 @@ export function useAgentStream(
       if (lastSeqRef.current === 0 && initialReplayLimit > 0) {
         params.set("replay_limit", String(initialReplayLimit));
       }
+      if (readOnly) params.set("read_only", "1");
       const url =
         `${proto}//${window.location.host}` +
         `/api/${resource}/${agentSlug}/stream?${params.toString()}`;
@@ -290,7 +296,7 @@ export function useAgentStream(
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [agentSlug, resource, initialReplayLimit]);
+  }, [agentSlug, resource, initialReplayLimit, readOnly]);
 
   async function loadOlder() {
     const current = historyRef.current;

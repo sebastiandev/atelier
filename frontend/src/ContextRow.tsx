@@ -327,7 +327,7 @@ function NewConnectionInline({
       <div className="conn-new-ft">
         {showCancelHint && <span className="hint">Cancel removes the row.</span>}
         <span className="spacer" />
-        <VerifyPill state={verifyState} />
+        <VerifyTag state={verifyState} />
         <button type="button" className="btn sm ghost" onClick={onCancel}>
           Cancel
         </button>
@@ -352,15 +352,15 @@ function NewConnectionInline({
   );
 }
 
-function VerifyPill({ state }: { state: VerifyState }) {
+function VerifyTag({ state }: { state: VerifyState }) {
   if (state === "verifying") {
     return (
-      <span className="verify-pill">
+      <span className="tag">
         <span className="spinner" /> Verifying…
       </span>
     );
   }
-  if (state === "ok") return <span className="verify-pill ok">✓ Verified</span>;
-  if (state === "err") return <span className="verify-pill err">✗ Couldn't verify</span>;
+  if (state === "ok") return <span className="tag good">✓ verified</span>;
+  if (state === "err") return <span className="tag danger">✗ couldn't verify</span>;
   return null;
 }

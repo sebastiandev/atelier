@@ -35,7 +35,8 @@ import signal
 import sys
 import time
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections import deque
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -66,9 +67,13 @@ from src.domain.agents import (
     SessionEstablished,
     StatusChange,
     TurnMetrics,
+    command_is_fully_approved,
 )
 from src.infrastructure.agents.acp.mapping import AcpUpdateMapper
 from src.infrastructure.agents.atelier_mcp_tools import MCP_SERVER_NAME
+from src.infrastructure.agents.permission_wait import (
+    await_permission_decision,
+)
 from src.infrastructure.agents.tool_canonical import canonicalize_tool
 
 logger = logging.getLogger(__name__)
@@ -78,8 +83,12 @@ _RECOVERY_PROMPT = (
     "Continue from where you left off after the transport reconnect. "
     "Do not repeat completed tool calls unless their results are missing."
 )
+_FRESH_RECOVERY_PREFIX = (
+    "A previous provider session disconnected while working on this request. "
+    "Inspect the existing workspace and do not repeat completed work.\n\n"
+)
 _MAX_RECOVERY_ATTEMPTS_PER_TURN = 8
-_ACP_STDIO_BUFFER_LIMIT_BYTES = 50 * 1024 * 1024
+_ACP_STREAM_LIMIT_BYTES = 50 * 1024 * 1024
 _AUTHENTICATION_REQUIRED_MESSAGE = "Authentication required"
 _AUTHENTICATION_REQUIRED_CODE = "authentication_required"
 
@@ -132,6 +141,9 @@ class AcpAdapter:
         model_label: str | None = None,
         authentication_recovery_command: str | None = None,
         connect_factory: Any = None,
+        environment: Mapping[str, str] | None = None,
+        session_meta: Mapping[str, Any] | None = None,
+        cleanup: Callable[[], None] | None = None,
     ) -> None:
         """``connect_factory`` is the test seam: an async callable
         ``(adapter) -> AcpConnection`` that replaces the subprocess +
@@ -141,6 +153,9 @@ class AcpAdapter:
         self._model_label = model_label
         self._authentication_recovery_command = authentication_recovery_command
         self._connect_factory = connect_factory
+        self._environment = dict(environment or {})
+        self._session_meta = dict(session_meta or {})
+        self._cleanup = cleanup
         self._proc: asyncio.subprocess.Process | None = None
         self._conn: AcpConnection | None = None
         self._session_id: str | None = None
@@ -148,13 +163,15 @@ class AcpAdapter:
         self._pending_warning: str | None = None
         self._mapper = AcpUpdateMapper()
         self._session_config_options: tuple[dict[str, Any], ...] = ()
-        self._advertised_config_values: dict[str, set[str | bool]] = {}
         self._replaying = False
         self._suppress_restored_updates_until_prompt = False
         self._user_inputs: asyncio.Queue[str | object] = asyncio.Queue()
         self._outgoing: asyncio.Queue[AgentEvent | object] = asyncio.Queue()
         self._pump_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
+        self._stderr_tail: deque[str] = deque(maxlen=20)
+        self._connection_failure_count = 0
+        self._last_transport_diagnostic = ""
         self._closed = False
         self._terminal_error: BaseException | None = None
         self._restored_session_id: str | None = None
@@ -186,12 +203,13 @@ class AcpAdapter:
             )
         if self._session_id is None:
             session_response = await self._conn.new_session(
-                cwd=cwd, mcp_servers=mcp_servers
+                cwd=cwd,
+                mcp_servers=mcp_servers,
+                **self._session_meta,
             )
             self._session_id = session_response.session_id
             self._fresh_session = True
         self._session_config_options = _config_options_payload(session_response)
-        self._advertised_config_values = _advertised_options(session_response)
         await self._apply_session_settings(session_response)
 
     async def send_input(self, text: str) -> None:
@@ -224,10 +242,31 @@ class AcpAdapter:
             return  # stale / duplicate frame after a WS reconnect
         fut.set_result(decision)
 
+    def _advertised_values(self, config_id: str) -> set[str | bool] | None:
+        """Values the session currently advertises for ``config_id``, or
+        ``None`` when it doesn't advertise the option at all.
+
+        Derived from ``_session_config_options`` on every read rather than
+        cached alongside it: applying one option can reveal or reshape
+        another (OpenCode publishes ``effort`` only once the selected model
+        has variants), and a cached copy would answer for the session as it
+        used to be. ``None`` and the empty set mean different things — an
+        unadvertised id is applied optimistically, an advertised one with
+        no listed choices accepts anything.
+        """
+        option = _find_config_option(self._session_config_options, config_id)
+        if option is None:
+            return None
+        return {
+            choice["value"]
+            for choice in option.get("options", ())
+            if isinstance(choice.get("value"), (str, bool))
+        }
+
     async def set_config_option(self, config_id: str, value: str | bool) -> None:
         if self._conn is None or self._closed or self._session_id is None:
             raise RuntimeError("ACP session is not running")
-        allowed = self._advertised_config_values.get(config_id)
+        allowed = self._advertised_values(config_id)
         if allowed is None:
             raise ValueError(f"session config option is not advertised: {config_id}")
         if allowed and value not in allowed:
@@ -314,7 +353,12 @@ class AcpAdapter:
             if not fut.done():
                 fut.set_result(_CANCELLED)
         await self._user_inputs.put(_SHUTDOWN)
-        await self._close_transport()
+        try:
+            await self._close_transport()
+        finally:
+            if self._cleanup is not None:
+                self._cleanup()
+                self._cleanup = None
 
     async def _close_transport(self) -> None:
         if self._conn is not None:
@@ -373,10 +417,6 @@ class AcpAdapter:
             return RequestPermissionResponse(
                 outcome=AllowedOutcome(outcome="selected", option_id=option.option_id)
             )
-        request_id = uuid.uuid4().hex
-        fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = fut
-        self._pending_options[request_id] = list(options)
         raw_input = getattr(tool_call, "raw_input", None)
         tool_id = getattr(tool_call, "tool_call_id", None)
         tool_id_str = tool_id if isinstance(tool_id, str) else None
@@ -389,6 +429,18 @@ class AcpAdapter:
         canon_name, canon_input = canonicalize_tool(
             provider_name, dict(raw_input) if isinstance(raw_input, dict) else {}
         )
+        auto_option = self._auto_approved_option(canon_name, canon_input, options)
+        if auto_option is not None:
+            # Already covered by approved_command_prefixes (possibly chained
+            # with &&/;/|): answer silently, the same as a command the
+            # provider's own permission policy pre-approved outright.
+            return RequestPermissionResponse(
+                outcome=AllowedOutcome(outcome="selected", option_id=auto_option.option_id)
+            )
+        request_id = uuid.uuid4().hex
+        fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = fut
+        self._pending_options[request_id] = list(options)
         await self._outgoing.put(
             PermissionRequest(
                 ts=_now(),
@@ -403,10 +455,13 @@ class AcpAdapter:
             )
         )
         try:
-            try:
-                decision = await fut
-            except asyncio.CancelledError:
-                decision = _CANCELLED
+            decision = await await_permission_decision(
+                fut,
+                request_id=request_id,
+                tool_name=canon_name,
+                cancelled=_CANCELLED,
+                expired="deny",
+            )
         finally:
             self._pending.pop(request_id, None)
             option_pool = self._pending_options.pop(request_id, list(options))
@@ -446,6 +501,46 @@ class AcpAdapter:
         return RequestPermissionResponse(
             outcome=AllowedOutcome(outcome="selected", option_id=option.option_id)
         )
+
+    def _auto_approved_option(
+        self,
+        canon_name: str,
+        canon_input: dict[str, Any],
+        options: list[PermissionOption],
+    ) -> PermissionOption | None:
+        """Silently allow a Bash request already fully covered by the stage's
+        approved command prefixes, even when the agent chained it with
+        ``&&``/``;``/``|``.
+
+        Preconditions: called before any ``PermissionRequest`` is emitted, with
+        the canonicalised tool call. Postconditions: returns ``None`` (defer to
+        asking) for anything other than a confidently-approved Bash command,
+        including on any unexpected error while evaluating it — a failure here
+        must never suppress the permission prompt.
+        """
+        if canon_name != "Bash":
+            return None
+        try:
+            command = canon_input.get("command")
+            if not isinstance(command, str):
+                return None
+            if not command_is_fully_approved(
+                command, self._config.common.approved_command_prefixes
+            ):
+                return None
+            option = _pick_option(list(options), "allow")
+        except Exception:
+            logger.warning(
+                "approved-command-prefix check raised; asking instead",
+                exc_info=True,
+            )
+            return None
+        if option is not None:
+            logger.debug(
+                "auto-approved bash command already covered by approved prefixes: %r",
+                command,
+            )
+        return option
 
     def on_connect(self, conn: Any) -> None:  # SDK hook; the adapter
         return None  # already holds the connection it built.
@@ -493,8 +588,10 @@ class AcpAdapter:
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self._config.common.workdir),
             start_new_session=os.name == "posix",
-            limit=_ACP_STDIO_BUFFER_LIMIT_BYTES,
+            limit=_ACP_STREAM_LIMIT_BYTES,
+            env={**os.environ, **self._environment},
         )
+        self._stderr_tail.clear()
         assert self._proc.stdin is not None and self._proc.stdout is not None
         self._stderr_task = asyncio.create_task(
             self._drain_stderr(), name="acp-stderr-drain"
@@ -512,10 +609,11 @@ class AcpAdapter:
             line = await self._proc.stderr.readline()
             if not line:
                 return
+            self._stderr_tail.append(line.decode(errors="replace").rstrip())
             logger.debug(
                 "acp[%s] stderr: %s",
                 self._argv[0],
-                line.decode(errors="replace").rstrip(),
+                self._stderr_tail[-1],
             )
 
     async def _restore_session(
@@ -533,7 +631,10 @@ class AcpAdapter:
                 self._replaying = True
                 try:
                     response = await self._conn.load_session(
-                        cwd=cwd, session_id=session_id, mcp_servers=mcp_servers
+                        cwd=cwd,
+                        session_id=session_id,
+                        mcp_servers=mcp_servers,
+                        **self._session_meta,
                     )
                 finally:
                     self._replaying = False
@@ -546,7 +647,10 @@ class AcpAdapter:
                 and getattr(session_caps, "resume", None) is not None
             ):
                 response = await self._conn.resume_session(
-                    cwd=cwd, session_id=session_id, mcp_servers=mcp_servers
+                    cwd=cwd,
+                    session_id=session_id,
+                    mcp_servers=mcp_servers,
+                    **self._session_meta,
                 )
                 self._session_id = session_id
                 self._restored_session_id = session_id
@@ -589,7 +693,6 @@ class AcpAdapter:
             self._fresh_session = True
             self._terminal_error = None
             self._session_config_options = _config_options_payload(response)
-            self._advertised_config_values = _advertised_options(response)
             await self._apply_session_settings(response)
             await self._outgoing.put(
                 Error(
@@ -619,9 +722,12 @@ class AcpAdapter:
     async def _apply_session_settings(self, session_response: Any) -> None:
         """Apply config options + mode from the typed config, tolerantly."""
         assert self._conn is not None and self._session_id is not None
-        advertised = self._advertised_config_values
         for config_id, value in self._config.acp_config_values():
-            allowed = advertised.get(config_id)
+            # Read per iteration, never snapshot: applying one option can
+            # reveal or reshape another. OpenCode only advertises `effort`
+            # once a model with variants is selected, so the model pair has
+            # to land before effort can be judged.
+            allowed = self._advertised_values(config_id)
             if allowed is not None and value not in allowed:
                 logger.debug(
                     "acp: skipping config option %s=%s (agent advertises %s)",
@@ -668,7 +774,6 @@ class AcpAdapter:
         options = _config_options_payload(response)
         if options:
             self._session_config_options = options
-            self._advertised_config_values = _advertised_options(response)
             return True
         if fallback_config_id is None or fallback_value is None:
             return False
@@ -691,6 +796,8 @@ class AcpAdapter:
             prompt_text = text
             original_prompt_text = text
             recovery_attempts = 0
+            self._connection_failure_count = 0
+            self._last_transport_diagnostic = ""
             try:
                 while True:
                     blocks = self._prompt_blocks(prompt_text)
@@ -706,28 +813,57 @@ class AcpAdapter:
                             await self._outgoing.put(event)
                         if not _is_terminal_connection_error(e):
                             raise
-                        recovery_attempts += 1
-                        if (
-                            prompt_text == _RECOVERY_PROMPT
-                            and await self._start_fresh_session_after_restore()
-                        ):
+                        recovery_error = e
+                        recovery_session_id = self._session_id
+                        restarted_fresh = False
+                        while True:
+                            await self._record_connection_failure(recovery_error)
+                            recovery_attempts += 1
+                            # The recovery prompt dying too means the
+                            # restored session is unusable — stop trying
+                            # to restore it and take the fresh-session
+                            # option straight away, if this agent has one.
+                            if (
+                                prompt_text == _RECOVERY_PROMPT
+                                and await self._start_fresh_session_after_restore()
+                            ):
+                                restarted_fresh = True
+                                break
+                            if (
+                                recovery_session_id is not None
+                                and recovery_attempts
+                                <= _MAX_RECOVERY_ATTEMPTS_PER_TURN
+                            ):
+                                try:
+                                    recovered = await self._recover_connection(
+                                        recovery_session_id
+                                    )
+                                except Exception as reconnect_error:
+                                    if not _is_terminal_connection_error(
+                                        reconnect_error
+                                    ):
+                                        raise
+                                    recovery_error = reconnect_error
+                                    continue
+                                if recovered:
+                                    break
+                            # Restore is not coming back for this session.
+                            # A resumed agent still gets one shot at a
+                            # brand-new session, replaying the original
+                            # prompt into it.
+                            if await self._start_fresh_session_after_restore():
+                                restarted_fresh = True
+                                break
+                            raise recovery_error from None
+                        if restarted_fresh:
                             prompt_text = original_prompt_text
                             recovery_attempts = 0
-                            continue
-                        if recovery_attempts > _MAX_RECOVERY_ATTEMPTS_PER_TURN:
-                            if await self._start_fresh_session_after_restore():
-                                prompt_text = original_prompt_text
-                                recovery_attempts = 0
-                                continue
-                            raise
-                        recovered = await self._recover_connection()
-                        if not recovered:
-                            if await self._start_fresh_session_after_restore():
-                                prompt_text = original_prompt_text
-                                recovery_attempts = 0
-                                continue
-                            raise
-                        prompt_text = _RECOVERY_PROMPT
+                        else:
+                            prompt_text = (
+                                f"{_FRESH_RECOVERY_PREFIX}{text}"
+                                if self._fresh_session
+                                else _RECOVERY_PROMPT
+                            )
 
                 for event in self._mapper.flush_turn():
                     await self._outgoing.put(event)
@@ -754,10 +890,15 @@ class AcpAdapter:
                     self._authentication_recovery_command is not None
                     and str(e) == _AUTHENTICATION_REQUIRED_MESSAGE
                 )
+                message = (
+                    self._connection_error_message(e)
+                    if _is_terminal_connection_error(e)
+                    else str(e)
+                )
                 await self._outgoing.put(
                     Error(
                         ts=_now(),
-                        message=str(e),
+                        message=message,
                         code=(
                             _AUTHENTICATION_REQUIRED_CODE
                             if authentication_required
@@ -776,6 +917,32 @@ class AcpAdapter:
                     return
                 await self._outgoing.put(StatusChange(ts=_now(), status="idle"))
 
+    async def _record_connection_failure(self, exc: BaseException) -> None:
+        """Capture bounded subprocess state before recovery tears it down."""
+        if self._connect_factory is not None:
+            return
+        await asyncio.sleep(0.05)
+        self._connection_failure_count += 1
+        proc = self._proc
+        process_state = (
+            f"wrapper exited with code {proc.returncode}"
+            if proc is not None and proc.returncode is not None
+            else "wrapper was still running when ACP stdio closed"
+        )
+        stderr = " | ".join(self._stderr_tail)[-2000:]
+        self._last_transport_diagnostic = process_state + (
+            f"; stderr: {stderr}" if stderr else "; no stderr was emitted"
+        )
+
+    def _connection_error_message(self, exc: BaseException) -> str:
+        """Return the provider error with production transport diagnostics."""
+        if not self._last_transport_diagnostic:
+            return str(exc)
+        return (
+            f"{exc} (ACP transport failed {self._connection_failure_count} times; "
+            f"{self._last_transport_diagnostic})"
+        )
+
     def _prompt_blocks(self, text: str) -> list[dict[str, Any]]:
         blocks: list[dict[str, Any]] = []
         if self._fresh_session and self._config.common.system_prompt:
@@ -793,9 +960,8 @@ class AcpAdapter:
         blocks.append({"type": "text", "text": text})
         return blocks
 
-    async def _recover_connection(self) -> bool:
-        session_id = self._session_id
-        if session_id is None or self._closed:
+    async def _recover_connection(self, session_id: str) -> bool:
+        if self._closed:
             return False
         await self._close_transport()
         self._conn = await self._connect()
@@ -812,13 +978,18 @@ class AcpAdapter:
             [_atelier_mcp_server()],
         )
         if response is None or self._session_id != session_id:
-            await self._close_transport()
-            self._session_id = session_id
-            return False
+            response = await self._conn.new_session(
+                cwd=str(self._config.common.workdir),
+                mcp_servers=[_atelier_mcp_server()],
+                **self._session_meta,
+            )
+            self._session_id = response.session_id
+            self._fresh_session = True
+            await self._outgoing.put(
+                SessionEstablished(ts=_now(), session_id=self._session_id)
+            )
         self._session_config_options = _config_options_payload(response)
-        self._advertised_config_values = _advertised_options(response)
         await self._apply_session_settings(response)
-        self._fresh_session = False
         return True
 
     def _build_turn_metrics(self, response: Any, started: float) -> TurnMetrics:
@@ -958,23 +1129,6 @@ def _string_attr(obj: Any, name: str) -> str | None:
 
 def _is_terminal_connection_error(exc: BaseException) -> bool:
     return isinstance(exc, ConnectionError)
-
-
-def _advertised_options(session_response: Any) -> dict[str, set[str | bool]]:
-    """``{config_id: allowed values}`` from a session response, tolerant
-    of agents that return no configOptions at all."""
-    out: dict[str, set[str | bool]] = {}
-    for option in getattr(session_response, "config_options", None) or []:
-        option_id = getattr(option, "id", None)
-        if not isinstance(option_id, str) or not option_id:
-            continue
-        values: set[str | bool] = set()
-        for choice in getattr(option, "options", None) or []:
-            value = getattr(choice, "value", None)
-            if isinstance(value, (str, bool)):
-                values.add(value)
-        out[option_id] = values
-    return out
 
 
 def _pick_option(

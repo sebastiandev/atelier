@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.domain.loop.briefs import brief_snapshot, optional_brief_from_snapshot
+from src.domain.loop.dtos import LoopBrief
 from src.domain.models import Agent, Context, Work
 from src.domain.workstore.dtos import (
     WorkChatContextFolder,
@@ -21,6 +23,7 @@ def serialize_work_record(
     contexts: list[Context],
     from_chat: WorkChatProvenance | None = None,
     chat_context_folders: list[WorkChatContextFolder] | None = None,
+    loop_brief: LoopBrief | None = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "id": work.id,
@@ -32,6 +35,8 @@ def serialize_work_record(
         "project_slug": work.project_slug,
         "contexts": [_serialize_context(c) for c in contexts],
     }
+    if work.mode is not None:
+        out["mode"] = work.mode
     provenance = from_chat
     if provenance is None and work.from_chat_slug and work.from_chat_title:
         provenance = WorkChatProvenance(
@@ -55,6 +60,8 @@ def serialize_work_record(
             }
             for f in folders
         ]
+    if loop_brief is not None:
+        out["loop_brief"] = brief_snapshot(loop_brief)
     return out
 
 
@@ -70,6 +77,7 @@ def deserialize_work_record(
         status=data["status"],
         created_at=datetime.fromisoformat(data["created_at"]),
         project_slug=data.get("project_slug"),
+        mode=data.get("mode"),
         from_chat_slug=from_chat.chat_slug if from_chat is not None else None,
         from_chat_title=from_chat.chat_title if from_chat is not None else None,
     )
@@ -81,6 +89,11 @@ def deserialize_contexts(data: dict[str, Any]) -> list[Context]:
     return [
         Context(type=item["type"], value=item["value"], conn_id=item.get("conn_id")) for item in raw
     ]
+
+
+def deserialize_loop_brief(data: dict[str, Any]) -> LoopBrief | None:
+    """Read the optional additive Work brief without rejecting legacy files."""
+    return optional_brief_from_snapshot(data.get("loop_brief"))
 
 
 def serialize_agent(agent: Agent, contexts: list[Context] | None = None) -> dict[str, Any]:
@@ -107,6 +120,8 @@ def serialize_agent(agent: Agent, contexts: list[Context] | None = None) -> dict
     # agent.json files round-trip byte-for-byte through reconcile.
     if agent.options:
         out["options"] = dict(agent.options)
+    if agent.worktree_slug:
+        out["worktree_slug"] = agent.worktree_slug
     return out
 
 
@@ -125,6 +140,7 @@ def deserialize_agent(data: dict[str, Any]) -> Agent:
         folder=Path(data["folder"]),
         status=data["status"],
         started_at=datetime.fromisoformat(data["started_at"]),
+        worktree_slug=data.get("worktree_slug"),
         stopped_at=datetime.fromisoformat(stopped_raw) if stopped_raw else None,
         session_id=data.get("session_id"),
         parent_session_id=data.get("parent_session_id"),

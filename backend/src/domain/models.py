@@ -41,6 +41,7 @@ ConnectionType = Literal["sentry", "honeycomb", "jira"]
 HandoffTargetDialog = Literal["new-agent"]
 ChatGroundingKind = Literal["project", "work", "folder"]
 ChatMessageRole = Literal["user", "assistant"]
+WorkMode = Literal["manual", "planning", "loop"]
 # ``ArtifactType`` was defined here; after the per-type-status split it
 # lives next to the typed Artifact subclasses. Re-exported below.
 
@@ -108,6 +109,8 @@ class Work:
     status: WorkStatus
     created_at: datetime
     project_slug: str | None = None
+    # Nullable for Works created before execution modes became durable.
+    mode: WorkMode | None = None
     # Optional provenance when a Work was promoted from an exploratory
     # chat. Nullable/additive so legacy rows and work.json files load as
     # ordinary work.
@@ -148,10 +151,10 @@ class Project:
 class Chat:
     """Lightweight exploratory conversation.
 
-    Chat is intentionally separate from Work: one immutable provider/model,
-    optional placement/working context, and a transcript stored under the
-    chat workspace directory. ``promoted_to_work_slug`` links forward once
-    the discussion seeds a tracked Work unit.
+    Chat is intentionally separate from Work: one provider session, optional
+    placement/working context, and a transcript stored under the chat workspace
+    directory. ``promoted_to_work_slug`` links forward once the discussion
+    seeds a tracked Work unit.
     """
 
     id: int | None = None
@@ -166,6 +169,18 @@ class Chat:
     # for chats created before this field existed; callers treat None as
     # provider defaults.
     options: dict[str, Any] | None = None
+    # Run discussions are ordinary chats constrained to read-only conversation.
+    # Nullable so rows created before this marker continue to load unchanged.
+    discussion_only: bool | None = None
+    # What the chat is for, declared by whoever created it. Drives the
+    # permission posture and the conduct paragraph in the system prompt --
+    # see ``domain/chats/posture.py``. Stored as the ``ChatRole`` value.
+    role: str = "explore"
+    # Hidden context available to the provider without appearing as a user turn.
+    # Run discussions use this to carry the selected stage's persisted output.
+    context_seed: str | None = None
+    # Stable run-stage identity used to reopen an existing discussion.
+    discussion_key: str | None = None
     created_at: datetime
     updated_at: datetime
     session_id: str | None = None
@@ -234,6 +249,9 @@ class Agent:
     folder: Path
     status: AgentStatus
     started_at: datetime
+    # Optional stable owner of the git worktree. Loop stages use one
+    # Work-owned checkout while keeping separate provider sessions.
+    worktree_slug: str | None = None
     stopped_at: datetime | None = None
     # Provider session/thread ID once the SDK has assigned one. Used to
     # resume the same conversation on reconnect: passed as ``resume`` to
@@ -331,5 +349,6 @@ __all__ = [
     "Project",
     "Provider",
     "Work",
+    "WorkMode",
     "WorkStatus",
 ]

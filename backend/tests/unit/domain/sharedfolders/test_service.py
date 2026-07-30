@@ -155,7 +155,7 @@ def test_create_new_default_location_skips_external_link() -> None:
 
 
 def test_create_new_custom_location_links_to_external(tmp_path: Path) -> None:
-    service, repo, prov = _make_service()
+    service, _repo, prov = _make_service()
     real = tmp_path / "elsewhere"
     record = service.create_new(
         CreateNewShareRequest(

@@ -68,7 +68,12 @@ def _launch_linux(command: str, kind: str) -> bool:
     if explicit is not None:
         binary, args = explicit
         if shutil.which(binary):
-            return subprocess.run([binary, *args, "bash", "-c", payload], check=False).returncode == 0
+            return (
+                subprocess.run(
+                    [binary, *args, "bash", "-c", payload], check=False
+                ).returncode
+                == 0
+            )
         return False
     # "system" / iterm2 / tmux / unknown → first available emulator.
     for binary, args in _LINUX_FALLBACKS:

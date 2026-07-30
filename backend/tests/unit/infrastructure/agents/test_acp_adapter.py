@@ -7,6 +7,7 @@ tests exercise the real queue choreography end to end.
 
 import asyncio
 import signal
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -100,9 +101,13 @@ class FakeConnection:
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     adapter: Any = None
     load_should_fail: bool = False
+    initialize_failures: int = 0
 
     async def initialize(self, protocol_version: int, **kw: Any) -> Any:
         self.calls.append(("initialize", {"protocol_version": protocol_version}))
+        if self.initialize_failures:
+            self.initialize_failures -= 1
+            raise ConnectionError("Connection closed during initialize")
         return _Obj(protocol_version=1, agent_capabilities=self.caps)
 
     async def new_session(self, cwd: str, **kw: Any) -> Any:
@@ -114,7 +119,16 @@ class FakeConnection:
         )
 
     async def load_session(self, cwd: str, session_id: str, **kw: Any) -> Any:
-        self.calls.append(("load_session", {"cwd": cwd, "session_id": session_id}))
+        self.calls.append(
+            (
+                "load_session",
+                {
+                    "cwd": cwd,
+                    "session_id": session_id,
+                    **{key: value for key, value in kw.items() if key != "mcp_servers"},
+                },
+            )
+        )
         if self.load_should_fail:
             raise RuntimeError("no such session")
         # Replay arrives as ordinary updates before the response resolves.
@@ -129,7 +143,15 @@ class FakeConnection:
         return _Obj(session_id=session_id, config_options=[], modes=None)
 
     async def resume_session(self, cwd: str, session_id: str, **kw: Any) -> Any:
-        self.calls.append(("resume_session", {"session_id": session_id}))
+        self.calls.append(
+            (
+                "resume_session",
+                {
+                    "session_id": session_id,
+                    **{key: value for key, value in kw.items() if key != "mcp_servers"},
+                },
+            )
+        )
         return _Obj(session_id=session_id, config_options=[], modes=None)
 
     async def prompt(self, prompt: list[Any], session_id: str, **kw: Any) -> Any:
@@ -163,6 +185,7 @@ def _build(
     config: Any = None,
     *,
     authentication_recovery_command: str | None = None,
+    session_meta: dict[str, Any] | None = None,
     **fake_kw: Any,
 ) -> tuple[AcpAdapter, FakeConnection]:
     fake = FakeConnection(**fake_kw)
@@ -177,6 +200,7 @@ def _build(
         model_label="test-model",
         authentication_recovery_command=authentication_recovery_command,
         connect_factory=factory,
+        session_meta=session_meta,
     )
     return adapter, fake
 
@@ -206,6 +230,35 @@ def test_start_creates_session_and_injects_mcp_server() -> None:
         await adapter.close()
 
     asyncio.run(scenario())
+
+
+def test_session_metadata_applies_to_fresh_and_restored_sessions() -> None:
+    async def scenario() -> None:
+        meta = {"vendor": {"approved": ["dt pytest"]}}
+        fresh, fresh_connection = _build(session_meta=meta)
+        await fresh.start(
+            AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s")
+        )
+        assert fresh_connection.called("new_session")[0]["vendor"] == meta["vendor"]
+        await fresh.close()
+
+        restored, restored_connection = _build(
+            caps=_caps(load_session=True),
+            session_meta=meta,
+        )
+        await restored.start(
+            AgentStartContext(
+                workdir=WORKDIR,
+                model="m",
+                system_prompt="s",
+                session_id="sess_1",
+            )
+        )
+        assert restored_connection.called("load_session")[0]["vendor"] == meta["vendor"]
+        await restored.close()
+
+    asyncio.run(scenario())
+
 
 def test_events_lead_with_session_established() -> None:
     async def scenario() -> None:
@@ -243,6 +296,39 @@ def test_config_options_applied_only_when_advertised() -> None:
         await adapter.close()
 
     asyncio.run(scenario())
+
+def test_applying_one_option_can_widen_another_before_it_is_judged() -> None:
+    """OpenCode publishes the effort ladder of the *currently selected*
+    model, so the ladder that matters only exists after the model pair
+    lands. Judging a later option against the session/new snapshot drops
+    values the agent would have accepted."""
+
+    async def scenario() -> None:
+        config = _config(desired_options=(("model", "opus"), ("effort", "xhigh")))
+        adapter, fake = _build(
+            config,
+            # At session/new the session sits on a model whose ladder
+            # stops at "high".
+            config_options=[
+                _select_option("model", "default", "opus"),
+                _select_option("effort", "low", "high"),
+            ],
+            # Selecting "opus" reveals a longer ladder.
+            set_config_response_options=[
+                _select_option("model", "default", "opus", current="opus"),
+                _select_option("effort", "low", "high", "xhigh"),
+            ],
+        )
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        assert fake.called("set_config_option") == [
+            {"config_id": "model", "value": "opus"},
+            {"config_id": "effort", "value": "xhigh"},
+        ]
+        await adapter.close()
+
+    asyncio.run(scenario())
+
 
 def test_config_value_not_advertised_is_skipped() -> None:
     async def scenario() -> None:
@@ -552,7 +638,12 @@ def test_connection_closed_prompt_terminates_event_stream() -> None:
         async def closed_prompt(fake: FakeConnection, session_id: str) -> Any:
             raise ConnectionError("Connection closed")
 
-        adapter, _fake = _build(prompt_script=[closed_prompt])
+        adapter, _fake = _build(
+            prompt_script=[
+                closed_prompt
+                for _ in range(acp_adapter._MAX_RECOVERY_ATTEMPTS_PER_TURN + 1)
+            ]
+        )
         await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
 
         events: list[Any] = []
@@ -577,6 +668,9 @@ def test_connection_closed_prompt_terminates_event_stream() -> None:
 def test_connection_closed_prompt_rejects_followup_before_stream_drains() -> None:
     async def scenario() -> None:
         async def closed_prompt(fake: FakeConnection, session_id: str) -> Any:
+            # Every reconnect dies too, so recovery exhausts its attempts
+            # instead of landing on a restored or fresh session.
+            fake.initialize_failures = acp_adapter._MAX_RECOVERY_ATTEMPTS_PER_TURN + 1
             raise ConnectionError("Connection closed")
 
         adapter, _fake = _build(prompt_script=[closed_prompt])
@@ -588,7 +682,7 @@ def test_connection_closed_prompt_rejects_followup_before_stream_drains() -> Non
         while True:
             event = await asyncio.wait_for(anext(gen), timeout=1)
             events.append(event)
-            if isinstance(event, Error) and event.message == "Connection closed":
+            if isinstance(event, Error) and "Connection closed" in event.message:
                 break
 
         with pytest.raises(ConnectionError, match="Connection closed"):
@@ -693,6 +787,85 @@ def test_restored_session_connection_loop_falls_back_to_fresh_session() -> None:
         assert "<atelier-context>" in prompts[2]["prompt"][0]["text"]
         assert prompts[2]["prompt"][1] == {"type": "text", "text": "go"}
         await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_connection_closed_prompt_falls_back_to_fresh_session() -> None:
+    async def scenario() -> None:
+        async def closed_prompt(fake: FakeConnection, session_id: str) -> Any:
+            fake.load_should_fail = True
+            fake.session_id = "sess_2"
+            raise ConnectionError("Connection closed")
+
+        adapter, fake = _build(
+            caps=_caps(load_session=True),
+            prompt_script=[closed_prompt, None],
+        )
+        await adapter.start(
+            AgentStartContext(workdir=WORKDIR, model="m", system_prompt="system")
+        )
+
+        events = await _collect_turn(adapter, "original task")
+
+        assert any(
+            isinstance(event, SessionEstablished) and event.session_id == "sess_2"
+            for event in events
+        )
+        assert fake.called("prompt")[1] == {
+            "prompt": [
+                {
+                    "type": "text",
+                    "text": "<atelier-context>\nYou are agt-1.\n</atelier-context>",
+                },
+                {
+                    "type": "text",
+                    "text": f"{acp_adapter._FRESH_RECOVERY_PREFIX}original task",
+                },
+            ],
+            "session_id": "sess_2",
+        }
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_connection_closed_while_recovering_retries_recovery() -> None:
+    async def scenario() -> None:
+        async def closed_prompt(fake: FakeConnection, session_id: str) -> Any:
+            fake.initialize_failures = 1
+            raise ConnectionError("Connection closed")
+
+        adapter, fake = _build(
+            caps=_caps(load_session=True),
+            prompt_script=[closed_prompt, None],
+        )
+        await adapter.start(
+            AgentStartContext(workdir=WORKDIR, model="m", system_prompt="system")
+        )
+
+        events = await _collect_turn(adapter, "original task")
+
+        assert len(fake.called("initialize")) == 3
+        assert any(isinstance(event, TurnMetrics) for event in events)
+        assert not any(isinstance(event, Error) for event in events)
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_connection_error_includes_bounded_subprocess_diagnostics() -> None:
+    async def scenario() -> None:
+        adapter = AcpAdapter(_config(), argv=("real-agent",))
+        adapter._proc = _Obj(returncode=17)  # type: ignore[assignment]
+        adapter._stderr_tail.extend(["first detail", "fatal transport detail"])
+
+        await adapter._record_connection_failure(ConnectionError("Connection closed"))
+
+        message = adapter._connection_error_message(ConnectionError("Connection closed"))
+        assert "ACP transport failed 1 times" in message
+        assert "wrapper exited with code 17" in message
+        assert "fatal transport detail" in message
 
     asyncio.run(scenario())
 
@@ -851,6 +1024,158 @@ def test_permission_request_uses_tool_identity_not_action_title() -> None:
         (request,) = [e for e in events if isinstance(e, PermissionRequest)]
         assert request.tool_name == "WebSearch"
         assert request.tool_input == {"query": "weather in Galway today"}
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def _bash_tool_call(command: str) -> ToolCallStart:
+    return ToolCallStart(
+        session_update="tool_call",
+        tool_call_id="t1",
+        title=command,
+        kind="execute",
+        raw_input={"command": command},
+        field_meta={"opencode": {"toolName": "bash"}},
+    )
+
+
+def _bash_options() -> list[PermissionOption]:
+    return [
+        PermissionOption(option_id="allow_always", name="Always", kind="allow_always"),
+        PermissionOption(option_id="allow", name="Allow", kind="allow_once"),
+        PermissionOption(option_id="reject", name="Reject", kind="reject_once"),
+    ]
+
+
+def test_bash_command_fully_covered_by_approved_prefixes_is_auto_allowed() -> None:
+    """A chained command whose every part matches an approved prefix is
+    silently allowed — no PermissionRequest/PermissionDecision at all,
+    mirroring how an already-approved bare command never asks either."""
+
+    async def scenario() -> None:
+        response_holder: dict[str, Any] = {}
+
+        async def prompting_prompt(fake: FakeConnection, session_id: str) -> Any:
+            tool_call = _bash_tool_call("git diff --stat && git diff --numstat")
+            await fake.adapter.session_update(session_id, tool_call)
+            response_holder["permission"] = await fake.adapter.request_permission(
+                options=_bash_options(),
+                session_id=session_id,
+                tool_call=tool_call,
+            )
+            return _Obj(stop_reason="end_turn", usage=None)
+
+        config = _TestAcpConfig(
+            common=CommonAgentConfig(
+                workdir=WORKDIR,
+                system_prompt="You are agt-1.",
+                approved_command_prefixes=("git diff",),
+            )
+        )
+        adapter, _fake = _build(config, prompt_script=[prompting_prompt])
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        events = await _collect_turn(adapter, "review")
+
+        assert not [e for e in events if isinstance(e, PermissionRequest)]
+        assert not [e for e in events if isinstance(e, PermissionDecision)]
+        outcome = response_holder["permission"].outcome
+        assert outcome.outcome == "selected"
+        assert outcome.option_id == "allow"
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_bash_command_chained_with_an_unapproved_command_still_asks() -> None:
+    """Approving `git diff` does not approve a line that chains it with
+    anything else — the whole line still needs a human decision."""
+
+    async def scenario() -> None:
+        async def prompting_prompt(fake: FakeConnection, session_id: str) -> Any:
+            tool_call = _bash_tool_call(
+                'git diff --stat && echo "---UNTRACKED---" && git status --porcelain'
+            )
+            await fake.adapter.session_update(session_id, tool_call)
+            return await fake.adapter.request_permission(
+                options=_bash_options(),
+                session_id=session_id,
+                tool_call=tool_call,
+            )
+
+        config = _TestAcpConfig(
+            common=CommonAgentConfig(
+                workdir=WORKDIR,
+                system_prompt="You are agt-1.",
+                approved_command_prefixes=("git diff",),
+            )
+        )
+        adapter, _fake = _build(config, prompt_script=[prompting_prompt])
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        events: list[Any] = []
+        await adapter.send_input("review")
+        gen = adapter.events()
+        async for event in gen:
+            events.append(event)
+            if isinstance(event, PermissionRequest):
+                await adapter.resolve_permission(event.request_id, "allow")
+            if isinstance(event, StatusChange) and event.status == "idle":
+                break
+        await gen.aclose()
+
+        assert len([e for e in events if isinstance(e, PermissionRequest)]) == 1
+        assert len([e for e in events if isinstance(e, PermissionDecision)]) == 1
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_bash_permission_check_error_falls_back_to_asking(monkeypatch: Any) -> None:
+    """A crash while evaluating approved prefixes must never suppress the
+    permission prompt — it always defers to asking, never to allowing."""
+
+    def boom(*args: Any, **kwargs: Any) -> bool:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(acp_adapter, "command_is_fully_approved", boom)
+
+    async def scenario() -> None:
+        async def prompting_prompt(fake: FakeConnection, session_id: str) -> Any:
+            tool_call = _bash_tool_call("git diff --stat")
+            await fake.adapter.session_update(session_id, tool_call)
+            return await fake.adapter.request_permission(
+                options=_bash_options(),
+                session_id=session_id,
+                tool_call=tool_call,
+            )
+
+        config = _TestAcpConfig(
+            common=CommonAgentConfig(
+                workdir=WORKDIR,
+                system_prompt="You are agt-1.",
+                approved_command_prefixes=("git diff",),
+            )
+        )
+        adapter, _fake = _build(config, prompt_script=[prompting_prompt])
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        events: list[Any] = []
+        await adapter.send_input("review")
+        gen = adapter.events()
+        async for event in gen:
+            events.append(event)
+            if isinstance(event, PermissionRequest):
+                await adapter.resolve_permission(event.request_id, "allow")
+            if isinstance(event, StatusChange) and event.status == "idle":
+                break
+        await gen.aclose()
+
+        (request,) = [e for e in events if isinstance(e, PermissionRequest)]
+        assert request.tool_name == "Bash"
+        (decision,) = [e for e in events if isinstance(e, PermissionDecision)]
+        assert decision.decision == "allow"
         await adapter.close()
 
     asyncio.run(scenario())
@@ -1020,6 +1345,79 @@ def test_terminate_process_tree_kills_process_group_on_posix(monkeypatch: Any) -
     asyncio.run(acp_adapter._terminate_process_tree(Proc()))  # type: ignore[arg-type]
 
     assert killed == [(456, signal.SIGTERM)]
+
+
+def test_subprocess_accepts_large_acp_frames(monkeypatch: Any) -> None:
+    async def scenario() -> None:
+        captured: dict[str, Any] = {}
+
+        class Stderr:
+            async def readline(self) -> bytes:
+                await asyncio.Future()
+                return b""
+
+        class Proc:
+            stdin = object()
+            stdout = object()
+            stderr = Stderr()
+
+        async def create_subprocess_exec(*argv: str, **kwargs: Any) -> Proc:
+            captured.update(kwargs)
+            return Proc()
+
+        connection = object()
+        monkeypatch.setattr(
+            acp_adapter.asyncio,
+            "create_subprocess_exec",
+            create_subprocess_exec,
+        )
+        monkeypatch.setattr(
+            acp_adapter,
+            "connect_to_agent",
+            lambda *args, **kwargs: connection,
+        )
+        adapter = AcpAdapter(
+            _config(),
+            argv=("fake",),
+            environment={"ATELIER_ACP_TEST": "enabled"},
+        )
+
+        assert await adapter._connect() is connection
+        assert captured["limit"] == acp_adapter._ACP_STREAM_LIMIT_BYTES
+        assert captured["env"]["ATELIER_ACP_TEST"] == "enabled"
+        assert adapter._stderr_task is not None
+        adapter._stderr_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await adapter._stderr_task
+
+    asyncio.run(scenario())
+
+
+def test_close_runs_owned_runtime_cleanup_once() -> None:
+    async def scenario() -> None:
+        cleaned: list[str] = []
+        fake = FakeConnection()
+
+        async def factory(adapter: AcpAdapter) -> FakeConnection:
+            fake.adapter = adapter
+            return fake
+
+        adapter = AcpAdapter(
+            _config(),
+            argv=("fake",),
+            connect_factory=factory,
+            cleanup=lambda: cleaned.append("done"),
+        )
+        await adapter.start(
+            AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s")
+        )
+
+        await adapter.close()
+        await adapter.close()
+
+        assert cleaned == ["done"]
+
+    asyncio.run(scenario())
 
 
 def test_close_is_idempotent_and_closes_connection() -> None:

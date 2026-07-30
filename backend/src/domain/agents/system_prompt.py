@@ -113,7 +113,13 @@ def render_system_prompt(
         f"Create and edit files inside this directory; ALL paths you "
         f"pass to tools (Write, Edit, atelier__record_doc, etc.) should "
         f"be relative to this directory unless the task explicitly tells "
-        f"you to use an absolute path.\n\n"
+        f"you to use an absolute path. For agent guidance, prefer this "
+        f"worktree's `.agents/...` files; `$HOME/.agents/...` is universal "
+        f"fallback guidance. Resolve `.agents/...` from this working "
+        f"directory and `~/...` or `$HOME/...` from the user's home. "
+        f"Before reporting a referenced file as missing or inaccessible, "
+        f"check that exact resolved path separately and report the path and "
+        f"error verbatim.\n\n"
         if workdir is not None
         else ""
     )

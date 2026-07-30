@@ -13,7 +13,7 @@ The constant trip-up: the backend venv is at `backend/.venv` (not repo root). Ac
 
 The skill takes an optional argument:
 
-- `/test` (no arg) → run everything: `cd backend && uv run pytest -q`
+- `/test` (no arg) → run everything: `cd backend && uv run --extra dev pytest -q`
 - `/test tests/unit/domain/agents/` → run a directory
 - `/test tests/unit/infrastructure/cli_launcher/test_build_resume_command.py::test_amp_includes_mode_flag` → run a single test by node id
 - `/test -k "ctx_pct"` → pass through pytest's `-k` filter
@@ -23,10 +23,29 @@ Pass the argument straight to pytest after the path setup. Don't try to be cleve
 ### 2. Run
 
 ```bash
-cd backend && uv run pytest <args>
+cd backend && uv run --extra dev pytest <args>
 ```
 
 `uv run` activates the venv on the fly — faster than `source .venv/bin/activate && python -m pytest` and avoids polluting the user's shell. It also picks the right interpreter every time, even if the user has a different one on PATH.
+
+**`--extra dev` is mandatory, not optional.** `pytest` lives in the `dev`
+optional-dependency group (`backend/pyproject.toml` → `[project.optional-dependencies]`).
+A bare `uv run pytest` syncs the environment to the *default* dependency set
+first, which **uninstalls pytest**, and then fails with:
+
+```
+Uninstalled 1 package in 1ms
+error: Failed to spawn: `pytest`
+  Caused by: No such file or directory (os error 2)
+```
+
+That message reads like a missing venv or a PATH problem. It isn't — `uv` just
+removed the binary a millisecond before trying to run it. Adding `--extra dev`
+keeps it installed. The same applies to `ruff` and `mypy`.
+
+Note the failure is *self-inflicting*: a bare `uv run pytest` leaves the shared
+venv without pytest, so the next correct invocation has to reinstall it. Never
+run the bare form to "check whether pytest is there".
 
 If the user prefers verbose output or a specific format, pass through their preference. The default is `-q` (quiet) since most runs the user wants the pass count + any failures, not the full collection list.
 

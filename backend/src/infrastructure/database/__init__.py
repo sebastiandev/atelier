@@ -8,20 +8,24 @@ Public surface used by the application layer:
 - `session_scope(factory)` — FastAPI dependency yielding a Session
 """
 
+from src.infrastructure.database.chat_repository import SqlChatRepository
 from src.infrastructure.database.engine import (
     begin,
     create_database_engine,
     temp_engine_for_path,
 )
+from src.infrastructure.database.loop_run_repository import SqlLoopRunRepository
 from src.infrastructure.database.mapping import configure_mappings, mapper_registry
 from src.infrastructure.database.migrations import (
     CURRENT_SCHEMA_VERSION,
     SchemaMismatchError,
     initialize_database,
 )
-from src.infrastructure.database.chat_repository import SqlChatRepository
-from src.infrastructure.database.session import create_session_factory, session_scope
+from src.infrastructure.database.planning_session_repository import (
+    SqlPlanningSessionRepository,
+)
 from src.infrastructure.database.project_repository import SqlProjectRepository
+from src.infrastructure.database.session import create_session_factory, session_scope
 from src.infrastructure.database.tables import (
     agents_table,
     artifacts_table,
@@ -29,6 +33,7 @@ from src.infrastructure.database.tables import (
     connections_table,
     handoffs_table,
     metadata,
+    planning_sessions_table,
     projects_table,
     schema_version_table,
     transcript_cursor_table,
@@ -40,6 +45,8 @@ __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "SchemaMismatchError",
     "SqlChatRepository",
+    "SqlLoopRunRepository",
+    "SqlPlanningSessionRepository",
     "SqlProjectRepository",
     "SqlWorkRepository",
     "agents_table",
@@ -54,6 +61,7 @@ __all__ = [
     "initialize_database",
     "mapper_registry",
     "metadata",
+    "planning_sessions_table",
     "projects_table",
     "schema_version_table",
     "session_scope",

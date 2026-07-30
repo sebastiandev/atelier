@@ -42,19 +42,68 @@ class ChatStoreService:
         self._clock = clock
 
     def create_chat(self, req: CreateChatRequest) -> ChatRecord:
-        first = req.first_message.strip()
-        if not first:
-            raise ValueError("first_message must be non-empty")
+        first = req.first_message.strip() if req.first_message else ""
+        title = (req.title or (_derive_title(first) if first else "")).strip()
+        if not title:
+            raise ValueError("title is required when first_message is omitted")
+        discussion_key = _clean_optional_text(req.discussion_key)
+        context_seed = _clean_optional_text(req.context_seed)
+        working_directory = _clean_optional_path(req.working_directory)
+        if discussion_key and not req.discussion_only:
+            raise ValueError("discussion_key requires discussion_only")
         now = self._clock()
         with self._lock:
+            if discussion_key:
+                # ponytail: local chat counts are small; add a repository lookup if this gets hot.
+                chats = self._repo.list_chats()
+                existing = next(
+                    (
+                        chat
+                        for chat in chats
+                        if chat.discussion_key == discussion_key
+                    ),
+                    None,
+                )
+                if existing is None and context_seed:
+                    existing = max(
+                        (
+                            chat
+                            for chat in chats
+                            if chat.discussion_only
+                            and chat.discussion_key is None
+                            and chat.context_seed == context_seed
+                            and chat.grounding_kind
+                            == (req.grounding.kind if req.grounding else None)
+                            and chat.grounding_ref
+                            == (req.grounding.ref if req.grounding else None)
+                            and chat.working_directory == working_directory
+                        ),
+                        key=lambda chat: chat.updated_at,
+                        default=None,
+                    )
+                    if existing is not None:
+                        existing.discussion_key = discussion_key
+                        self._repo.update_chat(existing)
+                        self._files.write_chat_json(
+                            _require_slug(existing), serialize_chat(existing)
+                        )
+                if existing is not None:
+                    return ChatRecord(
+                        chat=existing,
+                        transcript=self._read_transcript(_require_slug(existing)),
+                    )
             chat = Chat(
-                title=(req.title or _derive_title(first)).strip(),
+                title=title,
                 provider=req.provider,
                 model=req.model,
                 grounding_kind=req.grounding.kind if req.grounding else None,
                 grounding_ref=req.grounding.ref if req.grounding else None,
-                working_directory=_clean_optional_path(req.working_directory),
+                working_directory=working_directory,
                 options=req.options or None,
+                discussion_only=True if req.discussion_only else None,
+                role=req.role,
+                context_seed=context_seed,
+                discussion_key=discussion_key,
                 created_at=now,
                 updated_at=now,
             )
@@ -62,9 +111,12 @@ class ChatStoreService:
             slug = _require_slug(chat)
             self._files.ensure_chat_dir(slug)
             self._files.write_chat_json(slug, serialize_chat(chat))
-            first_message = ChatMessage(role="user", body=first, created_at=now)
-            self._append_transcript_message(slug, first_message)
-        return ChatRecord(chat=chat, transcript=[first_message])
+            transcript: list[ChatMessage] = []
+            if first:
+                first_message = ChatMessage(role="user", body=first, created_at=now)
+                self._append_transcript_message(slug, first_message)
+                transcript.append(first_message)
+        return ChatRecord(chat=chat, transcript=transcript)
 
     def get_chat(self, chat_slug: str) -> ChatRecord | None:
         with self._lock:
@@ -153,6 +205,16 @@ class ChatStoreService:
             if chat is None:
                 raise ValueError(f"chat not found: {chat_slug}")
             chat.session_id = session_id
+            chat.updated_at = self._clock()
+            self._repo.update_chat(chat)
+            self._files.write_chat_json(chat_slug, serialize_chat(chat))
+
+    def clear_chat_session_id(self, chat_slug: str) -> None:
+        with self._lock:
+            chat = self._repo.get_chat_by_slug(chat_slug)
+            if chat is None:
+                raise ValueError(f"chat not found: {chat_slug}")
+            chat.session_id = None
             chat.updated_at = self._clock()
             self._repo.update_chat(chat)
             self._files.write_chat_json(chat_slug, serialize_chat(chat))
@@ -275,6 +337,14 @@ def _clean_optional_path(path: str | None) -> str | None:
     if path is None:
         return None
     cleaned = path.strip()
+    return cleaned or None
+
+
+def _clean_optional_text(text: str | None) -> str | None:
+    """Trim optional hidden chat context without changing missing values."""
+    if text is None:
+        return None
+    cleaned = text.strip()
     return cleaned or None
 
 

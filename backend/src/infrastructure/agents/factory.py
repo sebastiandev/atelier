@@ -22,4 +22,14 @@ def build_adapter(config: AgentConfig, settings: Settings) -> AgentAdapter:
     )
 
 
-__all__ = ["build_adapter"]
+class ConfiguredAgentAdapterFactory:
+    """Bind runtime settings to the provider adapter dispatch."""
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    def build(self, config: AgentConfig) -> AgentAdapter:
+        return build_adapter(config, self._settings)
+
+
+__all__ = ["ConfiguredAgentAdapterFactory", "build_adapter"]

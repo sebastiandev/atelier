@@ -64,7 +64,7 @@ export function MoveWorkDialog({ work, projects, onClose, onMoved }: Props) {
             <p className="sub">{work.name}</p>
           </div>
           <button
-            className="btn-icon"
+            className="btn icon"
             onClick={onClose}
             aria-label="Close"
             disabled={submitting}

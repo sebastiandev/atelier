@@ -311,6 +311,30 @@ def test_send_input_failure_does_not_write_user_input() -> None:
     assert closed is True
 
 
+def test_send_input_can_record_different_transcript_text() -> None:
+    async def run() -> tuple[dict[str, Any], list[str]]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter([], keep_alive=True)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+
+        async with supervisor.subscribe("agt-1") as sub:
+            queue = sub.queue
+            await supervisor.send_input(
+                "agt-1",
+                "<hidden>plan index</hidden>\n\nhello there",
+                transcript_text="hello there",
+            )
+            ev = await queue.get()
+
+        await supervisor.shutdown()
+        return ev, adapter.received_inputs
+
+    ev, inputs = _run(run())
+    assert ev["type"] == "user_input"
+    assert ev["text"] == "hello there"
+    assert inputs == ["<hidden>plan index</hidden>\n\nhello there"]
+
+
 def test_send_input_to_unknown_agent_raises() -> None:
     async def run() -> None:
         supervisor = AgentSupervisorService(StubTranscriptLog())
@@ -459,6 +483,25 @@ def test_resubscribe_replaces_previous_subscriber() -> None:
     assert q1_empty is True
     assert sub1_kicked is True
     assert text == "after replace"
+
+
+def test_kicked_subscription_stream_stops() -> None:
+    """A replaced subscriber's stream exits immediately instead of hanging."""
+
+    async def run() -> None:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = StubAgentAdapter([], keep_alive=True)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+
+        async with supervisor.subscribe("agt-1") as sub1:
+            async with supervisor.subscribe("agt-1"):
+                assert sub1.kicked.is_set()
+                with pytest.raises(StopAsyncIteration):
+                    await asyncio.wait_for(anext(sub1.stream()), timeout=0.1)
+
+        await supervisor.shutdown()
+
+    _run(run())
 
 
 def test_outer_subscribe_finally_does_not_clear_inner_slot() -> None:

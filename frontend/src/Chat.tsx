@@ -1,6 +1,8 @@
 import {
   type ClipboardEvent as ReactClipboardEvent,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -11,23 +13,22 @@ import {
 import {
   TranscriptUnits,
   TurnMetricsBar,
-  EFFORT_SESSION_CONFIG_IDS,
-  FAST_MODE_SESSION_CONFIG_ID,
   type ContextSnapshot,
   contextSnapshotFor,
   contextToneFor,
   deriveActivityPhase,
   groupEvents,
   isAgentActive,
+  isTurnOpen,
   latestEventSeq,
   labelForSessionConfigValue,
   latestSessionConfigOption,
   latestSessionConfigOptionByIds,
   latestMetrics,
-  selectValueForSessionConfigValue,
-  sessionConfigChoiceForSelectValue,
-  sessionConfigChoicesForSelect,
+  SessionFastToggle,
+  StalledRuntimeBanner,
   sessionMetrics,
+  useStalledTurn,
 } from "./AgentTile";
 import {
   type ChatDetail,
@@ -35,6 +36,7 @@ import {
   type ChatMessage,
   type ChatSummary,
   type CreateChatPayload,
+  type PlanArtifact,
   type ProjectSummary,
   type ProviderDescriptor,
   type WorkChatContextFolder,
@@ -51,9 +53,14 @@ import {
   listWorks,
   patchChat,
   promoteChat,
+  reconnectChat,
   uploadImageAttachment,
 } from "./api";
-import { BrandMark } from "./BrandMark";
+import {
+  ChatTileComposer,
+  ChatTileFrame,
+  ChatTileTranscript,
+} from "./ChatTileSurface";
 import { useDragHandle } from "./dragHandleContext";
 import {
   anchoredMenuPosition,
@@ -63,9 +70,7 @@ import {
   ChatIcon,
   DocIcon,
   FolderIcon,
-  SearchIcon,
   SendIcon,
-  SlidersIcon,
   SparkIcon,
 } from "./Icons";
 import { FolderPickerDialog } from "./FolderPickerDialog";
@@ -73,6 +78,7 @@ import { ModelPicker } from "./ModelPicker";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
 import { ProviderAuthPrompt } from "./ProviderAuthPrompt";
 import {
+  EFFORT_OPTION_KEYS,
   coerceProviderOptionsForModel,
   modelPickerOptions,
   optionLabel,
@@ -92,7 +98,8 @@ import {
   isPasteKeyboardShortcut,
   nextImageLabels,
 } from "./pasteImages";
-import { ThemeToggle } from "./ThemeToggle";
+import { SessionModelPicker } from "./SessionModelPicker";
+import { ShellTopbar } from "./ShellTopbar";
 import {
   type AgentEvent,
   useAgentStream,
@@ -209,6 +216,8 @@ function messageWithPendingImages(body: string, notes: PendingImageNote[]): stri
   return `${body}\n\n${imageLines}`;
 }
 
+const CHAT_COMPOSER_MAX_HEIGHT = 200;
+
 export function ChatView({ chatSlug }: { chatSlug: string }) {
   const [chat, setChat] = useState<ChatDetail | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -220,16 +229,29 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   const [uploadingImageCount, setUploadingImageCount] = useState(0);
   const [pendingImageNotes, setPendingImageNotes] = useState<PendingImageNote[]>([]);
   const [compacting, setCompacting] = useState(false);
+  const [compactDialog, setCompactDialog] =
+    useState<ChatCompactionDialogState | null>(null);
   const [promoteOpen, setPromoteOpen] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
   const clipboardFallbackTimerRef = useRef<number | null>(null);
   const systemClipboardPasteInFlightRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastRuntimeSeqRef = useRef(0);
   const pendingScrollRestoreRef = useRef<{
     scrollHeight: number;
     scrollTop: number;
   } | null>(null);
+  useAutosizeTextarea(textareaRef, draft);
   const { byName: providersByName } = useProviderDescriptors();
+  const linkedWorkSlug =
+    chat?.promoted_to_work_slug ??
+    (chat?.grounding?.kind === "work" ? chat.grounding.ref : null);
+  const readOnly = Boolean(
+    linkedWorkSlug &&
+      works.some(
+        (work) => work.slug === linkedWorkSlug && work.status !== "active",
+      ),
+  );
   const {
     events,
     status: streamStatus,
@@ -239,11 +261,12 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     sendSessionConfig,
     loadOlder,
     history,
+    sendSessionConfigRefresh,
     pendingPermissions,
     providerAuthRequirement,
     providerAuthAwaitingInput,
     confirmProviderAuth,
-  } = useAgentStream(chatSlug, { resource: "chats" });
+  } = useAgentStream(chatSlug, { resource: "chats", readOnly });
 
   async function refresh() {
     try {
@@ -288,22 +311,44 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             ...current,
             transcript,
             message_count: Math.max(current.message_count, transcript.length),
+            planning_readiness:
+              planningReadinessFromEvents(events) ?? current.planning_readiness,
           }
         : current,
     );
   }, [events]);
 
-  const runtimeUnits = useMemo(() => groupEvents(events), [events]);
+  const displayEvents = useMemo(() => chatDisplayEvents(events), [events]);
+  const runtimeUnits = useMemo(() => groupEvents(displayEvents), [displayEvents]);
   const isActive = isAgentActive(events);
   const streamActive = streamStatus === "connected" && isActive;
+  const turnOpen = useMemo(() => isTurnOpen(events), [events]);
+  const stalled = useStalledTurn(events, turnOpen);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const activityPhase = useMemo(
     () => deriveActivityPhase(events, streamActive),
     [events, streamActive],
   );
+  const sessionModelConfig = useMemo(
+    () => latestSessionConfigOption(events, "model"),
+    [events],
+  );
+  const liveSessionModelValue =
+    typeof sessionModelConfig?.currentValue === "string"
+      ? sessionModelConfig.currentValue
+      : null;
+  const displayModel = liveSessionModelValue ?? chat?.model ?? "";
+  const sessionConfigOptionsSeq = useMemo(
+    () => latestEventSeq(events, "session_config_options"),
+    [events],
+  );
+  const modelPickerId = useMemo(
+    () => `chat-model-${chatSlug.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    [chatSlug],
+  );
   const modelMeta = chat
-    ? lookupModelMeta(providersByName, chat.provider, chat.model)
+    ? lookupModelMeta(providersByName, chat.provider, displayModel)
     : null;
   const latestCompactionSeq = useMemo(
     () =>
@@ -341,6 +386,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   }
 
   function send() {
+    if (readOnly || compacting) return;
     const body = draft.trim();
     if (!body || !chat || uploadingImageCount > 0) return;
     sendInput(messageWithPendingImages(body, pendingImageNotes));
@@ -369,7 +415,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     try {
       await appendSystemClipboardImagesToChatDraft(
         draft,
-        linkedWorkSlug(chat),
+        linkedWorkSlug,
         setDraft,
         setPendingImageNotes,
         setImageUploadError,
@@ -381,14 +427,28 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   }
 
   async function compactCurrentChat() {
-    if (!chat || compacting || streamActive) return;
+    if (readOnly || !chat || compacting || streamActive) return;
     setCompacting(true);
+    setCompactDialog((current) =>
+      current
+        ? { ...current, phase: "compacting", error: null }
+        : { phase: "compacting", context: contextSnapshot, error: null },
+    );
     try {
       await compactChat(chat.slug);
       setCompactError(null);
+      setCompactDialog((current) =>
+        current ? { ...current, phase: "success", error: null } : current,
+      );
       await refresh();
     } catch (err) {
-      setCompactError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setCompactError(message);
+      setCompactDialog((current) =>
+        current
+          ? { ...current, phase: "error", error: message }
+          : { phase: "error", context: contextSnapshot, error: message },
+      );
     } finally {
       setCompacting(false);
     }
@@ -407,35 +467,27 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
   const grounding = resolveGrounding(chat.grounding, projects, works);
   const workingFolder = resolveWorkingFolder(chat);
   const providerLabel = providerLabelFor(chat.provider);
+  const discussionOnly = chat.discussion_only === true;
   const composerDisabled =
-    streamStatus !== "connected" || providerAuthRequirement !== null;
+    readOnly ||
+    streamStatus !== "connected" ||
+    providerAuthRequirement !== null ||
+    compacting ||
+    compactDialog !== null;
 
   return (
-    <div className="shell-v3 narrow-left chat-v3">
+    <div className="shell-v3 narrow-left chat-v3 has-topbar">
+      <ShellTopbar
+        crumbs={[
+          ...(grounding.kind !== "none"
+            ? [{ href: grounding.href, label: grounding.label }]
+            : []),
+          { label: chat.slug },
+        ]}
+      />
       <aside className="shell-left chat-rail">
-        <div className="crown">
-          <a className="wordmark" href="/" title="Back to workspace">
-            <span className="wm-mark" aria-hidden><BrandMark /></span>
-            <span className="wm-rest">telier</span>
-          </a>
-          <div className="crown-actions">
-            <a className="btn-icon" href="/" title="Search">
-              <SearchIcon size={12} />
-            </a>
-            <a className="btn-icon" href="/settings" title="Settings">
-              <SlidersIcon size={12} />
-            </a>
-            <ThemeToggle className="btn-icon" />
-          </div>
-        </div>
-        <div className="crumbs-v3">
-          <a className="crumb" href="/">← workspace</a>
-          <span className="sep">/</span>
-          <span className="now">chat</span>
-        </div>
-
         <div className="chat-hero">
-          <div className="kind-line"><ChatIcon size={11} /> exploratory chat · {chat.slug}</div>
+          <div className="kind-line"><ChatIcon size={11} /> {discussionOnly ? "run discussion" : "exploratory chat"} · {chat.slug}</div>
           <div className="title">{chat.title}</div>
         </div>
         <div className="v3-rule flush" />
@@ -453,9 +505,9 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
           <div className="v3-shd"><span>Model</span></div>
           <div className="chat-model-static">
             <span className="cm-prov">{providerLabel}</span>
-            <span className="cm-model mono">{chat.model}</span>
+            <span className="cm-model mono">{displayModel}</span>
           </div>
-          <div className="chat-rail-action">
+          {(chat.promoted_to_work_slug || (!discussionOnly && !readOnly)) && <div className="chat-rail-action">
             {chat.promoted_to_work_slug ? (
               <a className="btn" href={`/works/${chat.promoted_to_work_slug}`}>
                 <SparkIcon size={12} /> Open {chat.promoted_to_work_slug}
@@ -469,15 +521,16 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               {chat.promoted_to_work_slug ? "this chat seeded a work unit" : "turn this thread into a tracked work unit"}
             </div>
             {compactError && <div className="form-error compact">{compactError}</div>}
-          </div>
+          </div>}
         </div>
       </aside>
 
       <main className="shell-right chat-right">
+        {discussionOnly && <DiscussionOnlyNotice />}
         <div className="chat-stream" ref={streamRef}>
           <div className="chat-reading">
             <div className="chat-opening">
-              {chat.slug} · talking to {chat.model}
+              {chat.slug} · talking to {displayModel}
               {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
               {" · "}{streamStatus}
             </div>
@@ -514,18 +567,29 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             activityPhase={activityPhase}
             context={contextSnapshot}
             compacting={compacting}
-            onCompact={() => void compactCurrentChat()}
+            onCompact={readOnly ? undefined : () =>
+              setCompactDialog({
+                phase: "confirm",
+                context: contextSnapshot,
+                error: null,
+              })
+            }
             compactTitle="Compact this chat context"
           />
         )}
         <div className="chat-composer-wrap">
+          <StalledRuntimeBanner
+            title="Chat appears stalled"
+            visible={!readOnly && stalled}
+            onReconnect={() => reconnectChat(chat.slug)}
+          />
           {providerAuthRequirement && (
             <ProviderAuthPrompt
               requirement={providerAuthRequirement}
               onConfirm={confirmProviderAuth}
             />
           )}
-          {pendingPermissions.length > 0 && (
+          {!readOnly && pendingPermissions.length > 0 && (
             <PermissionApprovalDialog
               pendingPermissions={pendingPermissions}
               onDecide={sendPermission}
@@ -541,6 +605,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               </div>
             )}
             <textarea
+              ref={textareaRef}
               rows={1}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -563,19 +628,30 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
                 void appendPastedImagesToChatDraft(
                   e,
                   draft,
-                  linkedWorkSlug(chat),
+                  linkedWorkSlug,
                   setDraft,
                   setPendingImageNotes,
                   setImageUploadError,
                   setUploadingImageCount,
                 );
               }}
-              placeholder={`Message ${chat.model}...`}
+              placeholder={
+                readOnly
+                  ? "Work completed - reopen to continue"
+                  : `Message ${displayModel}...`
+              }
               disabled={composerDisabled}
             />
             <div className="row">
               <span className="hint mono">Enter send · Shift+Enter newline</span>
-              <span className="spacer" />
+              <SessionModelPicker
+                disabled={composerDisabled || isActive}
+                option={sessionModelConfig}
+                pickerId={modelPickerId}
+                refreshSeq={sessionConfigOptionsSeq}
+                onChange={(value) => sendSessionConfig("model", value)}
+                onRefresh={() => sendSessionConfigRefresh("model")}
+              />
               <LiveEffortSelect
                 events={events}
                 disabled={
@@ -583,14 +659,14 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
                 }
                 onChange={sendSessionConfig}
               />
-              <LiveFastModeSelect
+              <SessionFastToggle
                 events={events}
-                disabled={
-                  composerDisabled || providerAuthAwaitingInput || streamActive
-                }
+                disabled={composerDisabled || isActive}
                 onChange={sendSessionConfig}
+                fallbackValue={chat?.options?.["fast-mode"]}
               />
-              {!chat.promoted_to_work_slug && (
+              <span className="spacer" />
+              {!readOnly && !discussionOnly && !chat.promoted_to_work_slug && (
                 <button className="btn sm" onClick={() => setPromoteOpen(true)}>
                   <SparkIcon size={11} /> Start work
                 </button>
@@ -607,7 +683,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
         </div>
       </main>
 
-      {promoteOpen && (
+      {!readOnly && promoteOpen && !discussionOnly && (
         <PromoteChatModal
           chat={chat}
           projects={projects}
@@ -616,6 +692,13 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
           onPromoted={(workSlug) => {
             window.location.assign(`/works/${workSlug}`);
           }}
+        />
+      )}
+      {compactDialog && (
+        <ChatCompactionModal
+          dialog={compactDialog}
+          onClose={() => setCompactDialog(null)}
+          onCompact={() => void compactCurrentChat()}
         />
       )}
     </div>
@@ -629,9 +712,17 @@ export function ChatTile({
   works,
   contextFolder,
   onOpenContext,
+  planReferences = [],
+  collapseHistoryByDefault = false,
   onClose,
   onStartAgent,
   onUpdated,
+  presentation = "canvas",
+  planningPlacement = "dock",
+  onOpenPlan,
+  openPlanLabel = "Open plan",
+  openPlanDisabled = false,
+  readOnly = false,
 }: {
   chatSlug: string;
   chatSummary?: ChatSummary;
@@ -639,9 +730,17 @@ export function ChatTile({
   works: WorkSummary[];
   contextFolder?: WorkChatContextFolder | null;
   onOpenContext?: (folder: WorkChatContextFolder) => void;
-  onClose: () => void;
+  planReferences?: PlanArtifact[];
+  collapseHistoryByDefault?: boolean;
+  onClose?: () => void;
   onStartAgent?: (chat: ChatDetail) => Promise<void> | void;
   onUpdated?: (chat: ChatSummary) => void;
+  presentation?: "canvas" | "planning";
+  planningPlacement?: "center" | "dock";
+  onOpenPlan?: () => void;
+  openPlanLabel?: string;
+  openPlanDisabled?: boolean;
+  readOnly?: boolean;
 }) {
   const [chat, setChat] = useState<ChatDetail | null>(null);
   const [draft, setDraft] = useState("");
@@ -653,18 +752,27 @@ export function ChatTile({
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
   const [uploadingImageCount, setUploadingImageCount] = useState(0);
   const [pendingImageNotes, setPendingImageNotes] = useState<PendingImageNote[]>([]);
+  const [compactDialog, setCompactDialog] =
+    useState<ChatCompactionDialogState | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [mention, setMention] = useState<PlanMentionState | null>(null);
+  const [mentionFilter, setMentionFilter] =
+    useState<PlanReferenceFilter>("all");
+  const [historyExpanded, setHistoryExpanded] = useState(!collapseHistoryByDefault);
   const streamRef = useRef<HTMLDivElement>(null);
   const clipboardFallbackTimerRef = useRef<number | null>(null);
   const systemClipboardPasteInFlightRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const mentionOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const lastSummarySeqRef = useRef(0);
   const pendingScrollRestoreRef = useRef<{
     scrollHeight: number;
     scrollTop: number;
   } | null>(null);
+  useAutosizeTextarea(textareaRef, draft);
   const dragHandle = useDragHandle();
   const { byName: providersByName } = useProviderDescriptors();
   const {
@@ -676,11 +784,12 @@ export function ChatTile({
     sendSessionConfig,
     loadOlder,
     history,
+    sendSessionConfigRefresh,
     pendingPermissions,
     providerAuthRequirement,
     providerAuthAwaitingInput,
     confirmProviderAuth,
-  } = useAgentStream(chatSlug, { resource: "chats" });
+  } = useAgentStream(chatSlug, { resource: "chats", readOnly });
 
   useEffect(() => {
     let cancelled = false;
@@ -727,11 +836,16 @@ export function ChatTile({
     if (!chatSummary) return;
     setChat((current) => {
       if (!current || current.slug !== chatSummary.slug) return current;
+      const sameReadiness =
+        current.planning_readiness?.ready === chatSummary.planning_readiness?.ready &&
+        current.planning_readiness?.summary === chatSummary.planning_readiness?.summary;
       if (
         current.title === chatSummary.title &&
         current.updated_at === chatSummary.updated_at &&
         current.working_directory === chatSummary.working_directory &&
-        current.promoted_to_work_slug === chatSummary.promoted_to_work_slug
+        current.promoted_to_work_slug === chatSummary.promoted_to_work_slug &&
+        Boolean(current.discussion_only) === Boolean(chatSummary.discussion_only) &&
+        sameReadiness
       ) {
         return current;
       }
@@ -743,6 +857,8 @@ export function ChatTile({
         grounding: chatSummary.grounding,
         working_directory: chatSummary.working_directory,
         promoted_to_work_slug: chatSummary.promoted_to_work_slug,
+        discussion_only: chatSummary.discussion_only,
+        planning_readiness: chatSummary.planning_readiness,
       };
     });
   }, [chatSummary]);
@@ -753,26 +869,48 @@ export function ChatTile({
     if (lastSeq <= lastSummarySeqRef.current) return;
     lastSummarySeqRef.current = lastSeq;
     const transcript = chatMessagesFromEvents(events);
+    const readiness = planningReadinessFromEvents(events) ?? chat.planning_readiness;
     onUpdated(
       chatSummaryFromDetail({
         ...chat,
         transcript,
         message_count: Math.max(chat.message_count, transcript.length),
+        planning_readiness: readiness,
       }),
     );
   }, [chat, events, onUpdated]);
 
-  const runtimeUnits = useMemo(() => groupEvents(events), [events]);
+  const displayEvents = useMemo(() => chatDisplayEvents(events), [events]);
+  const runtimeUnits = useMemo(() => groupEvents(displayEvents), [displayEvents]);
   const isActive = isAgentActive(events);
   const streamActive = streamStatus === "connected" && isActive;
+  const turnOpen = useMemo(() => isTurnOpen(events), [events]);
+  const stalled = useStalledTurn(events, turnOpen);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const activityPhase = useMemo(
     () => deriveActivityPhase(events, streamActive),
     [events, streamActive],
   );
+  const sessionModelConfig = useMemo(
+    () => latestSessionConfigOption(events, "model"),
+    [events],
+  );
+  const liveSessionModelValue =
+    typeof sessionModelConfig?.currentValue === "string"
+      ? sessionModelConfig.currentValue
+      : null;
+  const displayModel = liveSessionModelValue ?? chat?.model ?? "";
+  const sessionConfigOptionsSeq = useMemo(
+    () => latestEventSeq(events, "session_config_options"),
+    [events],
+  );
+  const modelPickerId = useMemo(
+    () => `chat-tile-model-${chatSlug.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
+    [chatSlug],
+  );
   const modelMeta = chat
-    ? lookupModelMeta(providersByName, chat.provider, chat.model)
+    ? lookupModelMeta(providersByName, chat.provider, displayModel)
     : null;
   const latestCompactionSeq = useMemo(
     () =>
@@ -803,6 +941,59 @@ export function ChatTile({
         "--ctx-pct": `${Math.max(0, Math.min(100, contextSnapshot.pct))}%`,
       } as CSSProperties)
     : undefined;
+  const planningPresentation = presentation === "planning";
+  const collapsePlanningHistory =
+    planningPresentation && planningPlacement === "dock" && collapseHistoryByDefault;
+  useEffect(() => {
+    setHistoryExpanded(!collapsePlanningHistory);
+  }, [chatSlug, collapsePlanningHistory]);
+  const mentionSearchMatches = useMemo(
+    () =>
+      mention
+        ? filterPlanReferences(planReferences, mention.query)
+        : [],
+    [mention, planReferences],
+  );
+  const mentionFilterCounts = useMemo(
+    () =>
+      PLAN_REFERENCE_FILTERS.map((filter) => ({
+        ...filter,
+        count: mentionSearchMatches.filter((ref) =>
+          planReferenceMatchesFilter(ref, filter.id),
+        ).length,
+      })),
+    [mentionSearchMatches],
+  );
+  const visibleMentionFilters = mentionFilterCounts.filter(
+    (filter) => filter.id === "all" || filter.count > 0,
+  );
+  const activeMentionFilter = visibleMentionFilters.some(
+    (filter) => filter.id === mentionFilter,
+  )
+    ? mentionFilter
+    : "all";
+  const mentionMatches = useMemo(
+    () =>
+      mentionSearchMatches
+        .filter((ref) => planReferenceMatchesFilter(ref, activeMentionFilter))
+        .slice(0, 8),
+    [activeMentionFilter, mentionSearchMatches],
+  );
+  const selectedMentionIndex =
+    mention && mentionMatches.length > 0
+      ? Math.min(mention.index, mentionMatches.length - 1)
+      : -1;
+
+  useEffect(() => {
+    mentionOptionRefs.current.length = mentionMatches.length;
+  }, [mentionMatches.length]);
+
+  useEffect(() => {
+    if (!mention || selectedMentionIndex < 0) return;
+    mentionOptionRefs.current[selectedMentionIndex]?.scrollIntoView({
+      block: "nearest",
+    });
+  }, [mention, mentionMatches.length, selectedMentionIndex]);
 
   const hintHandlers = (text: string) => ({
     onMouseEnter: () => setHint(text),
@@ -823,13 +1014,16 @@ export function ChatTile({
   }
 
   function send() {
+    if (readOnly || compacting) return;
     if (!chat) return;
     const body = draft.trim();
     if (!body || uploadingImageCount > 0) return;
+    setHistoryExpanded(true);
     sendInput(messageWithPendingImages(body, pendingImageNotes));
     setDraft("");
     setPendingImageNotes([]);
     setImageUploadError(null);
+    setMention(null);
   }
 
   function cancelSystemClipboardImagePaste() {
@@ -863,8 +1057,47 @@ export function ChatTile({
     }
   }
 
+  function syncMention(
+    text: string,
+    cursor: number | null | undefined,
+    options: { allowStart?: boolean } = {},
+  ) {
+    if (!planningPresentation || planReferences.length === 0) {
+      setMention(null);
+      return;
+    }
+    setMention((current) => {
+      if (current === null && options.allowStart !== true) return null;
+      const next = activePlanMention(text, cursor ?? text.length);
+      if (next === null) return null;
+      return {
+        ...next,
+        index:
+          current &&
+          current.start === next.start &&
+          current.query === next.query
+            ? current.index
+            : 0,
+      };
+    });
+  }
+
+  function insertPlanReference(ref: PlanArtifact) {
+    if (!mention) return;
+    const token = `@${ref.path}`;
+    const next =
+      draft.slice(0, mention.start) + token + " " + draft.slice(mention.end);
+    const cursor = mention.start + token.length + 1;
+    setDraft(next);
+    setMention(null);
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(cursor, cursor);
+    });
+  }
+
   async function startAgent() {
-    if (!chat || !onStartAgent) return;
+    if (readOnly || !chat || chat.discussion_only || !onStartAgent) return;
     setStartingAgent(true);
     try {
       await onStartAgent(chat);
@@ -877,20 +1110,34 @@ export function ChatTile({
   }
 
   async function compactCurrentChat() {
-    if (!chat || compacting || streamActive) return;
+    if (readOnly || !chat || compacting || streamActive) return;
     setCompacting(true);
+    setCompactDialog((current) =>
+      current
+        ? { ...current, phase: "compacting", error: null }
+        : { phase: "compacting", context: contextSnapshot, error: null },
+    );
     try {
       await compactChat(chat.slug);
       setError(null);
+      setCompactDialog((current) =>
+        current ? { ...current, phase: "success", error: null } : current,
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      setCompactDialog((current) =>
+        current
+          ? { ...current, phase: "error", error: message }
+          : { phase: "error", context: contextSnapshot, error: message },
+      );
     } finally {
       setCompacting(false);
     }
   }
 
   function startRename() {
-    if (!chat) return;
+    if (readOnly || !chat) return;
     setDraftTitle(chat.title);
     setRenameError(null);
     setEditingTitle(true);
@@ -927,8 +1174,14 @@ export function ChatTile({
     ? resolveGrounding(chat.grounding, projects, works)
     : { kind: "none" as const, label: "Loading", sub: "" };
   const showGrounding = grounding.kind !== "work";
+  const discussionOnly = chat?.discussion_only === true;
   const composerDisabled =
-    !chat || streamStatus !== "connected" || providerAuthRequirement !== null;
+    readOnly ||
+    !chat ||
+    streamStatus !== "connected" ||
+    providerAuthRequirement !== null ||
+    compacting ||
+    compactDialog !== null;
   const dotStatus = error
     ? "error"
     : streamActive
@@ -936,8 +1189,35 @@ export function ChatTile({
       : streamStatus === "connected"
         ? "idle"
         : streamStatus;
-  const tileClass =
-    "agent-tile chat-tile mode-tile" + (maximized ? " maximized" : "");
+  const tileClass = [
+    maximized && !planningPresentation ? "maximized" : "",
+    planningPresentation ? "planning-chat-tile" : "",
+    planningPresentation ? `planning-chat-${planningPlacement}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ") || undefined;
+  const historyCount = chat?.message_count ?? runtimeUnits.length;
+  const showCollapsedHistory =
+    collapsePlanningHistory && !historyExpanded && historyCount > 0;
+  const showPlanningReadyEmpty =
+    collapsePlanningHistory && (!historyExpanded || runtimeUnits.length === 0);
+  const planningReadiness =
+    planningPresentation
+      ? planningReadinessFromEvents(events) ?? chat?.planning_readiness ?? null
+      : null;
+  const showPlanningMaterializeCta =
+    Boolean(onOpenPlan) && planningReadiness?.ready === true;
+  const planningReadinessSeq = showPlanningMaterializeCta
+    ? firstPlanningReadinessSeq(events)
+    : null;
+  const runtimeUnitsBeforeReady =
+    planningReadinessSeq === null
+      ? runtimeUnits
+      : runtimeUnits.filter((unit) => unit.key <= planningReadinessSeq);
+  const runtimeUnitsAfterReady =
+    planningReadinessSeq === null
+      ? []
+      : runtimeUnits.filter((unit) => unit.key > planningReadinessSeq);
 
   useEffect(() => {
     if (!maximized) return;
@@ -952,88 +1232,105 @@ export function ChatTile({
   }, [maximized]);
 
   return (
-    <div className={tileClass} data-chat="true">
-      <header
-        className={dragHandle ? "tile-drag-header" : undefined}
-        {...(dragHandle?.attributes ?? {})}
-        {...(dragHandle?.listeners ?? {})}
-      >
-        <div className="tile-header-left">
-          <span className="persona-pip chat-pip">
-            <ChatIcon size={12} />
-          </span>
-          <span className="status-dot" data-status={dotStatus} />
-          {editingTitle ? (
-            <input
-              ref={titleInputRef}
-              className="tile-name-input"
-              value={draftTitle}
-              onChange={(e) => setDraftTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
+    <ChatTileFrame
+      className={tileClass}
+      data-chat="true"
+      headerProps={{
+        className: dragHandle && !planningPresentation ? "tile-drag-header" : undefined,
+        ...(!planningPresentation ? dragHandle?.attributes ?? {} : {}),
+        ...(!planningPresentation ? dragHandle?.listeners ?? {} : {}),
+      }}
+      headerLeft={
+        planningPresentation ? (
+          <>
+            <span className="persona-pip chat-pip">
+              <SparkIcon size={12} />
+            </span>
+            <div className="planning-chat-title">
+              <h2>Planning</h2>
+              <span>
+                {chat ? `${providerLabelFor(chat.provider)} · ${displayModel}` : "Loading"}
+              </span>
+            </div>
+          </>
+        ) : (
+          <>
+            <span className="persona-pip chat-pip">
+              <ChatIcon size={12} />
+            </span>
+            <span className="status-dot" data-status={dotStatus} />
+            {editingTitle ? (
+              <input
+                ref={titleInputRef}
+                className="tile-name-input"
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    cancelRename();
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    void commitRename();
+                  }
+                }}
+                onBlur={() => void commitRename()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                aria-label="Rename chat"
+              />
+            ) : (
+              <h2
+                title={readOnly ? undefined : "Double-click to rename"}
+                style={{ cursor: !readOnly && chat ? "text" : undefined }}
+                onDoubleClick={(e) => {
                   e.stopPropagation();
-                  cancelRename();
-                } else if (e.key === "Enter") {
-                  e.preventDefault();
-                  void commitRename();
-                }
-              }}
-              onBlur={() => void commitRename()}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              aria-label="Rename chat"
-            />
-          ) : (
-            <h2
-              title="Double-click to rename"
-              style={{ cursor: chat ? "text" : undefined }}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                startRename();
-              }}
-            >
-              {chat?.title ?? chatSlug}
-            </h2>
-          )}
-          {renameError && !editingTitle && (
-            <span className="tile-rename-err">{renameError}</span>
-          )}
-        </div>
-        <div className="tile-header-meta">
-          <span className="agent-slug mono">{chat?.slug ?? chatSlug}</span>
-          {chat && (
-            <span
-              className="provider-pill mono"
-              data-provider={shortProvider(chat.provider)}
-              {...hintHandlers(`Provider: ${providerLabelFor(chat.provider)} · Model: ${chat.model}`)}
-            >
-              {shortProvider(chat.provider)} · {shortModel(chat.model)}
+                  startRename();
+                }}
+              >
+                {chat?.title ?? chatSlug}
+              </h2>
+            )}
+            {renameError && !editingTitle && (
+              <span className="tile-rename-err">{renameError}</span>
+            )}
+          </>
+        )
+      }
+      headerMeta={
+        planningPresentation ? null : (
+          <>
+            <span className="agent-slug mono">{chat?.slug ?? chatSlug}</span>
+            {chat && (
+              <span
+                className="provider-pill mono"
+                data-provider={shortProvider(chat.provider)}
+                {...hintHandlers(`Provider: ${providerLabelFor(chat.provider)} · Model: ${displayModel}`)}
+              >
+                {shortProvider(chat.provider)} · {shortModel(displayModel)}
+              </span>
+            )}
+            {showGrounding && (
+              <span
+                className="chat-grounding-pill mono"
+                {...hintHandlers(
+                  grounding.kind === "none"
+                    ? "Open exploration"
+                    : `Linked to ${grounding.label}`,
+                )}
+              >
+                {grounding.label}
+              </span>
+            )}
+            <span className="conn-status" data-conn-status={streamStatus}>
+              {streamStatus}
             </span>
-          )}
-          {showGrounding && (
-            <span
-              className="chat-grounding-pill mono"
-              {...hintHandlers(
-                grounding.kind === "none"
-                  ? "Open exploration"
-                  : `Linked to ${grounding.label}`,
-              )}
-            >
-              {grounding.label}
-            </span>
-          )}
-          <span className="conn-status" data-conn-status={streamStatus}>
-            {streamStatus}
-          </span>
-        </div>
-        <div className="tile-header-right">
-          <span
-            className={"tile-hint" + (hint ? " visible" : "")}
-            aria-hidden="true"
-          >
-            {hint}
-          </span>
+          </>
+        )
+      }
+      headerRight={
+        planningPresentation ? (
           <div className="tile-controls">
             {contextFolder && onOpenContext && (
               <button
@@ -1049,45 +1346,73 @@ export function ChatTile({
             {onStartAgent && (
               <button
                 type="button"
-                className="tile-ctl"
-                aria-label="Start agent from chat"
-                onClick={() => void startAgent()}
-                disabled={!chat || startingAgent}
-                {...hintHandlers("Start agent from chat")}
+                className="btn icon sm"
+                aria-label={
+                  planningPlacement === "dock" ? "Minimize Planning" : "Close Planning"
+                }
+                title={planningPlacement === "dock" ? "Minimize" : "Close"}
+                onClick={onClose}
               >
-                <SparkIcon />
+                <span aria-hidden="true">
+                  {planningPlacement === "dock" ? "−" : "×"}
+                </span>
               </button>
             )}
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label={maximized ? "Restore" : "Maximize"}
-              onClick={() => setMaximized((m) => !m)}
-              {...hintHandlers(maximized ? "Restore" : "Maximize")}
-            >
-              {maximized ? <RestoreIcon /> : <MaxIcon />}
-            </button>
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Close chat tile"
-              onClick={onClose}
-              {...hintHandlers("Close · stays in Chats")}
-            >
-              <CloseIcon />
-            </button>
           </div>
-        </div>
-      </header>
-      <div className="agent-tile-body chat-tile-body">
+        ) : (
+          <>
+            <span
+              className={"tile-hint" + (hint ? " visible" : "")}
+              aria-hidden="true"
+            >
+              {hint}
+            </span>
+            <div className="tile-controls">
+              {!readOnly && onStartAgent && !discussionOnly && (
+                <button
+                  type="button"
+                  className="btn icon sm"
+                  aria-label="Start agent from chat"
+                  onClick={() => void startAgent()}
+                  disabled={!chat || startingAgent}
+                  {...hintHandlers("Start agent from chat")}
+                >
+                  <SparkIcon />
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn icon sm"
+                aria-label={maximized ? "Restore" : "Maximize"}
+                onClick={() => setMaximized((m) => !m)}
+                {...hintHandlers(maximized ? "Restore" : "Maximize")}
+              >
+                {maximized ? <RestoreIcon /> : <MaxIcon />}
+              </button>
+              {onClose && (
+                <button
+                  type="button"
+                  className="btn icon sm"
+                  aria-label="Close chat tile"
+                  onClick={onClose}
+                  {...hintHandlers("Close · stays in Chats")}
+                >
+                  <CloseIcon />
+                </button>
+              )}
+            </div>
+          </>
+        )
+      }
+    >
         {error && <div className="tile-banner">{error}</div>}
-        <div className="transcript chat-tile-transcript" ref={streamRef}>
+        {discussionOnly && <DiscussionOnlyNotice compact />}
+        <ChatTileTranscript
+          ref={streamRef}
+          className={planningPresentation ? "planning-chat-transcript" : undefined}
+        >
           {chat ? (
             <>
-              <div className="chat-opening">
-                {chat.slug} · talking to {chat.model}
-                {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
-              </div>
               {history.hasOlder && (
                 <button
                   type="button"
@@ -1098,16 +1423,70 @@ export function ChatTile({
                   {history.loadingOlder ? "Loading older..." : "Load older"}
                 </button>
               )}
-              <TranscriptUnits
-                units={runtimeUnits}
-                agentSlug={chat.slug}
-                compactionSummaryLoader={getChatCompactionSummary}
-              />
+              {!showCollapsedHistory && (
+                <div className="chat-opening">
+                  {planningPresentation ? (
+                    <>
+                      Planning · talking to {displayModel}
+                      {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
+                    </>
+                  ) : (
+                    <>
+                      {chat.slug} · talking to {displayModel}
+                      {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
+                    </>
+                  )}
+                </div>
+              )}
+              {showCollapsedHistory ? (
+                <>
+                  <button
+                    type="button"
+                    className="planning-chat-history-toggle"
+                    onClick={() => setHistoryExpanded(true)}
+                  >
+                    <span>Previous planning conversation</span>
+                    <strong>{historyCount} messages</strong>
+                  </button>
+                  <div className="planning-chat-ready-empty">
+                    <strong>Ready to revise the generated plan</strong>
+                    <span>Ask for edits, or use @ to reference a plan document.</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <TranscriptUnits
+                    units={runtimeUnitsBeforeReady}
+                    agentSlug={chat.slug}
+                    compactionSummaryLoader={getChatCompactionSummary}
+                  />
+                  {showPlanningMaterializeCta && (
+                    <PlanningMaterializeReadyCard
+                      disabled={openPlanDisabled}
+                      label={openPlanLabel}
+                      onCreate={onOpenPlan!}
+                    />
+                  )}
+                  {runtimeUnitsAfterReady.length > 0 && (
+                    <TranscriptUnits
+                      units={runtimeUnitsAfterReady}
+                      agentSlug={chat.slug}
+                      compactionSummaryLoader={getChatCompactionSummary}
+                    />
+                  )}
+                  {showPlanningReadyEmpty && (
+                    <div className="planning-chat-ready-empty">
+                      <strong>Ready to revise the generated plan</strong>
+                      <span>Ask for edits, or use @ to reference a plan document.</span>
+                    </div>
+                  )}
+                </>
+              )}
             </>
           ) : (
             <div className="chat-opening">Loading {chatSlug}...</div>
           )}
-        </div>
+        </ChatTileTranscript>
         {(lastMetrics || streamActive) && (
           <TurnMetricsBar
             metrics={lastMetrics}
@@ -1116,24 +1495,35 @@ export function ChatTile({
             activityPhase={activityPhase}
             context={contextSnapshot}
             compacting={compacting}
-            onCompact={() => void compactCurrentChat()}
+            onCompact={readOnly ? undefined : () =>
+              setCompactDialog({
+                phase: "confirm",
+                context: contextSnapshot,
+                error: null,
+              })
+            }
             compactTitle="Compact this chat context"
           />
         )}
-        {pendingPermissions.length > 0 && (
+        {!readOnly && pendingPermissions.length > 0 && (
           <PermissionApprovalDialog
             pendingPermissions={pendingPermissions}
             onDecide={sendPermission}
           />
         )}
+        <StalledRuntimeBanner
+          title="Chat appears stalled"
+          visible={!readOnly && stalled}
+          onReconnect={() => reconnectChat(chatSlug)}
+        />
         {providerAuthRequirement && (
           <ProviderAuthPrompt
             requirement={providerAuthRequirement}
             onConfirm={confirmProviderAuth}
           />
         )}
-        <form
-          className={`composer chat-tile-composer${activityPhase ? " is-working" : ""}`}
+        <ChatTileComposer
+          className={activityPhase ? "is-working" : undefined}
           data-ctx-tone={composerTone}
           style={composerStyle}
           onSubmit={(e) => {
@@ -1141,6 +1531,22 @@ export function ChatTile({
             send();
           }}
         >
+          {showPlanningMaterializeCta && !openPlanDisabled && (
+            <div className="planning-materialize-pill">
+              <span className="planning-materialize-dot" aria-hidden />
+              <span className="planning-materialize-pill-label">
+                Ready to materialize
+              </span>
+              <button
+                type="button"
+                className="planning-materialize-pill-btn"
+                onClick={onOpenPlan}
+                title="Build the source plan from this conversation"
+              >
+                <SparkIcon size={11} /> Create source plan
+              </button>
+            </div>
+          )}
           {contextSnapshot && (
             <div className="composer-context-gauge" aria-hidden="true">
               <span />
@@ -1157,13 +1563,69 @@ export function ChatTile({
             </div>
           )}
           <textarea
+            ref={textareaRef}
             rows={1}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              const cursor = e.target.selectionStart;
+              const typedAt =
+                next.length === draft.length + 1 &&
+                cursor > 0 &&
+                next[cursor - 1] === "@";
+              setDraft(next);
+              syncMention(next, cursor, { allowStart: typedAt });
+            }}
+            onClick={(e) => {
+              syncMention(e.currentTarget.value, e.currentTarget.selectionStart);
+            }}
+            onSelect={(e) => {
+              syncMention(e.currentTarget.value, e.currentTarget.selectionStart);
+            }}
             onKeyDown={(e) => {
               if (isPasteKeyboardShortcut(e)) {
                 scheduleSystemClipboardImagePaste();
                 return;
+              }
+              if (mention) {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMention(null);
+                  return;
+                }
+                if (mentionMatches.length > 0) {
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setMention((current) =>
+                      current
+                        ? {
+                            ...current,
+                            index: (current.index + 1) % mentionMatches.length,
+                          }
+                        : current,
+                    );
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setMention((current) =>
+                      current
+                        ? {
+                            ...current,
+                            index:
+                              (current.index - 1 + mentionMatches.length) %
+                              mentionMatches.length,
+                          }
+                        : current,
+                    );
+                    return;
+                  }
+                  if (e.key === "Enter" || e.key === "Tab") {
+                    e.preventDefault();
+                    insertPlanReference(mentionMatches[selectedMentionIndex]);
+                    return;
+                  }
+                }
               }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -1187,15 +1649,96 @@ export function ChatTile({
               );
             }}
             placeholder={
-              chat
+              readOnly
+                ? "Work completed - reopen to continue"
+                : chat
                 ? streamStatus === "connected"
-                  ? "Message this chat - Enter sends, Shift+Enter newline"
+                  ? collapsePlanningHistory
+                    ? "Ask Planning to revise the plan - use @ for plan files"
+                    : "Message this chat - Enter sends, Shift+Enter newline"
                   : "Connecting to chat..."
                 : "Loading chat..."
             }
             disabled={composerDisabled}
           />
+          {mention && (
+            <div className="composer-plan-mentions">
+              <div className="composer-plan-mentions-head">
+                <span className="composer-plan-mentions-title">
+                  Plan references
+                </span>
+                <div className="composer-plan-mention-filters">
+                  {visibleMentionFilters.map((filter) => (
+                    <button
+                      key={filter.id}
+                      type="button"
+                      className={filter.id === activeMentionFilter ? "active" : undefined}
+                      aria-pressed={filter.id === activeMentionFilter}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => {
+                        setMentionFilter(filter.id);
+                        setMention((current) =>
+                          current ? { ...current, index: 0 } : current,
+                        );
+                      }}
+                    >
+                      <span>{filter.label}</span>
+                      <span>{filter.count}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div
+                className="composer-plan-mentions-list"
+                role="listbox"
+                aria-label="Plan documents"
+              >
+                {mentionMatches.length > 0 ? (
+                  mentionMatches.map((ref, index) => (
+                    <button
+                      key={ref.id}
+                      ref={(node) => {
+                        mentionOptionRefs.current[index] = node;
+                      }}
+                      type="button"
+                      role="option"
+                      aria-selected={index === selectedMentionIndex}
+                      className={index === selectedMentionIndex ? "active" : undefined}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        insertPlanReference(ref);
+                      }}
+                    >
+                      <span
+                        className="pm-ref-kind"
+                        data-ref-kind={ref.kind}
+                        data-executable={ref.executable || undefined}
+                      >
+                        {planReferenceLabel(ref)}
+                      </span>
+                      <span className="pm-ref-main">
+                        <strong>{ref.title}</strong>
+                        <small>{ref.path}</small>
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="composer-plan-mentions-empty">
+                    No matching plan documents
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div className="composer-actions">
+            <SessionModelPicker
+              disabled={composerDisabled || isActive}
+              option={sessionModelConfig}
+              pickerId={modelPickerId}
+              refreshSeq={sessionConfigOptionsSeq}
+              onChange={(value) => sendSessionConfig("model", value)}
+              onRefresh={() => sendSessionConfigRefresh("model")}
+            />
             <LiveEffortSelect
               events={events}
               disabled={
@@ -1203,12 +1746,11 @@ export function ChatTile({
               }
               onChange={sendSessionConfig}
             />
-            <LiveFastModeSelect
+            <SessionFastToggle
               events={events}
-              disabled={
-                composerDisabled || providerAuthAwaitingInput || streamActive
-              }
+              disabled={composerDisabled || isActive}
               onChange={sendSessionConfig}
+              fallbackValue={chat?.options?.["fast-mode"]}
             />
             <span className="spacer" />
             <button
@@ -1219,7 +1761,52 @@ export function ChatTile({
               {uploadingImageCount > 0 ? "Uploading..." : "Send"}
             </button>
           </div>
-        </form>
+        </ChatTileComposer>
+        {compactDialog && (
+          <ChatCompactionModal
+            dialog={compactDialog}
+            onClose={() => setCompactDialog(null)}
+            onCompact={() => void compactCurrentChat()}
+          />
+        )}
+      </ChatTileFrame>
+  );
+}
+
+function PlanningMaterializeReadyCard({
+  disabled,
+  label,
+  onCreate,
+}: {
+  disabled: boolean;
+  label: string;
+  onCreate: () => void;
+}) {
+  return (
+    <div className="planning-ready-card">
+      <div className="planning-ready-card-icon">
+        <SparkIcon size={15} />
+      </div>
+      <div className="planning-ready-card-body">
+        <div className="planning-ready-card-title">
+          I have enough to build the plan
+        </div>
+        <div className="planning-ready-card-text">
+          The source docs above capture the intent, approach, and architecture.
+          I can turn them into an executable plan now - or we can keep shaping
+          the details first.
+        </div>
+        <div className="planning-ready-card-actions">
+          <button
+            type="button"
+            className="btn primary"
+            disabled={disabled}
+            onClick={onCreate}
+          >
+            <SparkIcon size={12} /> {label}
+          </button>
+          <span>or keep refining below - nothing's locked in</span>
+        </div>
       </div>
     </div>
   );
@@ -1229,6 +1816,10 @@ export function ChatComposer({
   projects,
   works,
   presetGrounding,
+  presetWorkingDirectory,
+  presetProvider,
+  presetModel,
+  presetOptions,
   hideGrounding = false,
   linkProjects,
   linkWorks,
@@ -1239,6 +1830,10 @@ export function ChatComposer({
   projects: ProjectSummary[];
   works: WorkSummary[];
   presetGrounding?: ChatGrounding | null;
+  presetWorkingDirectory?: string | null;
+  presetProvider?: string;
+  presetModel?: string;
+  presetOptions?: Record<string, string>;
   hideGrounding?: boolean;
   linkProjects?: ProjectSummary[];
   linkWorks?: WorkSummary[];
@@ -1253,7 +1848,9 @@ export function ChatComposer({
   const [opencodeModelsLoading, setOpencodeModelsLoading] = useState(false);
   const [opencodeModelsError, setOpencodeModelsError] = useState<string | null>(null);
   const [grounding, setGrounding] = useState<ChatGrounding | null>(presetGrounding ?? null);
-  const [workingDirectory, setWorkingDirectory] = useState<string | null>(null);
+  const [workingDirectory, setWorkingDirectory] = useState<string | null>(
+    presetWorkingDirectory ?? null,
+  );
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [imageUploadError, setImageUploadError] = useState<string | null>(null);
@@ -1267,11 +1864,20 @@ export function ChatComposer({
     listProviders()
       .then((rows) => {
         setProviders(rows);
-        const first = rows[0];
-        if (first) {
-          setProvider(first.name);
-          setModel(first.primary_field.default);
-          setProviderOptions(providerDefaults(first, first.primary_field.default));
+        const selected =
+          presetProvider
+            ? rows.find((candidate) => candidate.name === presetProvider)
+            : rows[0];
+        if (selected) {
+          const selectedModel = presetModel ?? selected.primary_field.default;
+          setProvider(selected.name);
+          setModel(selectedModel);
+          setProviderOptions({
+            ...providerDefaults(selected, selectedModel),
+            ...(presetOptions ?? {}),
+          });
+        } else if (presetProvider) {
+          setError(`Provider ${presetProvider} is not available.`);
         }
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -1393,10 +1999,18 @@ export function ChatComposer({
         }
       }}
     >
-      <div className="chat-bar" role="dialog" aria-label="New chat">
+      <div
+        className="chat-bar"
+        role="dialog"
+        aria-label="New chat"
+      >
         <div className="cb-head">
-          <span className="cb-tag"><ChatIcon size={12} /> new chat</span>
-          <span className="cb-hint">a quick exploratory conversation</span>
+          <span className="cb-tag">
+            <ChatIcon size={12} /> new chat
+          </span>
+          <span className="cb-hint">
+            a quick exploratory conversation
+          </span>
           <span className="esc-tag">esc</span>
         </div>
         {imageUploadError && <div className="form-error">{imageUploadError}</div>}
@@ -1536,6 +2150,15 @@ export function ChatComposer({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DiscussionOnlyNotice({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className={`chat-discussion-warning${compact ? " compact" : ""}`} role="note">
+      <ChatIcon size={12} />
+      <span><strong>Discussion only.</strong> The loop remains authoritative. Use the run view for changes.</span>
     </div>
   );
 }
@@ -1846,7 +2469,7 @@ export function DeleteChatDialog({
   return (
     <div className="scrim" onClick={() => !submitting && onClose()}>
       <div
-        className="modal modal-sm"
+        className="modal modal-confirm"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -1857,7 +2480,7 @@ export function DeleteChatDialog({
             <p className="sub">{chat.title}</p>
           </div>
           <button
-            className="btn-icon"
+            className="btn icon"
             onClick={onClose}
             aria-label="Close"
             disabled={submitting}
@@ -1909,13 +2532,13 @@ export function ContextDocModal({
 
   return (
     <div className="scrim" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal context-doc-modal">
+      <div className="modal context-doc-modal" role="dialog" aria-modal="true" aria-labelledby="context-doc-title">
         <div className="modal-hd">
           <div>
-            <h3><DocIcon size={13} /> {folder.name}/{folder.context_filename}</h3>
+            <h3 id="context-doc-title"><DocIcon size={13} /> {folder.name}/{folder.context_filename}</h3>
             <div className="sub">Shared context for this work, written when the chat was promoted.</div>
           </div>
-          <button className="btn-icon" onClick={onClose}>×</button>
+          <button className="btn icon" onClick={onClose}>×</button>
         </div>
         <div className="modal-bd">
           <div className="context-doc scroll">
@@ -1967,13 +2590,13 @@ function PromoteChatModal({
 
   return (
     <div className="scrim" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal promote-summary-modal">
+      <div className="modal promote-summary-modal" role="dialog" aria-modal="true" aria-labelledby="promote-chat-title">
         <div className="modal-hd">
           <div>
-            <h3><SparkIcon size={13} /> Start work from this chat</h3>
+            <h3 id="promote-chat-title"><SparkIcon size={13} /> Start work from this chat</h3>
             <div className="sub">Promote this conversation into a tracked work unit.</div>
           </div>
-          <button className="btn-icon" onClick={onClose}>×</button>
+          <button className="btn icon" onClick={onClose}>×</button>
         </div>
         <div className="modal-bd">
           <div className="promote-prov">
@@ -2056,7 +2679,7 @@ function GroundingPicker({
               <button
                 key={p.slug}
                 className={"ground-chip" + (value?.kind === "project" && value.ref === p.slug ? " active" : "")}
-                style={{ ["--proj-color" as string]: `oklch(0.62 0.16 ${p.color})` }}
+                style={{ ["--proj-h" as string]: String(p.color) }}
                 onClick={() => onChange({ kind: "project", ref: p.slug })}
               >
                 <span className="g-glyph mono">{p.glyph}</span> {p.name}
@@ -2197,7 +2820,7 @@ function workGroundStyle(
 ): Record<string, string> | undefined {
   const project = projects.find((p) => p.slug === work.project_slug);
   if (!project) return undefined;
-  return { "--proj-color": `oklch(0.62 0.16 ${project.color})` };
+  return { "--proj-h": String(project.color) };
 }
 
 function GroundingCard({ grounding }: { grounding: GroundingInfo }) {
@@ -2243,7 +2866,7 @@ function LiveEffortSelect({
   onChange: (configId: string, value: string | boolean) => void;
 }) {
   const config = useMemo(
-    () => latestSessionConfigOptionByIds(events, EFFORT_SESSION_CONFIG_IDS),
+    () => latestSessionConfigOptionByIds(events, EFFORT_OPTION_KEYS),
     [events],
   );
   const value = typeof config?.currentValue === "string" ? config.currentValue : null;
@@ -2260,54 +2883,6 @@ function LiveEffortSelect({
       >
         {config.choices.map((choice) => (
           <option key={String(choice.value)} value={String(choice.value)}>
-            {choice.name ?? String(choice.value)}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function LiveFastModeSelect({
-  events,
-  disabled,
-  onChange,
-}: {
-  events: AgentEvent[];
-  disabled: boolean;
-  onChange: (configId: string, value: string | boolean) => void;
-}) {
-  const config = useMemo(
-    () => latestSessionConfigOption(events, FAST_MODE_SESSION_CONFIG_ID),
-    [events],
-  );
-  const choices = useMemo(
-    () => (config ? sessionConfigChoicesForSelect(config) : []),
-    [config],
-  );
-  const value = config?.currentValue ?? null;
-  if (!config || value === null || choices.length === 0) return null;
-  const label = labelForSessionConfigValue(config, value);
-  return (
-    <label className="composer-effort-picker" title={`${config.name}: ${label}`}>
-      <span className="composer-effort-prefix">Fast:</span>
-      <select
-        className="composer-effort-select"
-        value={selectValueForSessionConfigValue(value)}
-        disabled={disabled}
-        onChange={(e) => {
-          const choice = sessionConfigChoiceForSelectValue(
-            choices,
-            e.target.value,
-          );
-          if (choice) onChange(config.id, choice.value);
-        }}
-      >
-        {choices.map((choice) => (
-          <option
-            key={selectValueForSessionConfigValue(choice.value)}
-            value={selectValueForSessionConfigValue(choice.value)}
-          >
             {choice.name ?? String(choice.value)}
           </option>
         ))}
@@ -2337,6 +2912,215 @@ function ChatContextGauge({ context }: { context: ContextSnapshot | null }) {
       </span>
     </div>
   );
+}
+
+function useAutosizeTextarea(
+  ref: React.RefObject<HTMLTextAreaElement>,
+  value: string,
+) {
+  useEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const height = textarea.scrollHeight;
+    textarea.style.height = `${Math.min(height, CHAT_COMPOSER_MAX_HEIGHT)}px`;
+    textarea.style.overflowY = height > CHAT_COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
+  }, [ref, value]);
+}
+
+type ChatCompactionDialogPhase = "confirm" | "compacting" | "success" | "error";
+
+type ChatCompactionDialogState = {
+  phase: ChatCompactionDialogPhase;
+  context: ContextSnapshot | null;
+  error: string | null;
+};
+
+function ChatCompactionModal({
+  dialog,
+  onClose,
+  onCompact,
+}: {
+  dialog: ChatCompactionDialogState;
+  onClose: () => void;
+  onCompact: () => void;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const primaryRef = useRef<HTMLButtonElement>(null);
+  const { context, error, phase } = dialog;
+  const tone = contextToneFor(context?.pct ?? null);
+  const pct = context ? clampContextPct(context.pct) : 0;
+  const readout = context
+    ? `ctx ${context.pct.toFixed(0)}% · ${formatCompactTokens(
+        context.promptTokens,
+      )} tokens`
+    : "context size unavailable";
+  const canClose = phase !== "compacting";
+  const title =
+    phase === "compacting"
+      ? "Compacting chat..."
+      : phase === "success"
+        ? "Compacted"
+        : phase === "error"
+          ? "Couldn't compact"
+          : "Compact context";
+  const body =
+    phase === "compacting"
+      ? "Summarizing the current provider session and starting a fresh one from that summary."
+      : phase === "success"
+        ? "New session started from summary. You can continue the conversation."
+        : phase === "error"
+          ? "The summary call failed. Try again or send a shorter next message."
+          : "The chat will summarize older turns and reset provider context. The visible transcript stays in place.";
+
+  useEffect(() => {
+    if (phase === "confirm" || phase === "error") {
+      primaryRef.current?.focus();
+    }
+  }, [phase]);
+
+  function handleLayerMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
+    if (e.target === e.currentTarget && canClose) onClose();
+  }
+
+  function handleKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Escape" && canClose) {
+      e.preventDefault();
+      onClose();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const buttons = Array.from(
+      cardRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ??
+        [],
+    );
+    if (buttons.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = buttons[0];
+    const last = buttons[buttons.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && active === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
+
+  return (
+    <div
+      className="compaction-modal-layer"
+      role="presentation"
+      data-tone={tone}
+      data-phase={phase}
+      onMouseDown={handleLayerMouseDown}
+    >
+      <div
+        ref={cardRef}
+        className="compaction-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onKeyDown={handleKeyDown}
+      >
+        <div className="compaction-modal-hd">
+          <div>
+            <h3>{title}</h3>
+            <p>{body}</p>
+          </div>
+          {canClose && (
+            <button
+              type="button"
+              className="compaction-modal-close"
+              aria-label="Close compaction dialog"
+              onClick={onClose}
+            >
+              x
+            </button>
+          )}
+        </div>
+        <div className="compaction-modal-facts">
+          <div className="compaction-modal-fact">
+            <span className="compaction-modal-dot is-good" aria-hidden />
+            <span>Keeps recent turns, decisions, and pinned files</span>
+          </div>
+          <div className="compaction-modal-fact">
+            <span className="compaction-modal-dot is-good" aria-hidden />
+            <span>Drops verbose tool output and exploration</span>
+          </div>
+          <div className="compaction-modal-fact">
+            <span className="compaction-modal-dot" aria-hidden />
+            <span>Can take a couple minutes on large sessions</span>
+          </div>
+        </div>
+        <div className="compaction-modal-progress">
+          <div className="compaction-modal-meter" aria-hidden>
+            <span style={{ width: `${phase === "success" ? 100 : pct}%` }} />
+          </div>
+          <span className="compaction-modal-readout mono">{readout}</span>
+        </div>
+        {phase === "compacting" && (
+          <div className="compaction-modal-phase" aria-live="polite">
+            <span className="compaction-modal-phase-label">
+              Summarizing transcript
+            </span>
+          </div>
+        )}
+        {phase === "error" && error && (
+          <div className="compaction-modal-error">{error}</div>
+        )}
+        <div className="compaction-modal-actions">
+          {phase === "success" ? (
+            <button
+              ref={primaryRef}
+              type="button"
+              className="compaction-modal-primary"
+              onClick={onClose}
+            >
+              Done
+            </button>
+          ) : phase === "compacting" ? (
+            <span className="compaction-modal-spinner" aria-live="polite">
+              Summarizing...
+            </span>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="compaction-modal-secondary"
+                onClick={onClose}
+              >
+                Cancel
+              </button>
+              <button
+                ref={primaryRef}
+                type="button"
+                className="compaction-modal-primary"
+                onClick={onCompact}
+              >
+                {phase === "error" ? "Try again" : "Compact now"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function clampContextPct(pct: number): number {
+  if (!Number.isFinite(pct)) return 0;
+  return Math.max(0, Math.min(100, pct));
+}
+
+function formatCompactTokens(n: number): string {
+  if (n < 1000) return `${n}`;
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
 type ChatRuntimeItem =
@@ -2383,18 +3167,19 @@ function chatItemsFromEvents(events: AgentEvent[]): ChatRuntimeItem[] {
       const text = stringField(ev, "text");
       if (pendingAssistant) {
         pendingAssistant.body += text;
+        pendingAssistant.body = stripPlanningReadinessMarkers(pendingAssistant.body);
       } else {
         pendingAssistant = {
           kind: "message",
           key: seq,
           role: "assistant",
-          body: text,
+          body: stripPlanningReadinessMarkers(text),
           complete: false,
         };
         out.push(pendingAssistant);
       }
     } else if (ev.type === "message_complete") {
-      const text = stringField(ev, "text");
+      const text = stripPlanningReadinessMarkers(stringField(ev, "text"));
       if (pendingAssistant) {
         pendingAssistant.body = text;
         pendingAssistant.complete = true;
@@ -2464,6 +3249,21 @@ function chatItemsFromEvents(events: AgentEvent[]): ChatRuntimeItem[] {
   return out;
 }
 
+function chatDisplayEvents(events: AgentEvent[]): AgentEvent[] {
+  return events
+    .map((event) => {
+      if (event.type !== "message_delta" && event.type !== "message_complete") {
+        return event;
+      }
+      const text = stringField(event, "text");
+      const stripped = stripPlanningReadinessMarkers(text);
+      if (stripped === text) return event;
+      if (!stripped.trim()) return { ...event, type: "planning_readiness_hidden" };
+      return { ...event, text: stripped };
+    })
+    .filter((event) => event.type !== "planning_readiness_hidden");
+}
+
 function chatMessagesFromEvents(events: AgentEvent[]): ChatMessage[] {
   const now = new Date().toISOString();
   return chatItemsFromEvents(events)
@@ -2475,6 +3275,50 @@ function chatMessagesFromEvents(events: AgentEvent[]): ChatMessage[] {
       body: item.body,
       created_at: eventTimestamp(events, item.key) ?? now,
     }));
+}
+
+function planningReadinessFromEvents(
+  events: AgentEvent[],
+): ChatSummary["planning_readiness"] {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event.type !== "planning_readiness" || event.ready !== true) continue;
+    return {
+      ready: true,
+      summary: typeof event.summary === "string" ? event.summary : "",
+    };
+  }
+  return null;
+}
+
+function firstPlanningReadinessSeq(events: AgentEvent[]): number | null {
+  for (const event of events) {
+    if (event.type === "planning_readiness" && event.ready === true) {
+      return eventSeq(event);
+    }
+  }
+  return null;
+}
+
+function stripPlanningReadinessMarkers(text: string): string {
+  const lines = text.split(/\r?\n/);
+  return lines
+    .filter((line) => !isPlanningReadinessMarkerLine(line))
+    .join("\n")
+    .trimEnd();
+}
+
+function isPlanningReadinessMarkerLine(line: string): boolean {
+  const text = line.trim();
+  if (!text.startsWith('{"atelier_planning_ready"')) return false;
+  try {
+    const payload = JSON.parse(text) as {
+      atelier_planning_ready?: { ready?: unknown };
+    };
+    return payload.atelier_planning_ready?.ready === true;
+  } catch {
+    return false;
+  }
 }
 
 function eventSeq(event: AgentEvent): number {
@@ -2524,6 +3368,75 @@ function inheritedProjectSlug(chat: ChatDetail, works: WorkSummary[]): string | 
     return works.find((w) => w.slug === chat.grounding?.ref)?.project_slug ?? null;
   }
   return null;
+}
+
+type PlanMentionState = {
+  start: number;
+  end: number;
+  query: string;
+  index: number;
+};
+
+type PlanReferenceFilter = "all" | "docs" | "stories" | "spikes" | "bugs";
+
+const PLAN_REFERENCE_FILTERS: Array<{
+  id: PlanReferenceFilter;
+  label: string;
+}> = [
+  { id: "all", label: "All" },
+  { id: "docs", label: "Docs" },
+  { id: "stories", label: "Stories" },
+  { id: "spikes", label: "Spikes" },
+  { id: "bugs", label: "Bugs" },
+];
+
+function activePlanMention(text: string, cursor: number): PlanMentionState | null {
+  const before = text.slice(0, cursor);
+  const start = before.lastIndexOf("@");
+  if (start < 0) return null;
+  if (start > 0 && /\S/.test(before[start - 1])) return null;
+  const query = before.slice(start + 1);
+  if (/\s/.test(query)) return null;
+  return { start, end: cursor, query, index: 0 };
+}
+
+function filterPlanReferences(
+  references: PlanArtifact[],
+  query: string,
+): PlanArtifact[] {
+  const terms = query
+    .trim()
+    .toLowerCase()
+    .split(/[\/\s-]+/)
+    .filter(Boolean);
+  if (terms.length === 0) return references;
+  return references.filter((ref) => {
+    const haystack = `${ref.path} ${ref.title} ${ref.id} ${ref.kind}`.toLowerCase();
+    return terms.every((term) => haystack.includes(term));
+  });
+}
+
+function planReferenceMatchesFilter(
+  ref: PlanArtifact,
+  filter: PlanReferenceFilter,
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "spikes") return ref.kind === "spike";
+  if (filter === "bugs") return ref.kind === "bug";
+  if (filter === "stories") {
+    return ref.executable && ref.kind !== "spike" && ref.kind !== "bug";
+  }
+  return !ref.executable || ref.kind === "note";
+}
+
+function planReferenceLabel(ref: PlanArtifact): string {
+  if (ref.kind === "architecture") return "ARCH";
+  if (ref.kind === "acceptance") return "AC";
+  if (ref.kind === "brief") return "BR";
+  if (ref.kind === "spike") return "SP";
+  if (ref.kind === "bug") return "BUG";
+  if (ref.kind === "hotfix") return "HOT";
+  return ref.executable ? "ST" : ref.kind.slice(0, 3).toUpperCase();
 }
 
 function providerLabelFor(provider: string): string {

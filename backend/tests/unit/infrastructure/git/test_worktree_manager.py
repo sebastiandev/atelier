@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from src.domain.worktrees import WorktreeProvisionFailed
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.git.worktree_manager import GitWorktreeManager
 
@@ -52,6 +53,37 @@ def test_ensure_creates_worktree_under_workspace_root(
     assert workdir.exists()
     assert (workdir / ".git").is_file()  # worktree has a gitlink, not a dir
     assert (workdir / "README.md").read_text() == "hello\n"
+
+
+def test_ensure_fetches_remote_default_without_moving_source_checkout(
+    manager: GitWorktreeManager, repo: Path, tmp_path: Path
+) -> None:
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", "-q", "-b", "main", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "-u", "origin", "main")
+    updater = tmp_path / "updater"
+    _git(tmp_path, "clone", "-q", str(remote), str(updater))
+    _git(updater, "config", "user.email", "test@example.com")
+    _git(updater, "config", "user.name", "Test")
+    (updater / "remote.txt").write_text("latest\n")
+    _git(updater, "add", "remote.txt")
+    _git(updater, "commit", "-q", "-m", "remote update")
+    _git(updater, "push", "-q", "origin", "main")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    assert (workdir / "remote.txt").read_text() == "latest\n"
+    assert not (repo / "remote.txt").exists()
+
+
+def test_ensure_does_not_fall_back_when_origin_cannot_be_fetched(
+    manager: GitWorktreeManager, repo: Path, tmp_path: Path
+) -> None:
+    _git(repo, "remote", "add", "origin", str(tmp_path / "missing.git"))
+
+    with pytest.raises(WorktreeProvisionFailed, match="git fetch origin HEAD failed"):
+        manager.ensure("WRK-001", "agt-1", repo)
 
 
 def test_ensure_forked_inherits_uncommitted_state(
@@ -98,6 +130,17 @@ def test_ensure_forked_is_idempotent(
     a = manager.ensure_forked("WRK-001", "agt-2", "agt-1", repo)
     b = manager.ensure_forked("WRK-001", "agt-2", "agt-1", repo)
     assert a == b
+
+
+def test_ensure_forked_inherits_tracked_deletions(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    source_workdir = manager.ensure("WRK-001", "agt-1", repo)
+    (source_workdir / "README.md").unlink()
+
+    forked = manager.ensure_forked("WRK-001", "loop", "agt-1", repo)
+
+    assert not (forked / "README.md").exists()
 
 
 def test_ensure_forked_for_non_git_source_falls_back_to_copy(
@@ -180,6 +223,31 @@ def test_remove_force_falls_back_to_rmtree_when_dirty(
     manager.remove("WRK-001", "agt-1")
 
     assert not workdir.exists()
+
+
+def test_list_states_includes_shared_dirty_worktree(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure("WRK-001", "loop", repo)
+    (workdir / "README.md").write_text("dirty edit\n")
+
+    states = manager.list_states("WRK-001")
+
+    assert len(states) == 1
+    assert states[0].workdir == workdir
+    assert states[0].changed_files == ("README.md",)
+
+
+def test_remove_without_force_preserves_dirty_worktree(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure("WRK-001", "loop", repo)
+    (workdir / "README.md").write_text("dirty edit\n")
+
+    with pytest.raises(WorktreeProvisionFailed, match="git worktree remove failed"):
+        manager.remove("WRK-001", "loop", force=False)
+
+    assert workdir.exists()
 
 
 def test_sweep_orphans_removes_worktrees_not_in_live_set(
@@ -397,6 +465,32 @@ def test_describe_state_reports_branch_and_changes(
     assert "?? notes.md" in state.status
     assert state.changed_files == ("README.md",)
     assert state.untracked_files == ("notes.md",)
+
+
+def test_describe_state_ignores_unchanged_legacy_env_copy(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+    (repo / ".env.local").write_text("TOKEN=shared\n")
+    (workdir / ".env.local").write_text("TOKEN=shared\n")
+
+    state = manager.describe_state(workdir)
+
+    assert state.status == ""
+    assert state.untracked_files == ()
+
+
+def test_describe_state_reports_modified_legacy_env_copy(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+    (repo / ".env.local").write_text("TOKEN=shared\n")
+    (workdir / ".env.local").write_text("TOKEN=changed\n")
+
+    state = manager.describe_state(workdir)
+
+    assert state.status == "?? .env.local"
+    assert state.untracked_files == (".env.local",)
 
 
 def test_describe_state_handles_non_git_folder(

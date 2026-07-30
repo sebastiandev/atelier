@@ -13,17 +13,14 @@ import { persist } from "zustand/middleware";
  */
 type ClosedState = {
   byWork: Record<string, string[]>;
-  isClosed: (workSlug: string, agentSlug: string) => boolean;
   close: (workSlug: string, agentSlug: string) => void;
   restore: (workSlug: string, agentSlug: string) => void;
 };
 
 export const useClosedStore = create<ClosedState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       byWork: {},
-      isClosed: (workSlug, agentSlug) =>
-        (get().byWork[workSlug] ?? []).includes(agentSlug),
       close: (workSlug, agentSlug) =>
         set((state) => {
           const current = state.byWork[workSlug] ?? [];

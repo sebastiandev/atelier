@@ -9,7 +9,7 @@ regardless.
 
 Concurrency: a small bounded gather so a large pool of PRs doesn't
 fire 30+ simultaneous requests at GitHub. The cap is intentionally
-modest — even at 5 in flight, a 30-PR cycle finishes in ~6× the
+modest — even at 5 in flight, a 30-PR cycle finishes in ~6x the
 single-request latency, well inside the 5-minute window.
 """
 

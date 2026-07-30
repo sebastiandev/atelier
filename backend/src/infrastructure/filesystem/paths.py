@@ -39,8 +39,26 @@ class WorkspacePaths:
     def works_dir(self) -> Path:
         return self.workspace_root / "works"
 
+    def loop_library_root(self) -> str:
+        """Return the root used by the global reusable loop library."""
+        return str(self.workspace_root)
+
+    def work_loop_root(self, work_slug: str) -> str:
+        """Return the root used by one Work's private loop overlays."""
+        return str(self.work_dir(work_slug))
+
     def chats_dir(self) -> Path:
         return self.workspace_root / "chats"
+
+    def planning_dir(self, work_slug: str) -> Path:
+        """Atelier-owned planning state for one Work, at a known path.
+
+        The manifest lives here rather than under the user's selected repo,
+        so nothing needs a pointer to locate it and Atelier state never
+        lands in someone else's tree.
+        """
+        _validate_slug(work_slug)
+        return self.work_dir(work_slug) / "planning"
 
     def chat_dir(self, chat_slug: str) -> Path:
         _validate_slug(chat_slug)

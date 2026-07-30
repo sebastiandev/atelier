@@ -110,3 +110,16 @@ async def test_refresh_now_swallows_execute_exceptions() -> None:
         result = await poller.refresh_now()
     assert result is None
     await poller._client.aclose()  # type: ignore[union-attr]
+
+
+@pytest.mark.anyio
+async def test_lifecycle_gateway_reuses_poller_client() -> None:
+    """Routes can borrow the lifespan-owned client without allocating one."""
+    stopped = PrStatusPoller(workstore=object())  # type: ignore[arg-type]
+    assert stopped.lifecycle_gateway() is None
+
+    poller = _make_poller()
+    gateway = poller.lifecycle_gateway()
+    assert gateway is not None
+    assert gateway._client is poller._client
+    await poller._client.aclose()  # type: ignore[union-attr]

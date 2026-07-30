@@ -5,7 +5,9 @@ boundaries: SQL chat row, chat transcript files, WorkStore creation, and
 work-scoped context files.
 """
 
+import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
@@ -15,8 +17,24 @@ from src.domain.agents.compactions import (
     BreadcrumbResult,
     CompactionSessionStartResult,
 )
-from src.domain.agents.configs import AmpAgentConfig, AmpPermissionMode
+from src.domain.agents.configs import (
+    AmpAgentConfig,
+    AmpPermissionMode,
+    CodexAcpAgentConfig,
+    CodexAcpEffort,
+    CodexAcpMode,
+)
+from src.domain.chats import runtime as chat_runtime
+from src.domain.commands.chats import send_input as send_chat_input
 from src.domain.commands.chats.connect import build_chat_runtime_config
+from src.domain.commands.planning import (
+    mark_ready as planning_mark_ready,
+)
+from src.domain.commands.planning import (
+    submit_materialization,
+)
+from src.domain.planning.dtos import PlanArtifactEntry
+from src.domain.planning.frameworks import default_plan_artifacts_dir
 from src.settings import Settings
 
 
@@ -36,8 +54,22 @@ def _new_amp_chat(first_message: str = "Can we explore a smaller launch plan?") 
     }
 
 
+def _new_codex_acp_chat(
+    first_message: str = "Can we explore a smaller launch plan?",
+) -> dict:
+    return {
+        "provider": "codex-acp",
+        "model": "gpt-5.5",
+        "first_message": first_message,
+    }
+
+
 def _new_project(name: str = "Atelier", glyph: str = "AT") -> dict[str, object]:
     return {"name": name, "description": "", "glyph": glyph, "color": 250}
+
+
+def _artifact_root(root: Path, work_slug: str) -> Path:
+    return root / default_plan_artifacts_dir("bmad", work_slug)
 
 
 class _FakeCompactionSessionClient:
@@ -90,6 +122,22 @@ class _FakeCompactionSessionClient:
         return BreadcrumbResult(written=True)
 
 
+class _CapturingChatSupervisor:
+    def __init__(self) -> None:
+        self.inputs: list[tuple[str, str, str | None]] = []
+
+    async def send_input(
+        self,
+        chat_slug: str,
+        text: str,
+        *,
+        transcript_text: str | None = None,
+        record_user_input: bool = True,
+    ) -> None:
+        assert record_user_input is True
+        self.inputs.append((chat_slug, text, transcript_text))
+
+
 def test_create_chat_persists_metadata_and_transcript(
     app_client: TestClient, test_settings: Settings
 ) -> None:
@@ -99,6 +147,7 @@ def test_create_chat_persists_metadata_and_transcript(
 
     assert body["slug"] == "CHT-001"
     assert body["title"] == "Can we explore a smaller launch plan?"
+    assert body["discussion_only"] is False
     assert body["grounding"] is None
     assert [m["role"] for m in body["transcript"]] == ["user"]
     assert body["message_count"] == 1
@@ -106,6 +155,7 @@ def test_create_chat_persists_metadata_and_transcript(
     chat_dir = test_settings.workspace_root / "chats" / "CHT-001"
     chat_json = json.loads((chat_dir / "chat.json").read_text())
     assert chat_json["slug"] == "CHT-001"
+    assert "discussion_only" not in chat_json
     transcript = (chat_dir / "transcript.ndjson").read_text().splitlines()
     assert len(transcript) == 1
 
@@ -144,11 +194,348 @@ def test_create_chat_separates_link_from_working_folder(
         record,
         app_client.app.state.workstore,
         app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
         test_settings,
     )
     assert context.workdir == working_dir
     assert runtime.workdir == working_dir
     assert runtime.link_label.startswith(f"work {work['slug']}")
+
+
+def test_chat_runtime_accepts_an_opaque_system_prompt_override(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    response = app_client.post("/api/chats", json=_new_chat())
+    record = app_client.app.state.chatstore.get_chat(response.json()["slug"])
+    assert record is not None
+
+    config, context, _runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
+        test_settings,
+        system_prompt_override="Materializer-owned prompt.",
+    )
+
+    assert context.system_prompt == "Materializer-owned prompt."
+    assert config.common.system_prompt == "Materializer-owned prompt."
+
+
+def test_planning_chat_runtime_prompt_uses_setup_contract(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    work = app_client.post(
+        "/api/works",
+        json={"name": "Existing work", "description": "active", "contexts": []},
+    ).json()
+    working_dir = test_settings.workspace_root / "scratch"
+    working_dir.mkdir(parents=True)
+    response = app_client.post(
+        "/api/chats",
+        json={
+            **_new_chat("Initialize an Atelier Planning session."),
+            "title": "Planning",
+            "role": "planning",
+            "grounding": {"kind": "work", "ref": work["slug"]},
+            "working_directory": str(working_dir),
+        },
+    )
+    assert response.status_code == 201
+
+    record = app_client.app.state.chatstore.get_chat("CHT-001")
+    assert record is not None
+    _config, context, _runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
+        test_settings,
+    )
+
+    assert "Atelier's Planning chat" in context.system_prompt
+    assert "Discovery phase:" in context.system_prompt
+    assert "Available framework roles/lenses" in context.system_prompt
+    assert "Ready to create source plan" in context.system_prompt
+    assert "atelier_planning_ready" in context.system_prompt
+
+
+def test_a_chat_merely_titled_planning_is_not_the_planning_chat(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """Posture comes from the declared role, never from the title string."""
+    work = app_client.post(
+        "/api/works",
+        json={"name": "Impostor", "description": "Look like Planning", "contexts": []},
+    ).json()
+    working_dir = test_settings.workspace_root / "impostor"
+    working_dir.mkdir(parents=True)
+    app_client.post(
+        "/api/chats",
+        json={
+            **_new_chat("I am not the reserved Planning chat."),
+            "title": "Planning",
+            "grounding": {"kind": "work", "ref": work["slug"]},
+            "working_directory": str(working_dir),
+        },
+    )
+
+    record = app_client.app.state.chatstore.get_chat("CHT-001")
+    assert record is not None
+    _config, context, _runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
+        test_settings,
+    )
+
+    assert "Atelier's Planning chat" not in context.system_prompt
+
+
+def test_planning_chat_revision_prompt_lists_source_documents(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    work = app_client.post(
+        "/api/works",
+        json={"name": "Existing work", "description": "active", "contexts": []},
+    ).json()
+    working_dir = test_settings.workspace_root / "scratch"
+    (working_dir / ".bmad-core").mkdir(parents=True)
+    artifact_dir = _artifact_root(working_dir, work["slug"])
+    stories_dir = artifact_dir / "stories"
+    stories_dir.mkdir(parents=True)
+    (artifact_dir / "intent.md").write_text("# Intent\n")
+    (stories_dir / "story-001.md").write_text("# First Story\n")
+    response = app_client.post(
+        "/api/chats",
+        json={
+            **_new_codex_acp_chat("Initialize an Atelier Planning session."),
+            "title": "Planning",
+            "role": "planning",
+            "grounding": {"kind": "work", "ref": work["slug"]},
+            "working_directory": str(working_dir),
+            "options": {"reasoning_effort": "xhigh", "mode": "read-only"},
+        },
+    )
+    assert response.status_code == 201
+    submit_materialization.execute(
+        app_client.app.state.workstore,
+        app_client.app.state.planningfiles,
+        app_client.app.state.loop_runs,
+        submit_materialization.SubmitPlanMaterializationRequest(
+            work_slug=work["slug"],
+            root_path=str(working_dir),
+            framework="bmad",
+            profile="feature",
+            artifacts=(
+                PlanArtifactEntry(
+                    path="intent.md",
+                    title="Intent",
+                    artifact_kind="brief",
+                    executable=False,
+                    dependencies=(),
+                ),
+                PlanArtifactEntry(
+                    path="stories/story-001.md",
+                    title="First Story",
+                    artifact_kind="story",
+                    executable=True,
+                    dependencies=("intent.md",),
+                ),
+            ),
+        ),
+    )
+
+    record = app_client.app.state.chatstore.get_chat(response.json()["slug"])
+    assert record is not None
+    config, context, runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
+        test_settings,
+    )
+
+    assert "Revision phase:" in context.system_prompt
+    assert "@intent.md" in context.system_prompt
+    assert "@stories/story-001.md" in context.system_prompt
+    assert runtime.agent_workdir == artifact_dir
+    assert runtime.writable_roots == (artifact_dir,)
+    assert isinstance(config, CodexAcpAgentConfig)
+    assert config.reasoning_effort is CodexAcpEffort.XHIGH
+    assert config.mode is CodexAcpMode.AUTO
+
+
+def test_planning_chat_input_sends_hidden_current_document_index(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    work = app_client.post(
+        "/api/works",
+        json={"name": "Existing work", "description": "active", "contexts": []},
+    ).json()
+    working_dir = test_settings.workspace_root / "scratch"
+    (working_dir / ".bmad-core").mkdir(parents=True)
+    artifact_dir = _artifact_root(working_dir, work["slug"])
+    stories_dir = artifact_dir / "stories"
+    stories_dir.mkdir(parents=True)
+    (artifact_dir / "intent.md").write_text("# Intent\n")
+    (stories_dir / "story-001.md").write_text("# First Story\n")
+    response = app_client.post(
+        "/api/chats",
+        json={
+            **_new_chat("Initialize an Atelier Planning session."),
+            "title": "Planning",
+            "role": "planning",
+            "grounding": {"kind": "work", "ref": work["slug"]},
+            "working_directory": str(working_dir),
+        },
+    )
+    assert response.status_code == 201
+    submit_materialization.execute(
+        app_client.app.state.workstore,
+        app_client.app.state.planningfiles,
+        app_client.app.state.loop_runs,
+        submit_materialization.SubmitPlanMaterializationRequest(
+            work_slug=work["slug"],
+            root_path=str(working_dir),
+            framework="bmad",
+            profile="feature",
+            artifacts=(
+                PlanArtifactEntry(
+                    path="intent.md",
+                    title="Intent",
+                    artifact_kind="brief",
+                    executable=False,
+                    dependencies=(),
+                ),
+                PlanArtifactEntry(
+                    path="stories/story-001.md",
+                    title="First Story",
+                    artifact_kind="story",
+                    executable=True,
+                    dependencies=("intent.md",),
+                ),
+            ),
+        ),
+    )
+    supervisor = _CapturingChatSupervisor()
+
+    asyncio.run(
+        send_chat_input.execute(
+            app_client.app.state.chatstore,
+            supervisor,  # type: ignore[arg-type]
+            app_client.app.state.planningfiles,
+            app_client.app.state.workstore,
+            send_chat_input.SendChatInputRequest(
+                chat_slug=response.json()["slug"],
+                text="What should we change next?",
+            ),
+        )
+    )
+
+    assert len(supervisor.inputs) == 1
+    chat_slug, provider_text, transcript_text = supervisor.inputs[0]
+    assert chat_slug == response.json()["slug"]
+    assert transcript_text == "What should we change next?"
+    assert "<atelier_planning_context>" in provider_text
+    assert f"Source-backed planning folder: {artifact_dir}" in provider_text
+    assert "@intent.md" in provider_text
+    assert "@stories/story-001.md" in provider_text
+    assert "<user_message>\nWhat should we change next?\n</user_message>" in provider_text
+
+
+def test_planning_chat_summary_exposes_readiness(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    work = app_client.post(
+        "/api/works",
+        json={"name": "Existing work", "description": "active", "contexts": []},
+    ).json()
+    working_dir = test_settings.workspace_root / "scratch"
+    working_dir.mkdir(parents=True)
+    response = app_client.post(
+        "/api/chats",
+        json={
+            **_new_chat("Initialize an Atelier Planning session."),
+            "title": "Planning",
+            "role": "planning",
+            "grounding": {"kind": "work", "ref": work["slug"]},
+            "working_directory": str(working_dir),
+        },
+    )
+    assert response.status_code == 201
+
+    result = planning_mark_ready.execute(
+        app_client.app.state.chatstore,
+        planning_mark_ready.MarkPlanningChatReadyRequest(
+            chat_slug=response.json()["slug"],
+            assistant_text=(
+                "Ready to create source plan.\n"
+                '{"atelier_planning_ready":{"ready":true,"summary":"Enough scope"}}'
+            ),
+        ),
+    )
+
+    assert result is not None
+    assert result.changed is True
+    summary_response = app_client.get(f"/api/chats?work_slug={work['slug']}")
+    assert summary_response.status_code == 200
+    summary = summary_response.json()[0]
+    assert summary["planning_readiness"] == {
+        "ready": True,
+        "summary": "Enough scope",
+    }
+
+
+def test_planning_readiness_metadata_is_not_sent_to_provider_config(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    work = app_client.post(
+        "/api/works",
+        json={"name": "Existing work", "description": "active", "contexts": []},
+    ).json()
+    working_dir = test_settings.workspace_root / "scratch"
+    working_dir.mkdir(parents=True)
+    response = app_client.post(
+        "/api/chats",
+        json={
+            **_new_codex_acp_chat("Initialize an Atelier Planning session."),
+            "title": "Planning",
+            "role": "planning",
+            "grounding": {"kind": "work", "ref": work["slug"]},
+            "working_directory": str(working_dir),
+            "options": {"reasoning_effort": "xhigh", "mode": "read-only"},
+        },
+    )
+    assert response.status_code == 201
+
+    result = planning_mark_ready.execute(
+        app_client.app.state.chatstore,
+        planning_mark_ready.MarkPlanningChatReadyRequest(
+            chat_slug=response.json()["slug"],
+            assistant_text=(
+                "Ready to create source plan.\n"
+                '{"atelier_planning_ready":{"ready":true,"summary":"Enough scope"}}'
+            ),
+        ),
+    )
+    assert result is not None
+
+    record = app_client.app.state.chatstore.get_chat(response.json()["slug"])
+    assert record is not None
+    assert "planning_readiness" in (record.chat.options or {})
+    config, _context, _runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
+        test_settings,
+    )
+
+    assert isinstance(config, CodexAcpAgentConfig)
+    assert config.reasoning_effort is CodexAcpEffort.XHIGH
+    assert config.mode is CodexAcpMode.READ_ONLY
 
 
 def test_create_chat_persists_provider_options_for_runtime(
@@ -174,10 +561,149 @@ def test_create_chat_persists_provider_options_for_runtime(
         record,
         app_client.app.state.workstore,
         app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
         test_settings,
     )
     assert isinstance(config, AmpAgentConfig)
     assert config.permission_mode is AmpPermissionMode.ALLOW_ALL
+
+
+def test_create_discussion_chat_keeps_marker_out_of_provider_options(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    run_worktree = test_settings.workspace_root / "works" / "WRK-001" / "worktrees" / "loop"
+    run_worktree.mkdir(parents=True)
+    response = app_client.post(
+        "/api/chats",
+        json={
+            **_new_amp_chat("Discuss the active loop stage"),
+            "working_directory": str(run_worktree),
+            "options": {"permission_mode": "default", "read_only": "true"},
+            "discussion_only": True,
+            "role": "advisory",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["discussion_only"] is True
+    assert response.json()["options"] == {
+        "permission_mode": "default",
+        "read_only": "true",
+    }
+
+    chat_json = json.loads(
+        (test_settings.workspace_root / "chats" / "CHT-001" / "chat.json").read_text()
+    )
+    assert chat_json["discussion_only"] is True
+    assert "discussion_only" not in chat_json["options"]
+
+    record = app_client.app.state.chatstore.get_chat("CHT-001")
+    assert record is not None
+    assert record.chat.discussion_only is True
+    config, context, runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
+        test_settings,
+    )
+    assert isinstance(config, AmpAgentConfig)
+    assert context.workdir == run_worktree
+    assert runtime.workdir == run_worktree
+    assert config.permission_mode is AmpPermissionMode.DEFAULT
+    # Not read-only: a discussion may write scratch files, and a hard
+    # read-only posture deadlocks the plan-exit permission request.
+    assert config.read_only is False
+
+
+def test_create_idle_discussion_chat_seeds_prompting_runtime(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    run_worktree = test_settings.workspace_root / "works" / "WRK-001" / "worktrees" / "loop"
+    run_worktree.mkdir(parents=True)
+    response = app_client.post(
+        "/api/chats",
+        json={
+            "provider": "codex-acp",
+            "model": "gpt-5.5",
+            "title": "Code review · ShipHero run 2",
+            "working_directory": str(run_worktree),
+            "options": {"mode": "agent", "reasoning_effort": "high"},
+            "discussion_only": True,
+            "role": "advisory",
+            "context_seed": "Stage: Code review\nFinding: preserve the public API.",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["transcript"] == []
+    assert response.json()["message_count"] == 0
+
+    chat_json = json.loads(
+        (test_settings.workspace_root / "chats" / "CHT-001" / "chat.json").read_text()
+    )
+    assert chat_json["context_seed"] == (
+        "Stage: Code review\nFinding: preserve the public API."
+    )
+
+    record = app_client.app.state.chatstore.get_chat("CHT-001")
+    assert record is not None
+    assert app_client.app.state.chatstore.claim_initial_prompt("CHT-001") is None
+    config, context, _runtime = build_chat_runtime_config(
+        record,
+        app_client.app.state.workstore,
+        app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
+        test_settings,
+    )
+    assert isinstance(config, CodexAcpAgentConfig)
+    assert config.mode is CodexAcpMode.AUTO
+    assert config.reasoning_effort is CodexAcpEffort.HIGH
+    assert context.system_prompt is not None
+    assert "Finding: preserve the public API." in context.system_prompt
+    assert "not allowed to implement" in context.system_prompt
+
+
+def test_create_discussion_chat_reopens_existing_run_stage(
+    app_client: TestClient,
+) -> None:
+    legacy_payload = {
+        **_new_amp_chat("Code review"),
+        "discussion_only": True,
+        "role": "advisory",
+        "grounding": {"kind": "work", "ref": "WRK-001"},
+        "context_seed": "Stage: Code review",
+    }
+    payload = {
+        **legacy_payload,
+        "discussion_key": '["WRK-001","story-1","run-001","code-review"]',
+    }
+
+    first = app_client.post("/api/chats", json=legacy_payload)
+    adopted = app_client.post("/api/chats", json=payload)
+    reopened = app_client.post("/api/chats", json=payload)
+
+    assert first.status_code == 201
+    assert adopted.status_code == 201
+    assert reopened.status_code == 201
+    assert adopted.json()["slug"] == first.json()["slug"]
+    assert reopened.json()["slug"] == first.json()["slug"]
+    assert reopened.json()["discussion_key"] == payload["discussion_key"]
+    assert len(app_client.get("/api/chats?work_slug=WRK-001").json()) == 1
+    chat_json = json.loads(
+        (app_client.app.state.settings.workspace_root / "chats/CHT-001/chat.json").read_text()
+    )
+    assert chat_json["discussion_key"] == payload["discussion_key"]
+
+
+def test_create_idle_chat_requires_explicit_title(app_client: TestClient) -> None:
+    response = app_client.post(
+        "/api/chats",
+        json={"provider": "codex-acp", "model": "gpt-5.5"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "title is required when first_message is omitted"
 
 
 def test_set_chat_option_updates_chat_json_and_runtime_config(
@@ -206,6 +732,7 @@ def test_set_chat_option_updates_chat_json_and_runtime_config(
         record,
         app_client.app.state.workstore,
         app_client.app.state.projectstore,
+        app_client.app.state.planningfiles,
         test_settings,
     )
     assert isinstance(config, AmpAgentConfig)
@@ -281,6 +808,25 @@ def test_delete_chat_removes_metadata_and_files(
     assert app_client.get("/api/chats").json() == []
 
 
+def test_reconnect_chat_stops_only_its_runtime(app_client: TestClient) -> None:
+    app_client.post("/api/chats", json=_new_chat("Recover stalled chat"))
+
+    class Supervisor:
+        def __init__(self) -> None:
+            self.stopped: list[str] = []
+
+        async def stop_agent(self, chat_slug: str) -> None:
+            self.stopped.append(chat_slug)
+
+    supervisor = Supervisor()
+    app_client.app.state.chat_supervisor = supervisor
+
+    response = app_client.post("/api/chats/CHT-001/reconnect")
+
+    assert response.status_code == 204
+    assert supervisor.stopped == ["CHT-001"]
+
+
 def test_chat_ws_replays_initial_prompt_and_records_later_input(
     app_client: TestClient,
 ) -> None:
@@ -303,6 +849,45 @@ def test_chat_ws_replays_initial_prompt_and_records_later_input(
 
     chat = app_client.get("/api/chats/CHT-001").json()
     assert [m["role"] for m in chat["transcript"][:2]] == ["user", "assistant"]
+
+
+def test_completed_work_chat_stream_is_replay_only(
+    app_client: TestClient,
+    monkeypatch: Any,
+) -> None:
+    work = app_client.post(
+        "/api/works",
+        json={"name": "Archived chat", "description": "", "contexts": []},
+    ).json()
+    created = app_client.post(
+        "/api/chats",
+        json={
+            **_new_amp_chat("Do not deliver this after completion"),
+            "grounding": {"kind": "work", "ref": work["slug"]},
+        },
+    )
+    assert created.status_code == 201, created.text
+    before = list(
+        app_client.app.state.chatstore.read_transcript_from_cursor("CHT-001", 0)
+    )
+    assert app_client.post(f"/api/works/{work['slug']}/complete").status_code == 200
+
+    def fail_build(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("archived chat view must not build an adapter")
+
+    monkeypatch.setattr(chat_runtime, "_build_adapter", fail_build)
+    with app_client.websocket_connect("/api/chats/CHT-001/stream") as ws:
+        replay = [ws.receive_json() for _ in range(len(before))]
+        ws.send_text(json.dumps({"type": "input", "text": "mutate archived work"}))
+        blocked = ws.receive_json()
+
+    assert replay == before
+    assert blocked["type"] == "client_error"
+    assert "reopen" in blocked["message"]
+    assert not app_client.app.state.chat_supervisor.is_registered("CHT-001")
+    assert list(
+        app_client.app.state.chatstore.read_transcript_from_cursor("CHT-001", 0)
+    ) == before
 
 
 def test_promote_chat_creates_work_with_context_file(

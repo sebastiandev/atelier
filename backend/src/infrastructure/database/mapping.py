@@ -24,12 +24,14 @@ from src.domain.models import (
     SharedFolder,
     Work,
 )
+from src.domain.planning.models import PlanningSession
 from src.infrastructure.database.tables import (
     agents_table,
     artifacts_table,
     chats_table,
     connections_table,
     handoffs_table,
+    planning_sessions_table,
     projects_table,
     shared_folders_table,
     works_table,
@@ -54,6 +56,7 @@ def configure_mappings() -> None:
     mapper_registry.map_imperatively(Project, projects_table)
     mapper_registry.map_imperatively(Work, works_table)
     mapper_registry.map_imperatively(Chat, chats_table)
+    mapper_registry.map_imperatively(PlanningSession, planning_sessions_table)
     mapper_registry.map_imperatively(Agent, agents_table)
     # Artifact: single-table inheritance on the existing ``artifacts``
     # table. The ``type`` column is the polymorphic discriminator;

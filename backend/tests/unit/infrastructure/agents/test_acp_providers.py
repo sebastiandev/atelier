@@ -5,6 +5,8 @@ config-value hooks, summary-only compaction configs, and resume-command
 translation back to the native CLIs.
 """
 
+import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ from src.domain.agents import (
 from src.domain.agents.configs import (
     OPENCODE_CONFIGURED_MODEL,
     ClaudeAcpEffort,
+    ClaudeAcpFastMode,
     ClaudeAcpModel,
     ClaudeAcpPermissionMode,
     CodexAcpAgentConfig,
@@ -45,8 +48,12 @@ from src.settings import Settings
 WORKDIR = Path("/tmp/atelier/test")
 
 
-def _common() -> CommonAgentConfig:
-    return CommonAgentConfig(workdir=WORKDIR, system_prompt="prompt")
+def _common(*approved_command_prefixes: str) -> CommonAgentConfig:
+    return CommonAgentConfig(
+        workdir=WORKDIR,
+        system_prompt="prompt",
+        approved_command_prefixes=approved_command_prefixes,
+    )
 
 
 # -- specs ---------------------------------------------------------------
@@ -67,12 +74,23 @@ def test_claude_acp_spec_builds_typed_config() -> None:
     config = ClaudeAcpSpec().build(
         _common(),
         "claude-fable-5[1m]",
-        {"thinking_effort": "xhigh", "permission_mode": "acceptEdits"},
+        {
+            "thinking_effort": "xhigh",
+            "permission_mode": "acceptEdits",
+            "fast-mode": "on",
+        },
     )
     assert isinstance(config, ClaudeAcpAgentConfig)
     assert config.model is ClaudeAcpModel.FABLE_5_1M
     assert config.thinking_effort is ClaudeAcpEffort.XHIGH
     assert config.permission_mode is ClaudeAcpPermissionMode.ACCEPT_EDITS
+    assert config.fast_mode is ClaudeAcpFastMode.ON
+
+
+def test_claude_acp_maps_removed_sonnet_1m_alias_to_sonnet() -> None:
+    config = ClaudeAcpSpec().build(_common(), "sonnet[1m]", {})
+
+    assert config.model is ClaudeAcpModel.SONNET
 
 
 def test_claude_acp_spec_rejects_unknown_options() -> None:
@@ -88,19 +106,13 @@ def test_claude_acp_spec_rejects_unknown_model() -> None:
 def test_codex_acp_spec_builds_typed_config() -> None:
     config = CodexAcpSpec().build(
         _common(),
-        "gpt-5.6-terra",
-        {"reasoning_effort": "max", "mode": "read-only", "fast-mode": "on"},
+        "gpt-5.6-sol",
+        {"reasoning_effort": "ultra", "fast-mode": "on", "mode": "read-only"},
     )
     assert isinstance(config, CodexAcpAgentConfig)
-    assert config.model is CodexAcpModel.GPT_5_6_TERRA
-    assert config.reasoning_effort is CodexAcpEffort.MAX
+    assert config.model is CodexAcpModel.GPT_5_6_SOL
+    assert config.reasoning_effort is CodexAcpEffort.ULTRA
     assert config.mode is CodexAcpMode.READ_ONLY
-    assert config.fast_mode is CodexAcpFastMode.ON
-
-
-def test_codex_acp_spec_accepts_boolean_fast_mode() -> None:
-    config = CodexAcpSpec().build(_common(), "gpt-5.5", {"fast-mode": True})
-
     assert config.fast_mode is CodexAcpFastMode.ON
 
 
@@ -157,17 +169,19 @@ def test_acp_descriptors_describe_without_error() -> None:
 # -- config hooks ------------------------------------------------------------
 
 
-def test_claude_acp_config_values_cover_all_three_options() -> None:
+def test_claude_acp_config_values_cover_all_options() -> None:
     config = ClaudeAcpAgentConfig(
         common=_common(),
         model=ClaudeAcpModel.SONNET,
         thinking_effort=ClaudeAcpEffort.HIGH,
         permission_mode=ClaudeAcpPermissionMode.PLAN,
+        fast_mode=ClaudeAcpFastMode.ON,
     )
     assert config.acp_config_values() == (
         ("model", "sonnet"),
         ("effort", "high"),
         ("mode", "plan"),
+        ("fast", "on"),
     )
     assert config.acp_mode_id() is None
 
@@ -177,8 +191,8 @@ def test_codex_acp_config_values_cover_all_options() -> None:
     assert config.acp_config_values() == (
         ("model", "gpt-5.5"),
         ("reasoning_effort", "medium"),
-        ("mode", "auto"),
         ("fast-mode", "off"),
+        ("mode", "agent"),
     )
 
 
@@ -193,6 +207,128 @@ def test_factory_builds_acp_adapter_for_all_acp_providers() -> None:
     ):
         adapter = build_adapter(config, Settings())
         assert isinstance(adapter, AcpAdapter)
+
+
+def test_claude_acp_passes_stage_prefixes_as_session_metadata() -> None:
+    adapter = build_adapter(
+        ClaudeAcpAgentConfig(common=_common("dt pytest", "dt pytest && rm -rf /")),
+        Settings(),
+    )
+
+    assert adapter._session_meta == {
+        "claudeCode": {
+            "options": {
+                "allowedTools": ["Bash(dt pytest *)"],
+            }
+        }
+    }
+
+
+def test_opencode_write_stage_allows_commands_and_keeps_user_denials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`build` alone does not carry write posture, so the config must.
+
+    Stage prefixes are additive: they widen what is allowed, never narrow
+    it. The user's own explicit denials survive alongside the catch-all.
+    """
+    monkeypatch.setenv(
+        "OPENCODE_CONFIG_CONTENT",
+        '{"theme":"system","permission":{"bash":{"rm *":"deny"}}}',
+    )
+    adapter = build_adapter(
+        OpenCodeAgentConfig(common=_common("dt ty")),
+        Settings(),
+    )
+
+    config = json.loads(adapter._environment["OPENCODE_CONFIG_CONTENT"])
+    assert config["theme"] == "system"
+    assert config["permission"]["bash"] == {
+        "*": "allow",
+        "rm *": "deny",
+        "dt ty": "allow",
+        "dt ty *": "allow",
+    }
+    assert config["permission"]["edit"] == "allow"
+
+
+def test_opencode_read_stage_keeps_ask_and_treats_prefixes_as_exceptions() -> None:
+    adapter = build_adapter(
+        OpenCodeAgentConfig(common=_common("dt ty"), mode=OpenCodeMode.PLAN),
+        Settings(),
+    )
+
+    config = json.loads(adapter._environment["OPENCODE_CONFIG_CONTENT"])
+    assert config["permission"]["bash"] == {
+        "*": "ask",
+        "dt ty": "allow",
+        "dt ty *": "allow",
+    }
+    assert "edit" not in config["permission"]
+
+
+def test_opencode_reads_the_roots_atelier_points_the_run_at() -> None:
+    """A run's plan artifact lives in the source repo, not the worktree."""
+    common = CommonAgentConfig(
+        workdir=WORKDIR,
+        system_prompt="prompt",
+        readable_roots=(Path("/src/repo"),),
+        writable_roots=(Path("/shares/design"),),
+    )
+
+    adapter = build_adapter(OpenCodeAgentConfig(common=common), Settings())
+
+    external = json.loads(
+        adapter._environment["OPENCODE_CONFIG_CONTENT"]
+    )["permission"]["external_directory"]
+    assert external["/src/repo"] == "allow"
+    assert external["/src/repo/**"] == "allow"
+    assert external["/shares/design/**"] == "allow"
+    assert "*" not in external
+
+
+def test_opencode_config_is_sent_even_without_stage_prefixes() -> None:
+    """Otherwise an unpinned write stage silently inherits user defaults."""
+    adapter = build_adapter(OpenCodeAgentConfig(common=_common()), Settings())
+
+    config = json.loads(adapter._environment["OPENCODE_CONFIG_CONTENT"])
+    assert config["permission"]["bash"]["*"] == "allow"
+
+
+def test_codex_acp_uses_temporary_config_layer_for_stage_rules(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    codex_home = tmp_path / "codex-home"
+    source_rules = codex_home / "rules"
+    source_rules.mkdir(parents=True)
+    (codex_home / "auth.json").write_text("{}", encoding="utf-8")
+    (source_rules / "default.rules").write_text(
+        'prefix_rule(pattern = ["git", "status"], decision = "allow")\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.delenv("CODEX_SQLITE_HOME", raising=False)
+    adapter = build_adapter(
+        CodexAcpAgentConfig(
+            common=_common("dt pytest", "dt pytest && rm -rf /")
+        ),
+        Settings(),
+    )
+    overlay = Path(adapter._environment["CODEX_HOME"])
+
+    generated = (overlay / "rules" / "atelier-stage.rules").read_text(
+        encoding="utf-8"
+    )
+    assert overlay != codex_home
+    assert adapter._environment["CODEX_SQLITE_HOME"] == str(codex_home)
+    assert (overlay / "auth.json").exists()
+    assert (overlay / "rules" / "default.rules").exists()
+    assert 'pattern = ["dt", "pytest"]' in generated
+    assert "rm" not in generated
+
+    asyncio.run(adapter.close())
+    assert not overlay.exists()
 
 
 def test_acp_wrappers_spawn_from_locked_backend_runtime() -> None:
@@ -274,7 +410,7 @@ def test_codex_acp_resume_unfolds_mode_to_cli_flags() -> None:
         "sess-2",
         WORKDIR,
         model="gpt-5.5",
-        options={"reasoning_effort": "xhigh", "mode": "full-access"},
+        options={"reasoning_effort": "xhigh", "mode": "agent-full-access"},
     )
     assert "--sandbox 'danger-full-access'" in cmd
     assert "--ask-for-approval 'never'" in cmd
@@ -288,11 +424,19 @@ def test_codex_acp_resume_auto_mode_omits_default_flags() -> None:
         "sess-2",
         WORKDIR,
         model="gpt-5.5",
-        options={"reasoning_effort": "medium", "mode": "auto"},
+        options={"reasoning_effort": "medium", "mode": "agent"},
     )
     assert "--sandbox" not in cmd
     assert "--ask-for-approval" not in cmd
     assert "-c" not in cmd
+
+
+def test_codex_acp_accepts_legacy_mode_values() -> None:
+    config = SPECS["codex-acp"].build(
+        _common(), "gpt-5.5", {"mode": "full-access"}
+    )
+
+    assert config.mode is CodexAcpMode.FULL_ACCESS
 
 
 def test_opencode_resume_is_bare_session_for_configured_default() -> None:

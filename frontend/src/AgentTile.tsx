@@ -30,13 +30,14 @@ import {
   type Persona,
   listConnections,
   patchAgent,
+  reconnectAgent,
   switchAgentThread,
   uploadImageAttachment,
 } from "./api";
 import { useConnectionDescriptors } from "./connectionDescriptors";
 import { ContextRow } from "./ContextRow";
 import { useDragHandle } from "./dragHandleContext";
-import { CheckIcon, SearchIcon } from "./Icons";
+import { PaperclipIcon } from "./Icons";
 import { MarkdownText } from "./MarkdownText";
 import {
   appendWithSpacing,
@@ -49,9 +50,20 @@ import {
 import { shortenPath } from "./pathFormat";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
 import { ProviderAuthPrompt } from "./ProviderAuthPrompt";
-import { lookupModelMeta, useProviderDescriptors } from "./providerDescriptors";
-import { SimpleContextRow, type SimpleContextType } from "./SimpleContextRow";
+import {
+  EFFORT_OPTION_KEYS,
+  lookupModelMeta,
+  useProviderDescriptors,
+} from "./providerDescriptors";
+import { SessionModelPicker } from "./SessionModelPicker";
+import {
+  isSimpleContextType,
+  SIMPLE_CONTEXT_PICKER_TYPES,
+  SimpleContextRow,
+  type SimpleContextType,
+} from "./SimpleContextRow";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
+import { TileHeader } from "./TileHeader";
 import {
   adaptiveTranscriptLimit,
   transcriptWindowFor,
@@ -68,23 +80,7 @@ const COMPACTION_RECOMMENDED_PCT = 75;
 const COMPACTION_URGENT_PCT = 86;
 const COMPACTION_BLOCKED_PCT = 100;
 
-const SIMPLE_PICKER_TYPES: { id: SimpleContextType; label: string }[] = [
-  { id: "text", label: "Text" },
-  { id: "url", label: "URL" },
-  { id: "file", label: "File" },
-];
-
-const SIMPLE_CONTEXT_TYPES: ReadonlySet<string> = new Set(["text", "url", "file"]);
-export const EFFORT_SESSION_CONFIG_IDS = [
-  "thinking_effort",
-  "reasoning_effort",
-  "effort",
-];
-export const FAST_MODE_SESSION_CONFIG_ID = "fast-mode";
-
-function isSimpleType(type: string): type is SimpleContextType {
-  return SIMPLE_CONTEXT_TYPES.has(type);
-}
+const RUNTIME_STALL_MS = 5 * 60 * 1000;
 
 type AgentTileProps = {
   agentSlug: string;
@@ -97,6 +93,8 @@ type AgentTileProps = {
   agentName?: string;
   provider?: string;
   model?: string;
+  /** Keep transcript/workspace inspection available while disabling provider mutations. */
+  readOnly?: boolean;
   onClose?: () => void;
   /** Hand the agent off to the user's terminal CLI. The supervisor's
    *  SDK process is stopped server-side; this callback is responsible
@@ -159,6 +157,7 @@ export function AgentTile({
   agentName,
   provider,
   model,
+  readOnly = false,
   onClose,
   onDetach,
   onHandoff,
@@ -186,6 +185,7 @@ export function AgentTile({
     confirmProviderAuth,
   } = useAgentStream(agentSlug, {
     initialReplayLimit: AGENT_INITIAL_REPLAY_LIMIT,
+    readOnly,
   });
   const [handoffSwitching, setHandoffSwitching] = useState(false);
   const [handoffError, setHandoffError] = useState<string | null>(null);
@@ -376,6 +376,8 @@ export function AgentTile({
     () => deriveActivityPhase(events, isAgentActive(events)),
     [events],
   );
+  const turnOpen = useMemo(() => isTurnOpen(events), [events]);
+  const stalled = useStalledTurn(events, turnOpen);
   // Debounce label swaps. Rapid event bursts inside a single turn
   // (tool_call → tool_result → message_delta in 200ms) would otherwise
   // strobe the phase text. The shimmer underneath keeps animating
@@ -403,19 +405,8 @@ export function AgentTile({
     [events],
   );
   const sessionEffortConfig = useMemo(
-    () => latestSessionConfigOptionByIds(events, EFFORT_SESSION_CONFIG_IDS),
+    () => latestSessionConfigOptionByIds(events, EFFORT_OPTION_KEYS),
     [events],
-  );
-  const sessionFastModeConfig = useMemo(
-    () => latestSessionConfigOption(events, FAST_MODE_SESSION_CONFIG_ID),
-    [events],
-  );
-  const sessionFastModeChoices = useMemo(
-    () =>
-      sessionFastModeConfig
-        ? sessionConfigChoicesForSelect(sessionFastModeConfig)
-        : [],
-    [sessionFastModeConfig],
   );
   const liveSessionModelValue =
     typeof sessionModelConfig?.currentValue === "string"
@@ -425,36 +416,15 @@ export function AgentTile({
     typeof sessionEffortConfig?.currentValue === "string"
       ? sessionEffortConfig.currentValue
       : null;
-  const liveSessionFastModeValue = sessionFastModeConfig?.currentValue ?? null;
   const displayModel = liveSessionModelValue ?? model;
   const sessionConfigOptionsSeq = useMemo(
     () => latestEventSeq(events, "session_config_options"),
     [events],
   );
-  const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  const [modelQuery, setModelQuery] = useState("");
-  const [modelActiveIndex, setModelActiveIndex] = useState(0);
-  const [modelRefreshing, setModelRefreshing] = useState(false);
-  const modelRefreshStartedSeqRef = useRef(0);
-  const modelPickerRef = useRef<HTMLDivElement>(null);
-  const modelSearchRef = useRef<HTMLInputElement>(null);
-  const modelResultsRef = useRef<HTMLDivElement>(null);
   const modelPickerId = useMemo(
     () => `composer-model-${agentSlug.replace(/[^a-zA-Z0-9_-]/g, "-")}`,
     [agentSlug],
   );
-  const filteredSessionModelChoices = useMemo(() => {
-    if (sessionModelConfig === null) return [];
-    const query = normalizeModelQuery(modelQuery);
-    if (!query) return sessionModelConfig.choices;
-    const terms = query.split(" ").filter(Boolean);
-    return sessionModelConfig.choices.filter((choice) => {
-      const haystack = normalizeModelQuery(
-        `${choice.name ?? ""} ${String(choice.value)} ${choice.description ?? ""}`,
-      );
-      return terms.every((term) => haystack.includes(term));
-    });
-  }, [modelQuery, sessionModelConfig]);
   const { byName: providersByName } = useProviderDescriptors();
   const modelMeta = lookupModelMeta(providersByName, provider, displayModel);
   const latestCompactionSeq = useMemo(
@@ -511,7 +481,7 @@ export function AgentTile({
   ]);
 
   useEffect(() => {
-    if (!compactionBlocked) {
+    if (readOnly || !compactionBlocked) {
       setCompactionModalDismissed(false);
       setCompactionDialog((current) =>
         current?.level === "blocked" && current.phase !== "compacting"
@@ -534,6 +504,7 @@ export function AgentTile({
     compactionLevel,
     contextSnapshot,
     compactionModalDismissed,
+    readOnly,
   ]);
 
   useEffect(() => {
@@ -716,12 +687,15 @@ export function AgentTile({
   const submittableContexts = useMemo(
     () =>
       pendingContexts.filter(
-        (c) => c.value.trim() !== "" && (c.conn_id !== null || isSimpleType(c.type)),
+        (c) =>
+          c.value.trim() !== "" &&
+          (c.conn_id !== null || isSimpleContextType(c.type)),
       ),
     [pendingContexts],
   );
 
   function submit() {
+    if (readOnly) return;
     if (guardBlockedCompaction()) return;
     if (uploadingImageCount > 0) return;
     const text = draft.trim();
@@ -921,29 +895,14 @@ export function AgentTile({
   // no-ops. Disable the composer for every non-connected state so the
   // user never thinks a click landed.
   const composerDisabled =
-    status !== "connected" || providerAuthRequirement !== null;
+    readOnly || status !== "connected" || providerAuthRequirement !== null;
   const sendDisabled = composerDisabled || compacting;
-  const sessionModelValue = liveSessionModelValue;
-  const sessionModelLabel =
-    sessionModelConfig && sessionModelValue
-      ? labelForSessionConfigValue(sessionModelConfig, sessionModelValue)
-      : null;
-  const showSessionModelSelect =
-    sessionModelConfig !== null &&
-    sessionModelValue !== null &&
-    sessionModelConfig.choices.length > 0;
   const sessionModelDisabled =
     composerDisabled ||
     providerAuthAwaitingInput ||
     isCurrentlyActive ||
     compactionBlocked;
   const sessionEffortDisabled = sessionModelDisabled;
-  const sessionFastModeDisabled = sessionModelDisabled;
-  const sessionModelTitle = sessionModelLabel
-    ? isCurrentlyActive
-      ? `Wait for the current turn to finish before changing model (${sessionModelValue})`
-      : `Model: ${sessionModelLabel} (${sessionModelValue})`
-    : undefined;
   const sessionEffortLabel =
     sessionEffortConfig && liveSessionEffortValue
       ? labelForSessionConfigValue(sessionEffortConfig, liveSessionEffortValue)
@@ -957,88 +916,6 @@ export function AgentTile({
       ? `Wait for the current turn to finish before changing effort (${liveSessionEffortValue})`
       : `${sessionEffortConfig?.name ?? "Effort"}: ${sessionEffortLabel}`
     : undefined;
-  const sessionFastModeLabel =
-    sessionFastModeConfig && liveSessionFastModeValue !== null
-      ? labelForSessionConfigValue(sessionFastModeConfig, liveSessionFastModeValue)
-      : null;
-  const showSessionFastModeSelect =
-    sessionFastModeConfig !== null &&
-    liveSessionFastModeValue !== null &&
-    sessionFastModeChoices.length > 0;
-  const sessionFastModeTitle = sessionFastModeLabel
-    ? isCurrentlyActive
-      ? `Wait for the current turn to finish before changing fast mode (${String(
-          liveSessionFastModeValue,
-        )})`
-      : `${sessionFastModeConfig?.name ?? "Fast mode"}: ${sessionFastModeLabel}`
-    : undefined;
-  useEffect(() => {
-    if (!modelPickerOpen) return;
-    requestAnimationFrame(() => modelSearchRef.current?.focus());
-  }, [modelPickerOpen]);
-  useEffect(() => {
-    if (!modelPickerOpen) return;
-    setModelActiveIndex(0);
-  }, [filteredSessionModelChoices, modelPickerOpen]);
-  useEffect(() => {
-    if (!modelPickerOpen) return;
-    const active = modelResultsRef.current?.querySelector<HTMLElement>(
-      '[data-active="true"]',
-    );
-    active?.scrollIntoView({ block: "nearest" });
-  }, [modelActiveIndex, modelPickerOpen]);
-  useEffect(() => {
-    if (!modelPickerOpen) return;
-    const close = (event: Event) => {
-      const target = event.target;
-      if (
-        target instanceof Node &&
-        modelPickerRef.current?.contains(target)
-      ) {
-        return;
-      }
-      setModelPickerOpen(false);
-    };
-    window.addEventListener("mousedown", close);
-    window.addEventListener("scroll", close, true);
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("scroll", close, true);
-    };
-  }, [modelPickerOpen]);
-  useEffect(() => {
-    if (!modelPickerOpen || showSessionModelSelect) return;
-    setModelPickerOpen(false);
-  }, [modelPickerOpen, showSessionModelSelect]);
-  useEffect(() => {
-    if (!modelRefreshing) return;
-    if (sessionConfigOptionsSeq > modelRefreshStartedSeqRef.current) {
-      setModelRefreshing(false);
-      return;
-    }
-    const handle = window.setTimeout(() => setModelRefreshing(false), 1500);
-    return () => window.clearTimeout(handle);
-  }, [modelRefreshing, sessionConfigOptionsSeq]);
-
-  function openSessionModelPicker() {
-    if (sessionModelDisabled || guardBlockedCompaction()) return;
-    const opening = !modelPickerOpen;
-    setModelPickerOpen(opening);
-    setModelQuery("");
-    setModelActiveIndex(0);
-    if (opening) {
-      modelRefreshStartedSeqRef.current = sessionConfigOptionsSeq;
-      setModelRefreshing(true);
-      sendSessionConfigRefresh("model");
-    }
-  }
-
-  function chooseSessionModel(choice: SessionConfigChoice) {
-    if (sessionModelDisabled || guardBlockedCompaction()) return;
-    sendSessionConfig("model", choice.value);
-    setModelPickerOpen(false);
-    setModelQuery("");
-  }
 
   function changeSessionEffort(value: string) {
     if (!sessionEffortConfig || sessionEffortDisabled || guardBlockedCompaction()) {
@@ -1047,58 +924,12 @@ export function AgentTile({
     sendSessionConfig(sessionEffortConfig.id, value);
   }
 
-  function changeSessionFastMode(rawValue: string) {
-    if (!sessionFastModeConfig || sessionFastModeDisabled || guardBlockedCompaction()) {
-      return;
-    }
-    const choice = sessionConfigChoiceForSelectValue(
-      sessionFastModeChoices,
-      rawValue,
-    );
-    if (!choice) return;
-    sendSessionConfig(sessionFastModeConfig.id, choice.value);
-  }
-
-  function handleModelSearchKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      setModelPickerOpen(false);
-      return;
-    }
-    const maxIndex = filteredSessionModelChoices.length - 1;
-    if (maxIndex < 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setModelActiveIndex((index) => Math.min(index + 1, maxIndex));
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setModelActiveIndex((index) => Math.max(index - 1, 0));
-      return;
-    }
-    if (e.key === "Home") {
-      e.preventDefault();
-      setModelActiveIndex(0);
-      return;
-    }
-    if (e.key === "End") {
-      e.preventDefault();
-      setModelActiveIndex(maxIndex);
-      return;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const choice =
-        filteredSessionModelChoices[Math.min(modelActiveIndex, maxIndex)];
-      if (choice) chooseSessionModel(choice);
-    }
-  }
-
   const tileClass = `agent-tile mode-${mode}` + (maximized ? " maximized" : "");
   const title = agentName || agentSlug;
   const composerPlaceholder =
-    compactionBlocked
+    readOnly
+      ? "Work completed — reopen to continue"
+      : compactionBlocked
       ? "Compact or handoff before sending"
       : status === "stopped"
       ? "Agent unavailable"
@@ -1114,222 +945,227 @@ export function AgentTile({
 
   return (
     <div className={tileClass} data-persona={persona}>
-      <header
+      <TileHeader
         className={dragHandle ? "tile-drag-header" : undefined}
         {...(dragHandle?.attributes ?? {})}
         {...(dragHandle?.listeners ?? {})}
-      >
-        <div className="tile-header-left">
-          {persona && <span className="persona-pip">{PERSONA_GLYPH[persona]}</span>}
-          <span className="status-dot" data-status={dotStatus} />
-          {editingName ? (
-            <input
-              ref={nameInputRef}
-              className="tile-name-input"
-              value={draftName}
-              onChange={(e) => setDraftName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  cancelRename();
-                } else if (e.key === "Enter") {
-                  e.preventDefault();
-                  void commitRename();
+        left={
+          <>
+            {persona && <span className="persona-pip">{PERSONA_GLYPH[persona]}</span>}
+            <span className="status-dot" data-status={dotStatus} />
+            {editingName ? (
+              <input
+                ref={nameInputRef}
+                className="tile-name-input"
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    cancelRename();
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    void commitRename();
+                  }
+                }}
+                onBlur={() => void commitRename()}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                aria-label="Rename agent"
+              />
+            ) : (
+              <h2
+                onDoubleClick={
+                  onRename
+                    ? (e) => {
+                        if (guardBlockedCompactionEvent(e)) return;
+                        e.stopPropagation();
+                        startRename();
+                      }
+                    : undefined
                 }
-              }}
-              onBlur={() => void commitRename()}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => e.stopPropagation()}
-              aria-label="Rename agent"
-            />
-          ) : (
-            <h2
-              onDoubleClick={
-                onRename
-                  ? (e) => {
-                      if (guardBlockedCompactionEvent(e)) return;
-                      e.stopPropagation();
-                      startRename();
-                    }
-                  : undefined
-              }
-              title={onRename ? "Double-click to rename" : undefined}
-              style={onRename ? { cursor: "text" } : undefined}
-            >
-              {title}
-            </h2>
-          )}
-          {renameError && !editingName && (
-            <span className="tile-rename-err">{renameError}</span>
-          )}
-        </div>
-        <div className="tile-header-meta">
-          {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}
-          {provider && displayModel && (
-            <span
-              className="provider-pill mono"
-              data-provider={shortProvider(provider)}
-              {...hintHandlers(`Provider: ${provider} · Model: ${displayModel}`)}
-            >
-              {providerPillLabel(provider)} · {shortModel(displayModel)}
-            </span>
-          )}
-          <span className="conn-status" data-conn-status={status}>{status}</span>
-          {worktreePath && (
-            <button
-              type="button"
-              className="folder-pill mono"
-              aria-label={`Reveal worktree — ${worktreePath}`}
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onRevealWorktree?.();
-              }}
-              onContextMenu={
-                onRevealAtelierDir
-                  ? (e) => {
-                      if (guardBlockedCompactionEvent(e)) return;
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setFolderMenu({ x: e.clientX, y: e.clientY });
-                    }
-                  : undefined
-              }
-              disabled={!onRevealWorktree}
-              {...hintHandlers(
-                onRevealAtelierDir
-                  ? `Reveal in Finder · ${worktreePath} · right-click for more`
-                  : `Reveal in Finder · ${worktreePath}`,
-              )}
-            >
-              {shortenPath(worktreePath)}
-            </button>
-          )}
-          {folderMenu && (
-            <div
-              className="folder-pill-menu"
-              style={{ left: folderMenu.x, top: folderMenu.y }}
-              onClick={(e) => e.stopPropagation()}
-            >
+                title={onRename ? "Double-click to rename" : undefined}
+                style={onRename ? { cursor: "text" } : undefined}
+              >
+                {title}
+              </h2>
+            )}
+            {renameError && !editingName && (
+              <span className="tile-rename-err">{renameError}</span>
+            )}
+          </>
+        }
+        meta={
+          <>
+            {persona && agentName && <span className="agent-slug mono">{agentSlug}</span>}
+            {provider && displayModel && (
+              <span
+                className="provider-pill mono"
+                data-provider={shortProvider(provider)}
+                {...hintHandlers(`Provider: ${provider} · Model: ${displayModel}`)}
+              >
+                {providerPillLabel(provider)} · {shortModel(displayModel)}
+              </span>
+            )}
+            <span className="conn-status" data-conn-status={status}>{status}</span>
+            {worktreePath && (
               <button
                 type="button"
-                className="menu-item"
+                className="folder-pill mono"
+                aria-label={`Reveal worktree — ${worktreePath}`}
                 onClick={(e) => {
                   if (guardBlockedCompactionEvent(e)) return;
-                  setFolderMenu(null);
                   onRevealWorktree?.();
                 }}
+                onContextMenu={
+                  onRevealAtelierDir
+                    ? (e) => {
+                        if (guardBlockedCompactionEvent(e)) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setFolderMenu({ x: e.clientX, y: e.clientY });
+                      }
+                    : undefined
+                }
+                disabled={!onRevealWorktree}
+                {...hintHandlers(
+                  onRevealAtelierDir
+                    ? `Reveal in Finder · ${worktreePath} · right-click for more`
+                    : `Reveal in Finder · ${worktreePath}`,
+                )}
               >
-                Open worktree
+                {shortenPath(worktreePath)}
               </button>
+            )}
+            {folderMenu && (
+              <div
+                className="folder-pill-menu"
+                style={{ left: folderMenu.x, top: folderMenu.y }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    setFolderMenu(null);
+                    onRevealWorktree?.();
+                  }}
+                >
+                  Open worktree
+                </button>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    setFolderMenu(null);
+                    onRevealAtelierDir?.();
+                  }}
+                >
+                  Open Atelier folder
+                </button>
+              </div>
+            )}
+          </>
+        }
+        right={
+          <>
+            <span
+              className={"tile-hint" + (hint ? " visible" : "")}
+              aria-hidden="true"
+            >
+              {hint}
+            </span>
+            <div className="tile-controls">
+              {onOpenInIde && (
+                <button
+                  type="button"
+                  className="btn icon sm"
+                  aria-label="Open worktree in editor"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    onOpenInIde();
+                  }}
+                  {...hintHandlers("Open in editor")}
+                >
+                  <OpenIdeIcon />
+                </button>
+              )}
+              {onOpenInConsole && (
+                <button
+                  type="button"
+                  className="btn icon sm"
+                  aria-label="Open worktree in console"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    onOpenInConsole();
+                  }}
+                  {...hintHandlers("Open in console")}
+                >
+                  <OpenConsoleIcon />
+                </button>
+              )}
+              {onHandoff && (
+                <button
+                  type="button"
+                  className="btn icon sm"
+                  aria-label="Handoff to agent"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    onHandoff();
+                  }}
+                  {...hintHandlers("Handoff to agent")}
+                >
+                  <HandoffIcon />
+                </button>
+              )}
               <button
                 type="button"
-                className="menu-item"
+                className="btn icon sm"
+                aria-label={maximized ? "Restore" : "Maximize"}
                 onClick={(e) => {
                   if (guardBlockedCompactionEvent(e)) return;
-                  setFolderMenu(null);
-                  onRevealAtelierDir?.();
+                  setMaximized((m) => !m);
                 }}
+                {...hintHandlers(maximized ? "Restore" : "Maximize")}
               >
-                Open Atelier folder
+                {maximized ? <RestoreIcon /> : <MaxIcon />}
+              </button>
+              {onDetach && (
+                <button
+                  type="button"
+                  className="btn icon sm"
+                  aria-label="Detach to terminal"
+                  onClick={(e) => {
+                    if (guardBlockedCompactionEvent(e)) return;
+                    onDetach();
+                  }}
+                  {...hintHandlers("Detach to CLI")}
+                >
+                  <DetachIcon />
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn icon sm"
+                aria-label={onClose ? "Close" : "Close unavailable"}
+                onClick={(e) => {
+                  if (guardBlockedCompactionEvent(e)) return;
+                  onClose?.();
+                }}
+                disabled={!onClose}
+                {...hintHandlers(
+                  onClose ? "Close · pins to sidebar" : "Close unavailable",
+                )}
+              >
+                <CloseIcon />
               </button>
             </div>
-          )}
-        </div>
-        <div className="tile-header-right">
-          <span
-            className={"tile-hint" + (hint ? " visible" : "")}
-            aria-hidden="true"
-          >
-            {hint}
-          </span>
-          <div className="tile-controls">
-          {onOpenInIde && (
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Open worktree in editor"
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onOpenInIde();
-              }}
-              {...hintHandlers("Open in editor")}
-            >
-              <OpenIdeIcon />
-            </button>
-          )}
-          {onOpenInConsole && (
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Open worktree in console"
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onOpenInConsole();
-              }}
-              {...hintHandlers("Open in console")}
-            >
-              <OpenConsoleIcon />
-            </button>
-          )}
-          {onHandoff && (
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Handoff to agent"
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onHandoff();
-              }}
-              {...hintHandlers("Handoff to agent")}
-            >
-              <HandoffIcon />
-            </button>
-          )}
-          <button
-            type="button"
-            className="tile-ctl"
-            aria-label={maximized ? "Restore" : "Maximize"}
-            onClick={(e) => {
-              if (guardBlockedCompactionEvent(e)) return;
-              setMaximized((m) => !m);
-            }}
-            {...hintHandlers(maximized ? "Restore" : "Maximize")}
-          >
-            {maximized ? <RestoreIcon /> : <MaxIcon />}
-          </button>
-          {onDetach && (
-            <button
-              type="button"
-              className="tile-ctl"
-              aria-label="Detach to terminal"
-              onClick={(e) => {
-                if (guardBlockedCompactionEvent(e)) return;
-                onDetach();
-              }}
-              {...hintHandlers("Detach to CLI")}
-            >
-              <DetachIcon />
-            </button>
-          )}
-          <button
-            type="button"
-            className="tile-ctl"
-            aria-label={onClose ? "Close" : "Close unavailable"}
-            onClick={(e) => {
-              if (guardBlockedCompactionEvent(e)) return;
-              onClose?.();
-            }}
-            disabled={!onClose}
-            {...hintHandlers(
-              onClose ? "Close · pins to sidebar" : "Close unavailable",
-            )}
-          >
-            <CloseIcon />
-          </button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
       <div
         className={
           "agent-tile-body" +
@@ -1348,6 +1184,11 @@ export function AgentTile({
             This agent slug isn't known to the server. Close it to clear from the rail.
           </div>
         )}
+        <StalledRuntimeBanner
+          title="Agent appears stalled"
+          visible={!readOnly && stalled}
+          onReconnect={() => reconnectAgent(agentSlug)}
+        />
         <div className="transcript" ref={transcriptRef}>
           {canLoadOlderEvents && (
             <button
@@ -1369,10 +1210,10 @@ export function AgentTile({
             activityPhase={composerActivity}
             context={contextSnapshot}
             compacting={compacting}
-            onCompact={openCompactionModal}
+            onCompact={readOnly ? undefined : openCompactionModal}
           />
         )}
-        {pendingPermissions.length > 0 && (
+        {!readOnly && pendingPermissions.length > 0 && (
           <PermissionApprovalDialog
             pendingPermissions={pendingPermissions}
             onDecide={(requestId, decision) => {
@@ -1381,7 +1222,7 @@ export function AgentTile({
             }}
           />
         )}
-        {pendingHandoff && (
+        {!readOnly && pendingHandoff && (
           <HandoffPrompt
             threadId={pendingHandoff.new_thread_id}
             switching={handoffSwitching}
@@ -1436,7 +1277,7 @@ export function AgentTile({
           {pendingContexts.length > 0 && (
             <div className="composer-contexts">
               {pendingContexts.map((c, i) =>
-                isSimpleType(c.type) ? (
+                isSimpleContextType(c.type) ? (
                   <SimpleContextRow
                     key={i}
                     context={c}
@@ -1484,19 +1325,21 @@ export function AgentTile({
             <div className="composer-add-context">
               <button
                 type="button"
-                className="composer-tool"
+                className="composer-tool composer-tool-icon"
+                disabled={readOnly}
                 onClick={(e) => {
                   if (guardBlockedCompactionEvent(e)) return;
                   setPickerOpen((o) => !o);
                 }}
                 title="Attach context to your next message — appended to context.md when you Send"
+                aria-label="Attach context"
                 aria-expanded={pickerOpen}
               >
-                + Add context
+                <PaperclipIcon size={13} />
               </button>
               {pickerOpen && (
                 <div className="composer-context-picker">
-                  {SIMPLE_PICKER_TYPES.map((s) => (
+                  {SIMPLE_CONTEXT_PICKER_TYPES.map((s) => (
                     <button
                       key={s.id}
                       type="button"
@@ -1521,94 +1364,15 @@ export function AgentTile({
                 </div>
               )}
             </div>
-            {showSessionModelSelect && (
-              <div
-                className="composer-model-picker"
-                ref={modelPickerRef}
-                title={sessionModelTitle}
-              >
-                <button
-                  type="button"
-                  className="composer-model-trigger"
-                  disabled={sessionModelDisabled}
-                  onClick={openSessionModelPicker}
-                  aria-haspopup="listbox"
-                  aria-expanded={modelPickerOpen}
-                >
-                  <span className="composer-model-prefix">Model:</span>
-                  <span className="composer-model-current">
-                    {sessionModelLabel}
-                  </span>
-                  <span className="composer-model-caret" aria-hidden>
-                    ▾
-                  </span>
-                </button>
-                {modelPickerOpen && (
-                  <div className="composer-model-menu">
-                    <label className="composer-model-search">
-                      <SearchIcon size={12} />
-                      <input
-                        ref={modelSearchRef}
-                        value={modelQuery}
-                        onChange={(e) => setModelQuery(e.target.value)}
-                        onKeyDown={handleModelSearchKeyDown}
-                        placeholder="Search models"
-                        aria-controls={`${modelPickerId}-results`}
-                        aria-activedescendant={
-                          filteredSessionModelChoices[modelActiveIndex]
-                            ? `${modelPickerId}-option-${modelActiveIndex}`
-                            : undefined
-                        }
-                      />
-                    </label>
-                    <div
-                      ref={modelResultsRef}
-                      id={`${modelPickerId}-results`}
-                      className="composer-model-results"
-                      role="listbox"
-                    >
-                      {filteredSessionModelChoices.length === 0 ? (
-                        <div className="composer-model-empty">No models found</div>
-                      ) : (
-                        filteredSessionModelChoices.map((choice, index) => {
-                          const selected = choice.value === sessionModelValue;
-                          const active = index === modelActiveIndex;
-                          return (
-                            <button
-                              key={String(choice.value)}
-                              id={`${modelPickerId}-option-${index}`}
-                              type="button"
-                              className="composer-model-option"
-                              data-active={active ? "true" : undefined}
-                              data-selected={selected ? "true" : undefined}
-                              role="option"
-                              aria-selected={selected}
-                              onMouseEnter={() => setModelActiveIndex(index)}
-                              onClick={() => chooseSessionModel(choice)}
-                            >
-                              <span className="composer-model-option-check">
-                                {selected ? <CheckIcon size={11} /> : null}
-                              </span>
-                              <span className="composer-model-option-main">
-                                <span className="composer-model-option-name">
-                                  {choice.name ?? String(choice.value)}
-                                </span>
-                                <span className="composer-model-option-value">
-                                  {String(choice.value)}
-                                </span>
-                              </span>
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
-                    <div className="composer-model-foot">
-                      {modelRefreshing ? "Refreshing models..." : "Type to filter"}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+            <SessionModelPicker
+              disabled={sessionModelDisabled}
+              option={sessionModelConfig}
+              pickerId={modelPickerId}
+              refreshSeq={sessionConfigOptionsSeq}
+              onBeforeChange={() => !guardBlockedCompaction()}
+              onChange={(value) => sendSessionConfig("model", value)}
+              onRefresh={() => sendSessionConfigRefresh("model")}
+            />
             {showSessionEffortSelect && (
               <label
                 className="composer-effort-picker"
@@ -1629,29 +1393,11 @@ export function AgentTile({
                 </select>
               </label>
             )}
-            {showSessionFastModeSelect && (
-              <label
-                className="composer-effort-picker"
-                title={sessionFastModeTitle}
-              >
-                <span className="composer-effort-prefix">Fast:</span>
-                <select
-                  className="composer-effort-select"
-                  value={selectValueForSessionConfigValue(liveSessionFastModeValue)}
-                  disabled={sessionFastModeDisabled}
-                  onChange={(e) => changeSessionFastMode(e.target.value)}
-                >
-                  {sessionFastModeChoices.map((choice) => (
-                    <option
-                      key={selectValueForSessionConfigValue(choice.value)}
-                      value={selectValueForSessionConfigValue(choice.value)}
-                    >
-                      {choice.name ?? String(choice.value)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
+            <SessionFastToggle
+              events={events}
+              disabled={sessionModelDisabled}
+              onChange={sendSessionConfig}
+            />
             <span className="spacer" />
             <button
               type="submit"
@@ -1667,7 +1413,7 @@ export function AgentTile({
           </div>
         </form>
       </div>
-      {compactionDialog && (
+      {!readOnly && compactionDialog && (
         <CompactionModal
           dialog={compactionDialog}
           canHandoff={Boolean(onHandoff)}
@@ -2231,6 +1977,110 @@ function isActiveEventStale(ev: AgentEvent): boolean {
   return Number.isFinite(ts) && Date.now() - ts > ACTIVE_EVENT_STALE_MS;
 }
 
+export function useStalledTurn(
+  events: AgentEvent[],
+  active: boolean,
+): boolean {
+  const [stalled, setStalled] = useState(false);
+
+  useEffect(() => {
+    setStalled(false);
+    if (!active) return;
+    const lastEventAt = Date.parse(events.at(-1)?.ts ?? "");
+    if (!Number.isFinite(lastEventAt)) return;
+    const remaining = lastEventAt + RUNTIME_STALL_MS - Date.now();
+    if (remaining <= 0) {
+      setStalled(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setStalled(true), remaining);
+    return () => window.clearTimeout(timer);
+  }, [active, events]);
+
+  return stalled;
+}
+
+export function isTurnOpen(events: AgentEvent[]): boolean {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (
+      event.type === "message_complete" ||
+      event.type === "turn_metrics" ||
+      event.type === "error" ||
+      event.type === "user_stop" ||
+      event.type === "permission_request"
+    ) {
+      return false;
+    }
+    if (event.type === "status_change") {
+      return event.status === "thinking" || event.status === "live";
+    }
+    if (
+      event.type === "user_input" ||
+      event.type === "message_delta" ||
+      event.type === "thinking_delta" ||
+      event.type === "thinking_complete" ||
+      event.type === "tool_call" ||
+      event.type === "tool_result"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function StalledRuntimeBanner({
+  title,
+  visible,
+  onReconnect,
+}: {
+  title: string;
+  visible: boolean;
+  onReconnect: () => Promise<void>;
+}) {
+  const [reconnecting, setReconnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (visible) return;
+    setReconnecting(false);
+    setError(null);
+  }, [visible]);
+
+  if (!visible) return null;
+
+  async function recover() {
+    setReconnecting(true);
+    setError(null);
+    try {
+      await onReconnect();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setReconnecting(false);
+    }
+  }
+
+  return (
+    <div className="chat-stalled-banner" role="status">
+      <div>
+        <strong>{title}</strong>
+        <span>
+          {error ??
+            "No activity for 5 minutes. Restart the runtime without resending your message."}
+        </span>
+      </div>
+      <button
+        type="button"
+        className="btn sm"
+        disabled={reconnecting}
+        onClick={() => void recover()}
+      >
+        {reconnecting ? "Reconnecting..." : "Reconnect runtime"}
+      </button>
+    </div>
+  );
+}
+
 function latestStatus(events: AgentEvent[]): string {
   // Walk from the tail. ``status_change`` is authoritative; ``turn_metrics``
   // implies idle as a fallback (per protocol it's emitted right before
@@ -2305,33 +2155,95 @@ export function latestSessionConfigOptionByIds(
   return null;
 }
 
-export function sessionConfigChoicesForSelect(
-  option: SessionConfigOption,
-): SessionConfigChoice[] {
-  if (option.choices.length > 0) return option.choices;
-  if (typeof option.currentValue === "boolean") {
-    return [
-      { value: false, name: "Off" },
-      { value: true, name: "On" },
-    ];
+export function latestFastSessionConfigOption(
+  events: AgentEvent[],
+): SessionConfigOption | null {
+  let configId: string | null = null;
+  for (const event of events) {
+    if (event.type !== "session_config_options" || !Array.isArray(event.options)) {
+      continue;
+    }
+    configId = event.options
+      .map(parseSessionConfigOption)
+      .find((option) => option !== null && isFastSessionConfigOption(option))
+      ?.id ?? null;
   }
-  return [];
+  return configId ? latestSessionConfigOption(events, configId) : null;
 }
 
-export function selectValueForSessionConfigValue(
-  value: SessionConfigValue,
-): string {
-  return typeof value === "boolean" ? String(value) : value;
-}
-
-export function sessionConfigChoiceForSelectValue(
-  choices: SessionConfigChoice[],
-  rawValue: string,
-): SessionConfigChoice | null {
+export function SessionFastToggle({
+  events,
+  disabled,
+  onChange,
+  fallbackValue,
+}: {
+  events: AgentEvent[];
+  disabled: boolean;
+  onChange: (configId: string, value: string | boolean) => void;
+  fallbackValue?: unknown;
+}) {
+  const config = useMemo(
+    () =>
+      latestFastSessionConfigOption(events) ??
+      fallbackFastSessionConfigOption(fallbackValue),
+    [events, fallbackValue],
+  );
+  const values = config ? fastToggleValues(config) : null;
+  if (!config || !values) return null;
   return (
-    choices.find(
-      (choice) => selectValueForSessionConfigValue(choice.value) === rawValue,
-    ) ?? null
+    <label
+      className="composer-fast-toggle"
+      title={`${config.name}: ${values.checked ? "On" : "Off"}`}
+    >
+      <input
+        type="checkbox"
+        checked={values.checked}
+        disabled={disabled}
+        onChange={(event) =>
+          onChange(config.id, event.target.checked ? values.on : values.off)
+        }
+      />
+      <span aria-hidden />
+      Fast
+    </label>
+  );
+}
+
+function fallbackFastSessionConfigOption(value: unknown): SessionConfigOption | null {
+  if (value !== "on" && value !== "off" && typeof value !== "boolean") return null;
+  return {
+    id: "fast-mode",
+    name: "Fast mode",
+    choices: [
+      { value: "off", name: "Off" },
+      { value: "on", name: "On" },
+    ],
+    currentValue: value,
+  };
+}
+
+function fastToggleValues(config: SessionConfigOption) {
+  if (typeof config.currentValue === "boolean") {
+    return { checked: config.currentValue, on: true, off: false };
+  }
+  const choices = config.choices.map((choice) => String(choice.value).toLowerCase());
+  const onIndex = choices.findIndex((value) =>
+    ["fast", "priority", "on", "true", "enabled"].includes(value),
+  );
+  const offIndex = choices.findIndex((value) =>
+    ["default", "standard", "off", "false", "disabled"].includes(value),
+  );
+  if (onIndex < 0 || offIndex < 0) return null;
+  const on = config.choices[onIndex].value;
+  const off = config.choices[offIndex].value;
+  return { checked: config.currentValue === on, on, off };
+}
+
+function isFastSessionConfigOption(option: SessionConfigOption): boolean {
+  const identity = `${option.id} ${option.name}`.toLowerCase();
+  if (/(^|[ _-])fast([ _-]?mode)?($|[ _-])/.test(identity)) return true;
+  return /service[ _-]?tier/.test(identity) && option.choices.some((choice) =>
+    ["fast", "priority"].includes(String(choice.value).toLowerCase()),
   );
 }
 
@@ -2378,10 +2290,6 @@ export function labelForSessionConfigValue(
 ): string {
   const choice = option.choices.find((item) => item.value === value);
   return choice?.name ?? String(value);
-}
-
-function normalizeModelQuery(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9./:_-]+/g, " ").trim();
 }
 
 export type TurnRollup = {

@@ -31,6 +31,7 @@ from src.domain.agents import (
     CodexSpec,
     CommonAgentConfig,
 )
+from src.domain.agents.configs import OPENCODE_CONFIGURED_MODEL
 
 
 def _common() -> CommonAgentConfig:
@@ -221,6 +222,14 @@ def test_amp_build_with_default() -> None:
     assert config.mode is AmpMode.SMART
 
 
+def test_amp_build_with_hidden_read_only_posture() -> None:
+    config = AmpSpec().build(
+        _common(), AmpMode.SMART.value, options={"read_only": "true"}
+    )
+
+    assert config.read_only is True
+
+
 def test_amp_build_with_custom_allowed_tools() -> None:
     config = AmpSpec().build(
         _common(),
@@ -277,7 +286,6 @@ def test_codex_describe_lists_models_and_options() -> None:
         CodexReasoningEffort.MEDIUM.value,
         CodexReasoningEffort.HIGH.value,
         CodexReasoningEffort.XHIGH.value,
-        CodexReasoningEffort.MAX.value,
         CodexReasoningEffort.EXTRA.value,
         CodexReasoningEffort.ULTRA.value,
     ]
@@ -342,16 +350,6 @@ def test_codex_build_with_full_options() -> None:
     assert config.approval_mode is CodexApprovalMode.UNTRUSTED
 
 
-def test_codex_build_accepts_max_reasoning_effort() -> None:
-    config = CodexSpec().build(
-        _common(),
-        CodexModel.GPT_5_5.value,
-        options={"reasoning_effort": "max"},
-    )
-
-    assert config.reasoning_effort is CodexReasoningEffort.MAX
-
-
 def test_codex_build_accepts_terra_aliases() -> None:
     for model in ("5.6 terra", "gpt.5.6-terra"):
         config = CodexSpec().build(_common(), model, options={})
@@ -399,3 +397,53 @@ def test_specs_registry_lists_legacy_providers_first() -> None:
     """Wire-compat: older frontends index providers by order; the legacy
     trio must stay in front of the ACP additions."""
     assert list(SPECS)[:3] == ["claude-code", "amp", "codex"]
+
+
+def test_opus_5_is_selectable_for_claude_code() -> None:
+    assert "claude-opus-5" in SPECS["claude-code"].describe().primary_field.values
+
+
+def test_opus_5_reports_no_invented_pricing() -> None:
+    """A missing figure renders "—"; a guessed one would feed wrong costs."""
+    meta = SPECS["claude-code"].describe().model_meta["claude-opus-5"]
+
+    assert meta.input_per_mtok is None
+    assert meta.output_per_mtok is None
+    assert meta.context_window == 1_000_000
+    assert meta.effort_values
+
+
+# ---------------------------------------------------------------------------
+# OpenCode effort (= OpenCode "variants")
+# ---------------------------------------------------------------------------
+
+
+def test_opencode_omits_effort_when_left_at_the_default() -> None:
+    """`default` means "say nothing" — OpenCode then applies whatever the
+    user's own config selects."""
+    config = SPECS["opencode"].build(_common(), OPENCODE_CONFIGURED_MODEL, {})
+
+    assert config.acp_config_values() == (("mode", "build"),)
+
+
+def test_opencode_sends_effort_after_the_model() -> None:
+    """OpenCode only advertises the effort option once a model with
+    variants is selected, so the model pair has to land first."""
+    config = SPECS["opencode"].build(
+        _common(),
+        "anthropic/claude-opus-5",
+        {"reasoning_effort": "xhigh"},
+    )
+
+    assert config.acp_config_values() == (
+        ("model", "anthropic/claude-opus-5"),
+        ("effort", "xhigh"),
+        ("mode", "build"),
+    )
+
+
+def test_opencode_rejects_an_effort_outside_the_union_ladder() -> None:
+    with pytest.raises(ValueError):
+        SPECS["opencode"].build(
+            _common(), OPENCODE_CONFIGURED_MODEL, {"reasoning_effort": "turbo"}
+        )

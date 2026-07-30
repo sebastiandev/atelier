@@ -41,7 +41,7 @@ export function DeleteAgentDialog({ agent, onClose, onDeleted }: Props) {
   return (
     <div className="scrim" onClick={() => !submitting && onClose()}>
       <div
-        className="modal modal-sm"
+        className="modal modal-confirm"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -54,7 +54,7 @@ export function DeleteAgentDialog({ agent, onClose, onDeleted }: Props) {
             </p>
           </div>
           <button
-            className="btn-icon"
+            className="btn icon"
             onClick={onClose}
             aria-label="Close"
             disabled={submitting}

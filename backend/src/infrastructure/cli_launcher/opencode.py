@@ -4,8 +4,9 @@ OpenCode's ACP session ids are its native session ids, so detach
 resumes through the TUI: ``opencode --session <sid>``. Model is
 configured-default in v1 (no flag); a non-sentinel model would pass
 through as ``--model provider/model`` for forward compat with the
-picker follow-up. ``mode`` has no TUI flag — the session's mode is
-already persisted OpenCode-side.
+picker follow-up. ``mode`` and ``reasoning_effort`` have no TUI flag —
+``--variant`` exists only on ``opencode run`` — but both are already
+persisted OpenCode-side per session, so resuming keeps them.
 """
 
 from __future__ import annotations

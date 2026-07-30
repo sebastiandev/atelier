@@ -47,7 +47,7 @@ def test_ensure_canonical_dir_idempotent(tmp_path: Path) -> None:
 
 
 def test_link_canonical_to_external_creates_symlink(tmp_path: Path) -> None:
-    prov, paths = _provisioner(tmp_path)
+    prov, _paths = _provisioner(tmp_path)
     real = tmp_path / "user_folder"
     real.mkdir()
     canonical = prov.link_canonical_to_external("PRJ-001", "shr-1", real)

@@ -138,7 +138,7 @@ export function EditProjectDialog({
                 : `${project.slug} · changes apply on save.`}
             </div>
           </div>
-          <button className="btn-icon" onClick={onClose} aria-label="Close">
+          <button className="btn icon" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
@@ -261,8 +261,8 @@ export function EditProjectDialog({
         <div className="modal-ft">
           {!confirmingDelete && (
             <button
-              className="btn-ghost-sm"
-              style={{ marginRight: "auto", color: "var(--bad, #d05050)" }}
+              className="btn ghost sm"
+              style={{ marginRight: "auto", color: "var(--danger)" }}
               onClick={() => {
                 setError(null);
                 setConfirmingDelete(true);
@@ -283,7 +283,7 @@ export function EditProjectDialog({
               </button>
               <button
                 className="btn primary"
-                style={{ background: "var(--bad, #d05050)", borderColor: "transparent" }}
+                style={{ background: "var(--danger)", borderColor: "transparent" }}
                 disabled={submitting}
                 onClick={confirmDelete}
               >

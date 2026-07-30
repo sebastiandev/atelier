@@ -195,3 +195,70 @@ def test_scan_text_indented_line_still_matches() -> None:
     )
     [payload] = scan_text_for_artifact_markers(text)
     assert payload["path"] == "README.md"
+
+
+# ---------------------------------------------------------------------------
+# Schema gate
+#
+# Adapters observe the raw tool-call frame and emit the artifact marker
+# immediately -- before the MCP server can reject the same call. Because
+# WorkStore.record_artifact is first-write-wins on URL, that pre-emptive
+# write is permanent and the model's corrected retry is discarded as a
+# duplicate. So a schema-violating call must produce no marker at all.
+# ---------------------------------------------------------------------------
+
+
+def test_schema_violating_call_emits_no_marker() -> None:
+    """The exact wrk02 run-005 call: record_pr with only a url."""
+    payload = marker_payload_for_tool(
+        "mcp__atelier__record_pr",
+        {"url": "https://github.com/acme/app/pull/46245"},
+    )
+
+    assert payload is None
+
+
+def test_enum_violating_call_emits_no_marker() -> None:
+    payload = marker_payload_for_tool(
+        "mcp__atelier__record_pr",
+        {"url": "https://x/1", "title": "Add foo", "status": "reopened"},
+    )
+
+    assert payload is None
+
+
+def test_blank_required_field_emits_no_marker() -> None:
+    payload = marker_payload_for_tool(
+        "record_jira", {"url": "https://x/1", "title": "   ", "status": "todo"}
+    )
+
+    assert payload is None
+
+
+def test_optional_fields_stay_optional() -> None:
+    """`status` defaults for pr; `repo` is optional. Neither blocks a marker."""
+    payload = marker_payload_for_tool("record_pr", {"url": "https://x/1", "title": "T"})
+
+    assert payload == {"type": "pr", "url": "https://x/1", "title": "T"}
+
+
+def test_a_non_atelier_tool_is_still_ignored() -> None:
+    assert marker_payload_for_tool("Bash", {"command": "ls"}) is None
+
+
+def test_every_declared_required_key_is_enforced() -> None:
+    """Every required field must actually block a marker when absent."""
+    from src.infrastructure.agents.atelier_mcp_tools import schema_violation
+
+    for tool_name, schema in TOOL_SCHEMAS.items():
+        required = schema["required"]
+        assert required, f"{tool_name} declares no required fields"
+        properties = schema["properties"]
+        complete = {
+            key: (properties[key].get("enum") or ["x"])[0] for key in required
+        }
+        assert schema_violation(tool_name, complete) is None, tool_name
+        for key in required:
+            partial = {k: v for k, v in complete.items() if k != key}
+            violation = schema_violation(tool_name, partial)
+            assert violation is not None and key in violation, (tool_name, key)

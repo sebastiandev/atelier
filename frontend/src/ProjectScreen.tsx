@@ -15,7 +15,6 @@ import {
   listProjects,
   listWorks,
 } from "./api";
-import { BrandMark } from "./BrandMark";
 import {
   ChatComposer,
   ChatRow,
@@ -28,14 +27,14 @@ import {
   CheckIcon,
   FolderIcon,
   MoreIcon,
-  SearchIcon,
-  SlidersIcon,
 } from "./Icons";
-import { NewWorkDialog } from "./NewWorkDialog";
+import { NewWorkDialog, type NewWorkIntent } from "./NewWorkDialog";
+import { loopStartStorageKey } from "./loopSetup";
+import { planningStartStorageKey } from "./planningSetup";
 import { SearchModal } from "./SearchModal";
 import { SharedFoldersSection } from "./SharedFoldersSection";
+import { ShellTopbar } from "./ShellTopbar";
 import { Switcher, type SwitcherItem } from "./Switcher";
-import { ThemeToggle } from "./ThemeToggle";
 
 type Tab = "active" | "completed";
 
@@ -126,11 +125,28 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
     searchOpen,
   ]);
 
-  async function handleCreateWork(payload: CreateWorkPayload) {
+  async function handleCreateWork(payload: CreateWorkPayload, intent: NewWorkIntent) {
     // Re-assert project_slug here so a stale dialog prop can't leak through.
-    await createWork({ ...payload, project_slug: projectSlug });
-    await refresh();
+    const created = await createWork({ ...payload, project_slug: projectSlug });
     setWorkDialogOpen(false);
+    if (intent.mode === "planning") {
+      sessionStorage.setItem(
+        planningStartStorageKey(created.slug),
+        JSON.stringify(intent.seed),
+      );
+      window.location.assign(`/works/${created.slug}`);
+      return created;
+    }
+    if (intent.mode === "loop") {
+      sessionStorage.setItem(
+        loopStartStorageKey(created.slug),
+        JSON.stringify(intent.seed),
+      );
+      window.location.assign(`/works/${created.slug}`);
+      return created;
+    }
+    window.location.assign(`/works/${created.slug}`);
+    return created;
   }
 
   const activeCount = works.filter((w) => w.status === "active").length;
@@ -194,51 +210,16 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
 
   return (
     <div
-      className="shell-v3 project-v3"
+      className="shell-v3 project-v3 has-topbar"
       style={{
         ["--proj-h" as string]: String(project.color),
-        ["--proj-color" as string]: `oklch(0.62 0.16 ${project.color})`,
-        ["--proj-soft" as string]: `oklch(0.62 0.16 ${project.color} / 0.10)`,
       }}
     >
-      {/* LEFT — rail: crown, crumbs, hero, stats, defaults, shared folders, actions */}
+      <ShellTopbar
+        crumbs={[{ hue: project.color, label: project.name }]}
+      />
+      {/* LEFT — project rail: hero, stats, defaults, shared folders, actions */}
       <aside className="shell-left proj-rail">
-        <div className="crown">
-          <a className="wordmark" href="/" title="Back to workspace">
-            <span className="wm-mark" aria-hidden>
-              <BrandMark />
-            </span>
-            <span className="wm-rest">telier</span>
-          </a>
-          <div className="crown-actions">
-            <button
-              className="btn-icon"
-              onClick={() => setSearchOpen(true)}
-              title="Search (⇧F)"
-              aria-label="Search"
-            >
-              <SearchIcon size={12} />
-            </button>
-            <a
-              className="btn-icon"
-              href="/settings"
-              title="Settings (⌘,)"
-              aria-label="Settings"
-            >
-              <SlidersIcon size={12} />
-            </a>
-            <ThemeToggle className="btn-icon" />
-          </div>
-        </div>
-
-        <div className="crumbs-v3">
-          <a className="crumb" href="/">
-            ← workspace
-          </a>
-          <span className="sep">/</span>
-          <span className="now">{project.slug}</span>
-        </div>
-
         <div className="scrolly">
           <div className="hero-block">
             <div className="hero-glyph">{project.glyph}</div>
@@ -376,8 +357,7 @@ export function ProjectScreen({ projectSlug }: { projectSlug: string }) {
           <div>
             <div className="title">Latest work</div>
             <div className="sub">
-              {works.length} {works.length === 1 ? "unit" : "units"} in{" "}
-              {project.name}
+              {works.length} {works.length === 1 ? "unit" : "units"} in {project.name}
             </div>
           </div>
         </div>
@@ -592,16 +572,16 @@ function SharedFoldersManagerDialog({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal modal-lg">
+      <div className="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="shared-folders-title">
         <div className="modal-hd">
           <div>
-            <h3>Shared folders</h3>
+            <h3 id="shared-folders-title">Shared folders</h3>
             <div className="sub">
               Project: <strong>{projectName}</strong>
             </div>
           </div>
           <button
-            className="btn-ghost-sm"
+            className="btn ghost sm"
             onClick={onClose}
             aria-label="Close"
           >

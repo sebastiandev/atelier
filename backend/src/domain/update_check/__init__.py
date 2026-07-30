@@ -1,3 +1,3 @@
-from src.domain.update_check.models import UpdateStatus, UpdateChecker
+from src.domain.update_check.models import UpdateChecker, UpdateStatus
 
-__all__ = ["UpdateStatus", "UpdateChecker"]
+__all__ = ["UpdateChecker", "UpdateStatus"]

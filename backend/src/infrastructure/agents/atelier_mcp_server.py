@@ -32,6 +32,7 @@ from src.infrastructure.agents.atelier_mcp_tools import (
     TOOL_RECORD_PR,
     TOOL_SCHEMAS,
     marker_text_for_tool,
+    schema_violation,
 )
 
 _TOOL_NAMES = (TOOL_RECORD_PR, TOOL_RECORD_JIRA, TOOL_RECORD_DOC)
@@ -57,6 +58,23 @@ def _build_server() -> Server[Any]:
     ) -> list[TextContent]:
         if name not in _TOOL_NAMES:
             raise ValueError(f"unknown tool: {name}")
+        # The SDK validates against inputSchema, but only once it has a
+        # cached tool definition -- `Server.call_tool` skips validation
+        # when that lookup misses. Check here too so a model that reached
+        # the tool without its schema in context (Claude Code's tool
+        # search hands back a bare tool_reference) always gets told what
+        # it left out, instead of the call half-succeeding.
+        violation = schema_violation(name, arguments)
+        if violation is not None:
+            return [
+                TextContent(
+                    type="text",
+                    text=(
+                        f"Not recorded: {violation}. "
+                        f"Re-call {name} with every required field."
+                    ),
+                )
+            ]
         return [TextContent(type="text", text=marker_text_for_tool(name, arguments))]
 
     return server

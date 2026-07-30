@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update Dependencies"
+  short_description: "Safely update and validate project dependencies"
+  default_prompt: "Use $update-dependencies to update selected dependencies and validate their contracts."

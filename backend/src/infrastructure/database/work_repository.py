@@ -76,6 +76,7 @@ class SqlWorkRepository:
                 existing.project_slug = work.project_slug
                 existing.from_chat_slug = work.from_chat_slug
                 existing.from_chat_title = work.from_chat_title
+                existing.mode = work.mode
         return work
 
     def delete_work(self, work_slug: str) -> None:
@@ -141,6 +142,7 @@ class SqlWorkRepository:
                 existing.provider = agent.provider
                 existing.model = agent.model
                 existing.folder = agent.folder
+                existing.worktree_slug = agent.worktree_slug
                 existing.status = agent.status
                 existing.started_at = agent.started_at
                 existing.stopped_at = agent.stopped_at

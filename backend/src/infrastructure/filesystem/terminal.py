@@ -212,4 +212,4 @@ _LINUX_EXEC_TERMINALS: tuple[tuple[str, str], ...] = (
 )
 
 
-__all__ = ["open_in_terminal", "TerminalKind"]
+__all__ = ["TerminalKind", "open_in_terminal"]

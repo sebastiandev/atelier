@@ -22,11 +22,15 @@ class ChatGrounding:
 class CreateChatRequest:
     provider: Provider
     model: str
-    first_message: str
+    first_message: str | None = None
     title: str | None = None
     grounding: ChatGrounding | None = None
     working_directory: str | None = None
     options: dict[str, Any] | None = None
+    discussion_only: bool = False
+    context_seed: str | None = None
+    discussion_key: str | None = None
+    role: str = "explore"
 
 
 @dataclass(frozen=True)

@@ -19,20 +19,24 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from src.domain.agents import (
-    SPECS,
     RefreshSessionConfigOptions,
     ResolvePermission,
     SendInput,
     SetSessionConfigOption,
     StopTurn,
     UserAction,
+    context_updates,
 )
-from src.domain.commands.agents import add_contexts
+from src.domain.agents.effort import spec_option_key
 from src.domain.connections import ConnectionStore
 from src.domain.workstore.ports import WorkStore
 
 if TYPE_CHECKING:
     from src.domain.supervisor import AgentSupervisorService
+
+
+class WorkNotActive(ValueError):
+    """The agent's Work is archived and cannot accept input."""
 
 
 async def execute(
@@ -42,6 +46,12 @@ async def execute(
     agent_slug: str,
     action: UserAction,
 ) -> None:
+    work_slug = workstore.get_work_slug_for_agent(agent_slug)
+    record = workstore.get_work(work_slug) if work_slug is not None else None
+    if record is not None and record.work.status != "active":
+        raise WorkNotActive(
+            f"work {work_slug} is {record.work.status}; reopen it to continue"
+        )
     match action:
         case SendInput(text=text, contexts=contexts):
             if contexts:
@@ -54,12 +64,11 @@ async def execute(
                 # exception propagates to the WS handler, which will
                 # surface it as a transcript error event.
                 result = await asyncio.to_thread(
-                    add_contexts.execute,
+                    context_updates.append_contexts,
                     workstore,
                     connection_store,
-                    add_contexts.AddContextsRequest(
-                        agent_slug=agent_slug, contexts=contexts
-                    ),
+                    agent_slug=agent_slug,
+                    contexts=contexts,
                 )
                 prepended = _prepend_context_hint(
                     text, result.new_file_paths, result.index_path
@@ -109,6 +118,7 @@ def _prepend_context_hint(
 def _stored_option_key(
     workstore: WorkStore, agent_slug: str, config_id: str
 ) -> str | None:
+    """Spec option key a live config change should persist under."""
     work_slug = workstore.get_work_slug_for_agent(agent_slug)
     if work_slug is None:
         return None
@@ -118,14 +128,7 @@ def _stored_option_key(
     )
     if agent is None:
         return None
-    option_keys = SPECS[agent.provider].describe().options.keys()
-    if config_id in option_keys:
-        return config_id
-    if config_id == "effort":
-        for key in ("thinking_effort", "reasoning_effort"):
-            if key in option_keys:
-                return key
-    return None
+    return spec_option_key(agent.provider, config_id)
 
 
-__all__ = ["execute"]
+__all__ = ["WorkNotActive", "execute"]

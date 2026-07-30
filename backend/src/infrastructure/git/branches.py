@@ -14,9 +14,23 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GitBranchState:
+    """Current branch posture for a selected local folder."""
+
+    is_git_repo: bool
+    branch: str | None = None
+
+    @property
+    def detached(self) -> bool:
+        """Return whether the git repository currently has a detached HEAD."""
+        return self.is_git_repo and self.branch is None
 
 
 def list_branches(path: Path) -> list[str]:
@@ -46,4 +60,31 @@ def list_branches(path: Path) -> list[str]:
     return [line for line in result.stdout.splitlines() if line]
 
 
-__all__ = ["list_branches"]
+def branch_state(path: Path) -> GitBranchState:
+    """Return current branch state, treating invalid folders as non-repositories."""
+    if not path.exists() or not path.is_dir():
+        return GitBranchState(is_git_repo=False)
+    try:
+        inside = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return GitBranchState(is_git_repo=False)
+    return GitBranchState(
+        is_git_repo=inside.stdout.strip() == "true",
+        branch=branch or None,
+    )
+
+
+__all__ = ["GitBranchState", "branch_state", "list_branches"]

@@ -12,7 +12,7 @@ Three scripts already exist; this skill is a thin wrapper that picks the right o
 - **Backend** → `127.0.0.1:8001` (port `8000` conflicts with another app on the user's machine; the project default is `8001`).
 - **Frontend** → `127.0.0.1:4173` (Vite default `5173` conflicts; the project uses `4173` and proxies `/api/*` to the backend).
 
-Both are overridable via env vars: `ATELIER_BACKEND_PORT`, `ATELIER_FRONTEND_PORT`, `ATELIER_BACKEND_HOST`, `ATELIER_FRONTEND_HOST`. Pass these only when the user asks; never override silently.
+Both are overridable via `./scripts/dev.sh --fe PORT --be PORT` (long aliases: `--frontend-port`, `--backend-port`) or the `ATELIER_BACKEND_PORT`, `ATELIER_FRONTEND_PORT`, `ATELIER_BACKEND_HOST`, and `ATELIER_FRONTEND_HOST` environment variables. Pass overrides only when the user asks; never override silently.
 
 ## Usage
 

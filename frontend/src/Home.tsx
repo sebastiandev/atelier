@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 
 import {
   type ChatGrounding,
@@ -11,6 +11,7 @@ import {
   listProjects,
   listWorks,
 } from "./api";
+import { BrandMark } from "./BrandMark";
 import { ChatComposer, ChatRow, DeleteChatDialog } from "./Chat";
 import {
   ChatIcon,
@@ -22,10 +23,18 @@ import {
   SlidersIcon,
 } from "./Icons";
 import { NewProjectDialog } from "./NewProjectDialog";
-import { NewWorkDialog } from "./NewWorkDialog";
+import { NewWorkDialog, type NewWorkIntent } from "./NewWorkDialog";
+import { PaneResizeHandle } from "./PaneResizeHandle";
+import { loopStartStorageKey } from "./loopSetup";
+import { planningStartStorageKey } from "./planningSetup";
 import { SearchModal } from "./SearchModal";
 import { Switcher, type SwitcherItem } from "./Switcher";
 import { ThemeToggle } from "./ThemeToggle";
+import {
+  HOME_RAIL_MAX,
+  HOME_RAIL_MIN,
+  useLayoutStore,
+} from "./state/layout";
 
 // "all" → everything (incl. loose). "loose" → no project. { slug } →
 // scope to a specific project. Single source of truth shared by the
@@ -34,6 +43,8 @@ import { ThemeToggle } from "./ThemeToggle";
 type ProjectFilter = "all" | "loose" | { slug: string };
 
 export function Home() {
+  const homeRailWidth = useLayoutStore((state) => state.homeRailWidth);
+  const setHomeRailWidth = useLayoutStore((state) => state.setHomeRailWidth);
   const [works, setWorks] = useState<WorkSummary[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [chats, setChats] = useState<ChatSummary[]>([]);
@@ -112,10 +123,27 @@ export function Home() {
     searchOpen,
   ]);
 
-  async function handleCreateWork(payload: CreateWorkPayload) {
-    await createWork(payload);
-    await refresh();
+  async function handleCreateWork(payload: CreateWorkPayload, intent: NewWorkIntent) {
+    const created = await createWork(payload);
     setWorkDialogOpen(false);
+    if (intent.mode === "planning") {
+      sessionStorage.setItem(
+        planningStartStorageKey(created.slug),
+        JSON.stringify(intent.seed),
+      );
+      window.location.assign(`/works/${created.slug}`);
+      return created;
+    }
+    if (intent.mode === "loop") {
+      sessionStorage.setItem(
+        loopStartStorageKey(created.slug),
+        JSON.stringify(intent.seed),
+      );
+      window.location.assign(`/works/${created.slug}`);
+      return created;
+    }
+    window.location.assign(`/works/${created.slug}`);
+    return created;
   }
 
   const projectMap = useMemo(() => {
@@ -179,50 +207,17 @@ export function Home() {
   }, [works, projectMap]);
 
   return (
-    <div className="shell-v3 wide-left home-v3">
+    <div
+      className="shell-v3 wide-left home-v3"
+      style={{ "--shell-left-width": `${homeRailWidth}px` } as CSSProperties}
+    >
       {/* LEFT: hero wordmark + tagline + 3 action buttons + footer */}
       <aside className="shell-left">
         <div className="home-v3-hero">
           <div className="home-v3-hero-top">
             <div className="home-v3-mark" aria-label="Atelier">
               <span className="glyph-a" aria-hidden>
-                {/* viewBox crops to the A's bounds so the SVG box's
-                    baseline lands at the bottom of the legs. The
-                    dash sits at y=56 (below the viewBox) and renders
-                    via overflow:visible — it's decoration, not part
-                    of the letterform's optical baseline. */}
-                <svg viewBox="0 0 64 50" overflow="visible">
-                  <g
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="6"
-                    strokeLinecap="butt"
-                    strokeLinejoin="miter"
-                    strokeMiterlimit="10"
-                  >
-                    {/* Single path through both legs so the apex at
-                        (32, 12) renders as a clean miter joint, not
-                        two butted flat caps. */}
-                    <path d="M 14 50 L 32 12 L 50 50" />
-                    <path d="M 21 36 L 43 36" />
-                  </g>
-                  <rect
-                    className="cur-dash"
-                    x="11"
-                    y="56"
-                    width="42"
-                    height="5"
-                    fill="currentColor"
-                  >
-                    <animate
-                      attributeName="opacity"
-                      values="1;1;0;0"
-                      keyTimes="0;0.55;0.6;1"
-                      dur="1.05s"
-                      repeatCount="indefinite"
-                    />
-                  </rect>
-                </svg>
+                <BrandMark blink viewBox="0 0 64 50" overflow="visible" />
               </span>
               <span className="rest">telier</span>
             </div>
@@ -255,7 +250,7 @@ export function Home() {
               >
                 <span className="launch-ico"><SearchIcon size={12} /></span>
                 <span className="launch-label">Search</span>
-                <span className="kbd">⇧F</span>
+                <span className="kbd">⌘K</span>
               </button>
             </div>
           </div>
@@ -288,6 +283,15 @@ export function Home() {
             </div>
           </div>
         </div>
+        <PaneResizeHandle
+          defaultValue={500}
+          edge="right"
+          label="Resize home rail"
+          max={HOME_RAIL_MAX}
+          min={HOME_RAIL_MIN}
+          value={homeRailWidth}
+          onChange={setHomeRailWidth}
+        />
       </aside>
 
       {/* RIGHT: latest work + projects */}
@@ -326,7 +330,7 @@ export function Home() {
                 }
                 onClick={() => setFilter({ slug: p.slug })}
                 style={{
-                  ["--proj-color" as string]: `oklch(0.62 0.16 ${p.color})`,
+                  ["--proj-h" as string]: String(p.color),
                 }}
               >
                 <span className="swatch" />
@@ -427,8 +431,7 @@ export function Home() {
                 className="v3-proj-row"
                 href={`/projects/${p.slug}`}
                 style={{
-                  ["--proj-color" as string]: `oklch(0.62 0.16 ${p.color})`,
-                  ["--proj-soft" as string]: `oklch(0.62 0.16 ${p.color} / 0.12)`,
+                  ["--proj-h" as string]: String(p.color),
                 }}
               >
                 <span className="swatch">{p.glyph}</span>
@@ -599,7 +602,7 @@ function V3WorkRow({
           style={
             project
               ? {
-                  ["--proj-color" as string]: `oklch(0.62 0.16 ${project.color})`,
+                  ["--proj-h" as string]: String(project.color),
                 }
               : undefined
           }

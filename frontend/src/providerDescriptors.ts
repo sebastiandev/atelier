@@ -5,6 +5,7 @@ import {
   type OpenCodeModelOption,
   type ProviderDescriptor,
   type ProviderField,
+  listOpenCodeModels,
   listProviders,
 } from "./api";
 
@@ -35,8 +36,27 @@ export function useProviderDescriptors(): {
   useEffect(() => {
     let cancelled = false;
     getProviderDescriptors()
-      .then((data) => {
-        if (!cancelled) setDescriptors(data);
+      .then(async (data) => {
+        if (cancelled) return;
+        setDescriptors(data);
+        // OpenCode's model list depends on which providers the user has
+        // authenticated, so the descriptor ships a placeholder and the real
+        // list comes from `opencode models`. Enriching here means every
+        // consumer of this hook gets it, rather than each caller
+        // rediscovering it.
+        if (!data.some((item) => item.name === "opencode")) return;
+        try {
+          const rows = await listOpenCodeModels();
+          if (cancelled || rows.length === 0) return;
+          setDescriptors((current) =>
+            (current ?? data).map((item) =>
+              item.name === "opencode" ? withOpenCodeModelOptions(item, rows) : item,
+            ),
+          );
+        } catch {
+          // Leave the placeholder in place: the CLI may not be installed,
+          // which is not an error for users on other providers.
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -77,7 +97,17 @@ export type ProviderOptionSelection = {
   field: ProviderField;
 };
 
-export const PROVIDER_EFFORT_OPTION_KEYS = [
+/**
+ * Every spelling of the reasoning-effort dial, across both the static
+ * provider descriptors (`thinking_effort` for the Claude family,
+ * `reasoning_effort` for Codex and OpenCode) and the live ACP session
+ * config ids (`effort` for claude-acp and opencode, `reasoning_effort`
+ * for codex-acp). Mirrors `EFFORT_OPTION_KEYS` + `ACP_EFFORT_CONFIG_ID`
+ * in `backend/src/domain/agents/effort.py`; the pre-launch form and the
+ * running-session picker read the same list so a provider can't light
+ * up in one surface and stay dark in the other.
+ */
+export const EFFORT_OPTION_KEYS = [
   "thinking_effort",
   "reasoning_effort",
   "effort",
@@ -147,12 +177,18 @@ export function optionFieldForModel(
   key: string,
   field: ProviderField,
 ): ProviderField {
-  if (!PROVIDER_EFFORT_OPTION_KEYS.some((item) => item === key) || !model) {
+  if (!EFFORT_OPTION_KEYS.some((item) => item === key) || !model) {
     return field;
   }
   const meta = provider.model_meta?.[model];
-  const values = meta?.effort_values?.filter(Boolean);
-  if (!values || values.length === 0) return field;
+  const declared = meta?.effort_values;
+  // Absent means "no opinion" — keep the provider-wide ladder. An empty
+  // list is an opinion: this model has no effort dial (OpenCode models
+  // without variants), so hand back an empty field and let callers hide
+  // the control rather than offer a value the agent would ignore.
+  if (declared === undefined || declared === null) return field;
+  const values = declared.filter(Boolean);
+  if (values.length === 0) return { ...field, values: [] };
   const defaultValue =
     meta?.effort_default && values.includes(meta.effort_default)
       ? meta.effort_default
@@ -168,11 +204,22 @@ export function providerEffortOption(
   provider: ProviderDescriptor,
   model: string | null,
 ): ProviderOptionSelection | null {
-  for (const key of PROVIDER_EFFORT_OPTION_KEYS) {
+  for (const key of EFFORT_OPTION_KEYS) {
     const field = provider.options[key];
-    if (field) return { key, field: optionFieldForModel(provider, model, key, field) };
+    if (!field) continue;
+    const effective = optionFieldForModel(provider, model, key, field);
+    return effective.values.length > 0 ? { key, field: effective } : null;
   }
   return null;
+}
+
+export function providerFastOption(
+  provider: ProviderDescriptor,
+): ProviderOptionSelection | null {
+  const field = provider.options["fast-mode"];
+  return field?.values.includes("on") && field.values.includes("off")
+    ? { key: "fast-mode", field }
+    : null;
 }
 
 export function providerPermissionOption(
@@ -197,11 +244,29 @@ export function withOpenCodeModelOptions(
   const values = [baseValue];
   const valueLabels = [baseLabel];
   const seen = new Set(values);
+  // OpenCode calls reasoning effort a "variant" and defines the ladder
+  // per model, so the CLI listing is the only source for it. Publishing
+  // it as model_meta lets the existing per-model narrowing apply.
+  const modelMeta: Record<string, ModelMeta> = { ...(provider.model_meta ?? {}) };
+  // The sentinel routes to whatever the user's OpenCode config selects,
+  // so its variant ladder is unknowable — declare no effort rather than
+  // offer the union and hope.
+  modelMeta[baseValue] = { ...emptyModelMeta, ...modelMeta[baseValue], effort_values: [] };
   for (const option of models) {
     if (seen.has(option.value)) continue;
     seen.add(option.value);
     values.push(option.value);
     valueLabels.push(option.label);
+    if (option.effort_values === undefined) continue;
+    modelMeta[option.value] = {
+      ...emptyModelMeta,
+      ...modelMeta[option.value],
+      effort_values:
+        option.effort_values.length > 0
+          ? [defaultEffort, ...option.effort_values]
+          : [],
+      effort_default: defaultEffort,
+    };
   }
   return {
     ...provider,
@@ -210,8 +275,21 @@ export function withOpenCodeModelOptions(
       values,
       value_labels: valueLabels,
     },
+    model_meta: modelMeta,
   };
 }
+
+/** OpenCode's "leave it alone" effort — must match `OpenCodeEffort.DEFAULT`
+ *  so the option is omitted from the launch payload when it's selected. */
+const defaultEffort = "default";
+
+const emptyModelMeta: ModelMeta = {
+  context_window: null,
+  input_per_mtok: null,
+  output_per_mtok: null,
+  cache_read_per_mtok: null,
+  cache_write_per_mtok: null,
+};
 
 export function modelPickerOptions(provider: ProviderDescriptor) {
   return provider.primary_field.values.map((value, index) => ({

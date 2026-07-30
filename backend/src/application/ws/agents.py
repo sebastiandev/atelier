@@ -55,6 +55,7 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
 
     cursor = _parse_cursor(websocket.query_params.get("cursor"))
     replay_limit = _parse_limit(websocket.query_params.get("replay_limit"))
+    read_only = websocket.query_params.get("read_only") == "1"
 
     try:
         async with connect.execute(
@@ -65,16 +66,22 @@ async def stream_agent(websocket: WebSocket, agent_slug: str) -> None:
             share_provisioner,
             settings,
             connect.ConnectRequest(
-                    agent_slug=agent_slug,
-                    cursor=cursor,
-                    replay_limit=replay_limit,
-                ),
+                agent_slug=agent_slug,
+                cursor=cursor,
+                replay_limit=replay_limit,
+                read_only=read_only,
+            ),
         ) as sub:
             await websocket.accept()
             send_task = asyncio.create_task(_drain(sub, websocket))
             recv_task = asyncio.create_task(
                 _receive_inputs(
-                    websocket, supervisor, workstore, connection_store, agent_slug
+                    websocket,
+                    supervisor,
+                    workstore,
+                    connection_store,
+                    agent_slug,
+                    read_only,
                 )
             )
             kick_task = asyncio.create_task(sub.kicked.wait())
@@ -134,9 +141,12 @@ async def _receive_inputs(
     workstore: WorkStore,
     connection_store: ConnectionStore,
     agent_slug: str,
+    read_only: bool,
 ) -> None:
     while True:
         msg = await websocket.receive_text()
+        if read_only:
+            continue
         try:
             data = json.loads(msg)
         except json.JSONDecodeError:
@@ -160,6 +170,9 @@ async def _receive_inputs(
                 await websocket.send_json(
                     {"type": "client_error", "message": f"Add context failed: {exc}"}
                 )
+        except handle_user_action.WorkNotActive as exc:
+            with suppress(Exception):
+                await websocket.send_json({"type": "client_error", "message": str(exc)})
         except AgentTerminated:
             # The pump exited (upstream rate limit, provider EOF,
             # subprocess crash). Tell the FE briefly, then close the

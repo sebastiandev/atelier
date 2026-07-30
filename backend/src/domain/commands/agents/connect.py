@@ -6,17 +6,14 @@ exactly once, in order: disk-replay first, then live events.
 
 Flow:
   1. If the supervisor already tracks the agent, subscribe directly.
-  2. Otherwise, ``resume.execute`` rebuilds the adapter, runs the
+  2. Otherwise, the resume runtime rebuilds the adapter, runs the
      detach catch-up merge (if needed), and registers the agent.
      Truly unknown slugs surface as ``AgentNotFound``.
   3. ``supervisor.subscribe(slug, cursor)`` yields the Subscription;
      this command yields the same value to the caller.
 
-The WS handler shrinks to::
-
-    async with connect.execute(deps, request) as sub:
-        async for event in sub.stream():
-            await websocket.send_json(event)
+The WS handler opens this command as an async context manager, then streams
+subscription events to the socket.
 
 with a parallel task watching ``sub.kicked`` and processing inbound
 input frames.
@@ -24,26 +21,31 @@ input frames.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from src.domain.commands.agents import resume
+from src.domain.agents import resume_runtime
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
+from src.domain.supervisor import AgentSubscription, build_replay_subscription
 from src.domain.workstore.ports import WorkStore
 from src.domain.worktrees import WorktreeManager
 from src.settings import Settings
 
 if TYPE_CHECKING:
-    from src.domain.supervisor import AgentSubscription, AgentSupervisorService
+    from src.domain.supervisor import AgentSupervisorService
 
 
 @dataclass(frozen=True)
 class ConnectRequest:
+    """Inputs for subscribing to an agent transcript."""
+
     agent_slug: str
     cursor: int = 0
     replay_limit: int | None = None
+    read_only: bool = False
 
 
 class AgentNotFound(ValueError):
@@ -60,43 +62,62 @@ async def execute(
     settings: Settings,
     req: ConnectRequest,
 ) -> AsyncIterator[AgentSubscription]:
+    history_work_slug = workstore.get_work_slug_for_agent(req.agent_slug)
+    if history_work_slug is None:
+        raise AgentNotFound(f"agent not found: {req.agent_slug}")
+    record = workstore.get_work(history_work_slug)
+    if record is None:
+        raise AgentNotFound(f"work not found: {history_work_slug}")
+
+    if req.read_only or record.work.status != "active":
+        subscription = build_replay_subscription(
+            await asyncio.to_thread(
+                lambda: list(
+                    workstore.read_transcript_from_cursor(
+                        history_work_slug, req.agent_slug, req.cursor
+                    )
+                )
+            ),
+            cursor=req.cursor,
+            replay_limit=req.replay_limit,
+        )
+        try:
+            yield subscription
+        finally:
+            subscription.kicked.set()
+        return
+
     if not supervisor.is_registered(req.agent_slug):
         # Supervisor has no live state — backend restart, the agent was
         # closed-to-rail, or it was detached to CLI. Resume will resolve
         # the work_slug from the workstore, register the agent, and (if
         # detached) merge the SDK-side events first.
-        history_work_slug = workstore.get_work_slug_for_agent(req.agent_slug)
-        if history_work_slug is None:
-            raise AgentNotFound(f"agent not found: {req.agent_slug}")
         try:
-            await resume.execute(
+            await resume_runtime.resume_agent(
                 workstore,
                 supervisor,
                 worktree_manager,
                 sharestore,
                 share_provisioner,
                 settings,
-                resume.ResumeAgentRequest(
+                resume_runtime.ResumeAgentRequest(
                     work_slug=history_work_slug, agent_slug=req.agent_slug
                 ),
             )
-        except resume.AgentNotFound as exc:
+        except resume_runtime.AgentNotFound as exc:
             raise AgentNotFound(str(exc)) from exc
     elif supervisor.is_lazy_registered(req.agent_slug):
         # A view-only reattach registers lazily. If the user keeps typing
         # in the external CLI after that, later opens must still import
         # provider transcript entries before computing the WS replay window.
-        history_work_slug = workstore.get_work_slug_for_agent(req.agent_slug)
-        if history_work_slug is None:
-            raise AgentNotFound(f"agent not found: {req.agent_slug}")
         try:
-            synced = await resume.catch_up_cli_events(
+            synced = await resume_runtime.catch_up_cli_events(
                 workstore,
                 worktree_manager,
                 work_slug=history_work_slug,
                 agent_slug=req.agent_slug,
             )
-        except resume.AgentNotFound as exc:
+        except resume_runtime.AgentNotFound as exc:
             raise AgentNotFound(str(exc)) from exc
         if synced:
             await supervisor.refresh_seq_from_disk(req.agent_slug)

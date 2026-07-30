@@ -14,10 +14,13 @@ from typing import Any
 from src.infrastructure.cli_launcher import codex
 
 # ACP mode → (sandbox, approval_mode) in the bespoke CLI's vocabulary.
-# ``auto`` matches the CLI defaults (workspace-write / on-request), so
+# ``agent`` matches the CLI defaults (workspace-write / on-request), so
 # both values are the skip-defaults the codex builder already omits.
 _MODE_TO_CLI: dict[str, tuple[str, str]] = {
     "read-only": ("read-only", "on-request"),
+    "agent": ("workspace-write", "on-request"),
+    "agent-full-access": ("danger-full-access", "never"),
+    # Compatibility for sessions persisted by codex-acp 0.x.
     "auto": ("workspace-write", "on-request"),
     "full-access": ("danger-full-access", "never"),
 }

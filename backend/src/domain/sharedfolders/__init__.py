@@ -16,9 +16,9 @@ from src.domain.sharedfolders.dtos import (
 )
 from src.domain.sharedfolders.ports import (
     MountConflict,
+    SharedFolderStore,
     ShareProvisioner,
     ShareRepository,
-    SharedFolderStore,
 )
 from src.domain.sharedfolders.service import SharedFolderStoreService
 from src.domain.sharedfolders.validation import (

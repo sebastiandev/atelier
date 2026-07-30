@@ -13,7 +13,6 @@ from pathlib import Path
 
 from src.domain.agents.doc_state import classify_location, git_state
 
-
 # ---------------------------------------------------------------------------
 # classify_location
 # ---------------------------------------------------------------------------

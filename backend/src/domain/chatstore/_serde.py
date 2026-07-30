@@ -24,6 +24,13 @@ def serialize_chat(chat: Chat) -> dict[str, Any]:
         out["working_directory"] = chat.working_directory
     if chat.options:
         out["options"] = chat.options
+    if chat.discussion_only:
+        out["discussion_only"] = True
+    out["role"] = chat.role
+    if chat.context_seed:
+        out["context_seed"] = chat.context_seed
+    if chat.discussion_key:
+        out["discussion_key"] = chat.discussion_key
     if chat.grounding_kind and chat.grounding_ref:
         out["grounding"] = {
             "kind": chat.grounding_kind,
@@ -46,6 +53,19 @@ def deserialize_chat(data: dict[str, Any]) -> Chat:
         options=(
             data["options"]
             if isinstance(data.get("options"), dict)
+            else None
+        ),
+        discussion_only=True if data.get("discussion_only") is True else None,
+        role=data.get("role") or "explore",
+        context_seed=(
+            data["context_seed"]
+            if isinstance(data.get("context_seed"), str) and data["context_seed"].strip()
+            else None
+        ),
+        discussion_key=(
+            data["discussion_key"]
+            if isinstance(data.get("discussion_key"), str)
+            and data["discussion_key"].strip()
             else None
         ),
         created_at=datetime.fromisoformat(data["created_at"]),

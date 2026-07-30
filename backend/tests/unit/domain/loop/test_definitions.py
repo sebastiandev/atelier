@@ -1,0 +1,100 @@
+"""Public contract tests for reusable loop definition validation."""
+
+from dataclasses import replace
+
+import pytest
+
+from src.domain.loop.builtins import builtin_loop_definitions
+from src.domain.loop.definitions import prepare_definition
+from src.domain.loop.dtos import LoopContextKind, LoopContextReference
+
+
+def test_builtins_are_valid_and_revisioned() -> None:
+    definitions = builtin_loop_definitions()
+
+    assert [definition.definition_id for definition in definitions] == [
+        "atelier-fast",
+        "atelier-reviewed",
+        "atelier-secure",
+    ]
+    assert all(definition.valid and len(definition.revision) == 6 for definition in definitions)
+    assert definitions[1].stages[1].retry.timeout_minutes == 15
+
+
+def test_unsafe_context_path_invalidates_definition() -> None:
+    source = builtin_loop_definitions()[1]
+    review = source.stages[1]
+    unsafe = replace(
+        source,
+        stages=(
+            source.stages[0],
+            replace(
+                review,
+                context=(
+                    *review.context,
+                    LoopContextReference(
+                        LoopContextKind.FILES,
+                        paths=("../outside.md",),
+                    ),
+                ),
+            ),
+            source.stages[2],
+        ),
+    )
+
+    prepared = prepare_definition(unsafe)
+
+    assert prepared.valid is False
+    assert "unsafe context path" in " ".join(prepared.errors)
+
+
+def test_review_stage_cannot_be_first() -> None:
+    source = builtin_loop_definitions()[1]
+    review_first = replace(source, stages=source.stages[1:])
+
+    prepared = prepare_definition(review_first)
+
+    assert "first stage must be an implementation agent" in " ".join(prepared.errors).lower()
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"provider": "unknown"}, "unknown provider"),
+        ({"provider": "codex", "model": "rush"}, "unsupported model"),
+        ({"provider": "amp", "effort": "high"}, "unsupported effort"),
+    ],
+)
+def test_invalid_explicit_agent_override_invalidates_definition(
+    changes: dict[str, str],
+    message: str,
+) -> None:
+    source = builtin_loop_definitions()[0]
+    stage = source.stages[0]
+    assert stage.agent is not None
+    invalid = replace(
+        source,
+        stages=(replace(stage, agent=replace(stage.agent, **changes)), source.stages[1]),
+    )
+
+    prepared = prepare_definition(invalid)
+
+    assert message in " ".join(prepared.errors).lower()
+
+
+def test_repo_scope_value_reads_as_library_for_old_snapshots() -> None:
+    """`repo` was renamed to `library`; historical snapshots still say repo."""
+    from src.domain.loop.dtos import LoopDefinitionScope, StageDefinitionScope
+
+    assert LoopDefinitionScope("repo") is LoopDefinitionScope.LIBRARY
+    assert LoopDefinitionScope("library") is LoopDefinitionScope.LIBRARY
+    assert StageDefinitionScope("repo") is StageDefinitionScope.LIBRARY
+
+
+def test_slugify_definition_id_matches_the_editor_rule() -> None:
+    from src.domain.loop.definitions import slugify_definition_id
+
+    assert slugify_definition_id("ShipHero Code & Review") == "shiphero-code-review"
+    assert slugify_definition_id("  Spaces --and-- symbols!! ") == "spaces-and-symbols"
+    assert slugify_definition_id("Shiphero-code") == "shiphero-code"
+    assert slugify_definition_id("!!!") == ""

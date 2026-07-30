@@ -36,6 +36,7 @@ class ClaudeModel(str, Enum):
     """
 
     FABLE_5 = "claude-fable-5"
+    OPUS_5 = "claude-opus-5"
     OPUS_4_8 = "claude-opus-4-8"
     OPUS_4_7_1M = "claude-opus-4-7[1m]"
     OPUS_4_7 = "claude-opus-4-7"
@@ -142,6 +143,15 @@ class CommonAgentConfig:
     # used by Codex so workspace-write agents can write project shared
     # folders whose symlink targets live outside the per-agent worktree.
     writable_roots: tuple[Path, ...] = ()
+    # Directories outside the workspace the agent legitimately needs to
+    # *read*: the source repository a worktree was cut from, where the plan
+    # artifacts a run is briefed against live. Providers that gate reads by
+    # location (OpenCode's `external_directory`) allow these; the rest ignore
+    # the field. Writable roots are readable too and need not be repeated.
+    readable_roots: tuple[Path, ...] = ()
+    # Loop stages may pre-approve narrow command prefixes in provider-native
+    # policy. Empty for interactive agents and providers without this support.
+    approved_command_prefixes: tuple[str, ...] = ()
 
 
 DEFAULT_ALLOWED_TOOLS: tuple[str, ...] = ("Read", "Grep", "Glob")
@@ -170,6 +180,7 @@ class AmpAgentConfig:
     common: CommonAgentConfig
     mode: AmpMode = AmpMode.SMART
     permission_mode: AmpPermissionMode = AmpPermissionMode.DEFAULT
+    read_only: bool = False
     # Only meaningful when ``permission_mode == CUSTOM``. Bash stays gated
     # through the bridge regardless — including ``"Bash"`` here is a no-op.
     custom_allowed_tools: tuple[str, ...] = ()
@@ -205,7 +216,6 @@ class CodexReasoningEffort(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
-    MAX = "max"
     EXTRA = "extra"
     ULTRA = "ultra"
 
@@ -267,15 +277,15 @@ class ClaudeAcpModel(str, Enum):
     """Model choices exposed by the official ``claude-agent-acp`` wrapper.
 
     These are the wrapper's session-config-option *values* (captured live
-    2026-06-11, wrapper 0.58.1) — aliases resolved by the Claude Code
+    2026-07-24, wrapper 0.61.0) — aliases resolved by the Claude Code
     runtime, not API model ids. ``DEFAULT`` defers to the user's Claude
     CLI configuration (currently resolves to Opus 4.8 with 1M context).
     """
 
     DEFAULT = "default"
+    OPUS_1M = "opus[1m]"
     FABLE_5_1M = "claude-fable-5[1m]"
     SONNET = "sonnet"
-    SONNET_1M = "sonnet[1m]"
     HAIKU = "haiku"
 
 
@@ -309,6 +319,22 @@ class ClaudeAcpPermissionMode(str, Enum):
     PLAN = "plan"
     DONT_ASK = "dontAsk"
     BYPASS = "bypassPermissions"
+
+
+class ClaudeAcpFastMode(str, Enum):
+    """claude-agent-acp ``fast`` values."""
+
+    OFF = "off"
+    ON = "on"
+
+
+ACP_EFFORT_CONFIG_ID = "effort"
+"""ACP config id for reasoning effort on agents that don't reuse their
+own spec key. claude-acp and opencode both publish the dial under this
+id; codex-acp happens to name it ``reasoning_effort``, matching its spec
+key exactly. Shared with ``domain.agents.effort`` so the emitters below
+and the reverse (live config id -> stored option key) mapping cannot
+drift apart."""
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -355,17 +381,19 @@ class ClaudeAcpAgentConfig(AcpAgentConfig):
     model: ClaudeAcpModel = ClaudeAcpModel.DEFAULT
     thinking_effort: ClaudeAcpEffort = ClaudeAcpEffort.DEFAULT
     permission_mode: ClaudeAcpPermissionMode = ClaudeAcpPermissionMode.DEFAULT
+    fast_mode: ClaudeAcpFastMode = ClaudeAcpFastMode.OFF
 
     def acp_config_values(self) -> tuple[tuple[str, str], ...]:
         return (
             ("model", self.model.value),
-            ("effort", self.thinking_effort.value),
+            (ACP_EFFORT_CONFIG_ID, self.thinking_effort.value),
             ("mode", self.permission_mode.value),
+            ("fast", self.fast_mode.value),
         )
 
 
 class CodexAcpModel(str, Enum):
-    """Model values exposed by the Agent Client Protocol codex-acp wrapper / Codex runtime.
+    """Model values exposed by Zed's codex-acp wrapper / Codex runtime.
 
     The 5.6 variants are ChatGPT-login Codex aliases; their public
     pricing/window metadata is not published, so specs keep blank meta
@@ -387,13 +415,12 @@ class CodexAcpEffort(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
     XHIGH = "xhigh"
-    MAX = "max"
     EXTRA = "extra"
     ULTRA = "ultra"
 
 
 class CodexAcpFastMode(str, Enum):
-    """codex-acp ``fast-mode`` service-tier toggle."""
+    """codex-acp ``fast-mode`` values."""
 
     OFF = "off"
     ON = "on"
@@ -409,11 +436,14 @@ class CodexAcpMode(str, Enum):
       network access or out-of-workspace edits. Matches the bespoke
       default (workspace-write + on-request) and is Atelier's default.
     - ``FULL_ACCESS`` — no approvals; use only for trusted runs.
+
+    The member names preserve Atelier's existing vocabulary; the values match
+    codex-acp 1.x's ``agent`` / ``agent-full-access`` protocol ids.
     """
 
     READ_ONLY = "read-only"
-    AUTO = "auto"
-    FULL_ACCESS = "full-access"
+    AUTO = "agent"
+    FULL_ACCESS = "agent-full-access"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -424,15 +454,15 @@ class CodexAcpAgentConfig(AcpAgentConfig):
 
     model: CodexAcpModel = CodexAcpModel.GPT_5_5
     reasoning_effort: CodexAcpEffort = CodexAcpEffort.MEDIUM
-    mode: CodexAcpMode = CodexAcpMode.AUTO
     fast_mode: CodexAcpFastMode = CodexAcpFastMode.OFF
+    mode: CodexAcpMode = CodexAcpMode.AUTO
 
     def acp_config_values(self) -> tuple[tuple[str, str], ...]:
         return (
             ("model", self.model.value),
             ("reasoning_effort", self.reasoning_effort.value),
-            ("mode", self.mode.value),
             ("fast-mode", self.fast_mode.value),
+            ("mode", self.mode.value),
         )
 
 
@@ -452,6 +482,25 @@ class OpenCodeMode(str, Enum):
     PLAN = "plan"
 
 
+class OpenCodeEffort(str, Enum):
+    """Reasoning effort of the OpenCode ACP ``effort`` option.
+
+    OpenCode calls these *variants* and defines them per model, so this
+    enum is the union of every ladder we've seen; which subset a given
+    model actually accepts arrives with the model list (``opencode
+    models --verbose``). ``default`` means "send nothing" — OpenCode
+    then applies whatever the user's own config selects.
+    """
+
+    DEFAULT = "default"
+    NONE = "none"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+    MAX = "max"
+
+
 @dataclass(frozen=True, kw_only=True)
 class OpenCodeAgentConfig(AcpAgentConfig):
     """OpenCode via its native ``opencode acp`` server.
@@ -459,15 +508,23 @@ class OpenCodeAgentConfig(AcpAgentConfig):
     ``configured-default`` suppresses the model config option so OpenCode
     uses its own default. Any explicit ``provider/model`` value travels
     as ACP ``model`` when the session advertises it.
+
+    ``effort`` must follow ``model``: OpenCode only advertises the effort
+    option once the selected model is one with variants, so a session
+    that starts on a variant-less default gains the option mid-apply.
     """
 
     model: str = OPENCODE_CONFIGURED_MODEL
     mode: OpenCodeMode = OpenCodeMode.BUILD
+    effort: OpenCodeEffort = OpenCodeEffort.DEFAULT
 
     def acp_config_values(self) -> tuple[tuple[str, str], ...]:
-        values: list[tuple[str, str]] = [("mode", self.mode.value)]
+        values: list[tuple[str, str]] = []
         if self.model != OPENCODE_CONFIGURED_MODEL:
-            values.insert(0, ("model", self.model))
+            values.append(("model", self.model))
+        if self.effort is not OpenCodeEffort.DEFAULT:
+            values.append((ACP_EFFORT_CONFIG_ID, self.effort.value))
+        values.append(("mode", self.mode.value))
         return tuple(values)
 
 
@@ -475,6 +532,7 @@ AgentConfig = ClaudeAgentConfig | AmpAgentConfig | CodexAgentConfig | AcpAgentCo
 
 
 __all__ = [
+    "ACP_EFFORT_CONFIG_ID",
     "AMP_DEFAULT_AUTO_ALLOWED_TOOLS",
     "DEFAULT_ALLOWED_TOOLS",
     "OPENCODE_CONFIGURED_MODEL",
@@ -485,6 +543,7 @@ __all__ = [
     "AmpPermissionMode",
     "ClaudeAcpAgentConfig",
     "ClaudeAcpEffort",
+    "ClaudeAcpFastMode",
     "ClaudeAcpModel",
     "ClaudeAcpPermissionMode",
     "ClaudeAgentConfig",
@@ -503,5 +562,6 @@ __all__ = [
     "CodexSandbox",
     "CommonAgentConfig",
     "OpenCodeAgentConfig",
+    "OpenCodeEffort",
     "OpenCodeMode",
 ]

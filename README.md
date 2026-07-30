@@ -81,6 +81,8 @@ cd atelier && ./scripts/dev.sh
 
 **02 · Open the workspace** — frontend at `127.0.0.1:4173`, API at `:8001`. Create a work unit, launch agents.
 
+Use alternate ports with `./scripts/dev.sh --fe 4183 --be 8011`.
+
 
 ### One-click desktop launcher
 

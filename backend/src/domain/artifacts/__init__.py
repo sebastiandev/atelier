@@ -40,17 +40,17 @@ from src.domain.artifacts.status import (
 )
 
 __all__ = [
+    "DOC_STATUSES",
+    "JIRA_STATUSES",
+    "PR_STATUSES",
     "Artifact",
     "ArtifactType",
     "BaseArtifact",
-    "DOC_STATUSES",
     "DocArtifact",
     "DocStatus",
     "InvalidStatus",
-    "JIRA_STATUSES",
     "JiraArtifact",
     "JiraStatus",
-    "PR_STATUSES",
     "PrArtifact",
     "PrStatus",
     "make_artifact",

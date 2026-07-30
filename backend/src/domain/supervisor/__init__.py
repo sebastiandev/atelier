@@ -5,6 +5,7 @@ from src.domain.supervisor.service import (
     AgentSubscription,
     AgentSupervisorService,
     AgentTerminated,
+    build_replay_subscription,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "AgentSubscription",
     "AgentSupervisorService",
     "AgentTerminated",
+    "build_replay_subscription",
 ]

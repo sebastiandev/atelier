@@ -25,7 +25,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 16
+CURRENT_SCHEMA_VERSION = 25
 
 
 class SchemaMismatchError(RuntimeError):
@@ -216,6 +216,92 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
             if not _has_column(conn, "chats", "options"):
                 conn.execute(text("ALTER TABLE chats ADD COLUMN options TEXT"))
             existing = 16
+        if existing == 16:
+            # v16 → v17: introduce one persisted PlanningSession per Work.
+            # Pure-add: metadata.create_all above creates the table.
+            existing = 17
+        if existing == 17:
+            # v17 → v18: persist generic loop runs and stage snapshots.
+            # Both tables are pure-add and are created by metadata.create_all.
+            existing = 18
+        if existing == 18:
+            # v18 → v19: persist a Work's selected execution mode. Nullable so
+            # existing Works keep the frontend's content-based fallback.
+            if not _has_column(conn, "works", "mode"):
+                conn.execute(text("ALTER TABLE works ADD COLUMN mode TEXT"))
+            existing = 19
+        if existing == 19:
+            # v19 → v20: let loop stage agents point at one stable,
+            # Work-owned checkout. NULL keeps legacy agents on their existing
+            # per-agent worktrees and the on-disk key remains optional.
+            if not _has_column(conn, "agents", "worktree_slug"):
+                conn.execute(
+                    text("ALTER TABLE agents ADD COLUMN worktree_slug TEXT")
+                )
+            existing = 20
+        if existing == 20:
+            # v20 → v21: persist whether an exploratory chat is a read-only
+            # run discussion. NULL keeps existing chats in their normal mode;
+            # chat.json also omits the additive marker unless it is true.
+            if not _has_column(conn, "chats", "discussion_only"):
+                conn.execute(
+                    text("ALTER TABLE chats ADD COLUMN discussion_only BOOLEAN")
+                )
+            existing = 21
+        if existing == 21:
+            # v21 -> v22: store hidden seed context for idle run discussions.
+            # NULL preserves every existing chat and the chat.json key is
+            # omitted unless a caller explicitly supplies a seed.
+            if not _has_column(conn, "chats", "context_seed"):
+                conn.execute(text("ALTER TABLE chats ADD COLUMN context_seed TEXT"))
+            existing = 22
+        if existing == 22:
+            # v22 -> v23: identify one reusable discussion per run stage. NULL
+            # preserves legacy chats and lets them keep their create-only behavior.
+            if not _has_column(conn, "chats", "discussion_key"):
+                conn.execute(text("ALTER TABLE chats ADD COLUMN discussion_key TEXT"))
+            existing = 23
+        if existing == 23:
+            # v23 -> v24: chats declare an owner-supplied role instead of the
+            # runtime inferring one from the title string and the
+            # discussion_only flag. Backfill once so existing chats keep the
+            # posture they were running under; the read path has no fallback.
+            if not _has_column(conn, "chats", "role"):
+                conn.execute(
+                    text(
+                        "ALTER TABLE chats ADD COLUMN role TEXT "
+                        "NOT NULL DEFAULT 'explore'"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "UPDATE chats SET role = 'advisory' "
+                        "WHERE discussion_only = 1"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "UPDATE chats SET role = 'planning' "
+                        "WHERE lower(trim(title)) = 'planning' "
+                        "AND grounding_kind = 'work'"
+                    )
+                )
+            existing = 24
+        if existing == 24:
+            # v24 -> v25: `artifact_root_path` held whichever of two things
+            # the caller happened to mean -- the folder setting a user typed
+            # (relative or absolute) on the session, the resolved absolute
+            # path in the manifest. The column is the former, so it takes the
+            # former's name. Rename rather than add-and-backfill: there is one
+            # column, one meaning, and no reader left on the old spelling.
+            if _has_column(conn, "planning_sessions", "artifact_root_path"):
+                conn.execute(
+                    text(
+                        "ALTER TABLE planning_sessions "
+                        "RENAME COLUMN artifact_root_path TO plan_artifacts_dir"
+                    )
+                )
+            existing = 25
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

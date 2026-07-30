@@ -148,7 +148,7 @@ export function FolderPickerDialog({
             </p>
           </div>
           <button
-            className="btn-icon"
+            className="btn icon"
             onClick={onCancel}
             aria-label="Close"
             type="button"

@@ -139,7 +139,10 @@ def _render(issue_id: str, issue: dict[str, Any], event: dict[str, Any] | None) 
             parts.append("")
             parts.extend(fallback)
         parts.append("")
-        parts.append("_(latest event unavailable — issue has no recent events or token lacks event scope)_")
+        parts.append(
+            "_(latest event unavailable — issue has no recent events or token "
+            "lacks event scope)_"
+        )
         return "\n".join(parts).rstrip() + "\n"
 
     error_section = _render_error(event, issue)

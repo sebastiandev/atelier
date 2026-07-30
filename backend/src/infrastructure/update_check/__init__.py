@@ -5,7 +5,7 @@ from src.infrastructure.update_check.poller import (
 )
 
 __all__ = [
+    "DEFAULT_INTERVAL_SECONDS",
     "GitUpdateChecker",
     "UpdateCheckPoller",
-    "DEFAULT_INTERVAL_SECONDS",
 ]
