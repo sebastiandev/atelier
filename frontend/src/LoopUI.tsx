@@ -1,19 +1,30 @@
-import { type CSSProperties, useEffect, useState } from "react";
+import { type CSSProperties, type ChangeEvent, useEffect, useRef, useState } from "react";
 
 import {
   type LoopContextKind,
   type LoopContextReference,
   type LoopDefinition,
+  type LoopImportPreview,
   type LoopOutcome,
   type LoopStepDefinition,
   type LoopStepKind,
   type PrStageConfig,
   type StageDefinition,
+  type StageImportPlan,
+  type StageImportPreview,
+  type StageImportStatus,
   type StageOverrides,
+  type StageResolutionAction,
   deleteLoopDefinition,
   deleteStageDefinition,
+  exportLoopDefinition,
+  exportStageDefinition,
+  importLoopDefinition,
+  importStageDefinition,
   listLoopDefinitions,
   listAvailableStageDefinitions,
+  previewLoopImport,
+  previewStageImport,
   revealLoopDefinition,
   revealStageDefinition,
   saveLoopDefinition,
@@ -29,9 +40,11 @@ import {
   CopyIcon,
   DocIcon,
   EditIcon,
+  ExportIcon,
   EyeIcon,
   FlaskIcon,
   FolderIcon,
+  ImportIcon,
   LockIcon,
   LoopIcon,
   PersonIcon,
@@ -257,6 +270,10 @@ export function LoopLibraryScreen({
   const [stageEditor, setStageEditor] = useState<StageEditorSeed | null>(null);
   const [tab, setTab] = useState<"loops" | "stages">("loops");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [importDoc, setImportDoc] = useState<
+    { kind: "loops" | "stages"; content: string } | null
+  >(null);
 
   const refresh = () =>
     Promise.all([
@@ -340,15 +357,86 @@ export function LoopLibraryScreen({
     }
   }
 
+  async function exportLoop(definition: LoopDefinition) {
+    try {
+      const out = await exportLoopDefinition(workSlug, definition.id, rootPath, definition.scope);
+      downloadTextFile(out.filename, out.content);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function exportStage(definition: StageDefinition) {
+    try {
+      const out = await exportStageDefinition(definition.id, stageDefinitionRoot(definition, rootPath));
+      downloadTextFile(out.filename, out.content);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function onImportFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    const kind = tab;
+    event.target.value = ""; // allow re-selecting the same file
+    if (!file) return;
+    try {
+      setImportDoc({ kind, content: await file.text() });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  const importButton = (
+    <button className="btn sm" onClick={() => fileInputRef.current?.click()}>
+      <ImportIcon size={11} /> Import
+    </button>
+  );
+
   const primaryAction = tab === "loops" ? (
     <>
+      {importButton}
       <button className="btn sm" disabled={!defaultBuiltin} onClick={() => defaultBuiltin && setEditor(editorSeed(defaultBuiltin, true, "library"))}><CopyIcon size={11} /> From existing</button>
       <button className="btn primary sm" onClick={() => setEditor(newLoopSeed("library"))}>+ Create loop</button>
     </>
-  ) : <button className="btn primary sm" onClick={() => setStageEditor(newStageSeed())}>+ New stage</button>;
+  ) : (
+    <>
+      {importButton}
+      <button className="btn primary sm" onClick={() => setStageEditor(newStageSeed())}>+ New stage</button>
+    </>
+  );
 
   return (
     <div className={"loop-fullscreen" + (embedded ? " embedded" : " has-topbar")}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".yaml,.yml,.json"
+        style={{ display: "none" }}
+        onChange={(event) => void onImportFile(event)}
+      />
+      {importDoc?.kind === "loops" && (
+        <LoopImportDialog
+          content={importDoc.content}
+          rootPath={rootPath}
+          onClose={() => setImportDoc(null)}
+          onDone={() => {
+            setImportDoc(null);
+            void refresh();
+          }}
+        />
+      )}
+      {importDoc?.kind === "stages" && (
+        <StageImportDialog
+          content={importDoc.content}
+          rootPath={rootPath}
+          onClose={() => setImportDoc(null)}
+          onDone={() => {
+            setImportDoc(null);
+            void refresh();
+          }}
+        />
+      )}
       {!embedded && (
         <ShellTopbar
           crumbs={workSlug
@@ -389,6 +477,7 @@ export function LoopLibraryScreen({
             definitions={builtins}
             onEdit={(definition) => setEditor(editorSeed(definition, false, "library"))}
             onDuplicate={(definition) => setEditor(editorSeed(definition, true, "library"))}
+            onExport={(definition) => void exportLoop(definition)}
           />
           <LoopLibraryGroup
             label="Library"
@@ -396,26 +485,28 @@ export function LoopLibraryScreen({
             definitions={repository}
             onEdit={(definition) => setEditor(editorSeed(definition, false, "library"))}
             onDuplicate={(definition) => setEditor(editorSeed(definition, true, "library"))}
+            onExport={(definition) => void exportLoop(definition)}
             onDelete={(definition) => void remove(definition)}
             busyId={busyId}
           />
-          {work.length > 0 && <LoopLibraryGroup label="Work" note="available only to this Work" definitions={work} onEdit={(definition) => setEditor(editorSeed(definition, false, "work"))} onDuplicate={(definition) => setEditor(editorSeed(definition, true, "work"))} onDelete={(definition) => void remove(definition)} busyId={busyId} />}
+          {work.length > 0 && <LoopLibraryGroup label="Work" note="available only to this Work" definitions={work} onEdit={(definition) => setEditor(editorSeed(definition, false, "work"))} onDuplicate={(definition) => setEditor(editorSeed(definition, true, "work"))} onExport={(definition) => void exportLoop(definition)} onDelete={(definition) => void remove(definition)} busyId={busyId} />}
         </> : <>
           <p className="stage-library-intro">Stages are loop-independent building blocks. A loop injects run-time inputs and wires outcomes.</p>
-          <StageLibraryGroup label="Built-in" note="read-only · bundled" definitions={builtinStages} onEdit={(definition) => setStageEditor(stageEditorSeed(definition, false))} onDuplicate={(definition) => setStageEditor(stageEditorSeed(definition, true))} />
-          <StageLibraryGroup label="Library" note="~/Atelier/stages/" definitions={repositoryStages} onEdit={(definition) => setStageEditor(stageEditorSeed(definition, false))} onDuplicate={(definition) => setStageEditor(stageEditorSeed(definition, true))} onDelete={(definition) => void removeStage(definition)} busyId={busyId} />
+          <StageLibraryGroup label="Built-in" note="read-only · bundled" definitions={builtinStages} onEdit={(definition) => setStageEditor(stageEditorSeed(definition, false))} onDuplicate={(definition) => setStageEditor(stageEditorSeed(definition, true))} onExport={(definition) => void exportStage(definition)} />
+          <StageLibraryGroup label="Library" note="~/Atelier/stages/" definitions={repositoryStages} onEdit={(definition) => setStageEditor(stageEditorSeed(definition, false))} onDuplicate={(definition) => setStageEditor(stageEditorSeed(definition, true))} onExport={(definition) => void exportStage(definition)} onDelete={(definition) => void removeStage(definition)} busyId={busyId} />
         </>}
       </main>
     </div>
   );
 }
 
-function StageLibraryGroup({ label, note, definitions, onEdit, onDuplicate, onDelete, busyId }: {
+function StageLibraryGroup({ label, note, definitions, onEdit, onDuplicate, onExport, onDelete, busyId }: {
   label: string;
   note: string;
   definitions: StageDefinition[];
   onEdit: (definition: StageDefinition) => void;
   onDuplicate: (definition: StageDefinition) => void;
+  onExport: (definition: StageDefinition) => void;
   onDelete?: (definition: StageDefinition) => void;
   busyId?: string | null;
 }) {
@@ -429,6 +520,7 @@ function StageLibraryGroup({ label, note, definitions, onEdit, onDuplicate, onDe
           <span className="loop-card-actions" onClick={(event) => event.stopPropagation()}>
             <button className="btn icon sm" title={definition.scope === "builtin" ? "Fork to library" : "Edit"} onClick={() => onEdit(definition)}>{definition.scope === "builtin" ? <CopyIcon size={12} /> : <EditIcon size={12} />}</button>
             {definition.scope === "library" && <button className="btn icon sm" title="Duplicate" onClick={() => onDuplicate(definition)}><CopyIcon size={12} /></button>}
+            <button className="btn icon sm" title="Export" onClick={() => onExport(definition)}><ExportIcon size={12} /></button>
             {onDelete && <button className="btn icon sm danger" disabled={busyId === definition.id} title="Delete" onClick={() => onDelete(definition)}><TrashIcon size={12} /></button>}
           </span>
         </div>
@@ -823,6 +915,7 @@ function LoopLibraryGroup({
   definitions,
   onEdit,
   onDuplicate,
+  onExport,
   onDelete,
   busyId,
 }: {
@@ -831,6 +924,7 @@ function LoopLibraryGroup({
   definitions: LoopDefinition[];
   onEdit: (definition: LoopDefinition) => void;
   onDuplicate: (definition: LoopDefinition) => void;
+  onExport: (definition: LoopDefinition) => void;
   onDelete?: (definition: LoopDefinition) => void;
   busyId?: string | null;
 }) {
@@ -855,6 +949,7 @@ function LoopLibraryGroup({
                   {definition.scope === "builtin" ? <CopyIcon size={12} /> : <EditIcon size={12} />}
                 </button>
                 {definition.scope === "library" && <button className="btn icon sm" title="Duplicate" onClick={() => onDuplicate(definition)}><CopyIcon size={12} /></button>}
+                <button className="btn icon sm" title="Export" onClick={() => onExport(definition)}><ExportIcon size={12} /></button>
                 {onDelete && <button className="btn icon sm danger" disabled={busyId === definition.id} title="Delete" onClick={() => onDelete(definition)}><TrashIcon size={12} /></button>}
               </span>
             </div>
@@ -1761,6 +1856,9 @@ function OutcomePanel({ stage, stages, onPatch }: { stage: LoopStepDefinition; s
           <label><input type="checkbox" checked={gate.locked} onChange={(event) => onPatch({ review_gate: { ...gate, locked: event.target.checked } })} /> lock · runs cannot override this gate in setup</label>
         </div>
       )}
+      {stage.kind === "agent_review" && !stage.transitions.changes_requested && (
+        <div className="loop-inspector-note warn"><AlertIcon size={13} /> {stage.review_gate ? `This stage has a ${stage.review_gate.mode === "human_check" ? "human-check" : "review"} gate, but it stays hidden and inactive until you wire a changes-requested edge above.` : "Wire a changes-requested edge above to choose who closes the loop — automatic or human check."}</div>
+      )}
       <div className="loop-inspector-note"><BranchIcon size={13} /> Cycles require an explicit changes-requested edge and bounded retries.</div>
     </InspectorField>
   );
@@ -2123,4 +2221,418 @@ function relativeContextPath(rootPath: string, selectedPath: string): string | n
   return selected.startsWith(`${root}/`)
     ? selected.slice(root.length + 1)
     : null;
+}
+
+// --- Import / export -------------------------------------------------------
+
+function downloadTextFile(filename: string, content: string) {
+  const blob = new Blob([content], { type: "text/yaml" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function statusTone(status: StageImportStatus): string {
+  if (status === "link-clean") return "good";
+  if (status === "link-conflict") return "warn";
+  return "";
+}
+
+function loopStageStatusLabel(plan: StageImportPlan): string {
+  if (plan.status === "inline") return "inline";
+  if (plan.status === "link-conflict") return `conflicts with your ${plan.linked_id}`;
+  return plan.local_exists
+    ? `links to your ${plan.linked_id}`
+    : `creates ${plan.linked_id}`;
+}
+
+type LoopResolutionState = Record<string, { action: StageResolutionAction; newName: string }>;
+
+function LoopImportDialog({
+  content,
+  rootPath,
+  onClose,
+  onDone,
+}: {
+  content: string;
+  rootPath?: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [preview, setPreview] = useState<LoopImportPreview | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [resolutions, setResolutions] = useState<LoopResolutionState>({});
+  const [accepted, setAccepted] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadError(null);
+    previewLoopImport(content, name.trim() || null, rootPath)
+      .then((next) => {
+        if (!cancelled) setPreview(next);
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [content, name, rootPath]);
+
+  const stages = preview?.stages ?? [];
+  const conflicts = stages.filter((plan) => plan.status === "link-conflict");
+  const surfacedPrefixes = [...new Set(stages.flatMap((plan) => plan.command_prefixes))];
+  const surfacedWrites = stages.some((plan) => plan.grants_write);
+  const hasSurface = surfacedPrefixes.length > 0 || surfacedWrites;
+  const conflictsResolved = conflicts.every((plan) => {
+    const choice = resolutions[plan.stage_id];
+    if (!choice) return false;
+    if (choice.action === "new") return slugify(choice.newName || plan.name).length > 0;
+    return true;
+  });
+  const canImport =
+    !!preview &&
+    preview.valid &&
+    !preview.id_collision &&
+    conflictsResolved &&
+    (!hasSurface || accepted) &&
+    !submitting;
+
+  function setChoice(stageId: string, action: StageResolutionAction) {
+    setResolutions((prev) => ({
+      ...prev,
+      [stageId]: { action, newName: prev[stageId]?.newName ?? "" },
+    }));
+  }
+
+  async function submit() {
+    if (!preview) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await importLoopDefinition(
+        content,
+        name.trim() || null,
+        surfacedPrefixes,
+        conflicts.map((plan) => {
+          const choice = resolutions[plan.stage_id];
+          return {
+            stage_id: plan.stage_id,
+            action: choice.action,
+            new_name: choice.action === "new" ? choice.newName || plan.name : null,
+          };
+        }),
+        rootPath,
+      );
+      onDone();
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : String(err));
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="scrim" onClick={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="modal loop-import-modal" role="dialog" aria-modal="true" aria-labelledby="loop-import-title">
+        <div className="modal-hd">
+          <div>
+            <h3 id="loop-import-title"><ImportIcon size={13} /> Import loop</h3>
+            <div className="sub">Review the loop and its stages before it joins your library.</div>
+          </div>
+          <button className="btn icon" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-bd">
+          {loadError && <div className="form-error">{loadError}</div>}
+          {preview && (
+            <>
+              <label className="field">
+                <span className="label">Name</span>
+                <input
+                  className="input"
+                  value={name}
+                  placeholder={preview.name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </label>
+              <div className={"loop-import-id" + (preview.id_collision ? " collision" : "")}>
+                id <code>{preview.derived_id || "—"}</code>
+                {preview.id_collision && <em className="loop-import-tag warn">id taken — rename above</em>}
+              </div>
+              {!preview.valid && preview.errors.length > 0 && (
+                <div className="form-error">{preview.errors.join(" ")}</div>
+              )}
+
+              <section className="loop-import-section">
+                <div className="loop-import-section-head">Stages</div>
+                <ul className="loop-import-stages">
+                  {stages.map((plan) => (
+                    <li key={plan.stage_id} className="loop-import-stage" data-stage-kind={plan.kind}>
+                      <div className="loop-import-stage-row">
+                        <span className="loop-import-kind"><span className="loop-import-kind-dot" />{stageKindLabel(plan.kind as LoopStepKind)}</span>
+                        <span className="loop-import-stage-name"><strong>{plan.name}</strong><code>{plan.stage_id}</code></span>
+                        <em className={`loop-import-tag ${statusTone(plan.status)}`}>{loopStageStatusLabel(plan)}</em>
+                      </div>
+                      {plan.status === "link-conflict" && (
+                        <div className="loop-import-resolution">
+                          <div className="loop-import-choices" role="group" aria-label={`Resolve ${plan.name}`}>
+                            <button
+                              className={"btn sm" + (resolutions[plan.stage_id]?.action === "replace" ? " primary" : "")}
+                              disabled={plan.local_scope === "builtin"}
+                              title={plan.local_scope === "builtin" ? "Built-in stages can't be replaced" : undefined}
+                              onClick={() => setChoice(plan.stage_id, "replace")}
+                            >Replace</button>
+                            <button
+                              className={"btn sm" + (resolutions[plan.stage_id]?.action === "use_existing" ? " primary" : "")}
+                              onClick={() => setChoice(plan.stage_id, "use_existing")}
+                            >Use existing</button>
+                            <button
+                              className={"btn sm" + (resolutions[plan.stage_id]?.action === "new" ? " primary" : "")}
+                              onClick={() => setChoice(plan.stage_id, "new")}
+                            >New id</button>
+                          </div>
+                          {resolutions[plan.stage_id]?.action === "replace" && plan.used_by_count > 0 && (
+                            <p className="loop-import-warn">
+                              <AlertIcon size={12} /> {plan.used_by_count} other loop{plan.used_by_count === 1 ? "" : "s"} use this stage — they'll pick up the change on their next run.
+                            </p>
+                          )}
+                          {resolutions[plan.stage_id]?.action === "new" && (
+                            <input
+                              className="input sm"
+                              placeholder="New stage name"
+                              value={resolutions[plan.stage_id]?.newName ?? ""}
+                              onChange={(event) =>
+                                setResolutions((prev) => ({
+                                  ...prev,
+                                  [plan.stage_id]: { action: "new", newName: event.target.value },
+                                }))
+                              }
+                            />
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+
+              {hasSurface && (
+                <section className="loop-import-section loop-import-safety">
+                  <div className="loop-import-section-head danger"><ShieldIcon size={12} /> Safety review</div>
+                  {surfacedPrefixes.length > 0 && (
+                    <div className="loop-import-safety-block">
+                      <span className="loop-import-safety-label">Auto-allowed shell commands</span>
+                      <ul className="loop-import-prefixes">
+                        {surfacedPrefixes.map((prefix) => <li key={prefix}><code>{prefix}</code></li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {surfacedWrites && (
+                    <div className="loop-import-safety-block">
+                      <span className="loop-import-safety-label">Filesystem access</span>
+                      <p className="loop-import-safety-note">One or more agent stages write to the workspace.</p>
+                    </div>
+                  )}
+                  <label className="loop-import-accept">
+                    <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />
+                    I've reviewed the commands and permissions above.
+                  </label>
+                </section>
+              )}
+              {submitError && <div className="form-error">{submitError}</div>}
+            </>
+          )}
+        </div>
+        <div className="modal-ft">
+          <span className="hint" style={{ marginRight: "auto" }}>Imports into your library.</span>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={!canImport} onClick={() => void submit()}>
+            {submitting ? "Importing…" : "Import loop"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StageImportDialog({
+  content,
+  rootPath,
+  onClose,
+  onDone,
+}: {
+  content: string;
+  rootPath?: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [preview, setPreview] = useState<StageImportPreview | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [action, setAction] = useState<StageResolutionAction | null>(null);
+  const [newName, setNewName] = useState("");
+  const [accepted, setAccepted] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadError(null);
+    setAction(null);
+    previewStageImport(content, name.trim() || null, rootPath)
+      .then((next) => {
+        if (!cancelled) setPreview(next);
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [content, name, rootPath]);
+
+  const needsDecision = !!preview && preview.id_collision && !preview.same_revision;
+  const needsAccept = !!preview && (preview.command_prefixes.length > 0 || preview.grants_write);
+  const newIdOk = action !== "new" || slugify(newName || name || preview?.name || "").length > 0;
+  const canImport =
+    !!preview &&
+    preview.valid &&
+    (!needsDecision || action !== null) &&
+    newIdOk &&
+    (!needsAccept || accepted) &&
+    !submitting;
+
+  async function submit() {
+    if (!preview) return;
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await importStageDefinition(
+        content,
+        name.trim() || null,
+        preview.command_prefixes,
+        needsDecision ? action : null,
+        action === "new" ? newName || null : null,
+        rootPath,
+      );
+      onDone();
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : String(err));
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="scrim" onClick={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="modal loop-import-modal" role="dialog" aria-modal="true" aria-labelledby="stage-import-title">
+        <div className="modal-hd">
+          <div>
+            <h3 id="stage-import-title"><ImportIcon size={13} /> Import stage</h3>
+            <div className="sub">Add a reusable stage to your library.</div>
+          </div>
+          <button className="btn icon" onClick={onClose}>×</button>
+        </div>
+        <div className="modal-bd">
+          {loadError && <div className="form-error">{loadError}</div>}
+          {preview && (
+            <>
+              <label className="field">
+                <span className="label">Name</span>
+                <input
+                  className="input"
+                  value={name}
+                  placeholder={preview.name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </label>
+              <div className={"loop-import-id" + (needsDecision ? " collision" : "")}>
+                id <code>{preview.derived_id || "—"}</code>
+                {preview.id_collision && preview.same_revision && (
+                  <em className="loop-import-tag good">identical to your {preview.derived_id}</em>
+                )}
+                {needsDecision && <em className="loop-import-tag warn">id taken — choose below</em>}
+              </div>
+              {!preview.valid && preview.errors.length > 0 && (
+                <div className="form-error">{preview.errors.join(" ")}</div>
+              )}
+
+              {needsDecision && (
+                <section className="loop-import-section">
+                  <div className="loop-import-section-head">Resolve collision</div>
+                  <div className="loop-import-choices" role="group" aria-label="Resolve stage collision">
+                    <button
+                      className={"btn sm" + (action === "replace" ? " primary" : "")}
+                      disabled={preview.local_scope === "builtin"}
+                      title={preview.local_scope === "builtin" ? "Built-in stages can't be replaced" : undefined}
+                      onClick={() => setAction("replace")}
+                    >Replace</button>
+                    <button
+                      className={"btn sm" + (action === "use_existing" ? " primary" : "")}
+                      onClick={() => setAction("use_existing")}
+                    >Use existing</button>
+                    <button
+                      className={"btn sm" + (action === "new" ? " primary" : "")}
+                      onClick={() => setAction("new")}
+                    >New id</button>
+                  </div>
+                  {action === "replace" && preview.used_by_count > 0 && (
+                    <p className="loop-import-warn">
+                      <AlertIcon size={12} /> {preview.used_by_count} loop{preview.used_by_count === 1 ? "" : "s"} use this stage — they'll pick up the change on their next run.
+                    </p>
+                  )}
+                  {action === "new" && (
+                    <input
+                      className="input sm"
+                      placeholder="New stage name"
+                      value={newName}
+                      onChange={(event) => setNewName(event.target.value)}
+                    />
+                  )}
+                </section>
+              )}
+
+              {needsAccept && (
+                <section className="loop-import-section loop-import-safety">
+                  <div className="loop-import-section-head danger"><ShieldIcon size={12} /> Safety review</div>
+                  {preview.command_prefixes.length > 0 && (
+                    <div className="loop-import-safety-block">
+                      <span className="loop-import-safety-label">Auto-allowed shell commands</span>
+                      <ul className="loop-import-prefixes">
+                        {preview.command_prefixes.map((prefix) => <li key={prefix}><code>{prefix}</code></li>)}
+                      </ul>
+                    </div>
+                  )}
+                  {preview.grants_write && (
+                    <div className="loop-import-safety-block">
+                      <span className="loop-import-safety-label">Filesystem access</span>
+                      <p className="loop-import-safety-note">This stage writes to the workspace.</p>
+                    </div>
+                  )}
+                  <label className="loop-import-accept">
+                    <input type="checkbox" checked={accepted} onChange={(event) => setAccepted(event.target.checked)} />
+                    I've reviewed the commands and permissions above.
+                  </label>
+                </section>
+              )}
+              {submitError && <div className="form-error">{submitError}</div>}
+            </>
+          )}
+        </div>
+        <div className="modal-ft">
+          <span className="hint" style={{ marginRight: "auto" }}>Imports into your library.</span>
+          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn primary" disabled={!canImport} onClick={() => void submit()}>
+            {submitting ? "Importing…" : "Import stage"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

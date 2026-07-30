@@ -496,3 +496,21 @@ export function LockIcon({ size = 14, ...rest }: IconProps) {
     </svg>
   );
 }
+
+// Tray with an outward (up) arrow — Export a definition to a file.
+export function ExportIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden {...rest}>
+      <path d="M8 9V2.5M5.3 5.2 8 2.5l2.7 2.7M3 11.5v1A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-1" />
+    </svg>
+  );
+}
+
+// Tray with an inward (down) arrow — Import a definition from a file.
+export function ImportIcon({ size = 14, ...rest }: IconProps) {
+  return (
+    <svg viewBox="0 0 16 16" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden {...rest}>
+      <path d="M8 2.5v6.5M5.3 6.3 8 9l2.7-2.7M3 11.5v1A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-1" />
+    </svg>
+  );
+}

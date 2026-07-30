@@ -1344,6 +1344,148 @@ export function revealStageDefinition(
   });
 }
 
+// --- Loop / stage import & export -----------------------------------------
+
+export interface TransportExport {
+  filename: string;
+  content: string;
+}
+
+export type StageImportStatus = "inline" | "link-clean" | "link-conflict";
+
+export interface StageImportPlan {
+  stage_id: string;
+  name: string;
+  kind: string;
+  status: StageImportStatus;
+  linked_id: string | null;
+  local_exists: boolean;
+  local_scope: string | null;
+  local_revision: string | null;
+  used_by_count: number;
+  command_prefixes: string[];
+  grants_write: boolean;
+}
+
+export interface LoopImportPreview {
+  name: string;
+  derived_id: string;
+  id_collision: boolean;
+  valid: boolean;
+  errors: string[];
+  stages: StageImportPlan[];
+}
+
+export type StageResolutionAction = "replace" | "use_existing" | "new";
+
+export interface StageResolutionInput {
+  stage_id: string;
+  action: StageResolutionAction;
+  new_name?: string | null;
+}
+
+export interface StageImportPreview {
+  name: string;
+  derived_id: string;
+  id_collision: boolean;
+  same_revision: boolean;
+  local_scope: string | null;
+  local_revision: string | null;
+  used_by_count: number;
+  valid: boolean;
+  errors: string[];
+  command_prefixes: string[];
+  grants_write: boolean;
+}
+
+export function exportLoopDefinition(
+  workSlug: string | null,
+  definitionId: string,
+  rootPath?: string | null,
+  scope?: LoopDefinitionScope,
+): Promise<TransportExport> {
+  const query = loopsPath(workSlug, rootPath, scope).split("?")[1];
+  return fetch(
+    `/api/loops/${encodeURIComponent(definitionId)}/export${query ? `?${query}` : ""}`,
+  ).then((response) => jsonOrThrow<TransportExport>(response));
+}
+
+export function previewLoopImport(
+  content: string,
+  name?: string | null,
+  rootPath?: string | null,
+): Promise<LoopImportPreview> {
+  return fetch("/api/loops/import/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, name: name ?? null, root_path: rootPath ?? null }),
+  }).then((response) => jsonOrThrow<LoopImportPreview>(response));
+}
+
+export function importLoopDefinition(
+  content: string,
+  name: string | null,
+  acceptedCommandPrefixes: string[],
+  resolutions: StageResolutionInput[],
+  rootPath?: string | null,
+): Promise<LoopDefinition> {
+  return fetch("/api/loops/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content,
+      name: name ?? null,
+      accepted_command_prefixes: acceptedCommandPrefixes,
+      resolutions,
+      root_path: rootPath ?? null,
+    }),
+  }).then((response) => jsonOrThrow<LoopDefinition>(response));
+}
+
+export function exportStageDefinition(
+  stageId: string,
+  rootPath?: string | null,
+): Promise<TransportExport> {
+  const query = stagesPath(rootPath).split("?")[1];
+  return fetch(
+    `/api/stages/${encodeURIComponent(stageId)}/export${query ? `?${query}` : ""}`,
+  ).then((response) => jsonOrThrow<TransportExport>(response));
+}
+
+export function previewStageImport(
+  content: string,
+  name?: string | null,
+  rootPath?: string | null,
+): Promise<StageImportPreview> {
+  return fetch("/api/stages/import/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, name: name ?? null, root_path: rootPath ?? null }),
+  }).then((response) => jsonOrThrow<StageImportPreview>(response));
+}
+
+export function importStageDefinition(
+  content: string,
+  name: string | null,
+  acceptedCommandPrefixes: string[],
+  action?: StageResolutionAction | null,
+  newName?: string | null,
+  rootPath?: string | null,
+): Promise<StageDefinition> {
+  return fetch("/api/stages/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      content,
+      name: name ?? null,
+      accepted_command_prefixes: acceptedCommandPrefixes,
+      action: action ?? null,
+      new_name: newName ?? null,
+      root_path: rootPath ?? null,
+    }),
+  }).then((response) => jsonOrThrow<StageDefinition>(response));
+}
+
 export function listWorkLoopRuns(workSlug: string): Promise<WorkLoopRun[]> {
   return fetch(`/api/works/${workSlug}/runs`).then((response) =>
     jsonOrThrow<WorkLoopRun[]>(response),

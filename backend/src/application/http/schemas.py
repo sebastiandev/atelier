@@ -1130,6 +1130,81 @@ class ForkLoopDefinitionRequest(BaseModel):
     root_path: str | None = None
 
 
+class TransportExportResponse(BaseModel):
+    # A downloadable export: the suggested filename plus the YAML body the
+    # browser turns into a blob. Shared by loop and stage exports.
+    filename: str
+    content: str
+
+
+class ImportPreviewRequest(BaseModel):
+    # ``content`` is the raw text of the uploaded export file; the frontend
+    # reads the file client-side and posts it as text (no multipart).
+    content: str = Field(min_length=1)
+    name: str | None = None
+    root_path: str | None = None
+
+
+class StageImportPlanResponse(BaseModel):
+    stage_id: str
+    name: str
+    kind: str
+    status: str
+    linked_id: str | None = None
+    local_exists: bool = False
+    local_scope: str | None = None
+    local_revision: str | None = None
+    used_by_count: int = 0
+    command_prefixes: list[str] = Field(default_factory=list)
+    grants_write: bool = False
+
+
+class LoopImportPreviewResponse(BaseModel):
+    name: str
+    derived_id: str
+    id_collision: bool
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    stages: list[StageImportPlanResponse] = Field(default_factory=list)
+
+
+class StageResolutionSchema(BaseModel):
+    stage_id: str = Field(min_length=1)
+    action: Literal["replace", "use_existing", "new"]
+    new_name: str | None = None
+
+
+class ImportLoopRequest(BaseModel):
+    content: str = Field(min_length=1)
+    name: str | None = None
+    accepted_command_prefixes: list[str] = Field(default_factory=list)
+    resolutions: list[StageResolutionSchema] = Field(default_factory=list)
+    root_path: str | None = None
+
+
+class StageImportPreviewResponse(BaseModel):
+    name: str
+    derived_id: str
+    id_collision: bool
+    same_revision: bool = False
+    local_scope: str | None = None
+    local_revision: str | None = None
+    used_by_count: int = 0
+    valid: bool
+    errors: list[str] = Field(default_factory=list)
+    command_prefixes: list[str] = Field(default_factory=list)
+    grants_write: bool = False
+
+
+class ImportStageRequest(BaseModel):
+    content: str = Field(min_length=1)
+    name: str | None = None
+    accepted_command_prefixes: list[str] = Field(default_factory=list)
+    action: Literal["replace", "use_existing", "new"] | None = None
+    new_name: str | None = None
+    root_path: str | None = None
+
+
 class StageDefinitionResponse(BaseModel):
     id: str
     name: str

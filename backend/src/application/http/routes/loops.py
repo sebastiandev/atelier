@@ -9,14 +9,21 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import (
     ForkLoopDefinitionRequest,
+    ImportLoopRequest,
+    ImportPreviewRequest,
     LoopDefinitionResponse,
+    LoopImportPreviewResponse,
     LoopStepDefinitionSchema,
     SaveLoopDefinitionRequest,
+    StageImportPlanResponse,
+    TransportExportResponse,
 )
 from src.domain.commands.loops import (
     delete_definition,
+    export_definition,
     fork_definition,
     get_definition,
+    import_definition,
     list_definitions,
     reveal_definition,
     save_definition,
@@ -31,9 +38,20 @@ from src.domain.loop.ports import (
     LoopDefinitionLocations,
     LoopDefinitionRepository,
     LoopWorkingRootRepository,
+    StageDefinitionRepository,
 )
 from src.domain.loop.snapshots import loop_stage_from_snapshot, loop_stage_snapshot
+from src.domain.loop.stages import (
+    StageDefinitionConflict,
+    StageDefinitionInvalid,
+    StageDefinitionReadOnly,
+)
+from src.domain.loop.transport import TransportInvalid
 from src.domain.workstore.ports import WorkStore
+from src.infrastructure.filesystem.loop_transport import (
+    dump_transport_document,
+    parse_transport_document,
+)
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 
 router = APIRouter(tags=["loops"])
@@ -56,6 +74,10 @@ def _definitions(request: Request) -> LoopDefinitionRepository:
     return request.app.state.loop_definitions  # type: ignore[no-any-return]
 
 
+def _stage_definitions(request: Request) -> StageDefinitionRepository:
+    return request.app.state.stage_definitions  # type: ignore[no-any-return]
+
+
 def _locations(request: Request) -> LoopDefinitionLocations:
     return request.app.state.workspace_paths  # type: ignore[no-any-return]
 
@@ -65,6 +87,9 @@ WorkingRootsDep = Annotated[
     LoopWorkingRootRepository, Depends(_working_roots)
 ]
 DefinitionsDep = Annotated[LoopDefinitionRepository, Depends(_definitions)]
+StageDefinitionsDep = Annotated[
+    StageDefinitionRepository, Depends(_stage_definitions)
+]
 LocationsDep = Annotated[LoopDefinitionLocations, Depends(_locations)]
 
 
@@ -134,6 +159,152 @@ def get_loop_endpoint(
         locations,
         definitions,
     )
+
+
+@router.get(
+    "/loops/{definition_id}/export",
+    response_model=TransportExportResponse,
+)
+def export_loop_endpoint(
+    definition_id: str,
+    workstore: WorkStoreDep,
+    work_roots: WorkingRootsDep,
+    locations: LocationsDep,
+    definitions: DefinitionsDep,
+    stage_definitions: StageDefinitionsDep,
+    work_slug: str | None = None,
+    root_path: str | None = None,
+    scope: LoopDefinitionScope | None = None,
+) -> TransportExportResponse:
+    try:
+        document = export_definition.execute(
+            workstore,
+            work_roots,
+            locations,
+            definitions,
+            stage_definitions,
+            export_definition.ExportLoopDefinitionRequest(
+                definition_id=definition_id,
+                work_slug=work_slug,
+                root_path=root_path,
+                scope=scope,
+            ),
+        )
+    except (
+        export_definition.WorkNotFound,
+        export_definition.LoopDefinitionNotFound,
+    ) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except export_definition.LoopRootUnavailable as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    return TransportExportResponse(
+        filename=f"{definition_id}.loop.yaml",
+        content=dump_transport_document(document),
+    )
+
+
+@router.post(
+    "/loops/import/preview",
+    response_model=LoopImportPreviewResponse,
+)
+def preview_loop_import_endpoint(
+    payload: ImportPreviewRequest,
+    locations: LocationsDep,
+    definitions: DefinitionsDep,
+    stage_definitions: StageDefinitionsDep,
+) -> LoopImportPreviewResponse:
+    try:
+        preview = import_definition.preview(
+            locations,
+            definitions,
+            stage_definitions,
+            import_definition.PreviewLoopImportRequest(
+                document=parse_transport_document(payload.content),
+                name_override=payload.name,
+                root_path=payload.root_path,
+            ),
+        )
+    except TransportInvalid as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    return LoopImportPreviewResponse(
+        name=preview.name,
+        derived_id=preview.derived_id,
+        id_collision=preview.id_collision,
+        valid=preview.valid,
+        errors=list(preview.errors),
+        stages=[
+            StageImportPlanResponse(
+                stage_id=plan.stage_id,
+                name=plan.name,
+                kind=plan.kind,
+                status=plan.status.value,
+                linked_id=plan.linked_id,
+                local_exists=plan.local_exists,
+                local_scope=plan.local_scope,
+                local_revision=plan.local_revision,
+                used_by_count=plan.used_by_count,
+                command_prefixes=list(plan.command_prefixes),
+                grants_write=plan.grants_write,
+            )
+            for plan in preview.stages
+        ],
+    )
+
+
+@router.post(
+    "/loops/import",
+    response_model=LoopDefinitionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def import_loop_endpoint(
+    payload: ImportLoopRequest,
+    locations: LocationsDep,
+    definitions: DefinitionsDep,
+    stage_definitions: StageDefinitionsDep,
+) -> LoopDefinitionResponse:
+    try:
+        created = import_definition.commit(
+            locations,
+            definitions,
+            stage_definitions,
+            import_definition.ImportLoopRequest(
+                document=parse_transport_document(payload.content),
+                name_override=payload.name,
+                accepted_command_prefixes=tuple(payload.accepted_command_prefixes),
+                resolutions=tuple(
+                    import_definition.StageResolution(
+                        stage_id=item.stage_id,
+                        action=item.action,
+                        new_name=item.new_name,
+                    )
+                    for item in payload.resolutions
+                ),
+                root_path=payload.root_path,
+            ),
+        )
+    except (import_definition.LoopDefinitionConflict, StageDefinitionConflict) as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (
+        TransportInvalid,
+        import_definition.LoopDefinitionInvalid,
+        import_definition.ImportNotAccepted,
+        import_definition.ImportConflictUnresolved,
+        StageDefinitionInvalid,
+        StageDefinitionReadOnly,
+        save_definition.LoopDefinitionReadOnly,
+        ValueError,
+    ) as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    return _to_response(created)
 
 
 @router.put("/loops/{definition_id}", response_model=LoopDefinitionResponse)

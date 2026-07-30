@@ -10,11 +10,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.schemas import (
     ForkStageDefinitionRequest,
+    ImportPreviewRequest,
+    ImportStageRequest,
     LoopStepDefinitionSchema,
     SaveStageDefinitionRequest,
     StageDefinitionResponse,
+    StageImportPreviewResponse,
+    TransportExportResponse,
 )
-from src.domain.commands import stages
+from src.domain.commands import stages, stages_import
 from src.domain.loop.dtos import StageDefinition, StageDefinitionScope
 from src.domain.loop.ports import (
     LoopDefinitionLocations,
@@ -22,6 +26,11 @@ from src.domain.loop.ports import (
     StageDefinitionRepository,
 )
 from src.domain.loop.snapshots import loop_stage_from_snapshot, loop_stage_snapshot
+from src.domain.loop.transport import TransportInvalid, export_stage
+from src.infrastructure.filesystem.loop_transport import (
+    dump_transport_document,
+    parse_transport_document,
+)
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 
 router = APIRouter(tags=["stages"])
@@ -78,6 +87,109 @@ def get_stage_endpoint(
         )
     except stages.StageDefinitionNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/stages/{definition_id}/export",
+    response_model=TransportExportResponse,
+)
+def export_stage_endpoint(
+    definition_id: str,
+    repository: RepositoryDep,
+    loops: LoopsDep,
+    locations: LocationsDep,
+    root_path: str | None = None,
+) -> TransportExportResponse:
+    try:
+        definition = stages.get_stage(
+            locations,
+            repository,
+            loops,
+            stages.StageCatalogRequest(definition_id, root_path),
+        )
+    except stages.StageDefinitionNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return TransportExportResponse(
+        filename=f"{definition_id}.stage.yaml",
+        content=dump_transport_document(export_stage(definition)),
+    )
+
+
+@router.post(
+    "/stages/import/preview",
+    response_model=StageImportPreviewResponse,
+)
+def preview_stage_import_endpoint(
+    payload: ImportPreviewRequest,
+    repository: RepositoryDep,
+    loops: LoopsDep,
+    locations: LocationsDep,
+) -> StageImportPreviewResponse:
+    try:
+        preview = stages_import.preview(
+            locations,
+            repository,
+            loops,
+            stages_import.PreviewStageImportRequest(
+                document=parse_transport_document(payload.content),
+                name_override=payload.name,
+                root_path=payload.root_path,
+            ),
+        )
+    except TransportInvalid as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    return StageImportPreviewResponse(
+        name=preview.name,
+        derived_id=preview.derived_id,
+        id_collision=preview.id_collision,
+        same_revision=preview.same_revision,
+        local_scope=preview.local_scope,
+        local_revision=preview.local_revision,
+        used_by_count=preview.used_by_count,
+        valid=preview.valid,
+        errors=list(preview.errors),
+        command_prefixes=list(preview.command_prefixes),
+        grants_write=preview.grants_write,
+    )
+
+
+@router.post(
+    "/stages/import",
+    response_model=StageDefinitionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def import_stage_endpoint(
+    payload: ImportStageRequest,
+    repository: RepositoryDep,
+    loops: LoopsDep,
+    locations: LocationsDep,
+) -> StageDefinitionResponse:
+    try:
+        created = stages_import.commit(
+            locations,
+            repository,
+            loops,
+            stages_import.ImportStageRequest(
+                document=parse_transport_document(payload.content),
+                name_override=payload.name,
+                accepted_command_prefixes=tuple(payload.accepted_command_prefixes),
+                action=payload.action,
+                new_name=payload.new_name,
+                root_path=payload.root_path,
+            ),
+        )
+    except stages_import.StageDefinitionConflict as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    except (
+        TransportInvalid,
+        stages_import.StageDefinitionInvalid,
+        stages_import.StageDefinitionReadOnly,
+        stages_import.StageImportNotAccepted,
+        stages_import.StageImportConflictUnresolved,
+        ValueError,
+    ) as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    return _response(created)
 
 
 @router.post(
