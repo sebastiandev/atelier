@@ -91,11 +91,24 @@ class LoopFailureKind(StrEnum):
 
 
 class LoopDefinitionScope(StrEnum):
-    """Where a reusable loop definition is owned."""
+    """Where a reusable loop definition is owned.
+
+    ``LIBRARY`` was called ``repo`` before the storage refactor, back when
+    loops could also be committed to a user's repository. That path is gone;
+    the value that survived is the global ``~/Atelier/loops`` library. Old
+    run snapshots and stale frontend tabs still say ``repo``, so ``_missing_``
+    maps it to ``LIBRARY`` on read.
+    """
 
     BUILTIN = "builtin"
-    REPOSITORY = "repo"
+    LIBRARY = "library"
     WORK = "work"
+
+    @classmethod
+    def _missing_(cls, value: object) -> LoopDefinitionScope | None:
+        if value == "repo":
+            return cls.LIBRARY
+        return None
 
 
 class LoopStepKind(StrEnum):
@@ -109,10 +122,18 @@ class LoopStepKind(StrEnum):
 
 
 class StageDefinitionScope(StrEnum):
-    """Where a reusable standalone stage definition is owned."""
+    """Where a reusable standalone stage definition is owned.
+
+    ``LIBRARY`` was ``repo`` before the storage refactor; ``_missing_`` maps
+    the old value so historical snapshots and stale frontend tabs still read.
+    """
 
     BUILTIN = "builtin"
-    REPOSITORY = "repo"
+    LIBRARY = "library"
+
+    @classmethod
+    def _missing_(cls, value: object) -> StageDefinitionScope | None:
+        return cls.LIBRARY if value == "repo" else None
 
 
 class LoopPermission(StrEnum):

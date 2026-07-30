@@ -12237,7 +12237,7 @@ a.pm-track-row:hover strong {
   text-transform: uppercase;
 }
 .loop-scope-badge.builtin { border-color: color-mix(in oklch, var(--info) 38%, var(--line)); color: var(--info); }
-.loop-scope-badge.repo { border-color: color-mix(in oklch, var(--good) 38%, var(--line)); color: var(--good); }
+.loop-scope-badge.library { border-color: color-mix(in oklch, var(--good) 38%, var(--line)); color: var(--good); }
 .loop-scope-badge.work { border-color: color-mix(in oklch, var(--warn) 38%, var(--line)); color: var(--warn); }
 .loop-default-pill { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
 .loop-stage-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
@@ -13589,7 +13589,7 @@ select:disabled {
   border-radius: var(--radius-tag);
 }
 .loop-scope-badge.builtin { background: var(--info-soft); color: var(--info); }
-.loop-scope-badge.repo { background: var(--good-soft); color: var(--good); }
+.loop-scope-badge.library { background: var(--good-soft); color: var(--good); }
 .loop-scope-badge.work { background: var(--warn-soft); color: var(--warn); }
 .loop-card {
   border: 0;

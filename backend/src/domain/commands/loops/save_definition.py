@@ -3,7 +3,7 @@
 from dataclasses import dataclass, replace
 
 from src.domain.loop.builtins import builtin_loop_definition
-from src.domain.loop.catalog import LoopDefinitionRoots, locate_definition, writable_root
+from src.domain.loop.catalog import locate_definition, writable_root
 from src.domain.loop.definitions import (
     LoopDefinitionConflict,
     LoopDefinitionInvalid,
@@ -21,7 +21,6 @@ from src.domain.loop.ports import (
 from src.domain.loop.roots import (
     WorkNotFound,
     resolve_catalog_roots,
-    resolve_working_root,
 )
 from src.domain.workstore.ports import WorkStore
 
@@ -34,7 +33,6 @@ class SaveLoopDefinitionRequest:
     work_slug: str | None = None
     root_path: str | None = None
     expected_revision: str | None = None
-    legacy_only: bool = False
 
 
 def execute(
@@ -45,32 +43,21 @@ def execute(
     req: SaveLoopDefinitionRequest,
 ) -> LoopDefinition:
     """Validate and persist one global or Work-local loop definition."""
-    scope = LoopDefinitionScope.REPOSITORY if req.legacy_only else req.definition.scope
+    scope = req.definition.scope
     if scope == LoopDefinitionScope.BUILTIN:
         raise LoopDefinitionReadOnly("built-in loops must be forked before editing")
     if (
-        scope == LoopDefinitionScope.REPOSITORY
+        scope == LoopDefinitionScope.LIBRARY
         and builtin_loop_definition(req.definition.definition_id) is not None
     ):
-        raise LoopDefinitionReadOnly("repository loops cannot replace a built-in id")
-    if req.legacy_only:
-        if req.work_slug is None:
-            raise WorkNotFound("work slug is required for legacy loop storage")
-        roots = LoopDefinitionRoots(
-            library=resolve_working_root(
-                workstore,
-                work_roots,
-                req.work_slug,
-            )
-        )
-    else:
-        roots = resolve_catalog_roots(
-            workstore,
-            work_roots,
-            locations,
-            work_slug=req.work_slug,
-            root_path=req.root_path,
-        )
+        raise LoopDefinitionReadOnly("library loops cannot replace a built-in id")
+    roots = resolve_catalog_roots(
+        workstore,
+        work_roots,
+        locations,
+        work_slug=req.work_slug,
+        root_path=req.root_path,
+    )
     prepared = prepare_definition(replace(req.definition, scope=scope))
     if not prepared.valid:
         raise LoopDefinitionInvalid(" ".join(prepared.errors))

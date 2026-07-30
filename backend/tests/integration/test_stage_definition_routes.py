@@ -28,7 +28,7 @@ def test_stage_library_fork_update_and_link_round_trip(
     )
     assert forked.status_code == 201, forked.text
     stage = forked.json()
-    assert stage["scope"] == "repo"
+    assert stage["scope"] == "library"
     assert stage["forked_from"] == "code-review"
     assert stage["stage"]["id"] == "api-review"
 
@@ -41,7 +41,7 @@ def test_stage_library_fork_update_and_link_round_trip(
     assert updated.json()["revision"] != stage["revision"]
 
     loop = app_client.get("/api/loops/atelier-reviewed").json()
-    loop.update(id="linked-review", name="Linked review", scope="repo")
+    loop.update(id="linked-review", name="Linked review", scope="library")
     linked = updated.json()["stage"]
     linked.update(
         id="api-review",
@@ -69,10 +69,9 @@ def test_stage_library_fork_update_and_link_round_trip(
     ]
 
     root = Path(test_settings.workspace_root)
-    assert (root / ".atelier" / "stages" / "api-review" / "stage.yaml").exists()
-    loop_yaml = (root / ".atelier" / "loops" / "linked-review" / "loop.yaml").read_text()
-    assert "from: api-review" in loop_yaml
-    assert "from_rev:" in loop_yaml
+    assert (root / "stages" / "api-review" / "stage.yaml").exists()
+    loop_yaml = (root / "loops" / "linked-review" / "loop.yaml").read_text()
+    assert "use: api-review@" in loop_yaml
 
 
 def test_create_pr_stage_config_is_additive_and_legacy_inline_loops_still_load(

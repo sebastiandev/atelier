@@ -16,7 +16,6 @@ class LoopDefinitionRoots:
 
     library: str
     work: str | None = None
-    legacy: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,19 +32,20 @@ def list_available_definitions(
 ) -> tuple[LoopDefinition, ...]:
     """List definitions after applying scope precedence.
 
-    Preconditions: configured roots are trusted Atelier or user-selected folders.
+    Preconditions: configured roots are trusted Atelier folders.
     Postconditions: each definition id appears once; Work overrides library,
-    library overrides built-ins, and built-ins override legacy repository files.
+    library overrides built-ins.
     """
     by_id = {
-        definition.definition_id: definition
-        for definition in _stored(repository, roots.legacy)
+        definition.definition_id: definition for definition in builtin_loop_definitions()
     }
     by_id.update(
-        {definition.definition_id: definition for definition in builtin_loop_definitions()}
-    )
-    by_id.update(
-        {definition.definition_id: definition for definition in _stored(repository, roots.library)}
+        {
+            definition.definition_id: definition
+            for definition in _stored(
+                repository, roots.library, scope=LoopDefinitionScope.LIBRARY
+            )
+        }
     )
     by_id.update(
         {
@@ -59,7 +59,7 @@ def list_available_definitions(
     )
     rank = {
         LoopDefinitionScope.BUILTIN: 0,
-        LoopDefinitionScope.REPOSITORY: 1,
+        LoopDefinitionScope.LIBRARY: 1,
         LoopDefinitionScope.WORK: 2,
     }
     return tuple(
@@ -90,17 +90,13 @@ def locate_definition(
     if scope is None:
         candidates = (
             (LoopDefinitionScope.WORK, roots.work),
-            (LoopDefinitionScope.REPOSITORY, roots.library),
+            (LoopDefinitionScope.LIBRARY, roots.library),
             (LoopDefinitionScope.BUILTIN, None),
-            (LoopDefinitionScope.REPOSITORY, roots.legacy),
         )
     elif scope == LoopDefinitionScope.WORK:
         candidates = ((scope, roots.work),)
-    elif scope == LoopDefinitionScope.REPOSITORY:
-        candidates = (
-            (scope, roots.library),
-            (scope, roots.legacy),
-        )
+    elif scope == LoopDefinitionScope.LIBRARY:
+        candidates = ((scope, roots.library),)
     else:
         candidates = ((scope, None),)
 
@@ -139,7 +135,7 @@ def _stored(
     repository: LoopDefinitionRepository,
     root: str | None,
     *,
-    scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+    scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY,
 ) -> tuple[LoopDefinition, ...]:
     if root is None:
         return ()

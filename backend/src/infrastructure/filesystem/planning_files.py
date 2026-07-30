@@ -23,14 +23,13 @@ class FsPlanningFiles:
             raise ValueError(f"planning root does not exist: {root}")
         if not root.is_dir():
             raise ValueError(f"planning root is not a directory: {root}")
-        atomic_write_json(self._paths.planning_pointer(work_slug), {"root_path": str(root)})
+        # No pointer to write: the manifest records root_path and lives at a
+        # known Atelier path, so the working root is read back from it.
         return str(root)
 
     def working_root(self, work_slug: str) -> str | None:
-        pointer = _read_json(self._paths.planning_pointer(work_slug))
-        if pointer is None:
-            return None
-        root = pointer.get("root_path")
+        manifest = self.read_manifest(work_slug)
+        root = manifest.get("root_path") if manifest else None
         return root if isinstance(root, str) and root else None
 
     def planning_path(self, work_slug: str) -> str:
@@ -43,10 +42,7 @@ class FsPlanningFiles:
         self._planning_dir(work_slug).mkdir(parents=True, exist_ok=True)
 
     def read_manifest(self, work_slug: str) -> dict[str, Any] | None:
-        root = self.working_root(work_slug)
-        if root is None:
-            return None
-        return _read_json(_planning_dir_from_root(root, work_slug) / "manifest.json")
+        return _read_json(self._planning_dir(work_slug) / "manifest.json")
 
     def write_manifest(self, work_slug: str, data: dict[str, Any]) -> None:
         atomic_write_json(self._planning_dir(work_slug) / "manifest.json", data)
@@ -85,10 +81,7 @@ class FsPlanningFiles:
         return _resolve_under_root(str(self._plan_artifacts_path(work_slug)), rel_path)
 
     def _planning_dir(self, work_slug: str) -> Path:
-        root = self.working_root(work_slug)
-        if root is None:
-            raise ValueError(f"planning root is not bound: {work_slug}")
-        return _planning_dir_from_root(root, work_slug)
+        return self._paths.planning_dir(work_slug)
 
     def _plan_artifacts_path(self, work_slug: str) -> Path:
         root = self.working_root(work_slug)
@@ -102,7 +95,9 @@ class FsPlanningFiles:
             return path if path.is_absolute() else Path(root).expanduser().resolve() / path
         if dir_value:
             return _resolve_under_root(root, dir_value)
-        return _planning_dir_from_root(root, work_slug)
+        # A materialized plan always records one of the keys above; fall back
+        # to the work root rather than the old Atelier-state location.
+        return Path(root).expanduser().resolve()
 
 
 def _resolve_under_root(root_path: str, rel_path: str) -> Path:
@@ -117,10 +112,6 @@ def _resolve_under_root(root_path: str, rel_path: str) -> Path:
 
 def _str_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
-
-
-def _planning_dir_from_root(root_path: str, work_slug: str) -> Path:
-    return Path(root_path).expanduser().resolve() / ".atelier" / "planning" / work_slug
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:

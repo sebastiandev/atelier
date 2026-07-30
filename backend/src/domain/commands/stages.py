@@ -110,7 +110,7 @@ def save_stage(
     if builtin_stage_definition(req.definition.definition_id) is not None:
         raise StageDefinitionReadOnly("repository stages cannot replace a built-in id")
     prepared = prepare_stage_definition(
-        replace(req.definition, scope=StageDefinitionScope.REPOSITORY)
+        replace(req.definition, scope=StageDefinitionScope.LIBRARY)
     )
     if not prepared.valid:
         raise StageDefinitionInvalid(" ".join(prepared.errors))
@@ -166,7 +166,7 @@ def reveal_stage(
     root = _root(locations, req.root_path)
     if repository.get_definition(root, req.definition_id) is None:
         raise StageDefinitionNotFound(f"saved stage definition not found: {req.definition_id}")
-    return Path(root).expanduser().resolve() / ".atelier" / "stages" / req.definition_id
+    return repository.definition_dir(root, req.definition_id)
 
 
 def _root(locations: LoopDefinitionLocations, root_path: str | None) -> str:

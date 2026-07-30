@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 from src.domain.loop.builtins import builtin_loop_definition
 from src.domain.loop.catalog import (
-    LoopDefinitionRoots,
     locate_definition,
     writable_root,
 )
@@ -25,7 +24,6 @@ from src.domain.loop.ports import (
 from src.domain.loop.roots import (
     WorkNotFound,
     resolve_catalog_roots,
-    resolve_working_root,
 )
 from src.domain.workstore.ports import WorkStore
 
@@ -40,7 +38,6 @@ class ForkLoopDefinitionRequest:
     target_scope: LoopDefinitionScope | None = None
     work_slug: str | None = None
     root_path: str | None = None
-    legacy_only: bool = False
 
 
 def execute(
@@ -51,34 +48,21 @@ def execute(
     req: ForkLoopDefinitionRequest,
 ) -> LoopDefinition:
     """Create a global or Work-local copy of an available definition."""
-    target_scope = LoopDefinitionScope.REPOSITORY
-    if not req.legacy_only:
-        target_scope = req.target_scope or (
-            LoopDefinitionScope.WORK
-            if req.work_slug is not None
-            else LoopDefinitionScope.REPOSITORY
-        )
-    if req.legacy_only:
-        if req.work_slug is None:
-            raise WorkNotFound("work slug is required for legacy loop storage")
-        roots = LoopDefinitionRoots(
-            library=resolve_working_root(
-                workstore,
-                work_roots,
-                req.work_slug,
-            )
-        )
-    else:
-        roots = resolve_catalog_roots(
-            workstore,
-            work_roots,
-            locations,
-            work_slug=req.work_slug,
-            root_path=req.root_path,
-        )
+    target_scope = req.target_scope or (
+        LoopDefinitionScope.WORK
+        if req.work_slug is not None
+        else LoopDefinitionScope.LIBRARY
+    )
+    roots = resolve_catalog_roots(
+        workstore,
+        work_roots,
+        locations,
+        work_slug=req.work_slug,
+        root_path=req.root_path,
+    )
     source = locate_definition(repository, roots, req.source_id).definition
     if (
-        target_scope == LoopDefinitionScope.REPOSITORY
+        target_scope == LoopDefinitionScope.LIBRARY
         and builtin_loop_definition(req.definition_id) is not None
     ):
         raise LoopDefinitionConflict(

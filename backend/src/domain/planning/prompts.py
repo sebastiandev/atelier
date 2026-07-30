@@ -85,7 +85,6 @@ class PlanningMaterializationPrompt:
     work_slug: str
     work_name: str
     root_path: str
-    atelier_planning_path: str
     plan_artifacts_dir: str
     framework: PlanningFramework
     profile: PlanningProfile
@@ -150,7 +149,6 @@ def _(req: PlanningMaterializationPrompt) -> str:
         f"- Framework: {fw.label}",
         f"- Profile: {req.profile}",
         f"- Working folder: {req.root_path}",
-        f"- Atelier state folder: {req.atelier_planning_path}",
         f"- Framework output folder: {req.plan_artifacts_dir}",
         "",
         f"{fw.label} is the authoritative framework for this run. Do not load, "
@@ -166,8 +164,6 @@ def _(req: PlanningMaterializationPrompt) -> str:
         "Requirements:",
         "- Write every framework-generated planning source file under "
         f"`{req.plan_artifacts_dir}/`.",
-        "- Do not write framework artifacts under the Atelier state folder; "
-        "Atelier uses that folder for manifest and index metadata.",
         "- Generate the complete plan now: include all framework-level grouping "
         "documents and all executable stories, tasks, spikes, bugs, hotfixes, "
         "or follow-up work items that are currently known or implied.",

@@ -80,3 +80,12 @@ def test_invalid_explicit_agent_override_invalidates_definition(
     prepared = prepare_definition(invalid)
 
     assert message in " ".join(prepared.errors).lower()
+
+
+def test_repo_scope_value_reads_as_library_for_old_snapshots() -> None:
+    """`repo` was renamed to `library`; historical snapshots still say repo."""
+    from src.domain.loop.dtos import LoopDefinitionScope, StageDefinitionScope
+
+    assert LoopDefinitionScope("repo") is LoopDefinitionScope.LIBRARY
+    assert LoopDefinitionScope("library") is LoopDefinitionScope.LIBRARY
+    assert StageDefinitionScope("repo") is StageDefinitionScope.LIBRARY

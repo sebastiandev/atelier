@@ -187,7 +187,7 @@ def _save(
             definition_id=payload.id,
             name=payload.name,
             description=payload.description,
-            scope=StageDefinitionScope.REPOSITORY,
+            scope=StageDefinitionScope.LIBRARY,
             forked_from=payload.forked_from,
             outcomes=tuple(payload.outcomes),
             stage=replace(

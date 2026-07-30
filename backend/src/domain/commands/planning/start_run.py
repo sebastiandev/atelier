@@ -61,7 +61,6 @@ from src.domain.planning.loop_persistence import (
     artifact_run_rows,
     persist_artifact_run,
 )
-from src.domain.planning.paths import atelier_planning_rel_path
 from src.domain.planning.ports import PlanningFiles, PlanningSessionRepository
 from src.domain.planning.service import (
     PlanArtifactNotExecutable,
@@ -323,7 +322,6 @@ def _resolve_definition(
             LoopDefinitionRoots(
                 library=locations.loop_library_root(),
                 work=locations.work_loop_root(req.work_slug),
-                legacy=files.working_root(req.work_slug),
             ),
             definition_id,
         ).definition
@@ -517,7 +515,7 @@ def _resolve_contexts(
     if raw_root is None:
         raise PlanningNotStarted(f"planning root not found: {work_slug}")
     root = Path(raw_root).expanduser().resolve()
-    plan_index = root / atelier_planning_rel_path(work_slug) / "manifest.json"
+    plan_index = Path(files.planning_path(work_slug)) / "manifest.json"
     return {
         stage.step_id: resolver.resolve(
             LoopContextResolutionRequest(

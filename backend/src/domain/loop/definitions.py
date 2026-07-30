@@ -45,6 +45,15 @@ class LoopRootUnavailable(ValueError):
     """The Work has no persisted working root for repository loops."""
 
 
+class LoopSchemaOutdated(ValueError):
+    """A loop/stage file predates the storage refactor and needs migrating.
+
+    A ``ValueError``, so the repository's read path catches it and surfaces
+    the definition as invalid (with an actionable message) rather than
+    crashing — the loop picker then hides it until the migration runs.
+    """
+
+
 def prepare_definition(definition: LoopDefinition) -> LoopDefinition:
     """Validate and revision-hash one loop definition.
 
@@ -113,7 +122,7 @@ def repository_copy(
     *,
     definition_id: str,
     name: str,
-    scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+    scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY,
 ) -> LoopDefinition:
     """Fork a built-in or repository definition into repository scope.
 

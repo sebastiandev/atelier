@@ -1113,7 +1113,7 @@ class SaveLoopDefinitionRequest(BaseModel):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     description: str = ""
-    scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY
+    scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY
     work_slug: str | None = None
     root_path: str | None = None
     expected_revision: str | None = None
@@ -1133,7 +1133,7 @@ class StageDefinitionResponse(BaseModel):
     id: str
     name: str
     description: str
-    scope: Literal["builtin", "repo"]
+    scope: Literal["builtin", "library"]
     revision: str
     valid: bool
     errors: list[str] = Field(default_factory=list)
@@ -1147,7 +1147,7 @@ class SaveStageDefinitionRequest(BaseModel):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     description: str = ""
-    scope: Literal["repo"] = "repo"
+    scope: Literal["library"] = "library"
     root_path: str | None = None
     expected_revision: str | None = None
     forked_from: str | None = None

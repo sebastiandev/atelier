@@ -124,7 +124,7 @@ def repository_stage_copy(
         definition_id=definition_id,
         name=name.strip(),
         stage=replace(source.stage, step_id=definition_id, name=name.strip()),
-        scope=StageDefinitionScope.REPOSITORY,
+        scope=StageDefinitionScope.LIBRARY,
         revision="",
         forked_from=source.definition_id,
         used_by=(),

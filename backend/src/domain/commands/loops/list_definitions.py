@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from src.domain.loop.catalog import LoopDefinitionRoots, list_available_definitions
+from src.domain.loop.catalog import list_available_definitions
 from src.domain.loop.definitions import LoopRootUnavailable
 from src.domain.loop.dtos import LoopDefinition
 from src.domain.loop.ports import (
@@ -13,7 +13,6 @@ from src.domain.loop.ports import (
 from src.domain.loop.roots import (
     WorkNotFound,
     resolve_catalog_roots,
-    resolve_working_root,
 )
 from src.domain.workstore.ports import WorkStore
 
@@ -24,7 +23,6 @@ class ListLoopDefinitionsRequest:
 
     work_slug: str | None = None
     root_path: str | None = None
-    legacy_only: bool = False
 
 
 def execute(
@@ -35,24 +33,13 @@ def execute(
     req: ListLoopDefinitionsRequest,
 ) -> tuple[LoopDefinition, ...]:
     """List definitions visible in the requested global or Work catalog."""
-    if req.legacy_only:
-        if req.work_slug is None:
-            raise WorkNotFound("work slug is required for legacy loop storage")
-        roots = LoopDefinitionRoots(
-            library=resolve_working_root(
-                workstore,
-                work_roots,
-                req.work_slug,
-            )
-        )
-    else:
-        roots = resolve_catalog_roots(
-            workstore,
-            work_roots,
-            locations,
-            work_slug=req.work_slug,
-            root_path=req.root_path,
-        )
+    roots = resolve_catalog_roots(
+        workstore,
+        work_roots,
+        locations,
+        work_slug=req.work_slug,
+        root_path=req.root_path,
+    )
     return list_available_definitions(repository, roots)
 
 

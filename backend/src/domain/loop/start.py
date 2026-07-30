@@ -135,7 +135,6 @@ async def start(
             LoopDefinitionRoots(
                 library=locations.loop_library_root(),
                 work=locations.work_loop_root(spec.work_slug),
-                legacy=str(root),
             ),
             spec.loop_definition_id,
         ).definition
@@ -392,7 +391,7 @@ def _resolve_contexts(
                 root_path=root,
                 work_slug=work_slug,
                 target_ref=str(root),
-                plan_index_ref=str(root / ".atelier" / "planning-index-unavailable"),
+                plan_index_ref=str(root / "planning-index-unavailable"),
                 dependencies=(),
                 shared_context_refs=shared_refs,
                 references=stage.context,

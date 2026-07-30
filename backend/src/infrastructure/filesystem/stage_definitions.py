@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from src.domain.loop.definitions import LoopSchemaOutdated
 from src.domain.loop.dtos import (
     LoopOutcome,
     LoopRetryPolicy,
@@ -34,7 +35,7 @@ class FsStageDefinitionRepository:
         self,
         root_path: str,
         *,
-        scope: StageDefinitionScope = StageDefinitionScope.REPOSITORY,
+        scope: StageDefinitionScope = StageDefinitionScope.LIBRARY,
     ) -> list[StageDefinition]:
         try:
             entries = sorted(_stages_root(root_path).iterdir(), key=lambda path: path.name)
@@ -51,7 +52,7 @@ class FsStageDefinitionRepository:
         root_path: str,
         definition_id: str,
         *,
-        scope: StageDefinitionScope = StageDefinitionScope.REPOSITORY,
+        scope: StageDefinitionScope = StageDefinitionScope.LIBRARY,
     ) -> StageDefinition | None:
         directory = _definition_dir(root_path, definition_id)
         return self._read(directory, scope=scope) if directory.is_dir() else None
@@ -73,22 +74,25 @@ class FsStageDefinitionRepository:
         prepared = prepare_stage_definition(definition)
         directory = _definition_dir(root_path, prepared.definition_id)
         directory.mkdir(parents=True, exist_ok=True)
-        if prepared.stage.instructions:
-            atomic_write_text(
-                directory / "steps" / f"{prepared.definition_id}.md",
-                prepared.stage.instructions.rstrip() + "\n",
-            )
         atomic_write_text(
             directory / "stage.yaml",
             yaml.safe_dump(_to_data(prepared), sort_keys=False, allow_unicode=False),
         )
-        return self._read(directory, scope=StageDefinitionScope.REPOSITORY)
+        return self._read(directory, scope=StageDefinitionScope.LIBRARY)
 
     def delete_definition(self, root_path: str, definition_id: str) -> None:
         directory = _definition_dir(root_path, definition_id)
         if not directory.is_dir():
             raise StageDefinitionNotFound(f"stage definition not found: {definition_id}")
         shutil.rmtree(directory)
+
+    def definition_dir(self, root_path: str, definition_id: str) -> Path:
+        """The on-disk directory for one stage, whether or not it exists.
+
+        Single source of the ``<root>/stages/<id>`` layout, so reveal and
+        the like don't rebuild the path and drift from it.
+        """
+        return _definition_dir(root_path, definition_id)
 
     def _read(
         self,
@@ -120,10 +124,15 @@ def _from_data(
     if not isinstance(stage_data, dict):
         raise ValueError("stage must be a mapping")
     stage_data = dict(stage_data)
-    instruction_ref = stage_data.get("instructions")
-    if isinstance(instruction_ref, str) and instruction_ref:
-        stage_data["instructions"] = _resolve_under(directory, instruction_ref).read_text(
-            encoding="utf-8"
+    instructions = stage_data.get("instructions")
+    if (
+        isinstance(instructions, str)
+        and instructions.rstrip().endswith(".md")
+        and "\n" not in instructions
+    ):
+        raise LoopSchemaOutdated(
+            f"{definition_id}: instructions is a file path, not inline text; "
+            "run scripts/migrate-loops.py"
         )
     outcomes = raw.get("outcomes")
     if not isinstance(outcomes, list):
@@ -141,8 +150,6 @@ def _from_data(
 
 def _to_data(definition: StageDefinition) -> dict[str, Any]:
     stage = loop_stage_snapshot(definition.stage)
-    if definition.stage.instructions:
-        stage["instructions"] = f"steps/{definition.definition_id}.md"
     return {
         "schema_version": _SCHEMA_VERSION,
         "id": definition.definition_id,
@@ -179,7 +186,7 @@ def _stages_root(root_path: str) -> Path:
     root = Path(root_path).expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"stage library root is not a directory: {root}")
-    return root / ".atelier" / "stages"
+    return root / "stages"
 
 
 def _definition_dir(root_path: str, definition_id: str) -> Path:
@@ -191,16 +198,6 @@ def _definition_dir(root_path: str, definition_id: str) -> Path:
     ):
         raise ValueError(f"invalid stage definition id: {definition_id!r}")
     return _stages_root(root_path) / definition_id
-
-
-def _resolve_under(root: Path, relative: str) -> Path:
-    candidate = Path(relative)
-    if candidate.is_absolute() or ".." in candidate.parts:
-        raise ValueError(f"unsafe stage instruction path: {relative!r}")
-    resolved = (root / candidate).resolve()
-    if root.resolve() not in resolved.parents:
-        raise ValueError(f"unsafe stage instruction path: {relative!r}")
-    return resolved
 
 
 def _required(data: dict[str, Any], key: str) -> str:

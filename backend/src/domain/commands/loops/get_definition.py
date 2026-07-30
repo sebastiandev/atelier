@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from src.domain.loop.catalog import LoopDefinitionRoots, locate_definition
+from src.domain.loop.catalog import locate_definition
 from src.domain.loop.definitions import LoopDefinitionNotFound, LoopRootUnavailable
 from src.domain.loop.dtos import LoopDefinition, LoopDefinitionScope
 from src.domain.loop.ports import (
@@ -13,7 +13,6 @@ from src.domain.loop.ports import (
 from src.domain.loop.roots import (
     WorkNotFound,
     resolve_catalog_roots,
-    resolve_working_root,
 )
 from src.domain.workstore.ports import WorkStore
 
@@ -26,7 +25,6 @@ class GetLoopDefinitionRequest:
     work_slug: str | None = None
     root_path: str | None = None
     scope: LoopDefinitionScope | None = None
-    legacy_only: bool = False
 
 
 def execute(
@@ -37,24 +35,13 @@ def execute(
     req: GetLoopDefinitionRequest,
 ) -> LoopDefinition:
     """Return one definition from the requested global or Work catalog."""
-    if req.legacy_only:
-        if req.work_slug is None:
-            raise WorkNotFound("work slug is required for legacy loop storage")
-        roots = LoopDefinitionRoots(
-            library=resolve_working_root(
-                workstore,
-                work_roots,
-                req.work_slug,
-            )
-        )
-    else:
-        roots = resolve_catalog_roots(
-            workstore,
-            work_roots,
-            locations,
-            work_slug=req.work_slug,
-            root_path=req.root_path,
-        )
+    roots = resolve_catalog_roots(
+        workstore,
+        work_roots,
+        locations,
+        work_slug=req.work_slug,
+        root_path=req.root_path,
+    )
     return locate_definition(
         repository,
         roots,

@@ -69,7 +69,7 @@ type StageEditorSeed = {
   source: StageDefinition | null;
 };
 
-type LoopSaveScope = "repo" | "work";
+type LoopSaveScope = "library" | "work";
 
 const CONTEXT_KINDS: Array<{
   kind: LoopContextKind;
@@ -279,7 +279,7 @@ export function LoopLibraryScreen({
       <LoopEditorScreen
         workSlug={workSlug}
         rootPath={rootPath}
-        saveScope={editor.definition.scope === "work" ? "work" : "repo"}
+        saveScope={editor.definition.scope === "work" ? "work" : "library"}
         seed={editor}
         onClose={() => setEditor(null)}
         onSaved={() => {
@@ -305,11 +305,11 @@ export function LoopLibraryScreen({
   }
 
   const builtins = definitions?.filter((row) => row.scope === "builtin") ?? [];
-  const repository = definitions?.filter((row) => row.scope === "repo") ?? [];
+  const repository = definitions?.filter((row) => row.scope === "library") ?? [];
   const work = definitions?.filter((row) => row.scope === "work") ?? [];
   const defaultBuiltin = defaultLoop(builtins);
   const builtinStages = stageDefinitions?.filter((row) => row.scope === "builtin") ?? [];
-  const repositoryStages = stageDefinitions?.filter((row) => row.scope === "repo") ?? [];
+  const repositoryStages = stageDefinitions?.filter((row) => row.scope === "library") ?? [];
 
   async function remove(definition: LoopDefinition) {
     if (!window.confirm(`Delete ${definition.name}? Historical runs keep their snapshot.`)) return;
@@ -342,8 +342,8 @@ export function LoopLibraryScreen({
 
   const primaryAction = tab === "loops" ? (
     <>
-      <button className="btn sm" disabled={!defaultBuiltin} onClick={() => defaultBuiltin && setEditor(editorSeed(defaultBuiltin, true, "repo"))}><CopyIcon size={11} /> From existing</button>
-      <button className="btn primary sm" onClick={() => setEditor(newLoopSeed("repo"))}>+ Create loop</button>
+      <button className="btn sm" disabled={!defaultBuiltin} onClick={() => defaultBuiltin && setEditor(editorSeed(defaultBuiltin, true, "library"))}><CopyIcon size={11} /> From existing</button>
+      <button className="btn primary sm" onClick={() => setEditor(newLoopSeed("library"))}>+ Create loop</button>
     </>
   ) : <button className="btn primary sm" onClick={() => setStageEditor(newStageSeed())}>+ New stage</button>;
 
@@ -368,7 +368,7 @@ export function LoopLibraryScreen({
         <header className="loop-library-head embedded">
           <span className="loop-library-title">
             <strong>{tab === "loops" ? "Loops" : "Stages"}</strong>
-            <small>{tab === "loops" ? <>Reusable multi-stage loops. Repository loops live in <code>.atelier/loops/</code>.</> : <>Reusable stage definitions live in <code>.atelier/stages/</code>.</>}</small>
+            <small>{tab === "loops" ? <>Reusable multi-stage loops. Library loops live in <code>~/Atelier/loops/</code>.</> : <>Reusable stage definitions live in <code>~/Atelier/stages/</code>.</>}</small>
           </span>
           {primaryAction}
         </header>
@@ -387,15 +387,15 @@ export function LoopLibraryScreen({
             label="Built-in"
             note="read-only · bundled"
             definitions={builtins}
-            onEdit={(definition) => setEditor(editorSeed(definition, false, "repo"))}
-            onDuplicate={(definition) => setEditor(editorSeed(definition, true, "repo"))}
+            onEdit={(definition) => setEditor(editorSeed(definition, false, "library"))}
+            onDuplicate={(definition) => setEditor(editorSeed(definition, true, "library"))}
           />
           <LoopLibraryGroup
             label="Library"
             note="reusable across Works"
             definitions={repository}
-            onEdit={(definition) => setEditor(editorSeed(definition, false, "repo"))}
-            onDuplicate={(definition) => setEditor(editorSeed(definition, true, "repo"))}
+            onEdit={(definition) => setEditor(editorSeed(definition, false, "library"))}
+            onDuplicate={(definition) => setEditor(editorSeed(definition, true, "library"))}
             onDelete={(definition) => void remove(definition)}
             busyId={busyId}
           />
@@ -403,7 +403,7 @@ export function LoopLibraryScreen({
         </> : <>
           <p className="stage-library-intro">Stages are loop-independent building blocks. A loop injects run-time inputs and wires outcomes.</p>
           <StageLibraryGroup label="Built-in" note="read-only · bundled" definitions={builtinStages} onEdit={(definition) => setStageEditor(stageEditorSeed(definition, false))} onDuplicate={(definition) => setStageEditor(stageEditorSeed(definition, true))} />
-          <StageLibraryGroup label="Repository" note=".atelier/stages/ · shared via git" definitions={repositoryStages} onEdit={(definition) => setStageEditor(stageEditorSeed(definition, false))} onDuplicate={(definition) => setStageEditor(stageEditorSeed(definition, true))} onDelete={(definition) => void removeStage(definition)} busyId={busyId} />
+          <StageLibraryGroup label="Library" note="~/Atelier/stages/" definitions={repositoryStages} onEdit={(definition) => setStageEditor(stageEditorSeed(definition, false))} onDuplicate={(definition) => setStageEditor(stageEditorSeed(definition, true))} onDelete={(definition) => void removeStage(definition)} busyId={busyId} />
         </>}
       </main>
     </div>
@@ -425,10 +425,10 @@ function StageLibraryGroup({ label, note, definitions, onEdit, onDuplicate, onDe
       {definitions.map((definition) => <article key={`${definition.scope}:${definition.id}`} className="loop-card loop-library-card stage-library-card" data-stage-kind={definition.stage.kind} onClick={() => onEdit(definition)}>
         <div className="loop-card-head">
           <span className="loop-library-icon">{stageIcon(definition.stage)}</span>
-          <span className="loop-card-copy"><strong>{definition.name}<em className={`loop-scope-badge ${definition.scope}`}>{definition.scope === "builtin" ? "built-in" : "repo"}</em></strong><small>{definition.description}</small></span>
+          <span className="loop-card-copy"><strong>{definition.name}<em className={`loop-scope-badge ${definition.scope}`}>{definition.scope === "builtin" ? "built-in" : "library"}</em></strong><small>{definition.description}</small></span>
           <span className="loop-card-actions" onClick={(event) => event.stopPropagation()}>
-            <button className="btn icon sm" title={definition.scope === "builtin" ? "Fork to repository" : "Edit"} onClick={() => onEdit(definition)}>{definition.scope === "builtin" ? <CopyIcon size={12} /> : <EditIcon size={12} />}</button>
-            {definition.scope === "repo" && <button className="btn icon sm" title="Duplicate" onClick={() => onDuplicate(definition)}><CopyIcon size={12} /></button>}
+            <button className="btn icon sm" title={definition.scope === "builtin" ? "Fork to library" : "Edit"} onClick={() => onEdit(definition)}>{definition.scope === "builtin" ? <CopyIcon size={12} /> : <EditIcon size={12} />}</button>
+            {definition.scope === "library" && <button className="btn icon sm" title="Duplicate" onClick={() => onDuplicate(definition)}><CopyIcon size={12} /></button>}
             {onDelete && <button className="btn icon sm danger" disabled={busyId === definition.id} title="Delete" onClick={() => onDelete(definition)}><TrashIcon size={12} /></button>}
           </span>
         </div>
@@ -520,7 +520,7 @@ function StageEditorScreen({
         id: draft.id,
         name: draft.name,
         description: draft.description,
-        scope: "repo",
+        scope: "library",
         forked_from: draft.forked_from,
         stage: {
           ...draft.stage,
@@ -851,10 +851,10 @@ function LoopLibraryGroup({
                 <small>{definition.description}</small>
               </span>
               <span className="loop-card-actions" onClick={(event) => event.stopPropagation()}>
-                <button className="btn icon sm" title={definition.scope === "builtin" ? "Duplicate to repository" : "Edit"} onClick={() => definition.scope === "builtin" ? onDuplicate(definition) : onEdit(definition)}>
+                <button className="btn icon sm" title={definition.scope === "builtin" ? "Duplicate to library" : "Edit"} onClick={() => definition.scope === "builtin" ? onDuplicate(definition) : onEdit(definition)}>
                   {definition.scope === "builtin" ? <CopyIcon size={12} /> : <EditIcon size={12} />}
                 </button>
-                {definition.scope === "repo" && <button className="btn icon sm" title="Duplicate" onClick={() => onDuplicate(definition)}><CopyIcon size={12} /></button>}
+                {definition.scope === "library" && <button className="btn icon sm" title="Duplicate" onClick={() => onDuplicate(definition)}><CopyIcon size={12} /></button>}
                 {onDelete && <button className="btn icon sm danger" disabled={busyId === definition.id} title="Delete" onClick={() => onDelete(definition)}><TrashIcon size={12} /></button>}
               </span>
             </div>
@@ -1007,7 +1007,7 @@ function LoopEditorScreen({
         id: slugify(stage.name) || stage.id,
         name: stage.name,
         description: stage.instructions.split("\n").find(Boolean) ?? "",
-        scope: "repo",
+        scope: "library",
         forked_from: null,
         stage: { ...stage, transitions: {}, stage_ref: null, overrides: null },
         outcomes: OUTCOMES.map((item) => item.key).filter((key) => key in stage.transitions),
@@ -1063,7 +1063,7 @@ function LoopEditorScreen({
     setSaving(true);
     setError(null);
     try {
-      const promoting = targetScope === "repo" && saveScope === "work";
+      const promoting = targetScope === "library" && saveScope === "work";
       let targetId = draft.id;
       let expectedRevision = seed.expectedRevision;
       let forkedFrom = draft.forked_from;
@@ -1071,11 +1071,11 @@ function LoopEditorScreen({
         const library = await listLoopDefinitions(null);
         const baseId = `${draft.id}-library`;
         const previousPromotion = library.find((definition) =>
-          definition.scope === "repo" &&
+          definition.scope === "library" &&
           definition.forked_from === draft.id &&
           (definition.id === baseId || definition.id.startsWith(`${baseId}-`)),
         ) ?? library.find((definition) =>
-          definition.scope === "repo" &&
+          definition.scope === "library" &&
           definition.id === draft.id &&
           Boolean(definition.forked_from) &&
           draft.forked_from === definition.id,
@@ -1150,7 +1150,7 @@ function LoopEditorScreen({
           <>
             <button className="btn sm" onClick={onClose}>Close</button>
             {saveScope === "work" && (
-              <button className="btn sm" disabled={saving || !draft.name.trim() || !draft.id} onClick={() => void save("repo")}><CopyIcon size={11} /> Save to library</button>
+              <button className="btn sm" disabled={saving || !draft.name.trim() || !draft.id} onClick={() => void save("library")}><CopyIcon size={11} /> Save to library</button>
             )}
             <button className="btn primary sm" disabled={!dirty || saving || !draft.name.trim() || !draft.id} onClick={() => void save()}><CheckIcon size={11} /> {saving ? "Saving…" : "Save"}</button>
           </>
@@ -1394,7 +1394,7 @@ function StageInspector({
         {tabs.map((item) => <button key={item.id} className={tab === item.id ? "active" : ""} onClick={() => onTab(item.id)}>{item.label}</button>)}
       </div>
       <div className="loop-inspector-body themed-scrollbar">
-        {stage.stage_ref && <div className="stage-linked-banner"><span><CopyIcon size={12} /><strong>Linked · {stage.stage_ref.definition_id}</strong><em>{source?.scope === "builtin" ? "built-in" : "repository"}</em></span><small>rev {stage.stage_ref.revision} · edits below are loop-local overrides</small><div>{onOpenSource && <button onClick={onOpenSource}>Open stage</button>}{onDetach && <button onClick={onDetach}>Detach</button>}</div></div>}
+        {stage.stage_ref && <div className="stage-linked-banner"><span><CopyIcon size={12} /><strong>Linked · {stage.stage_ref.definition_id}</strong><em>{source?.scope === "builtin" ? "built-in" : "library"}</em></span><small>rev {stage.stage_ref.revision} · edits below are loop-local overrides</small><div>{onOpenSource && <button onClick={onOpenSource}>Open stage</button>}{onDetach && <button onClick={onDetach}>Detach</button>}</div></div>}
         {!stage.stage_ref && onSaveToLibrary && <div className="stage-linked-banner local"><span><strong>Local to this loop</strong><em>unsaved</em></span><small>Save it once to reuse it in other loops.</small><div><button onClick={onSaveToLibrary}>Save to library</button></div></div>}
         {tab === "instructions" && <InstructionsPanel stage={stage} preview={preview} onPreview={onPreview} onPatch={onPatch} />}
         {tab === "context" && <ContextPanel stage={stage} stages={stages} rootPath={rootPath} onRootPath={onRootPath} onPatch={onPatch} />}
@@ -1806,9 +1806,9 @@ function AddStageSlot({ index, open, definitions, onToggle, onAdd }: { index: nu
     <button type="button" aria-expanded={open} onClick={onToggle}>+ Add stage</button>
     {open && <div className="loop-add-menu" role="dialog" aria-label="Add stage">
       <label className="loop-add-menu-search"><SearchIcon size={12} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search stages…" /></label>
-      {(["builtin", "repo"] as const).map((scope) => {
+      {(["builtin", "library"] as const).map((scope) => {
         const rows = visible.filter((definition) => definition.scope === scope);
-        return rows.length ? <section key={scope}><header>{scope === "builtin" ? "Built-in stages" : "Reusable stages"}</header>{rows.map((definition) => <button key={`${scope}:${definition.id}`} data-stage-kind={definition.stage.kind} onClick={() => onAdd(index, definition)}><i>{stageIcon(definition.stage)}</i><span><strong>{definition.name}</strong><small>{definition.description || stageKindLabel(definition.stage.kind)}</small></span>{scope === "repo" && <em>{definition.catalog_root ? "repo" : "library"}</em>}</button>)}</section> : null;
+        return rows.length ? <section key={scope}><header>{scope === "builtin" ? "Built-in stages" : "Reusable stages"}</header>{rows.map((definition) => <button key={`${scope}:${definition.id}`} data-stage-kind={definition.stage.kind} onClick={() => onAdd(index, definition)}><i>{stageIcon(definition.stage)}</i><span><strong>{definition.name}</strong><small>{definition.description || stageKindLabel(definition.stage.kind)}</small></span>{scope === "library" && <em>library</em>}</button>)}</section> : null;
       })}
       {visible.length === 0 && <p>No stages match “{query}”.</p>}
       <button className="loop-add-menu-blank" data-stage-kind="agent_task" onClick={() => onAdd(index)}><i>+</i><span><strong>Start blank</strong><small>Create a stage in this loop</small></span></button>
@@ -1844,7 +1844,7 @@ function stageDefinitionRoot(
   return definition.catalog_root !== undefined ? definition.catalog_root : fallback;
 }
 
-function editorSeed(definition: LoopDefinition, duplicate = false, scope: LoopSaveScope = "repo"): EditorSeed {
+function editorSeed(definition: LoopDefinition, duplicate = false, scope: LoopSaveScope = "library"): EditorSeed {
   if (definition.scope === scope && !duplicate) {
     return { definition: structuredClone(definition), expectedRevision: definition.revision };
   }
@@ -1877,7 +1877,7 @@ function editorSeed(definition: LoopDefinition, duplicate = false, scope: LoopSa
   };
 }
 
-function newLoopSeed(scope: LoopSaveScope = "repo"): EditorSeed {
+function newLoopSeed(scope: LoopSaveScope = "library"): EditorSeed {
   const implementation = stageFromPreset("implementation", []);
   const approval = stageFromPreset("approval", [implementation]);
   implementation.transitions.pass = approval.id;
@@ -1943,7 +1943,7 @@ function stageFromDefinition(definition: StageDefinition, existing: LoopStepDefi
 }
 
 function stageEditorSeed(definition: StageDefinition, duplicate: boolean): StageEditorSeed {
-  if (definition.scope === "repo" && !duplicate) {
+  if (definition.scope === "library" && !duplicate) {
     return { definition: structuredClone(definition), expectedRevision: definition.revision, source: null };
   }
   const id = `${definition.id}-${definition.scope === "builtin" && !duplicate ? "repository" : "copy"}`;
@@ -1952,7 +1952,7 @@ function stageEditorSeed(definition: StageDefinition, duplicate: boolean): Stage
       ...structuredClone(definition),
       id,
       name: `${definition.name}${duplicate ? " copy" : ""}`,
-      scope: "repo",
+      scope: "library",
       revision: "",
       errors: [],
       forked_from: definition.id,
@@ -1973,7 +1973,7 @@ function newStageSeed(): StageEditorSeed {
       id: "untitled-stage",
       name: "Untitled stage",
       description: "",
-      scope: "repo",
+      scope: "library",
       revision: "",
       valid: true,
       errors: [],
@@ -1997,7 +1997,7 @@ function newLocalStageSeed(existing: LoopStepDefinition[]): StageEditorSeed {
       id: stage.id,
       name: "",
       description: "",
-      scope: "repo",
+      scope: "library",
       revision: "",
       valid: true,
       errors: [],

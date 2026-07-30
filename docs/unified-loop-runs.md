@@ -124,7 +124,7 @@ and the manifest additionally when `source` is set.
   future trigger is an enum member rather than a second migration. `NULL`
   source = a sourceless run (Loop mode)
 
-**In the manifest (`.atelier/planning/<WRK>/manifest.json`)** — provenance
+**In the manifest (`~/Atelier/works/<WRK>/planning/manifest.json`)** — provenance
 only:
 
 ```json

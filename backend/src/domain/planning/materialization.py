@@ -35,7 +35,6 @@ from src.domain.planning.manifest_keys import (
     PLAN_ARTIFACTS_DIR_KEY,
     PLAN_ARTIFACTS_PATH_KEY,
 )
-from src.domain.planning.paths import atelier_planning_rel_path
 from src.domain.planning.ports import PlanningFiles
 from src.domain.planning.prompts import PlanningMaterializationPrompt
 from src.domain.planning.service import PlanningNotStarted, PlanningService
@@ -201,7 +200,6 @@ def start_materialization_chat(
             work_slug=work_slug,
             work_name=record.work.name,
             root_path=status.root_path,
-            atelier_planning_path=atelier_planning_rel_path(work_slug),
             plan_artifacts_dir=plan_artifacts_dir,
             framework=framework,
             profile=profile,

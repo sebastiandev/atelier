@@ -15,7 +15,6 @@ def test_materializer_prompt_keeps_framework_separate_from_output_path() -> None
             work_slug="WRK-002",
             work_name="Migrate data",
             root_path="/repo",
-            atelier_planning_path="/repo/.atelier/planning/WRK-002",
             plan_artifacts_dir="bmad/di_migration",
             framework="openspec",
             profile="feature",

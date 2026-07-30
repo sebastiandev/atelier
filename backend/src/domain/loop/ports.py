@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Protocol
 
 from src.domain.loop.dtos import (
@@ -25,7 +26,7 @@ class LoopDefinitionRepository(Protocol):
         self,
         root_path: str,
         *,
-        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+        scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY,
     ) -> list[LoopDefinition]:
         """Return every repository definition, including invalid entries."""
         ...
@@ -35,7 +36,7 @@ class LoopDefinitionRepository(Protocol):
         root_path: str,
         definition_id: str,
         *,
-        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+        scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY,
     ) -> LoopDefinition | None:
         """Return one repository definition when present."""
         ...
@@ -46,13 +47,17 @@ class LoopDefinitionRepository(Protocol):
         definition: LoopDefinition,
         *,
         expected_revision: str | None,
-        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+        scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY,
     ) -> LoopDefinition:
         """Create or replace one valid repository definition."""
         ...
 
     def delete_definition(self, root_path: str, definition_id: str) -> None:
         """Delete one repository definition directory."""
+        ...
+
+    def definition_dir(self, root_path: str, definition_id: str) -> Path:
+        """Return one definition's on-disk directory, existing or not."""
         ...
 
 
@@ -63,7 +68,7 @@ class StageDefinitionRepository(Protocol):
         self,
         root_path: str,
         *,
-        scope: StageDefinitionScope = StageDefinitionScope.REPOSITORY,
+        scope: StageDefinitionScope = StageDefinitionScope.LIBRARY,
     ) -> list[StageDefinition]: ...
 
     def get_definition(
@@ -71,7 +76,7 @@ class StageDefinitionRepository(Protocol):
         root_path: str,
         definition_id: str,
         *,
-        scope: StageDefinitionScope = StageDefinitionScope.REPOSITORY,
+        scope: StageDefinitionScope = StageDefinitionScope.LIBRARY,
     ) -> StageDefinition | None: ...
 
     def save_definition(
@@ -83,6 +88,8 @@ class StageDefinitionRepository(Protocol):
     ) -> StageDefinition: ...
 
     def delete_definition(self, root_path: str, definition_id: str) -> None: ...
+
+    def definition_dir(self, root_path: str, definition_id: str) -> Path: ...
 
 
 class LoopDefinitionLocations(Protocol):

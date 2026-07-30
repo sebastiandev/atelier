@@ -12,6 +12,7 @@ import yaml  # type: ignore[import-untyped]
 from src.domain.loop.definitions import (
     LoopDefinitionConflict,
     LoopDefinitionNotFound,
+    LoopSchemaOutdated,
     prepare_definition,
 )
 from src.domain.loop.dtos import (
@@ -61,7 +62,7 @@ class FsLoopDefinitionRepository:
         self,
         root_path: str,
         *,
-        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+        scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY,
     ) -> list[LoopDefinition]:
         root = _loops_root(root_path)
         try:
@@ -79,7 +80,7 @@ class FsLoopDefinitionRepository:
         root_path: str,
         definition_id: str,
         *,
-        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+        scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY,
     ) -> LoopDefinition | None:
         directory = _definition_dir(root_path, definition_id)
         if not directory.is_dir():
@@ -92,7 +93,7 @@ class FsLoopDefinitionRepository:
         definition: LoopDefinition,
         *,
         expected_revision: str | None,
-        scope: LoopDefinitionScope = LoopDefinitionScope.REPOSITORY,
+        scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY,
     ) -> LoopDefinition:
         directory = _definition_dir(root_path, definition.definition_id)
         current = self.get_definition(
@@ -126,17 +127,6 @@ class FsLoopDefinitionRepository:
             )
         )
         directory.mkdir(parents=True, exist_ok=True)
-        steps_dir = directory / "steps"
-        for stage in prepared.stages:
-            if stage.stage_ref is None and stage.kind in {
-                LoopStepKind.AGENT_TASK,
-                LoopStepKind.AGENT_REVIEW,
-                LoopStepKind.PR,
-            }:
-                atomic_write_text(
-                    steps_dir / f"{stage.step_id}.md",
-                    stage.instructions.rstrip() + "\n",
-                )
         data = _to_yaml_data(prepared)
         atomic_write_text(
             directory / "loop.yaml",
@@ -149,6 +139,14 @@ class FsLoopDefinitionRepository:
         if not directory.is_dir():
             raise LoopDefinitionNotFound(f"loop definition not found: {definition_id}")
         shutil.rmtree(directory)
+
+    def definition_dir(self, root_path: str, definition_id: str) -> Path:
+        """The on-disk directory for one loop, whether or not it exists.
+
+        The single source of the ``<root>/loops/<id>`` layout, so callers
+        that only need the path (reveal) don't rebuild it and drift.
+        """
+        return _definition_dir(root_path, definition_id)
 
     def _read_definition(
         self,
@@ -181,15 +179,20 @@ def _from_yaml_data(
     version = raw.get("schema_version")
     if version != _SCHEMA_VERSION:
         raise ValueError(f"unsupported schema_version: {version!r}")
+    if "steps" in raw and "stages" not in raw:
+        raise LoopSchemaOutdated(
+            f"{directory.name}: pre-refactor loop file (uses `steps:`); "
+            "run scripts/migrate-loops.py"
+        )
     definition_id = _required_str(raw, "id")
     if definition_id != directory.name:
         raise ValueError("loop id must match its directory name")
-    raw_steps = raw.get("steps")
-    if not isinstance(raw_steps, list):
-        raise ValueError("steps must be a list")
+    raw_stages = raw.get("stages")
+    if not isinstance(raw_stages, list):
+        raise ValueError("stages must be a list")
     stages = tuple(
         _stage_from_data(directory, item, stage_library_root=stage_library_root)
-        for item in raw_steps
+        for item in raw_stages
     )
     return LoopDefinition(
         definition_id=definition_id,
@@ -213,9 +216,11 @@ def _stage_from_data(
     if not isinstance(value, dict):
         raise ValueError("each stage must be a mapping")
     step_id = _required_str(value, "id")
-    source_id = _optional_str(value.get("from"))
-    if source_id:
-        source = _linked_source(str(directory.parents[2]), source_id, stage_library_root)
+    use_ref = _optional_str(value.get("use"))
+    if use_ref:
+        source_id, _, pinned_rev = use_ref.partition("@")
+        source_id = source_id.strip()
+        source = _linked_source(str(directory.parents[1]), source_id, stage_library_root)
         raw_transitions = value.get("transitions", {})
         instance = LoopStepDefinition(
             step_id=step_id,
@@ -224,17 +229,18 @@ def _stage_from_data(
             transitions=_transitions_from_data(raw_transitions),
             stage_ref=StageDefinitionRef(
                 source_id,
-                _optional_str(value.get("from_rev")) or source.revision,
+                pinned_rev.strip() or source.revision,
             ),
             overrides=stage_overrides_from_snapshot(value.get("overrides")),
         )
         return resolve_stage_link(instance, source)
     kind = LoopStepKind(_required_str(value, "kind"))
-    instruction_ref = _optional_str(value.get("instructions"))
-    instructions = ""
-    if instruction_ref:
-        path = _resolve_under(directory, instruction_ref)
-        instructions = path.read_text(encoding="utf-8")
+    instructions = _optional_str(value.get("instructions")) or ""
+    if instructions.rstrip().endswith(".md") and "\n" not in instructions:
+        raise LoopSchemaOutdated(
+            f"{step_id}: instructions is a file path, not inline text; "
+            "run scripts/migrate-loops.py"
+        )
 
     context_raw = value.get("context", [])
     if not isinstance(context_raw, list):
@@ -348,7 +354,7 @@ def _to_yaml_data(definition: LoopDefinition) -> dict[str, Any]:
     }
     if definition.forked_from:
         data["forked_from"] = definition.forked_from
-    data["steps"] = [_stage_to_data(stage) for stage in definition.stages]
+    data["stages"] = [_stage_to_data(stage) for stage in definition.stages]
     return data
 
 
@@ -359,27 +365,26 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
         "kind": stage.kind.value,
     }
     if stage.stage_ref is not None:
-        return {
+        referenced: dict[str, Any] = {
             "id": stage.step_id,
-            "from": stage.stage_ref.definition_id,
-            "from_rev": stage.stage_ref.revision,
-            **(
-                {"overrides": stage_overrides_snapshot(stage.overrides)}
-                if stage.overrides is not None
-                else {}
-            ),
-            "transitions": {
-                outcome.value: destination
-                for outcome, destination in stage.transitions.items()
-                if destination is not None
-            },
+            "use": f"{stage.stage_ref.definition_id}@{stage.stage_ref.revision}",
         }
-    if stage.kind in {
-        LoopStepKind.AGENT_TASK,
-        LoopStepKind.AGENT_REVIEW,
-        LoopStepKind.PR,
-    }:
-        data["instructions"] = f"steps/{stage.step_id}.md"
+        if stage.overrides is not None:
+            referenced["overrides"] = stage_overrides_snapshot(stage.overrides)
+        transitions = {
+            outcome.value: destination
+            for outcome, destination in stage.transitions.items()
+            if destination is not None
+        }
+        if transitions:
+            referenced["transitions"] = transitions
+        return referenced
+    if (
+        stage.instructions.strip()
+        and stage.kind
+        in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW, LoopStepKind.PR}
+    ):
+        data["instructions"] = stage.instructions.rstrip() + "\n"
     if stage.note_required is not None:
         data["note_required"] = stage.note_required
     if stage.review_gate is not None:
@@ -468,7 +473,7 @@ def _loops_root(root_path: str) -> Path:
     root = Path(root_path).expanduser().resolve()
     if not root.is_dir():
         raise ValueError(f"loop working root is not a directory: {root}")
-    return root / ".atelier" / "loops"
+    return root / "loops"
 
 
 def _definition_dir(root_path: str, definition_id: str) -> Path:
@@ -480,16 +485,6 @@ def _definition_dir(root_path: str, definition_id: str) -> Path:
     ):
         raise ValueError(f"invalid loop definition id: {definition_id!r}")
     return _loops_root(root_path) / definition_id
-
-
-def _resolve_under(root: Path, relative: str) -> Path:
-    candidate = Path(relative)
-    if candidate.is_absolute() or ".." in candidate.parts:
-        raise ValueError(f"unsafe loop instruction path: {relative!r}")
-    resolved = (root / candidate).resolve()
-    if resolved != root.resolve() and root.resolve() not in resolved.parents:
-        raise ValueError(f"unsafe loop instruction path: {relative!r}")
-    return resolved
 
 
 def _required_str(data: dict[str, Any], key: str) -> str:

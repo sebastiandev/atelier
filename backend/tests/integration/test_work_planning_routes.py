@@ -389,7 +389,7 @@ def test_start_plan_indexes_precreated_bmad_sources(
     repo_root = test_settings.workspace_root / "repos" / "planner"
     body = _start_plan(app_client, repo_root)
 
-    planning_dir = repo_root / ".atelier" / "planning" / "WRK-001"
+    planning_dir = test_settings.workspace_root / "works" / "WRK-001" / "planning"
     artifact_dir = _artifact_root(repo_root)
     assert body["work_slug"] == "WRK-001"
     assert body["root_path"] == str(repo_root)
@@ -410,7 +410,6 @@ def test_start_plan_indexes_precreated_bmad_sources(
     assert (artifact_dir / "design-guide.md").exists()
     assert not (artifact_dir / "design-guidance.md").exists()
     assert (artifact_dir / "stories" / "story-001.md").exists()
-    assert not (test_settings.workspace_root / ".atelier" / "planning" / "WRK-001").exists()
     manifest = json.loads((planning_dir / "manifest.json").read_text())
     assert [
         (item["path"], item["artifact_kind"], item["executable"]) for item in manifest["artifacts"]
@@ -464,7 +463,10 @@ def test_start_plan_accepts_a_custom_plan_artifacts_dir(
     body = res.json()
     assert body["plan_artifacts_path"] == str(artifact_dir)
     manifest = json.loads(
-        (repo_root / ".atelier" / "planning" / "WRK-001" / "manifest.json").read_text()
+        (
+            test_settings.workspace_root
+            / "works" / "WRK-001" / "planning" / "manifest.json"
+        ).read_text()
     )
     assert manifest["plan_artifacts_dir"] == "bmad/WRK-001"
     assert {item["path"] for item in manifest["artifacts"]} == {
@@ -546,7 +548,9 @@ def test_plan_manifest_dependencies_are_path_based_metadata(
     _create_work(app_client)
     repo_root = test_settings.workspace_root / "repos" / "planner"
     _start_plan(app_client, repo_root)
-    manifest_path = repo_root / ".atelier" / "planning" / "WRK-001" / "manifest.json"
+    manifest_path = (
+        test_settings.workspace_root / "works" / "WRK-001" / "planning" / "manifest.json"
+    )
     manifest = json.loads(manifest_path.read_text())
     for item in manifest["artifacts"]:
         if item["path"] == "stories/story-001.md":
@@ -566,7 +570,7 @@ def test_start_plan_indexes_precreated_files_without_content_payload(
     _create_work(app_client)
     repo_root = test_settings.workspace_root / "repo"
     _mark_framework_ready(repo_root, "spec")
-    planning_dir = repo_root / ".atelier" / "planning" / "WRK-001"
+    planning_dir = test_settings.workspace_root / "works" / "WRK-001" / "planning"
     artifact_dir = _artifact_root(repo_root, "spec")
     artifact_dir.mkdir(parents=True, exist_ok=True)
     (artifact_dir / "spec.md").write_text("# Import Spec\n\n## Behavior\n\nImport CSV.\n")
@@ -1813,7 +1817,7 @@ def test_custom_loop_executes_deterministic_check_stage(
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     implementation = _create_agent(app_client, root)
     forked = app_client.post(
-        "/api/works/WRK-001/loop-definitions/atelier-fast/fork",
+        "/api/loops/atelier-fast/fork",
         json={"id": "validated", "name": "Validated"},
     )
     assert forked.status_code == 201, forked.text
@@ -1841,7 +1845,7 @@ def test_custom_loop_executes_deterministic_check_stage(
         },
     )
     saved = app_client.put(
-        "/api/works/WRK-001/loop-definitions/validated",
+        "/api/loops/validated",
         json={
             "id": definition["id"],
             "name": definition["name"],
@@ -2023,7 +2027,7 @@ def test_required_loop_context_blocks_before_agent_launch(
     _create_planning_session(app_client, root)
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
     forked = app_client.post(
-        "/api/works/WRK-001/loop-definitions/atelier-reviewed/fork",
+        "/api/loops/atelier-reviewed/fork",
         json={"id": "required-policy", "name": "Required policy"},
     )
     assert forked.status_code == 201, forked.text
@@ -2033,7 +2037,7 @@ def test_required_loop_context_blocks_before_agent_launch(
     files_context["required"] = True
     files_context["paths"] = ["docs/required-policy.md"]
     saved = app_client.put(
-        "/api/works/WRK-001/loop-definitions/required-policy",
+        "/api/loops/required-policy",
         json={
             "id": definition["id"],
             "name": definition["name"],

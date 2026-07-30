@@ -453,7 +453,7 @@ export type LoopStepStatus =
   | "failed"
   | "cancelled";
 
-export type LoopDefinitionScope = "builtin" | "repo" | "work";
+export type LoopDefinitionScope = "builtin" | "library" | "work";
 export type LoopStepKind =
   | "agent_task"
   | "agent_review"

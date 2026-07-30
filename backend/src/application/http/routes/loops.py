@@ -236,178 +236,6 @@ def delete_loop_endpoint(
     )
 
 
-@router.get(
-    "/works/{work_slug}/loop-definitions",
-    response_model=list[LoopDefinitionResponse],
-)
-def list_loop_definitions_endpoint(
-    work_slug: str,
-    workstore: WorkStoreDep,
-    work_roots: WorkingRootsDep,
-    locations: LocationsDep,
-    definitions: DefinitionsDep,
-) -> list[LoopDefinitionResponse]:
-    return _list(
-        work_slug,
-        None,
-        workstore,
-        work_roots,
-        locations,
-        definitions,
-        legacy_only=True,
-    )
-
-
-@router.post(
-    "/works/{work_slug}/loop-definitions",
-    response_model=LoopDefinitionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_loop_definition_endpoint(
-    work_slug: str,
-    payload: SaveLoopDefinitionRequest,
-    workstore: WorkStoreDep,
-    work_roots: WorkingRootsDep,
-    locations: LocationsDep,
-    definitions: DefinitionsDep,
-) -> LoopDefinitionResponse:
-    return _save(
-        payload,
-        workstore,
-        work_roots,
-        locations,
-        definitions,
-        work_slug=work_slug,
-        legacy_only=True,
-    )
-
-
-@router.get(
-    "/works/{work_slug}/loop-definitions/{definition_id}",
-    response_model=LoopDefinitionResponse,
-)
-def get_loop_definition_endpoint(
-    work_slug: str,
-    definition_id: str,
-    workstore: WorkStoreDep,
-    work_roots: WorkingRootsDep,
-    locations: LocationsDep,
-    definitions: DefinitionsDep,
-) -> LoopDefinitionResponse:
-    return _get(
-        definition_id,
-        work_slug,
-        None,
-        None,
-        workstore,
-        work_roots,
-        locations,
-        definitions,
-        legacy_only=True,
-    )
-
-
-@router.post(
-    "/works/{work_slug}/loop-definitions/{definition_id}/reveal",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-def reveal_loop_definition_endpoint(
-    work_slug: str,
-    definition_id: str,
-    workstore: WorkStoreDep,
-    work_roots: WorkingRootsDep,
-    locations: LocationsDep,
-    definitions: DefinitionsDep,
-) -> None:
-    _reveal(
-        definition_id,
-        work_slug,
-        None,
-        None,
-        workstore,
-        work_roots,
-        locations,
-        definitions,
-        legacy_only=True,
-    )
-
-
-@router.put(
-    "/works/{work_slug}/loop-definitions/{definition_id}",
-    response_model=LoopDefinitionResponse,
-)
-def update_loop_definition_endpoint(
-    work_slug: str,
-    definition_id: str,
-    payload: SaveLoopDefinitionRequest,
-    workstore: WorkStoreDep,
-    work_roots: WorkingRootsDep,
-    locations: LocationsDep,
-    definitions: DefinitionsDep,
-) -> LoopDefinitionResponse:
-    _require_matching_id(payload.id, definition_id)
-    return _save(
-        payload,
-        workstore,
-        work_roots,
-        locations,
-        definitions,
-        work_slug=work_slug,
-        legacy_only=True,
-    )
-
-
-@router.post(
-    "/works/{work_slug}/loop-definitions/{definition_id}/fork",
-    response_model=LoopDefinitionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def fork_loop_definition_endpoint(
-    work_slug: str,
-    definition_id: str,
-    payload: ForkLoopDefinitionRequest,
-    workstore: WorkStoreDep,
-    work_roots: WorkingRootsDep,
-    locations: LocationsDep,
-    definitions: DefinitionsDep,
-) -> LoopDefinitionResponse:
-    return _fork(
-        definition_id,
-        payload,
-        workstore,
-        work_roots,
-        locations,
-        definitions,
-        work_slug=work_slug,
-        legacy_only=True,
-    )
-
-
-@router.delete(
-    "/works/{work_slug}/loop-definitions/{definition_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-def delete_loop_definition_endpoint(
-    work_slug: str,
-    definition_id: str,
-    workstore: WorkStoreDep,
-    work_roots: WorkingRootsDep,
-    locations: LocationsDep,
-    definitions: DefinitionsDep,
-) -> None:
-    _delete(
-        definition_id,
-        work_slug,
-        None,
-        None,
-        workstore,
-        work_roots,
-        locations,
-        definitions,
-        legacy_only=True,
-    )
-
-
 def _list(
     work_slug: str | None,
     root_path: str | None,
@@ -415,8 +243,6 @@ def _list(
     work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
-    *,
-    legacy_only: bool = False,
 ) -> list[LoopDefinitionResponse]:
     try:
         rows = list_definitions.execute(
@@ -427,7 +253,6 @@ def _list(
             list_definitions.ListLoopDefinitionsRequest(
                 work_slug=work_slug,
                 root_path=root_path,
-                legacy_only=legacy_only,
             ),
         )
     except list_definitions.WorkNotFound as exc:
@@ -451,8 +276,6 @@ def _get(
     work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
-    *,
-    legacy_only: bool = False,
 ) -> LoopDefinitionResponse:
     try:
         row = get_definition.execute(
@@ -465,7 +288,6 @@ def _get(
                 work_slug=work_slug,
                 root_path=root_path,
                 scope=scope,
-                legacy_only=legacy_only,
             ),
         )
     except (get_definition.WorkNotFound, get_definition.LoopDefinitionNotFound) as exc:
@@ -488,7 +310,6 @@ def _save(
     definitions: LoopDefinitionRepository,
     *,
     work_slug: str | None = None,
-    legacy_only: bool = False,
 ) -> LoopDefinitionResponse:
     try:
         row = save_definition.execute(
@@ -497,18 +318,10 @@ def _save(
             locations,
             definitions,
             save_definition.SaveLoopDefinitionRequest(
-                definition=_to_domain(
-                    payload,
-                    scope=(
-                        LoopDefinitionScope.REPOSITORY
-                        if legacy_only
-                        else payload.scope
-                    ),
-                ),
+                definition=_to_domain(payload, scope=payload.scope),
                 work_slug=work_slug or payload.work_slug,
                 root_path=payload.root_path,
                 expected_revision=payload.expected_revision,
-                legacy_only=legacy_only,
             ),
         )
     except save_definition.WorkNotFound as exc:
@@ -534,7 +347,6 @@ def _fork(
     definitions: LoopDefinitionRepository,
     *,
     work_slug: str | None = None,
-    legacy_only: bool = False,
 ) -> LoopDefinitionResponse:
     try:
         row = fork_definition.execute(
@@ -549,7 +361,6 @@ def _fork(
                 target_scope=payload.scope,
                 work_slug=work_slug or payload.work_slug,
                 root_path=payload.root_path,
-                legacy_only=legacy_only,
             ),
         )
     except (fork_definition.WorkNotFound, fork_definition.LoopDefinitionNotFound) as exc:
@@ -577,8 +388,6 @@ def _delete(
     work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
-    *,
-    legacy_only: bool = False,
 ) -> None:
     try:
         delete_definition.execute(
@@ -591,7 +400,6 @@ def _delete(
                 work_slug=work_slug,
                 root_path=root_path,
                 scope=scope,
-                legacy_only=legacy_only,
             ),
         )
     except (delete_definition.WorkNotFound, delete_definition.LoopDefinitionNotFound) as exc:
@@ -619,8 +427,6 @@ def _reveal(
     work_roots: LoopWorkingRootRepository,
     locations: LoopDefinitionLocations,
     definitions: LoopDefinitionRepository,
-    *,
-    legacy_only: bool = False,
 ) -> None:
     try:
         target = reveal_definition.execute(
@@ -633,7 +439,6 @@ def _reveal(
                 work_slug=work_slug,
                 root_path=root_path,
                 scope=scope,
-                legacy_only=legacy_only,
             ),
         )
         open_in_file_browser(str(target))
