@@ -9,7 +9,6 @@ bump deliberately, re-capturing the config-option fixtures in
 
 import json
 import os
-import shlex
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -20,6 +19,9 @@ from src.domain.agents import (
     AgentAdapter,
     ClaudeAcpAgentConfig,
     CodexAcpAgentConfig,
+)
+from src.domain.agents import (
+    parse_command_prefix_tokens as _command_prefix_tokens,
 )
 from src.domain.agents.configs import OpenCodeAgentConfig, OpenCodeMode
 from src.infrastructure.agents.acp.adapter import AcpAdapter
@@ -102,23 +104,6 @@ def _build_opencode(config: OpenCodeAgentConfig, settings: Settings) -> AgentAda
             )
         },
     )
-
-
-def _command_prefix_tokens(prefixes: tuple[str, ...]) -> tuple[tuple[str, ...], ...]:
-    """Parse safe single-command prefixes for provider-native policies."""
-    parsed: list[tuple[str, ...]] = []
-    for prefix in prefixes:
-        if not prefix.strip() or "\n" in prefix or "\r" in prefix:
-            continue
-        try:
-            lexer = shlex.shlex(prefix, posix=True, punctuation_chars=";&|")
-            lexer.whitespace_split = True
-            tokens = tuple(lexer)
-        except ValueError:
-            continue
-        if tokens and not any(set(token) <= set(";&|") for token in tokens):
-            parsed.append(tokens)
-    return tuple(parsed)
 
 
 def _glob_command_prefixes(prefixes: tuple[str, ...]) -> tuple[str, ...]:

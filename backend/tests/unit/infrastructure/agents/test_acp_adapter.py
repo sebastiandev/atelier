@@ -898,6 +898,158 @@ def test_permission_request_uses_tool_identity_not_action_title() -> None:
     asyncio.run(scenario())
 
 
+def _bash_tool_call(command: str) -> ToolCallStart:
+    return ToolCallStart(
+        session_update="tool_call",
+        tool_call_id="t1",
+        title=command,
+        kind="execute",
+        raw_input={"command": command},
+        field_meta={"opencode": {"toolName": "bash"}},
+    )
+
+
+def _bash_options() -> list[PermissionOption]:
+    return [
+        PermissionOption(option_id="allow_always", name="Always", kind="allow_always"),
+        PermissionOption(option_id="allow", name="Allow", kind="allow_once"),
+        PermissionOption(option_id="reject", name="Reject", kind="reject_once"),
+    ]
+
+
+def test_bash_command_fully_covered_by_approved_prefixes_is_auto_allowed() -> None:
+    """A chained command whose every part matches an approved prefix is
+    silently allowed — no PermissionRequest/PermissionDecision at all,
+    mirroring how an already-approved bare command never asks either."""
+
+    async def scenario() -> None:
+        response_holder: dict[str, Any] = {}
+
+        async def prompting_prompt(fake: FakeConnection, session_id: str) -> Any:
+            tool_call = _bash_tool_call("git diff --stat && git diff --numstat")
+            await fake.adapter.session_update(session_id, tool_call)
+            response_holder["permission"] = await fake.adapter.request_permission(
+                options=_bash_options(),
+                session_id=session_id,
+                tool_call=tool_call,
+            )
+            return _Obj(stop_reason="end_turn", usage=None)
+
+        config = _TestAcpConfig(
+            common=CommonAgentConfig(
+                workdir=WORKDIR,
+                system_prompt="You are agt-1.",
+                approved_command_prefixes=("git diff",),
+            )
+        )
+        adapter, _fake = _build(config, prompt_script=[prompting_prompt])
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        events = await _collect_turn(adapter, "review")
+
+        assert not [e for e in events if isinstance(e, PermissionRequest)]
+        assert not [e for e in events if isinstance(e, PermissionDecision)]
+        outcome = response_holder["permission"].outcome
+        assert outcome.outcome == "selected"
+        assert outcome.option_id == "allow"
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_bash_command_chained_with_an_unapproved_command_still_asks() -> None:
+    """Approving `git diff` does not approve a line that chains it with
+    anything else — the whole line still needs a human decision."""
+
+    async def scenario() -> None:
+        async def prompting_prompt(fake: FakeConnection, session_id: str) -> Any:
+            tool_call = _bash_tool_call(
+                'git diff --stat && echo "---UNTRACKED---" && git status --porcelain'
+            )
+            await fake.adapter.session_update(session_id, tool_call)
+            return await fake.adapter.request_permission(
+                options=_bash_options(),
+                session_id=session_id,
+                tool_call=tool_call,
+            )
+
+        config = _TestAcpConfig(
+            common=CommonAgentConfig(
+                workdir=WORKDIR,
+                system_prompt="You are agt-1.",
+                approved_command_prefixes=("git diff",),
+            )
+        )
+        adapter, _fake = _build(config, prompt_script=[prompting_prompt])
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        events: list[Any] = []
+        await adapter.send_input("review")
+        gen = adapter.events()
+        async for event in gen:
+            events.append(event)
+            if isinstance(event, PermissionRequest):
+                await adapter.resolve_permission(event.request_id, "allow")
+            if isinstance(event, StatusChange) and event.status == "idle":
+                break
+        await gen.aclose()
+
+        assert len([e for e in events if isinstance(e, PermissionRequest)]) == 1
+        assert len([e for e in events if isinstance(e, PermissionDecision)]) == 1
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_bash_permission_check_error_falls_back_to_asking(monkeypatch: Any) -> None:
+    """A crash while evaluating approved prefixes must never suppress the
+    permission prompt — it always defers to asking, never to allowing."""
+
+    def boom(*args: Any, **kwargs: Any) -> bool:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(acp_adapter, "command_is_fully_approved", boom)
+
+    async def scenario() -> None:
+        async def prompting_prompt(fake: FakeConnection, session_id: str) -> Any:
+            tool_call = _bash_tool_call("git diff --stat")
+            await fake.adapter.session_update(session_id, tool_call)
+            return await fake.adapter.request_permission(
+                options=_bash_options(),
+                session_id=session_id,
+                tool_call=tool_call,
+            )
+
+        config = _TestAcpConfig(
+            common=CommonAgentConfig(
+                workdir=WORKDIR,
+                system_prompt="You are agt-1.",
+                approved_command_prefixes=("git diff",),
+            )
+        )
+        adapter, _fake = _build(config, prompt_script=[prompting_prompt])
+        await adapter.start(AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s"))
+
+        events: list[Any] = []
+        await adapter.send_input("review")
+        gen = adapter.events()
+        async for event in gen:
+            events.append(event)
+            if isinstance(event, PermissionRequest):
+                await adapter.resolve_permission(event.request_id, "allow")
+            if isinstance(event, StatusChange) and event.status == "idle":
+                break
+        await gen.aclose()
+
+        (request,) = [e for e in events if isinstance(e, PermissionRequest)]
+        assert request.tool_name == "Bash"
+        (decision,) = [e for e in events if isinstance(e, PermissionDecision)]
+        assert decision.decision == "allow"
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
 def test_stop_turn_cancels_pending_permission_with_cancelled_outcome() -> None:
     async def scenario() -> None:
         response_holder: dict[str, Any] = {}

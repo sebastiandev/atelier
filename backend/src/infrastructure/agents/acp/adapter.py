@@ -67,6 +67,7 @@ from src.domain.agents import (
     SessionEstablished,
     StatusChange,
     TurnMetrics,
+    command_is_fully_approved,
 )
 from src.infrastructure.agents.acp.mapping import AcpUpdateMapper
 from src.infrastructure.agents.atelier_mcp_tools import MCP_SERVER_NAME
@@ -398,10 +399,6 @@ class AcpAdapter:
             return RequestPermissionResponse(
                 outcome=AllowedOutcome(outcome="selected", option_id=option.option_id)
             )
-        request_id = uuid.uuid4().hex
-        fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = fut
-        self._pending_options[request_id] = list(options)
         raw_input = getattr(tool_call, "raw_input", None)
         tool_id = getattr(tool_call, "tool_call_id", None)
         tool_id_str = tool_id if isinstance(tool_id, str) else None
@@ -414,6 +411,18 @@ class AcpAdapter:
         canon_name, canon_input = canonicalize_tool(
             provider_name, dict(raw_input) if isinstance(raw_input, dict) else {}
         )
+        auto_option = self._auto_approved_option(canon_name, canon_input, options)
+        if auto_option is not None:
+            # Already covered by approved_command_prefixes (possibly chained
+            # with &&/;/|): answer silently, the same as a command the
+            # provider's own permission policy pre-approved outright.
+            return RequestPermissionResponse(
+                outcome=AllowedOutcome(outcome="selected", option_id=auto_option.option_id)
+            )
+        request_id = uuid.uuid4().hex
+        fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = fut
+        self._pending_options[request_id] = list(options)
         await self._outgoing.put(
             PermissionRequest(
                 ts=_now(),
@@ -474,6 +483,46 @@ class AcpAdapter:
         return RequestPermissionResponse(
             outcome=AllowedOutcome(outcome="selected", option_id=option.option_id)
         )
+
+    def _auto_approved_option(
+        self,
+        canon_name: str,
+        canon_input: dict[str, Any],
+        options: list[PermissionOption],
+    ) -> PermissionOption | None:
+        """Silently allow a Bash request already fully covered by the stage's
+        approved command prefixes, even when the agent chained it with
+        ``&&``/``;``/``|``.
+
+        Preconditions: called before any ``PermissionRequest`` is emitted, with
+        the canonicalised tool call. Postconditions: returns ``None`` (defer to
+        asking) for anything other than a confidently-approved Bash command,
+        including on any unexpected error while evaluating it — a failure here
+        must never suppress the permission prompt.
+        """
+        if canon_name != "Bash":
+            return None
+        try:
+            command = canon_input.get("command")
+            if not isinstance(command, str):
+                return None
+            if not command_is_fully_approved(
+                command, self._config.common.approved_command_prefixes
+            ):
+                return None
+            option = _pick_option(list(options), "allow")
+        except Exception:
+            logger.warning(
+                "approved-command-prefix check raised; asking instead",
+                exc_info=True,
+            )
+            return None
+        if option is not None:
+            logger.debug(
+                "auto-approved bash command already covered by approved prefixes: %r",
+                command,
+            )
+        return option
 
     def on_connect(self, conn: Any) -> None:  # SDK hook; the adapter
         return None  # already holds the connection it built.

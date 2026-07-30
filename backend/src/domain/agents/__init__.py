@@ -1,6 +1,10 @@
 """Agent boundary: AgentAdapter port, AgentConfig hierarchy, AgentEvent union."""
 
 from src.domain.agents.artifacts import InvalidMarker, record_artifact
+from src.domain.agents.command_approval import (
+    command_is_fully_approved,
+    parse_command_prefix_tokens,
+)
 from src.domain.agents.configs import (
     AMP_DEFAULT_AUTO_ALLOWED_TOOLS,
     AcpAgentConfig,
@@ -147,7 +151,9 @@ __all__ = [
     "ToolResult",
     "TurnMetrics",
     "UserAction",
+    "command_is_fully_approved",
     "detect_shared_envs",
+    "parse_command_prefix_tokens",
     "parse_user_action",
     "record_artifact",
     "render_agent_contexts",
