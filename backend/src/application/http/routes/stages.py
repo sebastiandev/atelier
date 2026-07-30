@@ -128,7 +128,11 @@ def fork_stage_endpoint(
                 locations,
                 repository,
                 loops,
-                stages.ForkStageRequest(definition_id, payload.id, payload.name, payload.root_path),
+                stages.ForkStageRequest(
+                    source_id=definition_id,
+                    name=payload.name,
+                    root_path=payload.root_path,
+                ),
             )
         )
     except stages.StageDefinitionNotFound as exc:

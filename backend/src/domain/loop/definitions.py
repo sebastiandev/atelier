@@ -54,6 +54,20 @@ class LoopSchemaOutdated(ValueError):
     """
 
 
+_SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def slugify_definition_id(name: str) -> str:
+    """Derive a stable, readable id from a display name.
+
+    Lowercase, non-alphanumeric runs collapse to a single dash, edges
+    trimmed — the same rule the editor previews. Empty when the name has no
+    usable characters; the caller rejects that. The id is minted here, on
+    the backend, so it can't drift with a client that forgets to slug.
+    """
+    return _SLUG_NON_ALNUM.sub("-", name.strip().lower()).strip("-")
+
+
 def prepare_definition(definition: LoopDefinition) -> LoopDefinition:
     """Validate and revision-hash one loop definition.
 

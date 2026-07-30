@@ -1110,7 +1110,9 @@ class LoopDefinitionResponse(BaseModel):
 
 
 class SaveLoopDefinitionRequest(BaseModel):
-    id: str = Field(min_length=1)
+    # Omitted on create (the id is minted from the name server-side); on
+    # update it carries the URL id for the match check.
+    id: str = ""
     name: str = Field(min_length=1)
     description: str = ""
     scope: LoopDefinitionScope = LoopDefinitionScope.LIBRARY
@@ -1122,7 +1124,6 @@ class SaveLoopDefinitionRequest(BaseModel):
 
 
 class ForkLoopDefinitionRequest(BaseModel):
-    id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     scope: LoopDefinitionScope | None = None
     work_slug: str | None = None
@@ -1144,7 +1145,9 @@ class StageDefinitionResponse(BaseModel):
 
 
 class SaveStageDefinitionRequest(BaseModel):
-    id: str = Field(min_length=1)
+    # Omitted on create (minted from the name server-side); on update it
+    # carries the URL id.
+    id: str = ""
     name: str = Field(min_length=1)
     description: str = ""
     scope: Literal["library"] = "library"
@@ -1156,7 +1159,6 @@ class SaveStageDefinitionRequest(BaseModel):
 
 
 class ForkStageDefinitionRequest(BaseModel):
-    id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     root_path: str | None = None
 

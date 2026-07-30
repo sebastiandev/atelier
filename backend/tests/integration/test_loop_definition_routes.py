@@ -54,7 +54,7 @@ def test_canonical_create_rejects_unknown_stage_provider(
     app_client: TestClient,
 ) -> None:
     payload = app_client.get("/api/loops/atelier-fast").json()
-    payload["id"] = "invalid-provider"
+    payload["name"] = "Invalid provider loop"  # id is minted from the name now
     payload["scope"] = "library"
     payload["stages"][0]["agent"]["provider"] = "unknown"
 
@@ -96,6 +96,34 @@ def test_fast_mode_round_trips_through_loop_library(
 
     assert created.status_code == 201, created.text
     assert created.json()["stages"][0]["agent"]["fast"] is True
+
+
+def test_create_mints_id_from_name_and_rejects_a_collision(
+    app_client: TestClient,
+) -> None:
+    """The server owns the id; the client sends a name, no id."""
+    builtin = app_client.get("/api/loops/atelier-fast").json()
+    payload = {
+        "name": "Shiphero Code",
+        "scope": "library",
+        "stages": builtin["stages"],
+    }
+
+    created = app_client.post("/api/loops", json=payload)
+    assert created.status_code == 201, created.text
+    assert created.json()["id"] == "shiphero-code"  # minted from the name
+
+    again = app_client.post("/api/loops", json={**payload, "description": "dupe"})
+    assert again.status_code == 409, again.text
+
+
+def test_fork_mints_id_from_name_not_a_suffix(app_client: TestClient) -> None:
+    forked = app_client.post(
+        "/api/loops/atelier-reviewed/fork",
+        json={"name": "ShipHero Reviewed"},
+    )
+    assert forked.status_code == 201, forked.text
+    assert forked.json()["id"] == "shiphero-reviewed"
 
 
 def test_canonical_loop_verbs_do_not_upsert(app_client: TestClient) -> None:

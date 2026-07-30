@@ -14,6 +14,7 @@ from src.domain.loop.definitions import (
     LoopRootUnavailable,
     prepare_definition,
     repository_copy,
+    slugify_definition_id,
 )
 from src.domain.loop.dtos import LoopDefinition, LoopDefinitionScope
 from src.domain.loop.ports import (
@@ -30,10 +31,14 @@ from src.domain.workstore.ports import WorkStore
 
 @dataclass(frozen=True)
 class ForkLoopDefinitionRequest:
-    """Input for copying a loop into the current repository."""
+    """Input for copying a loop into the current repository.
+
+    The new id is minted from ``name`` (`slugify_definition_id`), not
+    supplied — so a fork can't produce a suffix artefact like
+    ``code-review-repository``.
+    """
 
     source_id: str
-    definition_id: str
     name: str
     target_scope: LoopDefinitionScope | None = None
     work_slug: str | None = None
@@ -61,17 +66,20 @@ def execute(
         root_path=req.root_path,
     )
     source = locate_definition(repository, roots, req.source_id).definition
+    definition_id = slugify_definition_id(req.name)
+    if not definition_id:
+        raise LoopDefinitionInvalid("loop name has no id-usable characters")
     if (
         target_scope == LoopDefinitionScope.LIBRARY
-        and builtin_loop_definition(req.definition_id) is not None
+        and builtin_loop_definition(definition_id) is not None
     ):
         raise LoopDefinitionConflict(
-            f"loop definition id is reserved by a built-in: {req.definition_id}"
+            f"loop definition id is reserved by a built-in: {definition_id}"
         )
     prepared = prepare_definition(
         repository_copy(
             source,
-            definition_id=req.definition_id,
+            definition_id=definition_id,
             name=req.name,
             scope=target_scope,
         )

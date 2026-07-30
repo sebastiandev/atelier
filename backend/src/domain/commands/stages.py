@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from src.domain.loop.definitions import slugify_definition_id
 from src.domain.loop.dtos import StageDefinition, StageDefinitionScope
 from src.domain.loop.ports import (
     LoopDefinitionLocations,
@@ -47,7 +48,6 @@ class ForkStageRequest:
     """Describe a writable copy of an existing reusable stage."""
 
     source_id: str
-    definition_id: str
     name: str
     root_path: str | None = None
 
@@ -104,13 +104,27 @@ def save_stage(
     repository: StageDefinitionRepository,
     req: SaveStageRequest,
 ) -> StageDefinition:
-    """Validate and create or update one repository stage."""
+    """Validate and create or update one repository stage.
+
+    On create the id is minted from the name (`slugify_definition_id`), like
+    loops; on update the id is fixed and the name may drift from it.
+    """
     if req.definition.scope == StageDefinitionScope.BUILTIN:
         raise StageDefinitionReadOnly("built-in stages must be forked before editing")
-    if builtin_stage_definition(req.definition.definition_id) is not None:
+    definition = req.definition
+    if req.expected_revision is None:
+        derived = slugify_definition_id(definition.name)
+        if not derived:
+            raise StageDefinitionInvalid("stage name has no id-usable characters")
+        definition = replace(
+            definition,
+            definition_id=derived,
+            stage=replace(definition.stage, step_id=derived),
+        )
+    if builtin_stage_definition(definition.definition_id) is not None:
         raise StageDefinitionReadOnly("repository stages cannot replace a built-in id")
     prepared = prepare_stage_definition(
-        replace(req.definition, scope=StageDefinitionScope.LIBRARY)
+        replace(definition, scope=StageDefinitionScope.LIBRARY)
     )
     if not prepared.valid:
         raise StageDefinitionInvalid(" ".join(prepared.errors))
@@ -134,7 +148,10 @@ def fork_stage(
         loops,
         StageCatalogRequest(req.source_id, req.root_path),
     )
-    copy = repository_stage_copy(source, definition_id=req.definition_id, name=req.name)
+    definition_id = slugify_definition_id(req.name)
+    if not definition_id:
+        raise StageDefinitionInvalid("stage name has no id-usable characters")
+    copy = repository_stage_copy(source, definition_id=definition_id, name=req.name)
     return save_stage(
         locations,
         repository,

@@ -2110,7 +2110,7 @@ def test_selected_loop_launches_a_fresh_agent_briefed_for_the_stage(
 
     assert started.status_code == 200, started.text
     run = started.json()["artifact"]["runs"][0]
-    assert run["loop_definition_id"] == "atelier-reviewed"
+    assert run["loop_definition_id"] == selected["id"] == "work-reviewed"
     assert run["loop_definition"] == {
         key: selected[key] for key in ("id", "name", "description", "scope", "revision", "stages")
     }

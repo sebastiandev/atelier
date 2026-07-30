@@ -356,7 +356,6 @@ def _fork(
             definitions,
             fork_definition.ForkLoopDefinitionRequest(
                 source_id=definition_id,
-                definition_id=payload.id,
                 name=payload.name,
                 target_scope=payload.scope,
                 work_slug=work_slug or payload.work_slug,

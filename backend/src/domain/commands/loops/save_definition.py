@@ -11,6 +11,7 @@ from src.domain.loop.definitions import (
     LoopDefinitionReadOnly,
     LoopRootUnavailable,
     prepare_definition,
+    slugify_definition_id,
 )
 from src.domain.loop.dtos import LoopDefinition, LoopDefinitionScope
 from src.domain.loop.ports import (
@@ -42,13 +43,24 @@ def execute(
     repository: LoopDefinitionRepository,
     req: SaveLoopDefinitionRequest,
 ) -> LoopDefinition:
-    """Validate and persist one global or Work-local loop definition."""
+    """Validate and persist one global or Work-local loop definition.
+
+    On create (no ``expected_revision``) the id is minted from the name here,
+    not taken from the client — a taken id then fails as an ordinary revision
+    conflict. On update the id is fixed and the name may drift from it.
+    """
     scope = req.definition.scope
     if scope == LoopDefinitionScope.BUILTIN:
         raise LoopDefinitionReadOnly("built-in loops must be forked before editing")
+    definition = req.definition
+    if req.expected_revision is None:
+        derived = slugify_definition_id(definition.name)
+        if not derived:
+            raise LoopDefinitionInvalid("loop name has no id-usable characters")
+        definition = replace(definition, definition_id=derived)
     if (
         scope == LoopDefinitionScope.LIBRARY
-        and builtin_loop_definition(req.definition.definition_id) is not None
+        and builtin_loop_definition(definition.definition_id) is not None
     ):
         raise LoopDefinitionReadOnly("library loops cannot replace a built-in id")
     roots = resolve_catalog_roots(
@@ -58,7 +70,7 @@ def execute(
         work_slug=req.work_slug,
         root_path=req.root_path,
     )
-    prepared = prepare_definition(replace(req.definition, scope=scope))
+    prepared = prepare_definition(replace(definition, scope=scope))
     if not prepared.valid:
         raise LoopDefinitionInvalid(" ".join(prepared.errors))
     root = writable_root(roots, scope)

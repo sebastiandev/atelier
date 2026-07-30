@@ -89,3 +89,12 @@ def test_repo_scope_value_reads_as_library_for_old_snapshots() -> None:
     assert LoopDefinitionScope("repo") is LoopDefinitionScope.LIBRARY
     assert LoopDefinitionScope("library") is LoopDefinitionScope.LIBRARY
     assert StageDefinitionScope("repo") is StageDefinitionScope.LIBRARY
+
+
+def test_slugify_definition_id_matches_the_editor_rule() -> None:
+    from src.domain.loop.definitions import slugify_definition_id
+
+    assert slugify_definition_id("ShipHero Code & Review") == "shiphero-code-review"
+    assert slugify_definition_id("  Spaces --and-- symbols!! ") == "spaces-and-symbols"
+    assert slugify_definition_id("Shiphero-code") == "shiphero-code"
+    assert slugify_definition_id("!!!") == ""
