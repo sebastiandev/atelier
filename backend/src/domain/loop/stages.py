@@ -141,8 +141,18 @@ def resolve_stage_link(
     Preconditions: ``instance`` carries loop identity/wiring and ``definition`` is
     valid. Postconditions: runtime fields come from the current library revision,
     sparse overrides win, and loop transitions remain untouched.
+
+    Only *routed* outcomes (a non-null destination) must be declared by the
+    source stage. A transition set to ``-`` (no destination) is not wired, so it
+    never requires the stage to declare that outcome — matching how
+    ``validate_definition`` skips null destinations for inline stages.
     """
-    undeclared = set(instance.transitions) - set(definition.outcomes)
+    wired = {
+        outcome
+        for outcome, destination in instance.transitions.items()
+        if destination is not None
+    }
+    undeclared = wired - set(definition.outcomes)
     if undeclared:
         labels = ", ".join(sorted(item.value for item in undeclared))
         raise StageDefinitionInvalid(
