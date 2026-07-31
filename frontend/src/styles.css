@@ -11853,6 +11853,8 @@ a.pm-track-row:hover strong {
   padding: 24px 32px 64px;
   max-width: 760px;
   width: 100%;
+  /* Centre the leftover space instead of hugging the rail, at either measure. */
+  margin: 0 auto;
 }
 .settings-body.wide { max-width: 1180px; }
 .settings-section-hd {

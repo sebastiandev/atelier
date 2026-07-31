@@ -18,6 +18,11 @@ export type SettingsSection =
   | "appearance"
   | "about";
 
+/* Sections whose content is a grid or list earn the wide measure; the
+   form-shaped ones stay at a readable width so a 240px label column and a
+   360px input do not sit either side of a gap. */
+const WIDE_SECTIONS = new Set<SettingsSection>(["loops", "connections", "tools"]);
+
 const SECTIONS = [
   {
     id: "tools",
@@ -118,7 +123,7 @@ export function Settings({ section }: { section: SettingsSection }) {
       </aside>
 
       <main className="shell-right settings-right">
-        <div className={`settings-body${section === "loops" ? " wide" : ""}`}>
+        <div className={`settings-body${WIDE_SECTIONS.has(section) ? " wide" : ""}`}>
           {section !== "loops" && (
             <div className="settings-section-hd">
               <h1>{currentSection.title}</h1>
