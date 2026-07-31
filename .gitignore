@@ -35,9 +35,6 @@ _bmad/
 _bmad-output/
 design/
 
-# Source recordings for the README demo videos. Only the converted
-# .mp4 deliverables ship in the repo; .mov masters stay local.
-docs/screenshots/*.mov
 # Most of .claude/ is local-only state (settings.local.json, per-machine
 # checkpoint scratchpads under docs/). Skills are project-shared tooling
 # — re-include just that subtree so contributors pick up /update,
