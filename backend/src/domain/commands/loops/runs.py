@@ -573,6 +573,34 @@ async def cancel_run(
     return get_run(loop_runs, req)
 
 
+async def stop_stage(
+    workstore: WorkStore,
+    loop_runs: LoopRunRepository,
+    supervisor: AgentSupervisorService,
+    req: LoopRunRequest,
+) -> LoopRunRecord:
+    """Stop the running stage, leaving the run retryable from that stage.
+
+    Preconditions: the run exists, is active, and has a stage running.
+    Postconditions: the stage agent is stopped and the stage is failed with a
+    reason naming the manual stop, so retry and its overrides stay available.
+    """
+    get_run(loop_runs, req)
+    store = LoopRunStore(loop_runs)
+    target = _target_or_raise(store, req)
+    lifecycle.stop_stage(target)
+    loop = actions.dict_or_empty(target.run.get("loop"))
+    await runtime.release_run_agents(
+        workstore,
+        supervisor,
+        work_slug=req.work_slug,
+        run=target.run,
+        loop=loop,
+    )
+    store.save(target)
+    return get_run(loop_runs, req)
+
+
 async def clean_run(
     workstore: WorkStore,
     loop_runs: LoopRunRepository,

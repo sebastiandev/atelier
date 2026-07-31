@@ -141,6 +141,7 @@ type PlanningModeProps = {
   ) => Promise<void>;
   onApproveRun: (artifact: PlanArtifact, runId: string) => Promise<void>;
   onCancelRun: (artifact: PlanArtifact, runId: string) => Promise<void>;
+  onStopRunStage: (artifact: PlanArtifact, runId: string) => Promise<void>;
   onRequestRunChanges: (
     artifact: PlanArtifact,
     runId: string,
@@ -228,6 +229,7 @@ export function PlanningMode({
   onRetryRunStage,
   onApproveRun,
   onCancelRun,
+  onStopRunStage,
   onRequestRunChanges,
   onCreateRunPr,
   onFollowUpRun,
@@ -576,6 +578,12 @@ export function PlanningMode({
               }
               onCancel={() =>
                 onCancelRun(
+                  selectedDetail.artifact,
+                  selectedRun.id,
+                )
+              }
+              onStopStage={() =>
+                onStopRunStage(
                   selectedDetail.artifact,
                   selectedRun.id,
                 )

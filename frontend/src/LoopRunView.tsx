@@ -116,6 +116,7 @@ type RunSurfaceProps = {
   onApprove?: () => Promise<void>;
   onBack?: () => void;
   onCancel?: () => Promise<void>;
+  onStopStage?: () => Promise<void>;
   onCreatePr?: (setup: PrConfig) => Promise<void>;
   onChangeLoop?: () => Promise<void>;
   onDock: (dock: RunDock) => void;
@@ -184,6 +185,7 @@ function RunSurfaceContent({
   onApprove,
   onBack,
   onCancel,
+  onStopStage,
   onCreatePr,
   onChangeLoop,
   onDock,
@@ -537,6 +539,7 @@ function RunSurfaceContent({
           discussionStage={discussionStage}
           onApprove={showingTerminalOccurrence ? onApprove : undefined}
           onCancel={onCancel}
+          onStopStage={onStopStage}
           onChangeLoop={showingTerminalOccurrence ? onChangeLoop : undefined}
           discussionBusy={discussionBusy}
           onDiscuss={(stage, stageAgent) => void openDiscussion(stage, stageAgent)}
@@ -705,6 +708,7 @@ type LoopRunViewProps = {
   onApprove: () => Promise<void>;
   onBack: () => void;
   onCancel: () => Promise<void>;
+  onStopStage: () => Promise<void>;
   onDock: (dock: RunDock) => void;
   onRequestChanges: (note: string) => Promise<void>;
   onRerun: () => void;
@@ -736,6 +740,7 @@ export function LoopRunView({ artifact, run, ...props }: LoopRunViewProps) {
       onApprove={props.readOnly ? undefined : props.onApprove}
       onBack={props.onBack}
       onCancel={props.readOnly ? undefined : props.onCancel}
+      onStopStage={props.readOnly ? undefined : props.onStopStage}
       onCreatePr={props.readOnly ? undefined : props.onCreatePr}
       onFollowUp={props.readOnly ? undefined : props.onFollowUp}
       onDock={props.onDock}
@@ -1347,6 +1352,7 @@ function RunActions({
   discussionStage,
   onApprove,
   onCancel,
+  onStopStage,
   onChangeLoop,
   onDiscuss,
   onEditLoop,
@@ -1363,6 +1369,7 @@ function RunActions({
   discussionStage: PlanLoopStageRun | null;
   onApprove?: () => Promise<void>;
   onCancel?: () => Promise<void>;
+  onStopStage?: () => Promise<void>;
   onChangeLoop?: () => Promise<void>;
   onDiscuss: (stage: PlanLoopStageRun, agent: AgentSummary) => void;
   onEditLoop?: () => void;
@@ -1380,6 +1387,7 @@ function RunActions({
       {onOpenConsole && <button className="btn" onClick={onOpenConsole}><span aria-hidden>&gt;_</span> Open console</button>}
       {discussionStage && <button className="btn chat" disabled={!discussionAgent || discussionBusy} onClick={() => discussionAgent && onDiscuss(discussionStage, discussionAgent)}><ChatIcon size={12} /> {discussionBusy ? "Opening chat…" : "Discuss in chat"}</button>}
       <span />
+      {active && onStopStage && <button className="btn ghost" disabled={busy} onClick={() => window.confirm("Stop the running stage? The run keeps its workspace and you can retry the stage afterwards.") && void onStopStage()}>Stop stage</button>}
       {active && onCancel && <button className="btn danger ghost" disabled={busy} onClick={() => window.confirm("Cancel this run? Its shared workspace will remain available.") && void onCancel()}>Cancel run</button>}
       {resultReady && !data.accepted && onRequestChanges && <button className="btn" disabled={busy} onClick={onRequestChanges}><ReturnIcon size={12} /> Request changes</button>}
       {resultReady && !data.accepted && onApprove && <button className="btn approve" disabled={busy} onClick={() => void onApprove()}><CheckIcon size={12} /> Approve result</button>}

@@ -86,6 +86,7 @@ class LoopFailureKind(StrEnum):
 
     PROVIDER_RUNTIME = "provider_runtime"
     TIMEOUT = "timeout"
+    STOPPED = "stopped"
     INVALID_REPORT = "invalid_report"
     STAGE_OUTCOME = "stage_outcome"
 

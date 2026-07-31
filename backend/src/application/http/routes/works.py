@@ -146,6 +146,7 @@ from src.domain.commands.planning import (
 from src.domain.commands.planning import (
     start_run as planning_start_run,
 )
+from src.domain.commands.planning import stop_run_stage as planning_stop_run_stage
 from src.domain.commands.planning import (
     submit_materialization as planning_submit_materialization,
 )
@@ -925,6 +926,35 @@ async def cancel_work_loop_run_endpoint(
     """Cancel one active standalone Loop run."""
     try:
         record = await loop_run_commands.cancel_run(
+            workstore,
+            loop_runs,
+            supervisor,
+            loop_run_commands.LoopRunRequest(work_slug, run_id),
+        )
+    except loop_run_commands.RunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/stop-stage",
+    response_model=WorkLoopRunResponse,
+)
+async def stop_work_loop_run_stage_endpoint(
+    work_slug: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+) -> WorkLoopRunResponse:
+    """Stop the running stage of one Loop run, leaving it retryable."""
+    try:
+        record = await loop_run_commands.stop_stage(
             workstore,
             loop_runs,
             supervisor,
@@ -2455,6 +2485,47 @@ async def send_work_plan_pr_feedback_endpoint(
             run_id=run_id,
         ),
     )
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/stop-stage",
+    response_model=PlanArtifactDetailResponse,
+)
+async def stop_work_plan_artifact_run_stage_endpoint(
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
+    supervisor: SupervisorDep,
+) -> PlanArtifactDetailResponse:
+    """Stop the running stage of one Planning artifact run."""
+    try:
+        detail = await planning_stop_run_stage.execute(
+            workstore,
+            planningfiles,
+            loop_runs,
+            supervisor,
+            planning_stop_run_stage.StopArtifactRunStageRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+            ),
+        )
+    except (
+        planning_stop_run_stage.WorkNotFound,
+        planning_stop_run_stage.PlanArtifactNotFound,
+        planning_stop_run_stage.PlanArtifactRunNotFound,
+        planning_stop_run_stage.PlanningNotStarted,
+    ) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except lifecycle.LoopStageNotStoppable as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
     return _to_plan_detail_response(detail)
 
 

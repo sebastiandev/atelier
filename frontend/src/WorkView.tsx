@@ -42,6 +42,7 @@ import {
   acceptPlanArtifactRun,
   approveWorkPlan,
   cancelPlanArtifactRun,
+  stopPlanArtifactRunStage,
   checkPlanningFrameworkStatus,
   createAgent,
   createPlanBug,
@@ -1360,6 +1361,22 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
   }
 
+  async function handleStopPlanRunStage(artifact: PlanArtifact, runId: string) {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const saved = await stopPlanArtifactRunStage(workSlug, artifact.id, runId);
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      await refreshPlan(saved.artifact.id);
+      showToast("Stage stopped. You can retry it from the run.");
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
   async function handleCancelPlanRun(artifact: PlanArtifact, runId: string) {
     setPlanSaving(true);
     setPlanError(null);
@@ -1877,6 +1894,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           }
           onCancelRun={(artifact, runId) =>
             handleCancelPlanRun(artifact, runId)
+          }
+          onStopRunStage={(artifact, runId) =>
+            handleStopPlanRunStage(artifact, runId)
           }
           onRequestRunChanges={(artifact, runId, note) =>
             handleRequestPlanRunChanges(artifact, runId, note)

@@ -255,3 +255,55 @@ def test_retry_accepts_inactive_stage(monkeypatch: Any) -> None:
 
     assert loop["status"] == "running"
     assert launched == [True]
+
+
+def test_stop_stage_fails_only_the_running_stage() -> None:
+    """The stage-level counterpart to cancel: the run stays retryable."""
+    target = _target("publish")
+    target.run["status"] = "running"
+    target.run["completed_at"] = None
+    loop = target.run["loop"]
+    loop["status"] = "running"
+    loop["current_stage_id"] = "publish"
+    loop["stages"][0]["status"] = "passed"
+    loop["stages"][1]["status"] = "running"
+
+    lifecycle.stop_stage(target)
+
+    assert target.run["status"] == "blocked"
+    assert loop["status"] == "failed"
+    assert loop["failure_kind"] == "stopped"
+    assert "stopped manually" in loop["status_reason"]
+    assert loop["findings"] == [loop["status_reason"]]
+    # the stage that was running fails; the rest keep their history
+    assert loop["stages"][1]["status"] == "failed"
+    assert loop["stages"][0]["status"] == "passed"
+
+
+def test_stop_stage_refuses_when_nothing_is_running() -> None:
+    target = _target("publish")
+    target.run["status"] = "running"
+    target.run["completed_at"] = None
+    loop = target.run["loop"]
+    loop["status"] = "running"
+    loop["current_stage_id"] = "publish"
+    loop["stages"][1]["status"] = "pending"
+
+    try:
+        lifecycle.stop_stage(target)
+    except lifecycle.LoopStageNotStoppable:
+        pass
+    else:  # pragma: no cover - the guard is the point of the test
+        raise AssertionError("expected LoopStageNotStoppable")
+
+
+def test_stop_stage_refuses_a_terminal_run() -> None:
+    target = _target("publish")
+    target.run["loop"]["status"] = "accepted"
+
+    try:
+        lifecycle.stop_stage(target)
+    except lifecycle.LoopStageNotStoppable:
+        pass
+    else:  # pragma: no cover - the guard is the point of the test
+        raise AssertionError("expected LoopStageNotStoppable")

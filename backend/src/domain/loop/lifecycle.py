@@ -11,6 +11,7 @@ from src.domain.loop import actions, briefs, pr_lifecycle, runtime
 from src.domain.loop.agent_policy import apply_retry_overrides
 from src.domain.loop.dtos import (
     LoopContextKind,
+    LoopFailureKind,
     LoopOutcome,
     LoopPermission,
     LoopRunStatus,
@@ -70,6 +71,10 @@ class LoopRunNotAcceptable(ValueError):
 
 class LoopRunNotCancellable(ValueError):
     """The run is already terminal and cannot be cancelled."""
+
+
+class LoopStageNotStoppable(ValueError):
+    """No stage is currently running, so there is nothing to stop."""
 
 
 async def resume(
@@ -519,6 +524,51 @@ def cancel(target: LoopRunTarget) -> None:
     run["loop"] = loop
 
 
+def stop_stage(target: LoopRunTarget) -> None:
+    """Stop the running stage and leave it retryable.
+
+    The stage-level counterpart to ``cancel``: the run keeps its workspace
+    and its history, and the failure lands in the same shape a timeout does,
+    so the existing failure panel offers retry with its model/effort
+    overrides. Only the reason differs.
+
+    Preconditions: the run has a stage currently running.
+    Postconditions: that stage is failed, the run is blocked, and the reason
+    records that a person stopped it rather than a timeout expiring.
+    """
+    run = target.run
+    loop = actions.dict_or_empty(run.get("loop"))
+    status = actions.loop_status(loop.get("status"), actions.run_status(run))
+    if status in {
+        LoopStatus.ACCEPTED,
+        LoopStatus.CLEANED,
+        LoopStatus.CANCELLED,
+        LoopStatus.FAILED,
+    }:
+        raise LoopStageNotStoppable(f"loop run is not active: {target.run_id}")
+    current = actions.str_or_empty(loop.get("current_stage_id"))
+    stage = next(
+        (
+            row
+            for row in loop.get("stages", [])
+            if isinstance(row, dict) and row.get("id") == current
+        ),
+        None,
+    )
+    if stage is None or stage.get("status") != LoopStepStatus.RUNNING.value:
+        raise LoopStageNotStoppable(f"no stage is running: {target.run_id}")
+    name = actions.str_or_empty(stage.get("name")) or current
+    reason = f"{name} was stopped manually."
+    stage["status"] = LoopStepStatus.FAILED.value
+    loop["status"] = LoopStatus.FAILED.value
+    loop["failure_kind"] = LoopFailureKind.STOPPED.value
+    loop["status_reason"] = reason
+    loop["findings"] = [reason]
+    run["status"] = LoopRunStatus.BLOCKED.value
+    run["completed_at"] = actions.now_iso()
+    run["loop"] = loop
+
+
 def _retry_note(resolution_note: str) -> str:
     """Lead a retry's resolution with the pick-up-existing-work hint."""
     return "\n\n".join(
@@ -594,8 +644,10 @@ __all__ = [
     "LoopRunNotCancellable",
     "LoopRunNotChangeable",
     "LoopRunNotResumable",
+    "LoopStageNotStoppable",
     "accept",
     "cancel",
     "request_changes",
     "resume",
+    "stop_stage",
 ]

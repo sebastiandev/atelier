@@ -11,6 +11,7 @@ import {
   type WorkLoopRun,
   acceptWorkLoopRun,
   cancelWorkLoopRun,
+  stopWorkLoopRunStage,
   createWorkLoopRunPrStage,
   getWorkLoopRun,
   getWorkLoopBrief,
@@ -363,6 +364,7 @@ export function LoopMode({
               onRefreshPr={canActOnRun ? refreshActivePr : undefined}
               onApprove={canActOnRun ? () => act(() => acceptWorkLoopRun(work.slug, activeRun.id)) : undefined}
               onCancel={canActOnRun ? () => act(() => cancelWorkLoopRun(work.slug, activeRun.id)) : undefined}
+              onStopStage={canActOnRun ? () => act(() => stopWorkLoopRunStage(work.slug, activeRun.id)) : undefined}
               onCreatePr={canActOnRun ? (setup) => act(() => createWorkLoopRunPrStage(work.slug, activeRun.id, setup)) : undefined}
               onChangeLoop={canActOnRun ? () => prepareNewRun(activeRun) : undefined}
               onFollowUp={canActOnRun ? (kind, note) => act(() => rerunWorkLoopRun(work.slug, activeRun.id, { kind, note: note || undefined })) : undefined}

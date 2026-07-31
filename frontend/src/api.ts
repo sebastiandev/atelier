@@ -1176,6 +1176,17 @@ export function cancelPlanArtifactRun(
   ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
 }
 
+export function stopPlanArtifactRunStage(
+  workSlug: string,
+  artifactId: string,
+  runId: string,
+): Promise<PlanArtifactDetail> {
+  return fetch(
+    `/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/stop-stage`,
+    { method: "POST" },
+  ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
 export function requestPlanArtifactRunChanges(
   workSlug: string,
   artifactId: string,
@@ -1735,6 +1746,15 @@ export function cancelWorkLoopRun(
   runId: string,
 ): Promise<WorkLoopRun> {
   return fetch(`/api/works/${workSlug}/runs/${runId}/cancel`, {
+    method: "POST",
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
+export function stopWorkLoopRunStage(
+  workSlug: string,
+  runId: string,
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/stop-stage`, {
     method: "POST",
   }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
