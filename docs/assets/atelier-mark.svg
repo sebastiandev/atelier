@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="atelier-mark-title">
+  <title id="atelier-mark-title">Atelier</title>
+  <!--
+    Stencil A_ — the same mark as frontend/src/BrandMark.tsx. Kept in sync by
+    hand: the component inherits currentColor and blinks via a CSS class, but a
+    README image has neither our stylesheet nor a text colour to inherit, so
+    the accent is inlined (oklch(0.62 0.18 278) -> #7075EF) and the cursor
+    blinks with SMIL, which survives GitHub's SVG sanitiser where <style> does
+    not.
+  -->
+  <g fill="none" stroke="#7075EF" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10">
+    <path d="M 14 50 L 32 12 L 50 50" />
+    <path d="M 21 36 L 43 36" />
+  </g>
+  <rect x="11" y="56" width="42" height="5" fill="#7075EF">
+    <!-- Matches @keyframes brand-mark-blink: hard on/off, 1.05s, on for 55%. -->
+    <animate
+      attributeName="opacity"
+      values="1;0"
+      keyTimes="0;0.55"
+      calcMode="discrete"
+      dur="1.05s"
+      repeatCount="indefinite" />
+  </rect>
+</svg>

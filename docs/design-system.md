@@ -39,24 +39,38 @@ Search and plan-reference pickers use that floating-layer recipe. Tool
 approval is the exception: it grows the existing `--bg-2` composer dock
 upward, joined by a 2px accent seam, rather than introducing another card.
 
-## Brand mark — Constellation
+## Brand mark — Stencil A_
 
-Four-node graph with one off-axis focal node and a halo ("spark"). The
-asymmetry is intentional; don't recenter or "balance" it.
+A stencil **A** over a cursor bar. The bar is a typing cursor, not an
+underline: it's what ties the mark to the terminal-shaped work Atelier does.
+Don't close the A's apex or round the strokes.
 
-- **Master**: `scripts/launchers/icons/atelier-app-icon.svg` (1024×1024 with
-  tile + sheen baked in). Re-render binaries via
-  `scripts/launchers/icons/build-icons.sh` — produces `Atelier.icns`,
-  `atelier.png`, and `Atelier.ico` for the desktop launchers.
-- **Topbar pip**: `.brand-mark` is an 18×18 tile rendered via CSS mask. The
-  glyph URL lives in `:root` as `--brand-mark-glyph` (inline
-  `data:image/svg+xml`). Tile color tracks `--accent`; the mark stays white
-  (background paints through the mask). Don't redraw the geometry.
-- **Topbar variants**: when on the accent tile, mark is white. When inline
-  without a tile (e.g. monochrome surfaces), mark inherits `currentColor`.
+The mark lives in code, not in an asset file — `frontend/src/BrandMark.tsx`
+draws it inline so it inherits `currentColor` from whatever it sits in, and
+therefore needs no per-theme variants. `.brand-mark` sizes it (24px) and owns
+the blink keyframes.
 
-The original handoff with full design rationale is at
-`design/design_handoff_atelier_icon/` (gitignored).
+- **Blink is opt-in.** `<BrandMark blink />` runs the cursor at 1.05s
+  `steps(1, end)`, on for 55% of the cycle. Use it on live surfaces — Home
+  does. Leave it off on settings-shaped pages (`ShellTopbar`, `Connections`),
+  where a blinking cursor reads as a stray control. It respects
+  `prefers-reduced-motion`.
+- **Composition**: `Connections` sets the mark immediately against the word
+  (`<BrandMark />telier`), so the glyph *is* the A. Keep that seam tight if you
+  reuse the trick.
+
+Two other marks are deliberately not this one:
+
+- **Desktop launcher / app icon** stays the Constellation — a four-node graph
+  with one off-axis focal node and a halo ("spark"); the asymmetry is
+  intentional, don't "balance" it. Master is
+  `scripts/launchers/icons/atelier-app-icon.svg` (1024×1024, tile + sheen baked
+  in); re-render binaries with `scripts/launchers/icons/build-icons.sh`, which
+  produces `Atelier.icns`, `atelier.png`, and `Atelier.ico`.
+- **README header** uses `docs/assets/atelier-mark.svg`, a standalone copy of
+  the A_ . It can't inherit anything, so the accent is inlined as a hex and the
+  blink is SMIL rather than CSS — GitHub's sanitiser strips `<style>` but keeps
+  SMIL. If the component's geometry changes, update that file to match.
 
 ## Chrome and headers
 

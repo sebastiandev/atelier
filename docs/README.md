@@ -27,7 +27,7 @@ the code wins — but please update the doc.
 - `_bmad-output/architecture-atelier-2026-04-30.md` — the formal architecture spec. Some pivots have superseded it; see `_bmad-output/project-status.yaml` → `locked_pivots`.
 - `_bmad-output/sprint-status.yaml` — story-level status and decisions log.
 - `_bmad-output/project-status.yaml` — locked pivots, follow-ups, runtime essentials.
-- `design/` — original UI design handoffs (gitignored). `frontend/src/styles.css` lifts the dark-theme tokens from `design/design_handoff_atelier/design_files/styles.css`; the brand-mark assets came from `design/design_handoff_atelier_icon/`.
+- `design/` — UI design handoffs (gitignored). `design/handoff/` is the current one: `specs-app.jsx` holds the per-surface specs and `mocks-*.jsx` the reference markup, both worth checking before reworking a screen. Superseded rounds moved to `design/old/` — `frontend/src/styles.css` lifted its dark-theme tokens from `design/old/design_handoff_atelier/design_files/styles.css`, and the original app-icon work is in `design/old/design_handoff_atelier_icon/`.
 
 ## Doc maintenance discipline
 

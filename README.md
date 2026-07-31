@@ -1,9 +1,12 @@
-<p align="center">
+<!-- One centred container: a <p> around the mark adds GitHub's paragraph
+     margin, which detaches it from the title. GitHub strips style attributes,
+     so `align` is the tool available here. -->
+<div align="center">
   <img src="docs/assets/atelier-mark.svg" width="72" alt="Atelier mark">
-</p>
-<h1 align="center">Atelier</h1>
-<p align="center"><b>Manage work across multiple coding agents.</b><br>
-Group it under projects, or run it loose — plan it, loop it, ship it.</p>
+  <h1>Atelier</h1>
+  <p><b>Manage work across multiple coding agents.</b><br>
+  Group it under projects, or run it loose — plan it, loop it, ship it.</p>
+</div>
 
 ---
 
