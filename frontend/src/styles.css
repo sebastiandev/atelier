@@ -2235,6 +2235,16 @@ body {
   border-radius: var(--radius-ctl);
   font-size: 12.5px;
 }
+/* Same shape as .form-error, good-toned: confirms where an exported file
+   landed, which the browser cannot do inside a standalone PWA window. */
+.loop-lib-notice {
+  background: var(--good-soft);
+  border: 0;
+  color: var(--good);
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-ctl);
+  font-size: 12.5px;
+}
 
 .complete-work-modal .modal-bd { gap: 12px; }
 .complete-work-copy {

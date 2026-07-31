@@ -266,6 +266,7 @@ export function LoopLibraryScreen({
   const [definitions, setDefinitions] = useState<LoopDefinition[] | null>(null);
   const [stageDefinitions, setStageDefinitions] = useState<StageDefinition[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorSeed | null>(null);
   const [stageEditor, setStageEditor] = useState<StageEditorSeed | null>(null);
   const [tab, setTab] = useState<"loops" | "stages">("loops");
@@ -358,18 +359,22 @@ export function LoopLibraryScreen({
   }
 
   async function exportLoop(definition: LoopDefinition) {
+    setError(null);
+    setNotice(null);
     try {
       const out = await exportLoopDefinition(workSlug, definition.id, rootPath, definition.scope);
-      downloadTextFile(out.filename, out.content);
+      setNotice(exportNotice(out.filename, await downloadTextFile(out.filename, out.content)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
   async function exportStage(definition: StageDefinition) {
+    setError(null);
+    setNotice(null);
     try {
       const out = await exportStageDefinition(definition.id, stageDefinitionRoot(definition, rootPath));
-      downloadTextFile(out.filename, out.content);
+      setNotice(exportNotice(out.filename, await downloadTextFile(out.filename, out.content)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -463,6 +468,7 @@ export function LoopLibraryScreen({
       )}
       <main className="loop-library-body themed-scrollbar">
         {error && <div className="form-error">{error}</div>}
+        {notice && <div className="loop-lib-notice">{notice}</div>}
         <div className="loop-library-collection-bar">
           <div className="loop-library-tabs" role="tablist" aria-label="Loop library">
             <button role="tab" aria-selected={tab === "loops"} className={tab === "loops" ? "active" : ""} onClick={() => setTab("loops")}><LoopIcon size={12} /> Loops <span>{definitions?.length ?? 0}</span></button>
@@ -2225,8 +2231,52 @@ function relativeContextPath(rootPath: string, selectedPath: string): string | n
 
 // --- Import / export -------------------------------------------------------
 
-function downloadTextFile(filename: string, content: string) {
+/* Returns how the file was delivered, so the caller can say something: an
+   `<a download>` cannot ask where to save and its confirmation UI lives in the
+   browser toolbar, which a `display: standalone` PWA window does not have — so
+   that path looks like nothing happened. */
+type SaveOutcome = "picked" | "downloaded" | "cancelled";
+
+async function downloadTextFile(
+  filename: string,
+  content: string,
+): Promise<SaveOutcome> {
   const blob = new Blob([content], { type: "text/yaml" });
+  const picker = (
+    window as unknown as {
+      showSaveFilePicker?: (options: unknown) => Promise<{
+        createWritable: () => Promise<{
+          write: (data: Blob) => Promise<void>;
+          close: () => Promise<void>;
+        }>;
+      }>;
+    }
+  ).showSaveFilePicker;
+  // Chromium only, and only in a secure context (localhost counts; a LAN IP
+  // does not). Everywhere else falls through to the anchor.
+  if (picker) {
+    try {
+      const handle = await picker.call(window, {
+        suggestedName: filename,
+        types: [
+          {
+            description: "YAML",
+            accept: { "text/yaml": [".yaml", ".yml"] },
+          },
+        ],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return "picked";
+    } catch (err) {
+      // Dismissing the dialog is a choice, not a failure.
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return "cancelled";
+      }
+      // Anything else (no permission, unsupported options): fall back.
+    }
+  }
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -2234,7 +2284,17 @@ function downloadTextFile(filename: string, content: string) {
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  URL.revokeObjectURL(url);
+  // Revoking in the same tick can abort the download before the browser has
+  // finished reading the blob.
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return "downloaded";
+}
+
+function exportNotice(filename: string, outcome: SaveOutcome): string | null {
+  if (outcome === "cancelled") return null;
+  return outcome === "picked"
+    ? `Saved ${filename}.`
+    : `Exported ${filename} to your downloads.`;
 }
 
 function statusTone(status: StageImportStatus): string {
