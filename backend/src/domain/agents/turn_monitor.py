@@ -17,6 +17,7 @@ class TurnObservation:
     last_activity_at: datetime | None
     elapsed_seconds: float | None
     waiting_permission: bool
+    tool_in_flight: bool
 
 
 def observe_turn(
@@ -26,7 +27,10 @@ def observe_turn(
     """Derive provider-turn health from ordered transcript events.
 
     Preconditions: events are in transcript order and ``now`` is timezone-aware.
-    Postconditions: elapsed time excludes intervals awaiting permission decisions.
+    Postconditions: elapsed time excludes intervals awaiting permission
+    decisions, and ``tool_in_flight`` reports whether a tool call is still
+    running — a long one (a test suite, a sub-agent exploration) emits no
+    events while it works, so silence alone does not mean the agent is stuck.
     """
     timed = [
         (event, timestamp)
@@ -43,7 +47,27 @@ def observe_turn(
         last_activity_at=max((timestamp for _, timestamp in timed), default=None),
         elapsed_seconds=elapsed_seconds,
         waiting_permission=waiting_permission,
+        tool_in_flight=_tool_in_flight(events),
     )
+
+
+def _tool_in_flight(events: list[dict[str, Any]]) -> bool:
+    """Return whether a tool call was started and has not reported a result.
+
+    Preconditions: events are in transcript order.
+    Postconditions: true only while at least one ``tool_call`` lacks the
+    matching ``tool_result``.
+    """
+    started: set[str] = set()
+    for event in events:
+        tool_id = event.get("tool_id")
+        if not isinstance(tool_id, str):
+            continue
+        if event.get("type") == "tool_call":
+            started.add(tool_id)
+        elif event.get("type") == "tool_result":
+            started.discard(tool_id)
+    return bool(started)
 
 
 def unresolved_permission_events(

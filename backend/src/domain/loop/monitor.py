@@ -456,8 +456,14 @@ async def _execute_claimed(
                 await supervisor.stop_agent(agent_slug)
                 return target
 
+            # A tool call that is still running emits nothing while it works —
+            # a test suite or a sub-agent exploration can be silent for far
+            # longer than the warning window. Treating that as a stall
+            # restarts a stage that was never stuck, throwing away its
+            # progress and the work the tool was in the middle of.
             inactive = (
                 not waiting_permission
+                and not observation.tool_in_flight
                 and last_activity_at is not None
                 and (now - last_activity_at).total_seconds() >= _INACTIVITY_WARNING_SECONDS
             )
