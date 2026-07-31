@@ -26,6 +26,7 @@ import {
   type WorkSummary,
   resolveWorkPlanMaterializationPermission,
   listLoopDefinitions,
+  revealWork,
 } from "./api";
 import { ChatTile } from "./Chat";
 import { LoopStructureEditor } from "./LoopUI";
@@ -41,6 +42,7 @@ import {
   EyeIcon,
   LoopIcon,
   SparkIcon,
+  FolderIcon,
 } from "./Icons";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import { PermissionApprovalDialog } from "./PermissionApprovalDialog";
@@ -49,6 +51,7 @@ import {
   LoopRunView,
   RunRail,
   planningRunData,
+  prStatusTone,
 } from "./LoopRunView";
 import {
   coerceProviderOptionsForModel,
@@ -950,7 +953,21 @@ function PlanningStarterRail({
         <em>{framework}</em>
       </div>
       <div className="pm-work-hero">
-        <span>{work.slug} · {formatShortDate(work.created_at)}</span>
+        <div className="pm-work-hero-id">
+          <span>{work.slug} · {formatShortDate(work.created_at)}</span>
+          <button
+            className="btn icon sm work-hero-folder"
+            title={`Open ${work.atelier_path} in the file browser`}
+            onClick={() => {
+              revealWork(work.slug).catch(() => {
+                navigator.clipboard?.writeText(work.atelier_path).catch(() => {});
+              });
+            }}
+            aria-label="Reveal work folder"
+          >
+            <FolderIcon size={12} />
+          </button>
+        </div>
         <strong>{work.name}</strong>
       </div>
       <div className="pm-starter-rail-fill themed-scrollbar">
@@ -1343,6 +1360,19 @@ function PlanningRunRail({
   onViewLoop: () => void;
 }) {
   const setPlanningRailWidth = useLayoutStore((state) => state.setPlanningRailWidth);
+  const storyPullRequests = useMemo(() => {
+    const seen = new Set<string>();
+    const rows: PrLifecycle[] = [];
+    for (const item of [...artifact.runs].reverse()) {
+      const pr = item.pr;
+      if (!pr) continue;
+      const key = pr.url ?? String(pr.number ?? "");
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      rows.push(pr);
+    }
+    return rows;
+  }, [artifact.runs]);
   return (
     <div className="pm-run-rail-host">
       <RunRail
@@ -1359,7 +1389,28 @@ function PlanningRunRail({
         selectedRunId={run.id}
         onRun={onRun}
         onViewLoop={onViewLoop}
-      />
+      >
+        {storyPullRequests.length > 0 && (
+          <section className="loop-mode-rail-section">
+            <header><span>Pull requests</span><em>{storyPullRequests.length}</em></header>
+            <div className="loop-mode-rail-section-body themed-scrollbar">
+              {storyPullRequests.map((pr) => (
+                <a
+                  className="loop-mode-rail-row"
+                  href={pr.url ?? undefined}
+                  key={pr.url ?? String(pr.number)}
+                  target={pr.url ? "_blank" : undefined}
+                  rel={pr.url ? "noreferrer" : undefined}
+                >
+                  <span>PR</span>
+                  <strong>{pr.number ? `#${pr.number} ` : ""}{pr.title}</strong>
+                  <em className={prStatusTone(pr.status)}>{pr.status}</em>
+                </a>
+              ))}
+            </div>
+          </section>
+        )}
+      </RunRail>
       <PaneResizeHandle
         defaultValue={296}
         edge="right"
@@ -1973,6 +2024,8 @@ function ArtifactDetail({
   const editable = !readOnly && (status === "draft" || status === "ready" || status === "blocked");
   const dirty = draft !== detail.content;
   const latestRun = detail.artifact.runs.at(-1) ?? null;
+  const latestPr =
+    [...detail.artifact.runs].reverse().find((run) => run.pr)?.pr ?? null;
   const latestLoopStatus = latestRun ? loopStatus(latestRun) : null;
   const latestRunData = latestRun ? planningRunData(detail.artifact, latestRun) : null;
   const latestRunReviewable = latestLoopStatus === "completed" || latestLoopStatus === "awaiting_approval";
@@ -2052,6 +2105,13 @@ function ArtifactDetail({
             <Kv label="Criteria" value={detail.artifact.readiness === "ready" ? "defined" : "missing"} tone={detail.artifact.readiness === "ready" ? "good" : "danger"} />
             <Kv label="Estimate" value={detail.artifact.readiness === "ready" ? "lightweight" : "missing"} />
             <Kv label="Deps" value={detail.artifact.dependencies.length > 0 ? detail.artifact.dependencies.join(", ") : "clear"} tone={detail.artifact.launch_blockers.length > 0 ? "warn" : "good"} />
+            {latestPr && (
+              <Kv
+                label="PR"
+                value={`${latestPr.number ? `#${latestPr.number} ` : ""}${latestPr.status}`}
+                tone={prReadinessTone(latestPr.status)}
+              />
+            )}
           </InspectorPanel>
           <InspectorPanel title="Latest run">
             {latestRun ? (
@@ -2300,7 +2360,15 @@ function InspectorPanel({ title, children }: { title: string; children: ReactNod
   );
 }
 
-function Kv({ label, value, tone }: { label: string; value: string; tone?: "good" | "warn" | "danger" }) {
+/* Readiness answers "does this story still need work?", so a merged PR reads
+   as good and a closed one as a problem. */
+function prReadinessTone(status: string): "merged" | "warn" | "danger" | undefined {
+  if (status === "merged") return "merged";
+  if (status === "closed") return "danger";
+  return undefined;
+}
+
+function Kv({ label, value, tone }: { label: string; value: string; tone?: "good" | "warn" | "danger" | "merged" }) {
   return (
     <div className="pm-kv">
       <span>{label}</span>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { PrComment, PrLifecycle } from "./api";
 import { BranchIcon, CheckIcon, ChevronRightIcon, CopyIcon, LoopIcon, ReturnIcon } from "./Icons";
+import { prStatusTone } from "./LoopRunView";
 
 type FeedbackItem = { comment_id: string; instruction: string };
 /** `open` still needs a decision; the rest are kept for history.
@@ -59,6 +60,7 @@ export function PrLifecyclePanel({
   const selectedCount = actionable.filter((thread) => selected.has(thread.action.id)).length;
   const hasFreeInstruction = Boolean(instruction.trim());
   const allSelected = actionable.length > 0 && actionable.every((thread) => selected.has(thread.action.id));
+  const terminal = pr.status === "merged" || pr.status === "closed";
   const checkState = typeof pr.checks === "string" ? pr.checks : pr.checks.state;
   const checks = typeof pr.checks === "string"
     ? pr.checks
@@ -106,7 +108,7 @@ export function PrLifecyclePanel({
             </>}
           </small>
         </span>
-        <em className="tag">{pr.status}</em>
+        <em className={`tag ${prStatusTone(pr.status)}`}>{pr.status}</em>
         <em className={`tag ${statusTone(checkState)}`}><CheckIcon size={9} /> checks {checks}</em>
         <em className={`tag ${statusTone(pr.review_state)}`}>review {pr.review_state.replaceAll("_", " ")}</em>
         <a className="btn primary sm" href={pr.url} target="_blank" rel="noreferrer">Open PR ↗</a>
@@ -138,11 +140,12 @@ export function PrLifecyclePanel({
 
       <header className="run-pr-comments-head">
         <button type="button" onClick={() => setOpen((value) => !value)}>{open ? "▾" : "▸"} PR comments</button>
-        <em className={actionable.length > 0 ? "tag warn" : "tag"}>{actionable.length} open</em>
+        <em className={actionable.length > 0 && !terminal ? "tag warn" : "tag"}>{actionable.length} open</em>
         {open_.length > actionable.length && <em className="tag good">{open_.length - actionable.length} you replied</em>}
         {history.length > 0 && <em className="tag">{history.length} earlier</em>}
         <span>since this push{pr.last_synced_at && <> · synced {relativeTime(pr.last_synced_at)}</>}</span>
-        {actionable.length > 0 && <label><input
+        {terminal && <em className={`tag ${prStatusTone(pr.status)}`}>{pr.status} · read-only</em>}
+        {!terminal && actionable.length > 0 && <label><input
           type="checkbox"
           checked={allSelected}
           onChange={(event) => setSelected(
@@ -160,7 +163,7 @@ export function PrLifecyclePanel({
             const expanded = thread.actionable !== toggledThreads.has(thread.id);
             return (
               <div className={`run-pr-comment${checked ? " selected" : ""}${thread.actionable ? "" : " acknowledged"}`} key={thread.id}>
-                {thread.actionable ? <input
+                {thread.actionable && !terminal ? <input
                   type="checkbox"
                   checked={checked}
                   disabled={!onSendFeedback}
@@ -218,10 +221,21 @@ export function PrLifecyclePanel({
               ))}
             </div>
           )}
-          {onSendFeedback && <label className="run-pr-free-instruction"><span>Your instruction <small>no comment needed — refactors, missed scope, changed requirements</small></span><textarea rows={2} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Additional work for the next implementation pass" /></label>}
+          {onSendFeedback && !terminal && <label className="run-pr-free-instruction"><span>Your instruction <small>no comment needed — refactors, missed scope, changed requirements</small></span><textarea rows={2} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Additional work for the next implementation pass" /></label>}
           {onSendFeedback && <footer>
-            <span>Unselected comments stay open.</span>
-            <button className="btn primary sm" disabled={busy || (!selectedCount && !hasFreeInstruction)} onClick={() => void sendFeedback()}><ReturnIcon size={11} /> Send to Implement · {selectedCount}{hasFreeInstruction ? " + 1" : ""}</button>
+            <span>
+              {terminal
+                ? `This pull request is ${pr.status}. Its branch is no longer open, so further passes would have nowhere to land — start a new run instead.`
+                : "Unselected comments stay open."}
+            </span>
+            <button
+              className="btn primary sm"
+              disabled={terminal || busy || (!selectedCount && !hasFreeInstruction)}
+              title={terminal ? `PR is ${pr.status} — no further changes can be pushed to it` : undefined}
+              onClick={() => void sendFeedback()}
+            >
+              <ReturnIcon size={11} /> Send to Implement · {selectedCount}{hasFreeInstruction ? " + 1" : ""}
+            </button>
           </footer>}
         </div>
       )}

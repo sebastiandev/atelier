@@ -25,10 +25,11 @@ import {
   sendWorkLoopRunPrFeedback,
   resumeWorkLoopRun,
   startWorkLoopRun,
+  revealWork,
 } from "./api";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { FolderPickerDialog } from "./FolderPickerDialog";
-import { CheckIcon, LoopIcon } from "./Icons";
+import { CheckIcon, FolderIcon, LoopIcon } from "./Icons";
 import { LoopBriefSetup } from "./LoopBriefSetup";
 import {
   LoopStructureEditor,
@@ -38,6 +39,7 @@ import {
   type RunSurfaceData,
   RunRail,
   RunSurface,
+  prStatusTone,
 } from "./LoopRunView";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import { type LoopStartSeed, loopStartStorageKey } from "./loopSetup";
@@ -491,7 +493,21 @@ function LoopModeRail({
           </div>
           <div className="loop-mode-work">
             <strong>{work.name}</strong>
-            <span>{work.slug} · {compactPath(folder)}</span>
+            <div className="loop-mode-work-id">
+              <span>{work.slug} · {compactPath(folder)}</span>
+              <button
+                className="btn icon sm work-hero-folder"
+                title={`Open ${work.atelier_path} in the file browser`}
+                onClick={() => {
+                  revealWork(work.slug).catch(() => {
+                    navigator.clipboard?.writeText(work.atelier_path).catch(() => {});
+                  });
+                }}
+                aria-label="Reveal work folder"
+              >
+                <FolderIcon size={12} />
+              </button>
+            </div>
           </div>
           <p className="loop-mode-goal">{goal || "Describe the goal before starting."}</p>
         </>
@@ -513,7 +529,7 @@ function LoopModeRail({
               target={artifact.url ? "_blank" : undefined}
               rel={artifact.url ? "noreferrer" : undefined}
             >
-              <span>PR</span><strong>{artifact.title}</strong><em className="good">{artifact.status}</em>
+              <span>PR</span><strong>{artifact.title}</strong><em className={prStatusTone(artifact.status)}>{artifact.status}</em>
             </a>
           ))}
           {pullRequests.length === 0 && <span className="loop-mode-rail-empty">No pull requests yet.</span>}

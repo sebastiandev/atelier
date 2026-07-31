@@ -976,18 +976,20 @@ export function RunRail({
       </section>
       <section className="loop-mode-rail-section">
         <header><span>Runs</span><em>{runs.length}</em></header>
-        {runs.map((run) => (
-          <button
-            key={run.id}
-            type="button"
-            className={`loop-mode-rail-row${run.id === selectedRunId ? " active" : ""}`}
-            onClick={() => onRun(run.id)}
-          >
-            <span>run {run.number}</span>
-            <strong>{run.runKind === "initial" ? `initial · rev ${run.revision || "legacy"}` : `${run.runKind} · ${run.seedLabel || "current state"}`}</strong>
-            <em className={runStatusTone(run.status)}>{statusLabel(run.status)}</em>
-          </button>
-        ))}
+        <div className="loop-mode-rail-section-body themed-scrollbar">
+          {runs.map((run) => (
+            <button
+              key={run.id}
+              type="button"
+              className={`loop-mode-rail-row${run.id === selectedRunId ? " active" : ""}`}
+              onClick={() => onRun(run.id)}
+            >
+              <span>run {run.number}</span>
+              <strong>{run.runKind === "initial" ? `initial · rev ${run.revision || "legacy"}` : `${run.runKind} · ${run.seedLabel || "current state"}`}</strong>
+              <em className={runStatusTone(run.status)}>{statusLabel(run.status)}</em>
+            </button>
+          ))}
+        </div>
       </section>
       {children}
     </aside>
@@ -1077,6 +1079,12 @@ function StageOutput({
         <strong>{updatingPr ? `Update PR #${pr?.number ?? ""}` : stage.name}</strong>
         <span className="tag">{updatingPr ? "commit & push only" : kindLabel(stage.kind)}</span>
         <span className={`tag ${stageTone(stage.status)}`}>{stageStatusLabel(stage.status)}</span>
+        {stage.kind === "pr" && pr && (
+          /* The stage tag reports the stage lifecycle ("passed"); the PR can
+             move on independently after that, so surface its outcome here
+             rather than only inside the panel below. */
+          <span className={`tag ${prStatusTone(pr.status)}`}>#{pr.number ?? ""} {pr.status}</span>
+        )}
         <em>pass {stage.passNumber}</em>
       </header>
       {stage.kind !== "user_approval" && (
@@ -1687,6 +1695,16 @@ function stageIcon(stage: Pick<PlanLoopStageRun, "id" | "kind">, size: number) {
   if (stage.kind === "user_approval") return <UserCheckIcon size={size} />;
   if (stage.kind === "deterministic_check") return <FlaskIcon size={size} />;
   return <SparkIcon size={size} />;
+}
+
+/* Merged carries the Atelier accent so a landed PR reads at a glance; open is
+   good-toned, closed is danger. (Diverges from the handoff's neutral merged
+   tag — a deliberate call: neutral was too subtle to spot in a rail.) */
+export function prStatusTone(status: string): string {
+  if (status === "merged") return "merged";
+  if (status === "open") return "good";
+  if (status === "closed") return "danger";
+  return "";
 }
 
 function stageTone(status: PlanLoopStageRun["status"]): string {

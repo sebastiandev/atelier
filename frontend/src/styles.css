@@ -72,7 +72,11 @@
   /* PR-specific terminal state. ``merged`` is its own colour (matches
      GitHub's purple) so it reads as distinct from ``done``/``committed``
      greens at a glance. */
-  --merged: oklch(0.70 0.18 305);
+  /* Merged reads in the Atelier accent (user-tunable via TweaksPanel).
+     Diverges from the handoff's neutral <XTag>merged</XTag> — deliberate. */
+  --merged: var(--accent);
+  --merged-soft: var(--accent-soft);
+  --merged-line: var(--accent-line);
 
   /* Direction D shape scale */
   --radius-tag: 2px;
@@ -1483,7 +1487,7 @@
   --review-line: oklch(0.62 0.15 330 / calc(0.38 * var(--hint)));
   --ctx-warn: var(--warn);
   --ctx-crit: var(--danger);
-  --merged: oklch(0.55 0.20 305);
+  --merged: var(--accent);
 
   /* Accent overrides for higher-contrast soft tints on light bg */
   --accent-soft: oklch(0.62 0.18 var(--accent-h) / 0.12);
@@ -6630,7 +6634,7 @@ h5.md-h {
   --review: var(--ansi-magenta);
   --ctx-warn: var(--ansi-yellow);
   --ctx-crit: var(--ansi-red);
-  --merged: var(--ansi-magenta);
+  --merged: var(--accent);
 }
 
 /* Persona color tokens — remap the warm hue ramp to ANSI brights */
@@ -8560,10 +8564,41 @@ h5.md-h {
 }
 .work-rail .work-hero { padding: 12px 18px 16px; }
 .work-rail .work-hero .id-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-4);
   letter-spacing: 0.04em;
+}
+.work-rail .work-hero .id-line > span {
+  min-width: 0;
+}
+/* Reveal-work-folder control. Same affordance in the Manual canvas rail,
+   the Planning rail, and the Loop rail. */
+.work-hero-folder {
+  flex: 0 0 auto;
+  color: var(--fg-4);
+}
+.work-hero-folder:hover:not(:disabled) {
+  color: var(--fg-2);
+}
+.pm-work-hero-id,
+.loop-mode-work-id {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pm-work-hero-id > span,
+.loop-mode-work-id > span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .work-rail .work-hero .name {
   font-size: 16px;
@@ -8797,7 +8832,7 @@ h5.md-h {
 .planning-mode {
   --pm-epic: var(--accent);
   --pm-story: var(--info);
-  --pm-spike: var(--merged);
+  --pm-spike: oklch(0.70 0.18 305);
   --pm-bug: var(--danger);
   --pm-doc: var(--chat-color);
   --pm-rail-width: 296px;
@@ -9734,9 +9769,9 @@ h5.md-h {
 }
 .pm-art-wrap {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 232px;
+  grid-template-columns: minmax(0, 1fr) minmax(232px, 300px);
   gap: 18px;
-  width: min(980px, calc(100% - 32px));
+  width: min(1100px, calc(100% - 32px));
   margin: 0 auto;
   padding: 20px 0 34px;
 }
@@ -9817,6 +9852,8 @@ h5.md-h {
   display: flex;
   gap: 8px;
   align-items: flex-start;
+  min-width: 0;
+  overflow-wrap: anywhere;
   border: 1px solid var(--line);
   border-radius: var(--radius-pop);
   background: var(--panel);
@@ -9966,7 +10003,19 @@ h5.md-h {
 .pm-art-aside {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 10px;
+}
+.pm-art-aside .pm-panel {
+  min-width: 0;
+}
+/* A stage assessment can run to several hundred words. Cap it in the rail
+   and let it scroll rather than pushing the panels off the fold. */
+.pm-art-aside .pm-panel-note {
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-color: color-mix(in oklch, var(--fg-4) 58%, var(--line)) transparent;
+  scrollbar-width: thin;
 }
 .pm-panel {
   border: 1px solid var(--line);
@@ -10003,6 +10052,7 @@ h5.md-h {
 .pm-kv .good { color: var(--good); }
 .pm-kv .warn { color: var(--warn); }
 .pm-kv .danger { color: var(--danger); }
+.pm-kv .merged { color: var(--merged); }
 .pm-inline-actions {
   display: flex;
   flex-wrap: wrap;
@@ -10040,18 +10090,25 @@ h5.md-h {
 .pm-latest-run-status {
   display: inline-flex;
   min-height: 19px;
+  /* A flex item defaults to min-width:auto, so a long status label such as
+     AWAITING APPROVAL refuses to shrink and pushes the `open run` affordance
+     past the rail edge. Let it shrink and clip instead. */
+  min-width: 0;
+  overflow: hidden;
   align-items: center;
   gap: 5px;
   padding: 2px 6px;
   border-radius: var(--radius-tag);
   font: 600 9.5px var(--font-mono);
   text-transform: uppercase;
+  white-space: nowrap;
 }
 .pm-latest-run-status.good { background: var(--good-soft); color: var(--good); }
 .pm-latest-run-status.info { background: var(--info-soft); color: var(--info); }
 .pm-latest-run-status.warn { background: var(--warn-soft); color: var(--warn); }
 .pm-latest-run-status.danger { background: var(--danger-soft); color: var(--danger); }
 .pm-latest-run-status > i {
+  flex: 0 0 auto;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -10073,6 +10130,8 @@ h5.md-h {
   white-space: nowrap;
 }
 .pm-latest-run-note {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--fg-3);
   font-size: 11.5px;
   line-height: 1.45;
@@ -10109,11 +10168,20 @@ h5.md-h {
 .pm-track-row.rail {
   width: 100%;
   padding: 6px;
+  border: 0;
+  background: transparent;
   border-radius: var(--radius-input);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
   text-align: left;
 }
 .pm-track-row.rail:hover {
   background: var(--hover);
+}
+.pm-track-row.rail:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 .pm-track-kind {
   flex: 0 0 auto;
@@ -10123,8 +10191,10 @@ h5.md-h {
   padding: 2px 6px;
   border: 1px solid var(--line);
   border-radius: var(--radius-tag);
+  background: var(--bg-1);
   color: var(--fg-3);
   font: 9px var(--font-mono);
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 .pm-track-kind.pr,
@@ -10154,8 +10224,9 @@ h5.md-h {
   color: var(--fg-3);
 }
 .pm-track-kind.pr.merged {
-  border-color: color-mix(in oklch, var(--info) 45%, var(--line));
-  color: var(--info);
+  border-color: var(--merged-line);
+  background: var(--merged-soft);
+  color: var(--merged);
 }
 .pm-track-kind.pr.closed {
   border-color: color-mix(in oklch, var(--danger) 40%, var(--line));
@@ -14195,6 +14266,9 @@ select:disabled {
 .run-stage-output .tag.failed { background: var(--danger-soft); color: var(--danger); }
 .run-stage-output .tag.blocked { background: var(--warn-soft); color: var(--warn); }
 .run-stage-output .tag.pending { color: var(--fg-4); }
+.run-stage-output .tag.merged,
+.run-pr-summary > .tag.merged,
+.run-pr-comments-head .tag.merged { background: var(--merged-soft); color: var(--merged); }
 .run-stage-execution {
   display: flex;
   min-width: 0;
@@ -15021,6 +15095,17 @@ select:disabled {
   gap: 5px;
   margin-top: 4px;
 }
+/* Each rail section scrolls independently, so a long RUNS history never
+   pushes PULL REQUESTS below the fold (design-system.md -> Work rail
+   scrolling). */
+.loop-mode-rail-section-body {
+  display: grid;
+  gap: 5px;
+  max-height: min(34vh, 280px);
+  overflow-y: auto;
+  scrollbar-color: color-mix(in oklch, var(--fg-4) 58%, var(--line)) transparent;
+  scrollbar-width: thin;
+}
 .loop-mode-rail-section > header {
   display: flex;
   align-items: center;
@@ -15186,6 +15271,8 @@ select:disabled {
 .loop-mode-run-head > em.info { background: var(--info-soft); color: var(--info); }
 .loop-mode-rail-row > em.danger,
 .loop-mode-run-head > em.danger { background: var(--danger-soft); color: var(--danger); }
+.loop-mode-rail-row > em.merged,
+.loop-mode-run-head > em.merged { background: var(--merged-soft); color: var(--merged); }
 .loop-mode-rail-foot { margin-top: auto; }
 
 .loop-mode-main {

@@ -1707,11 +1707,14 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   };
 
   const chatContextFolders = work.chat_context_folders ?? [];
+  const sharedFolderCount = chatContextFolders.length + shares.length;
   const selectedContextFolder =
     chatContextFolders.find((f) => f.name === contextDocFolder) ?? null;
-  const planningModeActive = workMode === "planning";
+  const effectiveWorkMode =
+    workModeExplicit ? workMode : work.mode ?? workMode;
+  const planningModeActive = effectiveWorkMode === "planning";
   const planningModeReady = planningModeActive && Boolean(plan || planningChat);
-  const loopModeActive = workMode === "loop";
+  const loopModeActive = effectiveWorkMode === "loop";
   const planInitialRoot =
     agents[0]?.folder ??
     visibleChats.find((chat) => chat.working_directory)?.working_directory ??
@@ -1794,6 +1797,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       </div>
     </div>
   ) : null;
+
+  if (planningModeActive && !planningModeReady && planLoading) {
+    return <div className="work-loading hint">Loading…</div>;
+  }
 
   if (loopModeActive) {
     return (
@@ -1993,7 +2000,19 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       <aside className="shell-left work-rail">
         <div className="work-hero">
           <div className="id-line">
-            {work.slug} · {formatAge(work.created_at)}
+            <span>{work.slug} · {formatAge(work.created_at)}</span>
+            <button
+              className="btn icon sm work-hero-folder"
+              title={`Open ${work.atelier_path} in the file browser`}
+              onClick={() => {
+                revealWork(work.slug).catch(() => {
+                  navigator.clipboard?.writeText(work.atelier_path).catch(() => {});
+                });
+              }}
+              aria-label="Reveal work folder"
+            >
+              <FolderIcon size={12} />
+            </button>
           </div>
           <div className="name">{work.name}</div>
           {work.description && <div className="desc">{work.description}</div>}
@@ -2046,13 +2065,13 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             pullRequests.length > 0 ? " has-pull-requests" : ""
           }`}
         >
-          {shares.length > 0 && (
+          {sharedFolderCount > 0 && (
             <section className="work-rail-section shared-folders-section">
               <div className="v3-shd">
                 <span>
                   Shared folders{" "}
                   <span className="num" style={{ marginLeft: 8 }}>
-                    {shares.length}
+                    {sharedFolderCount}
                   </span>
                 </span>
                 {project && work.project_slug && (
@@ -2299,28 +2318,6 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           )}
         </div>
 
-        <div className="v3-footstrip">
-          <span className="seg">
-            <span className="dot live" />
-            {orderedAgents.filter((a) => a.status === "live").length} live
-          </span>
-          <span className="seg">
-            {orderedAgents.filter((a) => a.status === "thinking").length} working
-          </span>
-          <span style={{ flex: 1 }} />
-          <button
-            className="btn icon"
-            title={`Open ${work.atelier_path} in the file browser`}
-            onClick={() => {
-              revealWork(work.slug).catch(() => {
-                navigator.clipboard?.writeText(work.atelier_path).catch(() => {});
-              });
-            }}
-            aria-label="Reveal work folder"
-          >
-            <FolderIcon size={12} />
-          </button>
-        </div>
         <PaneResizeHandle
           defaultValue={280}
           edge="right"
