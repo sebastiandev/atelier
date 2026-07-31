@@ -12,6 +12,7 @@ instead of the platform default. Supported values:
       Terminal.app on macOS, Windows Terminal / cmd on Windows, the
       Debian ``x-terminal-emulator`` alternative on Linux.
     - ``"iterm2"`` — iTerm2 on macOS via ``open -a iTerm <path>``.
+    - ``"ghostty"`` — Ghostty, which ships on both macOS and Linux.
     - ``"terminator"`` — Terminator on Linux.
     - ``"gnome-terminal"`` — GNOME Terminal on Linux.
     - ``"konsole"`` — KDE Konsole on Linux.
@@ -43,6 +44,9 @@ def open_in_terminal(path: str, kind: TerminalKind = "system") -> None:
     """
     if kind == "iterm2":
         _open_iterm2(path)
+        return
+    if kind == "ghostty":
+        _open_ghostty(path)
         return
     if kind == "terminator":
         _open_named_linux_terminal("terminator", "--working-directory", path)
@@ -95,6 +99,26 @@ def _open_iterm2(path: str) -> None:
     # ``open -a iTerm`` accepts a path argument and iTerm2 cd's its new
     # window into it. Same shape as the Terminal.app branch above.
     subprocess.run(["open", "-a", "iTerm", path], check=True)
+
+
+def _open_ghostty(path: str) -> None:
+    """Open Ghostty at ``path`` on either of the platforms it ships for.
+
+    Unlike the other named terminals, Ghostty is not Linux-only, and its CLI
+    takes ``--key=value`` rather than a space-separated flag — so it cannot
+    reuse ``_open_named_linux_terminal``. ``-n`` gets a new window instead of
+    re-using the running instance, which would ignore the directory.
+    """
+    if sys.platform == "darwin":
+        subprocess.run(
+            ["open", "-na", "Ghostty", "--args", f"--working-directory={path}"],
+            check=True,
+        )
+        return
+    resolved = shutil.which("ghostty")
+    if not resolved:
+        raise FileNotFoundError("'ghostty' not found on PATH")
+    subprocess.run([resolved, f"--working-directory={path}"], check=True)
 
 
 def _open_named_linux_terminal(binary: str, cwd_flag: str, path: str) -> None:

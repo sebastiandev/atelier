@@ -90,6 +90,9 @@ EDITOR_OPTIONS: tuple[ToolOptionRead, ...] = (
 TERMINAL_OPTIONS: tuple[ToolOptionRead, ...] = (
     ToolOptionRead(value="system", label="System default", command="open -a Terminal"),
     ToolOptionRead(value="iterm2", label="iTerm2 (macOS)", command="open -a iTerm"),
+    ToolOptionRead(
+        value="ghostty", label="Ghostty", command="ghostty --working-directory"
+    ),
     ToolOptionRead(value="terminator", label="Terminator (Linux)", command="terminator"),
     ToolOptionRead(
         value="gnome-terminal", label="GNOME Terminal", command="gnome-terminal"

@@ -252,3 +252,37 @@ def test_tmux_missing_binary_raises(
     with pytest.raises(FileNotFoundError, match="tmux"):
         term_mod.open_in_terminal("/tmp/foo", kind="tmux")
     assert runs == []
+
+
+# ---------------------------------------------------------------------------
+# ghostty — ships on macOS and Linux, and takes --key=value
+# ---------------------------------------------------------------------------
+
+
+def test_ghostty_on_macos_opens_a_new_window(
+    monkeypatch: pytest.MonkeyPatch, runs: list[list[str]]
+) -> None:
+    monkeypatch.setattr(term_mod.sys, "platform", "darwin")
+    term_mod.open_in_terminal("/tmp/foo", kind="ghostty")
+    assert runs == [
+        ["open", "-na", "Ghostty", "--args", "--working-directory=/tmp/foo"]
+    ]
+
+
+def test_ghostty_on_linux_uses_the_binary(
+    monkeypatch: pytest.MonkeyPatch, runs: list[list[str]]
+) -> None:
+    monkeypatch.setattr(term_mod.sys, "platform", "linux")
+    monkeypatch.setattr(term_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+    term_mod.open_in_terminal("/tmp/foo", kind="ghostty")
+    assert runs == [["/usr/bin/ghostty", "--working-directory=/tmp/foo"]]
+
+
+def test_ghostty_missing_on_linux_raises(
+    monkeypatch: pytest.MonkeyPatch, runs: list[list[str]]
+) -> None:
+    monkeypatch.setattr(term_mod.sys, "platform", "linux")
+    monkeypatch.setattr(term_mod.shutil, "which", lambda name: None)
+    with pytest.raises(FileNotFoundError, match="ghostty"):
+        term_mod.open_in_terminal("/tmp/foo", kind="ghostty")
+    assert runs == []

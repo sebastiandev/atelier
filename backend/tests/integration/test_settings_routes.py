@@ -67,6 +67,12 @@ TERMINAL_OPTIONS = [
         "url_template": None,
     },
     {
+        "value": "ghostty",
+        "label": "Ghostty",
+        "command": "ghostty --working-directory",
+        "url_template": None,
+    },
+    {
         "value": "terminator",
         "label": "Terminator (Linux)",
         "command": "terminator",

@@ -118,6 +118,11 @@ const FALLBACK_EDITOR_OPTIONS: ToolOption[] = [
 const FALLBACK_TERMINAL_OPTIONS: ToolOption[] = [
   { value: "system", label: "System default", command: "open -a Terminal" },
   { value: "iterm2", label: "iTerm2 (macOS)", command: "open -a iTerm" },
+  {
+    value: "ghostty",
+    label: "Ghostty",
+    command: "ghostty --working-directory",
+  },
   { value: "terminator", label: "Terminator (Linux)", command: "terminator" },
   {
     value: "gnome-terminal",
