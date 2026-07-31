@@ -58,7 +58,7 @@ export function DeleteWorkDialog({
             <p className="sub">{work.name}</p>
           </div>
           <button
-            className="btn-icon"
+            className="btn ghost icon sm"
             onClick={onClose}
             aria-label="Close"
             disabled={submitting}

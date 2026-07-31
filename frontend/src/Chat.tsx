@@ -1332,18 +1332,7 @@ export function ChatTile({
       headerRight={
         planningPresentation ? (
           <div className="tile-controls">
-            {contextFolder && onOpenContext && (
-              <button
-                type="button"
-                className="tile-ctl"
-                aria-label="Open chat seed"
-                onClick={() => onOpenContext(contextFolder)}
-                {...hintHandlers("Open chat seed")}
-              >
-                <DocIcon />
-              </button>
-            )}
-            {onStartAgent && (
+            {onClose && (
               <button
                 type="button"
                 className="btn icon sm"
@@ -1368,6 +1357,17 @@ export function ChatTile({
               {hint}
             </span>
             <div className="tile-controls">
+              {contextFolder && onOpenContext && (
+                <button
+                  type="button"
+                  className="btn icon sm"
+                  aria-label="Open chat seed"
+                  onClick={() => onOpenContext(contextFolder)}
+                  {...hintHandlers("Open chat seed")}
+                >
+                  <DocIcon />
+                </button>
+              )}
               {!readOnly && onStartAgent && !discussionOnly && (
                 <button
                   type="button"
@@ -1413,7 +1413,7 @@ export function ChatTile({
         >
           {chat ? (
             <>
-              {history.hasOlder && (
+              {!planningPresentation && history.hasOlder && (
                 <button
                   type="button"
                   className="transcript-load-older"
