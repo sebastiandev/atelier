@@ -610,7 +610,6 @@ class AmpAdapter:
                 request_id=request_id,
                 tool_name=canon_name,
                 cancelled="deny",
-                expired="deny",
             )
         finally:
             self._pending.pop(request_id, None)

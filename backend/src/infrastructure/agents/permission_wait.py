@@ -1,32 +1,27 @@
-"""Bounded wait for the user's answer to a permission request.
+"""Wait for the user's answer to a permission request.
 
-Every adapter used to ``await fut`` with no deadline, so one unanswered
-prompt wedged the provider session permanently: no decision, no turn
-metrics, no trailing ``idle``. The chat looked like it was still
-thinking, forever, and the only way out was sending another message.
+A pending prompt is held open until the user answers it. Nothing here
+decides on their behalf: a tool approval is a human judgement, and the
+user may simply have walked away. Denying a legitimate request because
+nobody was at the keyboard destroys the turn's work for no gain.
 
-That is reachable whenever the prompt never renders -- a suppressed
-dialog, a posture whose exit handshake nobody can answer, a browser tab
-closed mid-turn -- so bound it rather than relying on the UI always
-getting it right.
-
-The deadline is deliberately generous: answering a permission prompt is
-a human action, and denying a legitimate one because someone took a
-lunch break is its own bug. This is a stuck-session backstop, not a
-politeness timer.
+This used to expire after 30 minutes and deny, as a backstop against a
+prompt that can never be answered — a closed tab, a dropped subscriber,
+a dialog gated off by mistake — wedging the provider session with no
+decision, no turn metrics and no trailing ``idle``. That case is already
+covered where it actually resolves: when the agent is next registered,
+``AgentSupervisorService._clear_stale_permission_requests`` denies every
+orphaned request, so the prompt clears and the agent accepts input again.
+A deadline here only added a way to lose work that was waiting on a
+person.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import TypeVar
 
-_log = logging.getLogger(__name__)
-
 _Decision = TypeVar("_Decision")
-
-PERMISSION_DECISION_TIMEOUT_S = 30 * 60
 
 
 async def await_permission_decision(
@@ -35,29 +30,20 @@ async def await_permission_decision(
     request_id: str,
     tool_name: str,
     cancelled: _Decision,
-    expired: _Decision,
 ) -> _Decision:
-    """Return the user's decision, or a synthetic one if it never arrives.
+    """Return the user's decision, waiting as long as it takes.
 
     Preconditions: ``fut`` is the pending future for ``request_id``; the
     caller removes it from its pending map afterwards.
-    Postconditions: always returns a decision. ``cancelled`` is returned
-    when the turn is torn down (the caller's own sentinel) and ``expired``
-    when the deadline passes. Callers pass a deny for ``expired``:
-    auto-allowing would run a tool the user never approved.
+    Postconditions: returns the user's decision, or ``cancelled`` (the
+    caller's own sentinel) when the turn is torn down. It never
+    synthesises an answer on a live turn.
     """
+    del request_id, tool_name  # retained for call-site clarity and logging hooks
     try:
-        return await asyncio.wait_for(fut, PERMISSION_DECISION_TIMEOUT_S)
+        return await fut
     except asyncio.CancelledError:
         return cancelled
-    except TimeoutError:
-        _log.warning(
-            "permission request expired after %ss tool=%s rid=%s; denying",
-            PERMISSION_DECISION_TIMEOUT_S,
-            tool_name,
-            request_id,
-        )
-        return expired
 
 
-__all__ = ["PERMISSION_DECISION_TIMEOUT_S", "await_permission_decision"]
+__all__ = ["await_permission_decision"]
