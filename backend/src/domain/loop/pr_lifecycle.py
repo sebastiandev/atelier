@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from src.domain.agents.specs import SPECS
 from src.domain.artifacts.models import PrArtifact
 from src.domain.artifacts.pr_status import parse_pr_url
 from src.domain.loop import actions
@@ -175,6 +176,7 @@ def add_one_off_stage(target: LoopRunTarget, setup: PrSetup) -> None:
             "approved_command_prefixes": _approved_prefixes(agent),
         }
     )
+    _drop_unsupported_options(agent)
     raw_stages.append(
         {
             "id": stage_id,
@@ -581,6 +583,24 @@ def _pr_instructions(setup: PrSetup) -> str:
         "that PR and never create a second one. Record it with atelier__record_pr and "
         "include its URL in artifact_refs."
     )
+
+
+def _drop_unsupported_options(agent: dict[str, Any]) -> None:
+    """Remove policy keys the resolved provider has no option for.
+
+    This stage is synthesised rather than authored, so it never passes
+    through ``validate_agent_policy`` — which would reject exactly this.
+    The setup dialog sends ``fast`` whether or not the user expressed an
+    opinion, and inheriting the implementation agent supplies one anyway,
+    so a provider without a fast-mode option (OpenCode) would otherwise get
+    an explicit policy it cannot honour and every launch would raise.
+    """
+    provider = agent.get("provider")
+    if not isinstance(provider, str) or provider not in SPECS:
+        return
+    options = SPECS[provider].describe().options
+    if "fast-mode" not in options:
+        agent.pop("fast", None)
 
 
 def _approved_prefixes(agent: dict[str, Any]) -> list[str]:
