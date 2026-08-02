@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -33,7 +34,7 @@ from src.domain.chatstore import ChatStoreService
 from src.domain.commands.loops import runs as loop_run_commands
 from src.domain.commands.planning import run_monitor as planning_run_monitor
 from src.domain.connections import ConnectionStoreService
-from src.domain.loop.dtos import LoopRunSourceKind, LoopStatus
+from src.domain.loop.dtos import LoopRunSourceKind
 from src.domain.models import Artifact
 from src.domain.projectstore import ProjectStoreService
 from src.domain.projectstore import reconcile as reconcile_projects
@@ -273,12 +274,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         planning_run_monitor_tasks: dict[str, asyncio.Task[Any]] = {}
         app.state.planning_run_monitor_tasks = planning_run_monitor_tasks
+
+        def _report_monitor_exit(task: asyncio.Task[Any]) -> None:
+            """Surface a monitor that died instead of losing it silently.
+
+            A resumed monitor is nobody's awaited task, so an exception in it
+            is only reported when the task is garbage collected — by which
+            point the run has been sitting unattended with no clue why.
+            """
+            if task.cancelled():
+                return
+            error = task.exception()
+            if error is not None:
+                logging.getLogger(__name__).exception(
+                    "loop run monitor %s stopped", task.get_name(), exc_info=error
+                )
+        # Resume every non-terminal run, not just the two statuses a run
+        # happens to sit in while an agent is working. A run parked in
+        # `needs_agent` (an approval recorded, its next stage appended and
+        # waiting to be launched) or `assessing` was otherwise stranded for
+        # good by a restart: nothing re-attached a monitor, so the pending
+        # hand-off was never consumed. `list_active` already excludes the
+        # terminal statuses, and `monitor_run` returns immediately unless the
+        # run-level status is RUNNING, so attaching to a run that turns out to
+        # be waiting on a person costs one loop iteration.
         for persisted in loop_runs.list_active():
-            if persisted.status not in {
-                LoopStatus.RUNNING,
-                LoopStatus.WAITING_REPORT,
-            }:
-                continue
             if persisted.source is None:
                 run_id = str(persisted.state.get("id") or "")
                 if not run_id:
@@ -303,6 +323,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     ),
                     name=f"loop-run-{persisted.work_slug}-{run_id}",
                 )
+                planning_run_monitor_tasks[key].add_done_callback(_report_monitor_exit)
                 continue
             if (
                 persisted.source.kind is not LoopRunSourceKind.STORY
@@ -337,6 +358,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     f"{persisted.source.ref}-{persisted.plan_run_id}"
                 ),
             )
+            planning_run_monitor_tasks[key].add_done_callback(_report_monitor_exit)
 
         # Background loop that refreshes non-terminal PR artifact
         # statuses against GitHub every 5 minutes. No-op when the user
