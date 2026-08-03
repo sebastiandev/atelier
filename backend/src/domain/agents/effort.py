@@ -38,6 +38,31 @@ def effort_option_key(provider: Provider) -> str | None:
     return None if found is None else found[0]
 
 
+def allowed_efforts(provider: Provider, model: str | None = None) -> tuple[str, ...]:
+    """Effort values ``provider`` accepts, narrowed to ``model`` when it says.
+
+    A model's ladder can be shorter than its provider's: OpenCode exposes
+    effort as a per-model *variant*, so one model offers ``high``/``max``
+    and another offers nothing at all. ``model_meta`` carries that when the
+    provider knows it; an absent entry means "no opinion", so the
+    provider-wide ladder stands.
+
+    Preconditions: ``provider`` is registered.
+    Postconditions: empty when the provider has no dial, or when the model
+    declares it has none.
+    """
+    found = effort_option(provider)
+    if found is None:
+        return ()
+    allowed = tuple(found[1].values)
+    if not model:
+        return allowed
+    meta = SPECS[provider].describe().model_meta.get(model)
+    if meta is None or meta.effort_values is None:
+        return allowed
+    return tuple(meta.effort_values)
+
+
 def spec_option_key(provider: Provider, config_id: str) -> str | None:
     """Map a live ACP config id onto the spec option key that stores it.
 
@@ -57,6 +82,7 @@ def spec_option_key(provider: Provider, config_id: str) -> str | None:
 __all__ = [
     "ACP_EFFORT_CONFIG_ID",
     "EFFORT_OPTION_KEYS",
+    "allowed_efforts",
     "effort_option",
     "effort_option_key",
     "spec_option_key",

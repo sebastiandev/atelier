@@ -8,7 +8,7 @@ import re
 from dataclasses import asdict, replace
 from pathlib import PurePosixPath
 
-from src.domain.agents.effort import effort_option
+from src.domain.agents.effort import allowed_efforts
 from src.domain.agents.specs import SPECS
 from src.domain.loop.dtos import (
     LoopAgentPolicy,
@@ -249,12 +249,9 @@ def validate_agent_policy(label: str, policy: LoopAgentPolicy) -> list[str]:
         return [f"{label} uses an unsupported model for {policy.provider!r}."]
     if not policy.effort:
         return []
-    effort = effort_option(policy.provider)
-    allowed = list(effort[1].values) if effort is not None else []
-    model_meta = descriptor.model_meta.get(policy.model) if policy.model else None
-    if model_meta is not None and model_meta.effort_values:
-        allowed = list(model_meta.effort_values)
-    if policy.effort not in allowed:
+    # Same ladder the sanitiser drops against, so an authored value and a
+    # derived one can never disagree about what this model accepts.
+    if policy.effort not in allowed_efforts(policy.provider, policy.model):
         return [f"{label} uses an unsupported effort for {policy.provider!r}."]
     return []
 

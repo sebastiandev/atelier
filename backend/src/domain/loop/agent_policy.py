@@ -16,7 +16,7 @@ from src.domain.agents.configs import (
     CommonAgentConfig,
     OpenCodeMode,
 )
-from src.domain.agents.effort import effort_option, effort_option_key
+from src.domain.agents.effort import allowed_efforts, effort_option, effort_option_key
 from src.domain.agents.launch import InvalidProviderConfig
 from src.domain.agents.specs import SPECS, EnumOption
 from src.domain.loop.definitions import validate_agent_policy
@@ -31,6 +31,48 @@ from src.domain.loop.dtos import (
 from src.domain.models import Provider
 
 StageAgentConfig = tuple[Provider, str, dict[str, object]]
+
+
+def supports_fast(provider: Provider) -> bool:
+    """Whether ``provider`` publishes a fast-mode option at all."""
+    return "fast-mode" in SPECS[provider].describe().options
+
+
+def sanitize_agent_policy(
+    policy: LoopAgentPolicy,
+    *,
+    provider: Provider,
+    model: str | None = None,
+) -> LoopAgentPolicy:
+    """Drop policy values ``provider``/``model`` cannot honour.
+
+    One answer to "does this apply here?", for every policy Atelier derives
+    rather than a person authoring it: a synthesised PR stage, a brief
+    override, a retry that changes model. Those inherit whatever the
+    previous config happened to carry, and a value that made sense for the
+    old model is not an instruction about the new one — a Create PR dialog
+    sending ``fast: false`` to OpenCode, or an effort carried onto a model
+    whose ladder does not list it. Ignoring them is the point: an inherited
+    default is not a choice, so refusing to launch over one would be
+    strictly worse than proceeding without it.
+
+    Authored definitions keep going through ``validate_agent_policy``,
+    which reports the same conditions as errors — someone who typed a value
+    should be told it will not apply.
+
+    Preconditions: ``provider`` is registered.
+    Postconditions: returns a policy whose remaining values are all
+    supported; ``provider``/``model`` themselves are left untouched.
+    """
+    effort = policy.effort
+    if effort and effort not in allowed_efforts(provider, model or policy.model):
+        effort = None
+    fast = policy.fast
+    if fast is not None and not supports_fast(provider):
+        fast = None
+    if effort == policy.effort and fast == policy.fast:
+        return policy
+    return replace(policy, effort=effort, fast=fast)
 
 
 def apply_stage_agent_policy(
@@ -244,6 +286,9 @@ def resolve_stage_agent_config(
     )
     provider = cast(Provider, effective.provider or parent_provider)
     model = resolve_stage_model(provider, parent_provider, parent_model, effective)
+    # Everything above is inherited or overridden rather than authored here,
+    # so drop what the resolved provider/model cannot honour before applying.
+    effective = sanitize_agent_policy(effective, provider=provider, model=model)
     options = apply_stage_agent_policy(
         provider,
         parent_options,
@@ -378,14 +423,12 @@ def apply_retry_overrides(
     """
     if model_override is None and effort_override is None:
         return provider, model, dict(options)
-    errors = validate_agent_policy(
-        "Retry override",
-        LoopAgentPolicy(
-            provider=provider,
-            model=model_override or model,
-            effort=effort_override,
-        ),
+    requested = LoopAgentPolicy(
+        provider=provider,
+        model=model_override or model,
+        effort=effort_override,
     )
+    errors = validate_agent_policy("Retry override", requested)
     if errors:
         raise InvalidProviderConfig(" ".join(errors))
     resolved = dict(options)
@@ -403,5 +446,7 @@ __all__ = [
     "apply_stage_agent_policy",
     "resolve_stage_agent_config",
     "resolve_stage_model",
+    "sanitize_agent_policy",
+    "supports_fast",
     "validate_stage_agent_policies",
 ]

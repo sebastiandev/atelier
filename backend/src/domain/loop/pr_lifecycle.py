@@ -13,7 +13,13 @@ from src.domain.agents.specs import SPECS
 from src.domain.artifacts.models import PrArtifact
 from src.domain.artifacts.pr_status import parse_pr_url
 from src.domain.loop import actions
-from src.domain.loop.dtos import LoopRunStatus, LoopStatus, LoopStepStatus
+from src.domain.loop.agent_policy import sanitize_agent_policy
+from src.domain.loop.dtos import (
+    LoopAgentPolicy,
+    LoopRunStatus,
+    LoopStatus,
+    LoopStepStatus,
+)
 from src.domain.loop.models import LoopRunTarget
 from src.domain.workstore.ports import WorkStore
 
@@ -176,7 +182,23 @@ def add_one_off_stage(target: LoopRunTarget, setup: PrSetup) -> None:
             "approved_command_prefixes": _approved_prefixes(agent),
         }
     )
-    _drop_unsupported_options(agent)
+    provider = agent.get("provider")
+    if isinstance(provider, str) and provider in SPECS:
+        model = agent.get("model")
+        sanitized = sanitize_agent_policy(
+            LoopAgentPolicy(
+                provider=provider,
+                model=model if isinstance(model, str) else None,
+                effort=agent.get("effort") if isinstance(agent.get("effort"), str) else None,
+                fast=agent.get("fast") if isinstance(agent.get("fast"), bool) else None,
+            ),
+            provider=provider,
+            model=model if isinstance(model, str) else None,
+        )
+        if sanitized.effort is None:
+            agent.pop("effort", None)
+        if sanitized.fast is None:
+            agent.pop("fast", None)
     raw_stages.append(
         {
             "id": stage_id,
@@ -583,24 +605,6 @@ def _pr_instructions(setup: PrSetup) -> str:
         "that PR and never create a second one. Record it with atelier__record_pr and "
         "include its URL in artifact_refs."
     )
-
-
-def _drop_unsupported_options(agent: dict[str, Any]) -> None:
-    """Remove policy keys the resolved provider has no option for.
-
-    This stage is synthesised rather than authored, so it never passes
-    through ``validate_agent_policy`` — which would reject exactly this.
-    The setup dialog sends ``fast`` whether or not the user expressed an
-    opinion, and inheriting the implementation agent supplies one anyway,
-    so a provider without a fast-mode option (OpenCode) would otherwise get
-    an explicit policy it cannot honour and every launch would raise.
-    """
-    provider = agent.get("provider")
-    if not isinstance(provider, str) or provider not in SPECS:
-        return
-    options = SPECS[provider].describe().options
-    if "fast-mode" not in options:
-        agent.pop("fast", None)
 
 
 def _approved_prefixes(agent: dict[str, Any]) -> list[str]:

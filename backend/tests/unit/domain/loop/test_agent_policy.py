@@ -8,6 +8,7 @@ from src.domain.loop.agent_policy import (
     apply_stage_agent_policy,
     resolve_stage_agent_config,
     resolve_stage_model,
+    sanitize_agent_policy,
 )
 from src.domain.loop.dtos import LoopAgentPolicy, LoopBriefAgent, LoopPermission
 
@@ -287,3 +288,59 @@ def test_amp_write_permission_keeps_normal_gating() -> None:
     )
 
     assert resolved == {"permission_mode": "default"}
+
+
+# ---------------------------------------------------------------------------
+# sanitize_agent_policy — one answer to "does this apply to this model?"
+# ---------------------------------------------------------------------------
+
+
+def test_fast_is_dropped_for_a_provider_without_the_option() -> None:
+    """The Create PR dialog sends `fast` whether or not anyone chose it, and
+    OpenCode has no fast-mode option. Launching used to raise on it."""
+    policy = LoopAgentPolicy(provider="opencode", model="anthropic/x", fast=False)
+
+    assert sanitize_agent_policy(policy, provider="opencode").fast is None
+
+
+def test_fast_survives_where_the_provider_supports_it() -> None:
+    policy = LoopAgentPolicy(provider="codex-acp", fast=True)
+
+    assert sanitize_agent_policy(policy, provider="codex-acp").fast is True
+
+
+def test_effort_outside_the_provider_ladder_is_dropped() -> None:
+    policy = LoopAgentPolicy(provider="claude-acp", effort="nonsense")
+
+    assert sanitize_agent_policy(policy, provider="claude-acp").effort is None
+
+
+def test_effort_is_dropped_for_a_provider_with_no_dial() -> None:
+    policy = LoopAgentPolicy(provider="amp", effort="high")
+
+    assert sanitize_agent_policy(policy, provider="amp").effort is None
+
+
+def test_a_supported_policy_is_returned_untouched() -> None:
+    policy = LoopAgentPolicy(provider="claude-acp", effort="high")
+
+    assert sanitize_agent_policy(policy, provider="claude-acp") is policy
+
+
+def test_a_pr_stage_agent_no_longer_breaks_the_launch() -> None:
+    """End to end: the config that raised `provider 'opencode' does not
+    support fast mode` now resolves and simply omits fast."""
+    provider, _model, options = resolve_stage_agent_config(
+        LoopAgentPolicy(
+            provider="opencode",
+            model="anthropic/claude-sonnet-5",
+            effort="medium",
+            fast=False,
+        ),
+        parent_provider="opencode",
+        parent_model="anthropic/claude-sonnet-5",
+        parent_options={"mode": "build"},
+    )
+
+    assert provider == "opencode"
+    assert "fast-mode" not in options
