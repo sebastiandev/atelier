@@ -10,7 +10,11 @@ from src.domain.loop.dtos import (
     LoopStepDefinition,
     LoopStepKind,
 )
-from src.domain.loop.prompts import ReviewStagePrompt, build_stage_prompt
+from src.domain.loop.prompts import (
+    ReviewStagePrompt,
+    TaskStagePrompt,
+    build_stage_prompt,
+)
 from src.domain.worktrees import WorktreeState
 
 
@@ -103,3 +107,70 @@ def test_workspace_context_uses_live_worktree_state() -> None:
     assert "M src/app.py" in context
     assert "?? src/new.py" in context
     assert "git diff" in context
+
+
+# ---------------------------------------------------------------------------
+# PR feedback reaches the next stage exactly once, by whichever route applies
+# ---------------------------------------------------------------------------
+
+FEEDBACK_NOTE = "\n".join(
+    (
+        "Address this pull-request feedback in the current worktree:",
+        "- FranAguilar at app/kernel_lpn_movement.py:32: rename and move this.",
+        "  User instruction: check my changes and make sure tests pass.",
+        "- Reviewer at app/moved_lpn.py:8: this snapshot looks wrong.",
+        "  User instruction: fix the snapshot.",
+    )
+)
+
+
+def _task_stage(*kinds: LoopContextKind) -> LoopStepDefinition:
+    return LoopStepDefinition(
+        step_id="implementation",
+        name="Implementation",
+        kind=LoopStepKind.AGENT_TASK,
+        instructions="Implement the target.",
+        context=tuple(LoopContextReference(kind) for kind in kinds),
+    )
+
+
+def _task_prompt(stage: LoopStepDefinition, *, resolution_note: str = "") -> str:
+    return build_stage_prompt(
+        TaskStagePrompt(
+            run_id="run-1",
+            work_slug="WRK-001",
+            artifact_id="objective",
+            artifact_title="Goal",
+            source_ref="Goal",
+            stage=stage,
+            previous_summary=FEEDBACK_NOTE,
+            resolution_note=resolution_note,
+        )
+    )
+
+
+def test_feedback_appears_once_when_the_stage_declares_previous_report() -> None:
+    """The previous block carries it, so the monitor adds no note."""
+    prompt = _task_prompt(_task_stage(LoopContextKind.PREVIOUS_REPORT))
+
+    assert prompt.count("Address this pull-request feedback") == 1
+
+
+def test_feedback_appears_once_when_the_stage_declares_no_context() -> None:
+    """`_changes_requested_note` is the only carrier — the shape your
+    implementation stage has, with `context: []`."""
+    prompt = _task_prompt(
+        _task_stage(),
+        resolution_note=f"Required changes from the prior stage:\nSummary: {FEEDBACK_NOTE}",
+    )
+
+    assert prompt.count("Address this pull-request feedback") == 1
+
+
+def test_a_resolution_note_is_still_rendered_for_other_flows() -> None:
+    """Dropping the PR-feedback copy must not mute a human's resume note or a
+    review gate instruction, which use the same channel."""
+    prompt = _task_prompt(_task_stage(), resolution_note="Rebase onto master first.")
+
+    assert "User resolution:" in prompt
+    assert "Rebase onto master first." in prompt

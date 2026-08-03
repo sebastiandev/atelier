@@ -1479,10 +1479,13 @@ async def _apply_pr_feedback_decision(
     if stage_row is None:
         raise LoopTransitionInvalid(f"loop stage state not found: {stage_id}")
     summary = actions.str_or_empty(decision.get("summary"))
+    # Summary only. Putting the same note in `findings` made
+    # `_changes_requested_note` render it twice — once as `Summary:` and again
+    # as a single `Findings:` bullet — and a finding is meant to be a discrete
+    # review point, not the whole note.
     report = LoopStageReport(
         outcome=LoopOutcome.CHANGES_REQUESTED,
         summary=summary,
-        findings=(summary,) if summary else (),
     )
     return await _advance_after_stage_report(
         workstore,
@@ -1505,7 +1508,13 @@ async def _apply_pr_feedback_decision(
         report,
         bypass_review_gate=True,
         pass_already_started=True,
-        resolution_note=summary,
+        # No resolution note: the feedback already reaches the next stage by
+        # whichever route applies. A stage declaring `previous_report` gets it
+        # from `previous_summary`; one that does not gets
+        # `_changes_requested_note`, which is added for exactly that case; a
+        # retry rebuilds it from the durable bundle via
+        # `pending_feedback_context`. Passing it here as well simply added a
+        # third copy of a block that grows with every selected comment.
     )
 
 

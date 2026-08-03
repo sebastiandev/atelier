@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.domain.artifacts.models import PrArtifact
-from src.domain.loop import pr_lifecycle
+from src.domain.loop import actions, pr_lifecycle
 from src.domain.loop.dtos import LoopPrConfig, LoopStepDefinition, LoopStepKind
 from src.domain.loop.models import LoopRunTarget
 from src.domain.models import Agent, AgentStatus
@@ -618,3 +618,36 @@ def test_follow_up_run_inherits_only_stable_existing_pr_state() -> None:
     assert "pending_pr_feedback" not in loop
     assert "pr_feedback_decision" not in loop
     assert "passes" not in loop
+
+
+def test_re_running_create_pr_still_carries_its_update_instructions() -> None:
+    """Re-executing Create PR to update an existing PR must keep telling the
+    agent to push to that PR and what this pass addressed. That copy is the
+    PR stage's own input — separate from the implementation prompt, and it
+    must survive dropping the duplicated feedback delivery."""
+    target = _accepted_target()
+    loop = target.run["loop"]
+    loop["pr"] = {"url": "https://github.com/o/r/pull/12", "number": 12}
+    loop["pr_config"] = {"name": "Migrate movement", "base_branch": "master"}
+    loop["pending_pr_feedback"] = {
+        "pass_number": actions.int_or_default(loop.get("pass_number"), 1),
+        "comments": [
+            {
+                "author": "reviewer",
+                "location": "src/app.py:4",
+                "body": "Reduce the number of queries.",
+                "instruction": "Keep the public API unchanged.",
+            }
+        ],
+        "instruction": "Add focused validation.",
+    }
+
+    context = pr_lifecycle.prompt_context(target.run)
+
+    assert "https://github.com/o/r/pull/12" in context
+    assert "do not create another PR" in context
+    assert "Addressed in this push:" in context
+    assert "Reduce the number of queries." in context
+    assert "Add focused validation." in context
+    # One mention per comment, not one per delivery channel.
+    assert context.count("Reduce the number of queries.") == 1
