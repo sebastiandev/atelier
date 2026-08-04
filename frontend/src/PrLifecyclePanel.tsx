@@ -208,15 +208,21 @@ export function PrLifecyclePanel({
               </button>
               {historyOpen && history.map((thread) => (
                 <div className="run-pr-comment acknowledged" key={thread.id}>
-                  <div>
-                    <span className={thread.state === "addressed" ? "tag good" : "tag"}>
-                      <CheckIcon size={9} /> {thread.state === "addressed" ? "sent to implement" : "before latest push"}
+                  {/* `.run-pr-comment` is a `16px 1fr` grid: a marker cell and
+                      a content cell. Without the wrapper the whole meta row
+                      lands in the 16px column and collapses onto itself. */}
+                  <span className="run-pr-thread-state"><CheckIcon size={10} /></span>
+                  <span className="run-pr-comment-content">
+                    <span className="run-pr-history-meta">
+                      <span className={thread.state === "addressed" ? "tag good" : "tag"}>
+                        {thread.state === "addressed" ? "sent to implement" : "before latest push"}
+                      </span>
+                      <strong>{thread.action.author}</strong>
+                      {thread.action.location && <small>{thread.action.location}</small>}
+                      <small>{relativeTime(thread.action.created_at)}</small>
                     </span>
-                    <strong>{thread.action.author}</strong>
-                    {thread.action.location && <small>{thread.action.location}</small>}
-                    <small>{relativeTime(thread.action.created_at)}</small>
-                  </div>
-                  <p>{thread.action.body}</p>
+                    <p className="run-pr-comment-body">{thread.action.body}</p>
+                  </span>
                 </div>
               ))}
             </div>
