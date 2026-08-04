@@ -727,7 +727,11 @@ export function PlanningAgentControls({
   pinned,
 }: {
   value: PlanningAgentConfig | null;
-  onChange: (value: PlanningAgentConfig) => void;
+  /** ``touchedKey`` names the option a person just set. Provider and model
+   *  switches, and the normalising effect, emit provider defaults and report
+   *  no key — a default that arrives by itself is not a choice, and callers
+   *  that persist an override need to tell the two apart. */
+  onChange: (value: PlanningAgentConfig, touchedKey?: string) => void;
   /** What the loop or stage already pins. Shown as the effective value
    *  when this run overrides nothing, because that is what the backend
    *  resolves to -- the provider's own default would be a fiction. */
@@ -820,14 +824,17 @@ export function PlanningAgentControls({
   }
 
   function changeOption(key: string, nextValue: string) {
-    onChange({
-      provider: activeProvider.name,
-      model,
-      options: {
-        ...currentOptions,
-        [key]: nextValue,
+    onChange(
+      {
+        provider: activeProvider.name,
+        model,
+        options: {
+          ...currentOptions,
+          [key]: nextValue,
+        },
       },
-    });
+      key,
+    );
   }
 
   return (

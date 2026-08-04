@@ -26,6 +26,11 @@ import {
 } from "./Icons";
 import { LoopPicker } from "./LoopUI";
 import { PlanningAgentControls } from "./PlanningMode";
+import {
+  providerDefaults,
+  useProviderDescriptors,
+} from "./providerDescriptors";
+import type { ProviderDescriptor } from "./api";
 import type { PlanningAgentConfig } from "./planningSetup";
 
 type Props = {
@@ -67,6 +72,12 @@ export function LoopBriefSetup({
 }: Props) {
   const goal = brief.goal;
   const [expandedStageId, setExpandedStageId] = useState<string | null>(null);
+  // Options already on the brief were set by a person on an earlier visit,
+  // so they stay chosen across a remount.
+  const [touchedOptionKeys, setTouchedOptionKeys] = useState<Set<string>>(
+    () => new Set(Object.keys(entryAgentOptions(brief, definition))),
+  );
+  const { descriptors } = useProviderDescriptors();
   const [picker, setPicker] = useState<{
     kind: "file" | "folder";
     stageId: string;
@@ -78,7 +89,14 @@ export function LoopBriefSetup({
   // else. It used to also live in a caller-held state that the controls
   // rendered from while Start sent the brief, so the screen could show one
   // config and launch another.
-  const agentConfig = completeAgent(firstStageBrief?.agent ?? null, null);
+  // Complete for display, sparse in the brief. The controls render from the
+  // effective config — provider defaults filled in — while the brief keeps
+  // only the options a person actually set, so an untouched default never
+  // outranks the loop definition.
+  const agentConfig = completeAgent(
+    firstStageBrief?.agent ?? null,
+    defaultsFor(descriptors, firstStageBrief?.agent ?? null),
+  );
   const baseCommandPrefixes = firstStageBrief?.approved_command_prefixes
     ?? firstAgentStage?.agent?.approved_command_prefixes
     ?? [];
@@ -102,8 +120,27 @@ export function LoopBriefSetup({
     });
   }
 
-  function setBaseConfig(config: PlanningAgentConfig) {
-    if (firstAgentStage) patchStage(firstAgentStage.id, { agent: config });
+  function setBaseConfig(config: PlanningAgentConfig, touchedKey?: string) {
+    if (!firstAgentStage) return;
+    // Switching provider or model hands back that provider's defaults, so
+    // nothing is chosen yet; only an option a person set survives into the
+    // brief. Provider and model always do: a story run's entry stage has
+    // nothing to fall back on and must name one.
+    const switched =
+      agentConfig?.provider !== config.provider || agentConfig?.model !== config.model;
+    const kept = switched
+      ? new Set<string>()
+      : new Set(touchedOptionKeys);
+    if (touchedKey) kept.add(touchedKey);
+    setTouchedOptionKeys(kept);
+    const options: Record<string, string> = {};
+    for (const key of kept) {
+      const value = config.options[key];
+      if (value !== undefined) options[key] = value;
+    }
+    patchStage(firstAgentStage.id, {
+      agent: { provider: config.provider, model: config.model, options },
+    });
   }
 
   function addContext(stageId: string, kind: LoopBriefContextKind, value = "") {
@@ -544,6 +581,34 @@ function relativePath(root: string, path: string): string {
  *  because setup had silently claimed it. Only genuine differences are an
  *  instruction; the rest should keep deferring to the definition.
  */
+/** Provider defaults for whatever the brief already names, so the controls
+ *  render effective values while the brief itself stays sparse. */
+function defaultsFor(
+  descriptors: ProviderDescriptor[] | null,
+  agent: LoopBriefAgent | null,
+): PlanningAgentConfig | null {
+  if (!agent?.provider || !agent.model || !descriptors) return null;
+  const descriptor = descriptors.find((item) => item.name === agent.provider);
+  if (!descriptor) return null;
+  return {
+    provider: descriptor.name,
+    model: agent.model,
+    options: providerDefaults(descriptor, agent.model),
+  };
+}
+
+
+/** Options already pinned on the brief's entry stage. */
+function entryAgentOptions(
+  brief: LoopBrief,
+  definition: LoopDefinition | null,
+): Record<string, string> {
+  const first = definition?.stages.find((stage) => stage.agent !== null) ?? null;
+  if (!first) return {};
+  return stageBrief(brief, first.id).agent?.options ?? {};
+}
+
+
 function overrideDelta(
   next: PlanningAgentConfig,
   inherited: PlanningAgentConfig | null,
