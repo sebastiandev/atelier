@@ -189,6 +189,7 @@ REVIEW_COMMAND_PREFIXES: tuple[str, ...] = (
     "grep",
     "sort",
     "uniq",
+    "wc",
     "tail",
     "cut",
     "ls",

@@ -351,13 +351,17 @@ function StageBriefCard({
       ) : brief.agent ? (
         <div className="loop-brief-execution override">
           <label>Execution <span>run override</span></label>
-          <PlanningAgentControls value={overrideConfig} onChange={onAgent} pinned={pinnedPolicy} />
+          <PlanningAgentControls
+            value={overrideConfig}
+            onChange={(next) => onAgent(overrideDelta(next, agentConfig))}
+            pinned={pinnedPolicy}
+          />
           <button type="button" onClick={() => onAgent(null)}>reset to inherit</button>
         </div>
       ) : (
         <div className="loop-brief-execution inherit">
           <span>execution · inherits first agent stage{execution ? ` · ${execution.provider} · ${execution.model}` : ""}</span>
-          <button type="button" disabled={!agentConfig} onClick={() => agentConfig && onAgent({ ...agentConfig, options: { ...agentConfig.options } })}><EditIcon size={9} /> change</button>
+          <button type="button" disabled={!agentConfig} onClick={() => agentConfig && onAgent({ provider: null, model: null, options: {} })}><EditIcon size={9} /> change</button>
         </div>
       )}
 
@@ -530,6 +534,31 @@ function relativePath(root: string, path: string): string {
   const normalized = root.replace(/\/$/, "");
   return normalized && path.startsWith(`${normalized}/`) ? path.slice(normalized.length + 1) : path;
 }
+
+/** What this run actually changes, not a snapshot of everything.
+ *
+ *  A brief override outranks the loop definition permanently: it is pinned
+ *  into the run and inherited by follow-ups. Recording the whole resolved
+ *  config meant merely opening this control froze every inherited value —
+ *  so a later edit to the definition's effort could never take effect,
+ *  because setup had silently claimed it. Only genuine differences are an
+ *  instruction; the rest should keep deferring to the definition.
+ */
+function overrideDelta(
+  next: PlanningAgentConfig,
+  inherited: PlanningAgentConfig | null,
+): LoopBriefAgent {
+  const options: Record<string, string> = {};
+  for (const [key, value] of Object.entries(next.options)) {
+    if (inherited?.options?.[key] !== value) options[key] = value;
+  }
+  return {
+    provider: next.provider === inherited?.provider ? null : next.provider,
+    model: next.model === inherited?.model ? null : next.model,
+    options,
+  };
+}
+
 
 function completeAgent(
   agent: LoopBriefAgent | null,
