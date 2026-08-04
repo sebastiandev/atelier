@@ -222,6 +222,7 @@ async def resume(
         current_stage_row["attempt"] = (
             actions.int_or_default(current_stage_row.get("attempt"), 1) + 1
         )
+        current_stage_row.pop("repair_attempt", None)
     run["status"] = LoopRunStatus.RUNNING.value
     run["completed_at"] = None
     loop["status"] = LoopStatus.RUNNING.value
@@ -428,6 +429,7 @@ async def request_changes(
     approval_row["status"] = LoopStepStatus.CHANGES_REQUESTED.value
     stage_row["status"] = LoopStepStatus.RUNNING.value
     stage_row["attempt"] = actions.int_or_default(stage_row.get("attempt"), 1) + 1
+    stage_row.pop("repair_attempt", None)
     loop["current_stage_id"] = destination
     if stage.agent is not None and stage.agent.permissions != LoopPermission.READ:
         loop["source_agent_slug"] = agent_slug

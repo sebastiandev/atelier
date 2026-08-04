@@ -905,6 +905,7 @@ async def _advance_after_stage_report(
     )
     next_row["status"] = LoopStepStatus.RUNNING.value
     next_row["attempt"] = actions.int_or_default(next_row.get("attempt"), 0) + 1
+    next_row.pop("repair_attempt", None)
     next_row["agent_slug"] = next_agent
     _record_owned_agent(loop, next_agent)
     if (
@@ -962,6 +963,7 @@ async def _run_check_stage(
     )
     stage_row["status"] = LoopStepStatus.RUNNING.value
     stage_row["attempt"] = actions.int_or_default(stage_row.get("attempt"), 0) + 1
+    stage_row.pop("repair_attempt", None)
     loop["current_stage_id"] = stage.step_id
     loop["status"] = LoopStatus.RUNNING.value
     loop["status_reason"] = f"{stage.name} is running."
@@ -1087,7 +1089,13 @@ async def _repair_stage_report(
     report_seq: int,
     problem: str,
 ) -> LoopRunTarget:
-    attempts = actions.int_or_default(stage_row.get("attempt"), 1)
+    # Its own budget, not `attempt`. `attempt` counts every launch of the
+    # stage — the normal advance, a resume, and each retry a person asks for
+    # — so sharing it meant a stage retried a few times arrived here with the
+    # budget already spent and failed on its first malformed report without
+    # ever being asked to repair it. This counter resets whenever the stage
+    # launches, so the allowance is "repairs within one attempt".
+    attempts = actions.int_or_default(stage_row.get("repair_attempt"), 0)
     if attempts >= stage.retry.max_attempts:
         stage_row["status"] = LoopStepStatus.FAILED.value
         _fail_run(
@@ -1110,7 +1118,7 @@ async def _repair_stage_report(
         agent_slug=agent_slug,
         prompt=stage_report_repair_prompt(stage),
     )
-    stage_row["attempt"] = attempts + 1
+    stage_row["repair_attempt"] = attempts + 1
     loop["attempt"] = actions.int_or_default(loop.get("attempt"), 1) + 1
     loop["last_checked_seq"] = report_seq
     loop["status_reason"] = problem

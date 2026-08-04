@@ -307,3 +307,48 @@ def test_stop_stage_refuses_a_terminal_run() -> None:
         pass
     else:  # pragma: no cover - the guard is the point of the test
         raise AssertionError("expected LoopStageNotStoppable")
+
+
+def test_a_retry_restores_the_report_repair_budget(monkeypatch: Any) -> None:
+    """`attempt` counts every launch of a stage, including each retry a person
+    asks for, while `max_attempts` budgets automatic report repairs. Sharing
+    one counter meant a stage retried a few times failed on its first
+    malformed report without ever being asked to repair it."""
+    target = _target("publish")
+    target.run["status"] = "blocked"
+    loop = target.run["loop"]
+    loop.update({"status": "failed", "current_stage_id": "publish"})
+    stage_row = loop["stages"][1]
+    stage_row.update(
+        {"status": "failed", "agent_slug": "agt-old", "attempt": 12, "repair_attempt": 3}
+    )
+
+    async def fake_launch(*args: Any, **kwargs: Any) -> str:
+        return "agt-new"
+
+    async def fake_send(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(lifecycle, "_launch_retry_agent", fake_launch)
+    monkeypatch.setattr(lifecycle.runtime, "send_loop_prompt", fake_send)
+    monkeypatch.setattr(lifecycle.runtime, "last_transcript_seq", lambda *args, **kwargs: 0)
+    workstore = SimpleNamespace(get_work_slug_for_agent=lambda slug: "WRK-001")
+
+    asyncio.run(
+        lifecycle.resume(
+            target,
+            workstore,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            retry_failed=True,
+        )
+    )
+
+    # The launch counter keeps climbing; the repair budget starts over.
+    assert stage_row["attempt"] == 13
+    assert "repair_attempt" not in stage_row
