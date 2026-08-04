@@ -31,6 +31,7 @@ export function PrLifecyclePanel({
   onSendFeedback,
   pr,
   pushAt,
+  pushInFlight = false,
 }: {
   addressedComments?: Array<Record<string, unknown>>;
   busy: boolean;
@@ -40,6 +41,10 @@ export function PrLifecyclePanel({
   onSendFeedback?: (comments: FeedbackItem[], instruction: string) => Promise<void>;
   pr: PrLifecycle;
   pushAt: string | null;
+  /** The PR stage is running: everything below the summary describes the PR
+      as it was *before* this push, so it is shown as superseded rather than
+      offered for reading. */
+  pushInFlight?: boolean;
 }) {
   const visible = useMemo(
     () => prCommentThreads(comments, pushAt),
@@ -138,6 +143,21 @@ export function PrLifecyclePanel({
         </div>
       )}
 
+      <div className={`run-pr-superseded${pushInFlight ? " is-updating" : ""}`}>
+      {pushInFlight && (
+        <div className="run-pr-updating" role="status">
+          <LoopIcon size={12} />
+          <span>
+            <strong>
+              {pr.url ? `Updating PR #${pr.number ?? ""}` : "Opening the pull request"}
+            </strong>
+            <small>
+              Committing and pushing this pass. The comments below are from
+              before it — they refresh once the push lands.
+            </small>
+          </span>
+        </div>
+      )}
       <header className="run-pr-comments-head">
         <button type="button" onClick={() => setOpen((value) => !value)}>{open ? "▾" : "▸"} PR comments</button>
         <em className={actionable.length > 0 && !terminal ? "tag warn" : "tag"}>{actionable.length} open</em>
@@ -245,6 +265,7 @@ export function PrLifecyclePanel({
           </footer>}
         </div>
       )}
+      </div>
     </section>
   );
 }

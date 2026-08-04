@@ -1110,6 +1110,7 @@ function StageOutput({
         <PrLifecyclePanel
           addressedComments={stage.addressed_comments}
           busy={busy}
+          pushInFlight={running}
           comments={prComments}
           feedbackInstruction={stage.feedback_instruction}
           onRefresh={onRefreshPr}
