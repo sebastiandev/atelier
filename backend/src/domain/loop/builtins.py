@@ -177,6 +177,27 @@ def _implementation(pass_to: str) -> LoopStepDefinition:
     )
 
 
+#: Read-only commands a reviewer may run without an approval prompt. A
+#: chained command is approved only when *every* segment matches one of these
+#: (see domain/agents/command_approval.py), which is why the pipe-friendly
+#: filters are listed alongside the searches.
+REVIEW_COMMAND_PREFIXES: tuple[str, ...] = (
+    "git diff",
+    "git status",
+    "rg",
+    "sed",
+    "grep",
+    "sort",
+    "uniq",
+    "tail",
+    "cut",
+    "ls",
+    "head",
+    "echo",
+    "cd",
+)
+
+
 def _review(
     step_id: str,
     name: str,
@@ -203,6 +224,11 @@ def _review(
         agent=LoopAgentPolicy(
             session=LoopSessionPolicy.FRESH,
             permissions=LoopPermission.READ,
+            # A read stage asks before every command, so inspection stalls on
+            # approval prompts. These are the read-only tools a reviewer needs
+            # to navigate a diff; prefixes are matched token-wise, so `rg`
+            # covers any `rg ...`. Nothing here can write.
+            approved_command_prefixes=REVIEW_COMMAND_PREFIXES,
         ),
         report_contract="review",
         review_gate=LoopReviewGate(),

@@ -28,17 +28,23 @@ if TYPE_CHECKING:
 
 
 CREATE_PR_STAGE_INSTRUCTIONS = (
-    "Create or update the single pull request for this Work. Commit all intended "
-    "changes, allow commit hooks to run, and push before opening or updating the PR. "
-    "PR preparation has a narrow repair scope: you may apply deterministic formatter "
-    "and lint fixes, and minimal type-check fixes introduced by the current diff when "
-    "they preserve intended behavior and public contracts. Do not blindly silence "
-    "checks with ignores, noqa comments, weakened types, or unsafe casts. You may rerun "
-    "failing tests to confirm and diagnose them, but do not change product code or tests "
-    "to repair test failures in this stage. Do not make other implementation changes. "
-    "For confirmed test failures, or any type or lint fix that needs behavioral, "
-    "architectural, or public-contract changes, report changes_requested with the "
-    "failing command, evidence, and actionable findings. Never bypass hooks or force-push."
+    "Create or update the single pull request for this Work. Your job is exactly: "
+    "stage, commit, push, open or update the PR, and reply to the review comments "
+    "this pass addressed — each reply citing the commit that addressed it. Nothing "
+    "else. "
+    "Do not run the test suite or any individual test. The implementation and code "
+    "review stages already ran them and their evidence is in this run's reports; "
+    "re-running them here costs time and tokens and proves nothing new. "
+    "The only changes you may make are what a commit hook demands: deterministic "
+    "formatter and lint fixes, and minimal type-check fixes introduced by the current "
+    "diff when they preserve intended behavior and public contracts. Do not blindly "
+    "silence checks with ignores, noqa comments, weakened types, or unsafe casts, and "
+    "make no other implementation changes. "
+    "If anything needs more than that — a failing hook you cannot satisfy within that "
+    "scope, or a fix that needs behavioral, architectural, or public-contract changes "
+    "— report changes_requested with the failing command, its output, and actionable "
+    "findings, and let the implementation stage handle it. "
+    "Never bypass hooks or force-push."
 )
 
 

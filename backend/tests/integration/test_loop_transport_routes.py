@@ -5,6 +5,8 @@ from __future__ import annotations
 import yaml  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
+from src.domain.loop.builtins import REVIEW_COMMAND_PREFIXES
+
 
 def _fork_stage_and_link_into_loop(app_client: TestClient) -> None:
     """Create a library stage and a library loop that links it."""
@@ -238,7 +240,11 @@ def test_import_preserves_loop_local_overrides_on_a_linked_stage(
 
     reimported = app_client.post(
         "/api/loops/import",
-        json={"content": content, "name": "Reimported override"},
+        json={
+            "content": content,
+            "name": "Reimported override",
+            "accepted_command_prefixes": list(REVIEW_COMMAND_PREFIXES),
+        },
     )
     assert reimported.status_code == 201, reimported.text
     stage = reimported.json()["stages"][0]
@@ -280,7 +286,7 @@ def test_import_surfaces_and_requires_prefix_acceptance(
         json={
             "content": content,
             "name": "Imported prefixed",
-            "accepted_command_prefixes": ["rm -rf"],
+            "accepted_command_prefixes": ["rm -rf", *REVIEW_COMMAND_PREFIXES],
         },
     )
     assert accepted.status_code == 201, accepted.text
@@ -300,13 +306,21 @@ def test_import_loop_id_collision(app_client: TestClient) -> None:
 
     collided = app_client.post(
         "/api/loops/import",
-        json={"content": content, "name": "atelier reviewed"},
+        json={
+            "content": content,
+            "name": "atelier reviewed",
+            "accepted_command_prefixes": list(REVIEW_COMMAND_PREFIXES),
+        },
     )
     assert collided.status_code == 409, collided.text
 
     renamed = app_client.post(
         "/api/loops/import",
-        json={"content": content, "name": "Fresh import"},
+        json={
+            "content": content,
+            "name": "Fresh import",
+            "accepted_command_prefixes": list(REVIEW_COMMAND_PREFIXES),
+        },
     )
     assert renamed.status_code == 201, renamed.text
     assert renamed.json()["id"] == "fresh-import"
