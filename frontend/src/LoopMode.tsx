@@ -54,9 +54,11 @@ import {
 } from "./providerDescriptors";
 import { ShellTopbar } from "./ShellTopbar";
 import {
-  useLayoutStore,
+  PLANNING_DOCK_MAX,
+  PLANNING_DOCK_MIN,
   WORK_RAIL_MAX,
   WORK_RAIL_MIN,
+  useLayoutStore,
 } from "./state/layout";
 
 type Props = {
@@ -103,6 +105,8 @@ export function LoopMode({
   const [error, setError] = useState<string | null>(null);
   const [runDock, setRunDock] = useState<RunDock>(null);
   const railWidth = useLayoutStore((state) => state.workRailWidth);
+  const dockWidth = useLayoutStore((state) => state.planningDockWidth);
+  const setDockWidth = useLayoutStore((state) => state.setPlanningDockWidth);
   const setRailWidth = useLayoutStore((state) => state.setWorkRailWidth);
   const { descriptors } = useProviderDescriptors();
   const requestSequence = useRef(0);
@@ -307,6 +311,7 @@ export function LoopMode({
 
   const style = {
     ["--loop-rail-width" as string]: `${railWidth}px`,
+    ["--loop-dock-width" as string]: `${dockWidth}px`,
     ["--shell-left-width" as string]: `${railWidth}px`,
     ...(project
       ? {
@@ -454,6 +459,15 @@ export function LoopMode({
         </main>
         {goalChatOpen && goalChat && (
           <aside className="loop-goal-dock">
+            <PaneResizeHandle
+              defaultValue={420}
+              edge="left"
+              label="Resize goal discussion"
+              max={PLANNING_DOCK_MAX}
+              min={PLANNING_DOCK_MIN}
+              value={dockWidth}
+              onChange={setDockWidth}
+            />
             <ChatTile
               chatSlug={goalChat.slug}
               projects={project ? [project] : []}

@@ -15141,12 +15141,16 @@ select:disabled {
   grid-template-columns: var(--loop-rail-width, 280px) minmax(0, 1fr) var(--loop-dock-width, 420px);
 }
 .loop-goal-dock {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--line);
   background: var(--bg-1);
 }
+/* Drag the dock's left edge to widen the discussion, same as the plan chat.
+   `position: relative` is load-bearing: the handle is absolutely placed. */
+.loop-goal-dock .pane-resize-handle { --pane-color: var(--chat-color); }
 .loop-goal-dock > .chat-tile { width: 100%; min-height: 0; }
 .loop-brief-goal-head {
   display: flex;
