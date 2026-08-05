@@ -129,14 +129,22 @@ export function LoopMode({
   const entryAgent =
     brief.stages.find((stage) => stage.agent)?.agent ?? null;
 
+  // The discussion happens *before* the run is configured, so it can't depend
+  // on the brief's agent being picked yet — it falls back to the first
+  // descriptor's own default model rather than a literal "default" the
+  // provider would reject.
+  const goalChatDescriptor =
+    descriptors?.find((item) => item.name === entryAgent?.provider) ?? descriptors?.[0] ?? null;
+  const goalChatModel = entryAgent?.model || goalChatDescriptor?.primary_field.default || "";
+
   async function openGoalDiscussion() {
     setGoalChatOpen(true);
-    if (goalChat || goalChatBusy || !selectedDefinition) return;
+    if (goalChat || goalChatBusy || !selectedDefinition || !goalChatDescriptor) return;
     setGoalChatBusy(true);
     try {
       const created = await createChat({
-        provider: entryAgent?.provider ?? "claude-acp",
-        model: entryAgent?.model ?? "default",
+        provider: goalChatDescriptor.name,
+        model: goalChatModel,
         title: "Loop goal",
         grounding: { kind: "work", ref: work.slug },
         working_directory: folder || null,
