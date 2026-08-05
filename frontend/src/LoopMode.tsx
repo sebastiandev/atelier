@@ -238,6 +238,11 @@ export function LoopMode({
   }, [activeRun?.id, activeRun?.status, work.slug]);
 
   function replaceRun(next: WorkLoopRun) {
+    // Invalidate any poll already in flight. Its response was requested before
+    // this write and describes the run as it was *before* the action, so
+    // letting it land would revert the view — "Stop stage" would keep showing
+    // the stage as running until a reload.
+    requestSequence.current += 1;
     setRuns((current) => orderRuns([next, ...current.filter((run) => run.id !== next.id)]));
     setSelectedRunId(next.id);
     setPreparingRun(false);
