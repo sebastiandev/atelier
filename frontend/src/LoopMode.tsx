@@ -130,12 +130,16 @@ export function LoopMode({
     brief.stages.find((stage) => stage.agent)?.agent ?? null;
 
   // The discussion happens *before* the run is configured, so it can't depend
-  // on the brief's agent being picked yet — it falls back to the first
-  // descriptor's own default model rather than a literal "default" the
-  // provider would reject.
+  // on the brief's agent being picked yet. A half-filled brief is the hard
+  // case: a stage can carry a model with no provider, and pairing that model
+  // with a fallback provider is how "configured-default" reached claude-acp.
+  // The model is only kept when the provider that owns it is the one chosen.
   const goalChatDescriptor =
     descriptors?.find((item) => item.name === entryAgent?.provider) ?? descriptors?.[0] ?? null;
-  const goalChatModel = entryAgent?.model || goalChatDescriptor?.primary_field.default || "";
+  const goalChatModel =
+    goalChatDescriptor?.primary_field.values.includes(entryAgent?.model ?? "")
+      ? entryAgent!.model!
+      : goalChatDescriptor?.primary_field.default ?? "";
 
   async function openGoalDiscussion() {
     setGoalChatOpen(true);
