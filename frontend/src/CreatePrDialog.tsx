@@ -18,6 +18,7 @@ type AgentConfig = {
 export function CreatePrDialog({
   goal,
   inheritedAgent,
+  inheritedFrom,
   onClose,
   onCreate,
   runLabel = "run",
@@ -25,6 +26,8 @@ export function CreatePrDialog({
 }: {
   goal: string;
   inheritedAgent: AgentConfig | null;
+  /** Stage the inherited config comes from, named so the summary can say which. */
+  inheritedFrom?: string | null;
   onClose: () => void;
   onCreate: (setup: PrConfig) => Promise<void>;
   runLabel?: string;
@@ -39,7 +42,7 @@ export function CreatePrDialog({
   const [detached, setDetached] = useState(false);
   const [baseBranch, setBaseBranch] = useState("master");
   const [branchName, setBranchName] = useState("");
-  const [editingExecution, setEditingExecution] = useState(false);
+  const [editingExecution, setEditingExecution] = useState(true);
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState("");
@@ -177,8 +180,8 @@ export function CreatePrDialog({
 
           <section className="create-pr-execution">
             <div className="create-pr-execution-summary">
-              <span>execution · ⇡ inherits Implement — {effectiveProvider || "run provider"} · {effectiveModel || "run model"}{effectiveEffort && ` · effort ${effectiveEffort}`}{effectiveFast && " · fast"}</span>
-              <button type="button" aria-expanded={editingExecution} onClick={() => setEditingExecution((value) => !value)}>✎ change</button>
+              <span>execution · ⇡ inherits {inheritedFrom || "the first agent stage"} — {effectiveProvider || "run provider"} · {effectiveModel || "run model"}{effectiveEffort && ` · effort ${effectiveEffort}`}{effectiveFast && " · fast"}</span>
+              <button type="button" aria-expanded={editingExecution} onClick={() => setEditingExecution((value) => !value)}>{editingExecution ? "hide" : "✎ change"}</button>
             </div>
             {editingExecution && <div className="create-pr-execution-fields">
               <label><span>Provider</span><select value={provider} onChange={(event) => {

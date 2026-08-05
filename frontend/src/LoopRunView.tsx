@@ -298,6 +298,11 @@ function RunSurfaceContent({
     ? dock.stageId ?? data.currentStageId ?? stage?.id ?? data.stages[0]?.id ?? null
     : null;
   const agent = agents.find((item) => item.slug === agentStage?.agent_slug) ?? null;
+  // Create PR copies the *first* agent_task stage's agent (pr_lifecycle.py:164),
+  // not whichever stage ran last. Seed the dialog from the same one so what it
+  // shows as inherited is what the run will actually use.
+  const prSourceStage = data.stages.find((item) => item.kind === "agent_task") ?? null;
+  const prSourceAgent = agents.find((item) => item.slug === prSourceStage?.agent_slug) ?? null;
   const outputAgent = agents.find((item) => item.slug === selectedOccurrence?.agent_slug) ?? null;
   const discussionStage = selectedOccurrence?.agent_slug ? selectedOccurrence : agentStage;
   const discussionAgent = agents.find((item) => item.slug === discussionStage?.agent_slug) ?? null;
@@ -611,11 +616,12 @@ function RunSurfaceContent({
         <CreatePrDialog
           goal={data.goal}
           runLabel={`run ${data.number}`}
-          inheritedAgent={agent ? {
-            provider: agent.provider,
-            model: agent.model,
-            options: stringOptions(agent.options ?? {}),
+          inheritedAgent={prSourceAgent ? {
+            provider: prSourceAgent.provider,
+            model: prSourceAgent.model,
+            options: stringOptions(prSourceAgent.options ?? {}),
           } : null}
+          inheritedFrom={prSourceStage?.name ?? null}
           workspacePath={workspacePath}
           onClose={() => setCreatePrOpen(false)}
           onCreate={async (setup) => {
