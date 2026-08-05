@@ -615,8 +615,20 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               onDecide={sendPermission}
             />
           )}
-          <div className="chat-composer">
+          <ChatTileComposer
+            className={`chat-composer${activityPhase ? " is-working" : ""}`}
+            onSubmit={(event) => {
+              event.preventDefault();
+              send();
+            }}
+          >
             <ChatContextGauge context={contextSnapshot} />
+            {/* The moving rail the canvas tiles show while a turn is live.
+                The route's composer was a bare div, so it had neither this
+                nor the tile's border treatment. */}
+            <div className="composer-activity-rail" aria-hidden="true">
+              {activityPhase && <span />}
+            </div>
             {imageUploadError && <div className="form-error">{imageUploadError}</div>}
             {uploadingImageCount > 0 && (
               <div className="composer-upload-status mono">
@@ -699,7 +711,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
                 <SendIcon size={12} /> {uploadingImageCount > 0 ? "Uploading..." : "Send"}
               </button>
             </div>
-          </div>
+          </ChatTileComposer>
         </div>
         </ChatTileFrame>
       </main>

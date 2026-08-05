@@ -1054,7 +1054,11 @@
   width: 100%;
   margin: 0;
 }
-.chat-page-tile .chat-composer-wrap { padding: 10px 20px 16px; }
+.chat-page-tile .chat-composer-wrap {
+  padding: 0 14px 12px;
+  border-top: 0;
+  background: transparent;
+}
 
 .chat-stream {
   flex: 1;
