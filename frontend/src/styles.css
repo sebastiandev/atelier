@@ -1020,6 +1020,31 @@
   background: var(--bg-1);
 }
 
+/* The standalone chat route renders the manual-canvas tile permanently
+   maximised: it fills the pane, and there is no minimise or close because
+   the route is the chat. The old layout floated a reading column in an empty
+   pane with a detached composer. */
+.chat-right > .chat-page-tile {
+  flex: 1;
+  min-height: 0;
+  margin: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tile);
+  background: var(--bg);
+}
+.chat-page-tile > .chat-tile-body { min-height: 0; }
+.chat-page-tile .chat-tile-transcript {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 20px 28px;
+  contain: layout paint;
+}
+.chat-page-tile .chat-reading {
+  width: min(760px, 100%);
+  margin: 0 auto;
+}
+
 .chat-stream {
   flex: 1;
   min-height: 0;

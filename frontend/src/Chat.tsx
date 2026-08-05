@@ -526,14 +526,34 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
       </aside>
 
       <main className="shell-right chat-right">
+        {/* The same tile the manual canvas opens, permanently maximised: no
+            minimise or close, because this route *is* the chat. Reusing the
+            tile's surface rather than the whole ChatTile keeps one websocket
+            per chat — both components own a useAgentStream, and a second
+            subscribe to the same chat kicks the first. */}
+        <ChatTileFrame
+          className="chat-page-tile"
+          headerLeft={(
+            <>
+              <span className="tile-title">{chat.title}</span>
+              <span className="agent-slug mono">{chat.slug}</span>
+            </>
+          )}
+          headerMeta={(
+            <>
+              <span className="provider-pill mono">{displayModel}</span>
+              {grounding.kind !== "none" && (
+                <span className="chat-grounding-pill mono">{grounding.label}</span>
+              )}
+              <span className="conn-status" data-conn-status={streamStatus}>
+                {streamStatus}
+              </span>
+            </>
+          )}
+        >
         {discussionOnly && <DiscussionOnlyNotice />}
-        <div className="chat-stream" ref={streamRef}>
+        <ChatTileTranscript ref={streamRef}>
           <div className="chat-reading">
-            <div className="chat-opening">
-              {chat.slug} · talking to {displayModel}
-              {grounding.kind !== "none" && <> · linked to {grounding.label}</>}
-              {" · "}{streamStatus}
-            </div>
             <div className="transcript chat-transcript">
               {history.hasOlder && (
                 <button
@@ -558,7 +578,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
               </div>
             )}
           </div>
-        </div>
+        </ChatTileTranscript>
         {(lastMetrics || streamActive) && (
           <TurnMetricsBar
             metrics={lastMetrics}
@@ -681,6 +701,7 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             </div>
           </div>
         </div>
+        </ChatTileFrame>
       </main>
 
       {!readOnly && promoteOpen && !discussionOnly && (
