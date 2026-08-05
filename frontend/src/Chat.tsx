@@ -202,6 +202,31 @@ async function appendImagesToChatDraft(
   }
 }
 
+export const LOOP_GOAL_OPEN = "<atelier-loop-goal>";
+export const LOOP_GOAL_CLOSE = "</atelier-loop-goal>";
+
+/** The last goal the agent delimited, or null.
+ *
+ *  A marker rather than "the last message": a discussion ends with prose
+ *  around its conclusion, and taking the whole reply would drop the agent's
+ *  commentary into the brief.
+ */
+function latestDraftedGoal(events: AgentEvent[]): string | null {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event.type !== "message_complete") continue;
+    const text = typeof event.text === "string" ? event.text : "";
+    const start = text.lastIndexOf(LOOP_GOAL_OPEN);
+    if (start < 0) continue;
+    const end = text.indexOf(LOOP_GOAL_CLOSE, start);
+    if (end < 0) continue;
+    const goal = text.slice(start + LOOP_GOAL_OPEN.length, end).trim();
+    if (goal) return goal;
+  }
+  return null;
+}
+
+
 function linkedWorkSlug(chat: ChatDetail | null): string | null {
   return linkedWorkSlugFromGrounding(chat?.grounding ?? null);
 }
@@ -747,6 +772,7 @@ export function ChatTile({
   onOpenContext,
   planReferences = [],
   collapseHistoryByDefault = false,
+  onDraftedGoal,
   onClose,
   onStartAgent,
   onUpdated,
@@ -765,6 +791,10 @@ export function ChatTile({
   onOpenContext?: (folder: WorkChatContextFolder) => void;
   planReferences?: PlanArtifact[];
   collapseHistoryByDefault?: boolean;
+  /** Called with the latest goal the agent delimited in its reply. Lets a
+   *  loop's setup screen take the conclusion of a discussion straight into
+   *  its brief instead of asking the user to copy it out. */
+  onDraftedGoal?: (goal: string) => void;
   onClose?: () => void;
   onStartAgent?: (chat: ChatDetail) => Promise<void> | void;
   onUpdated?: (chat: ChatSummary) => void;
@@ -919,6 +949,16 @@ export function ChatTile({
   const streamActive = streamStatus === "connected" && isActive;
   const turnOpen = useMemo(() => isTurnOpen(events), [events]);
   const stalled = useStalledTurn(events, turnOpen);
+  const draftedGoal = useMemo(() => latestDraftedGoal(events), [events]);
+  const reportedGoalRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onDraftedGoal || !draftedGoal) return;
+    // Only when it changes: the agent restates the block on later turns, and
+    // re-applying an unchanged goal would fight the user editing the field.
+    if (reportedGoalRef.current === draftedGoal) return;
+    reportedGoalRef.current = draftedGoal;
+    onDraftedGoal(draftedGoal);
+  }, [draftedGoal, onDraftedGoal]);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const activityPhase = useMemo(

@@ -8,10 +8,12 @@ import {
   type LoopStatus,
   type ProjectSummary,
   type WorkDetail,
+  type ChatDetail,
   type WorkLoopRun,
   acceptWorkLoopRun,
   cancelWorkLoopRun,
   stopWorkLoopRunStage,
+  createChat,
   createWorkLoopRunPrStage,
   getWorkLoopRun,
   getWorkLoopBrief,
@@ -28,6 +30,7 @@ import {
   startWorkLoopRun,
   revealWork,
 } from "./api";
+import { ChatTile, LOOP_GOAL_CLOSE, LOOP_GOAL_OPEN } from "./Chat";
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { FolderPickerDialog } from "./FolderPickerDialog";
 import { CheckIcon, FolderIcon, LoopIcon } from "./Icons";
@@ -115,6 +118,38 @@ export function LoopMode({
   );
   const canActOnRun = workStatus === "active" && activeRun?.id === runs[0]?.id;
   const pullRequests = artifacts.filter((artifact) => artifact.type === "pr");
+  const [goalChat, setGoalChat] = useState<ChatDetail | null>(null);
+  const [goalChatOpen, setGoalChatOpen] = useState(false);
+  const [goalChatBusy, setGoalChatBusy] = useState(false);
+
+  const entryAgent =
+    brief.stages.find((stage) => stage.agent)?.agent ?? null;
+
+  async function openGoalDiscussion() {
+    setGoalChatOpen(true);
+    if (goalChat || goalChatBusy || !selectedDefinition) return;
+    setGoalChatBusy(true);
+    try {
+      const created = await createChat({
+        provider: entryAgent?.provider ?? "claude-acp",
+        model: entryAgent?.model ?? "default",
+        title: "Loop goal",
+        grounding: { kind: "work", ref: work.slug },
+        working_directory: folder || null,
+        discussion_only: true,
+        role: "advisory",
+        // Keyed to the loop, so reopening the screen returns to the same
+        // discussion instead of starting a new one each time.
+        discussion_key: JSON.stringify([work.slug, "loop-goal", selectedDefinition.id]),
+        context_seed: buildGoalSeed(selectedDefinition, brief.goal),
+      });
+      setGoalChat(created);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setGoalChatBusy(false);
+    }
+  }
   const provider = descriptors?.find((item) => item.name === agentConfig?.provider) ?? null;
 
   useEffect(() => {
@@ -315,7 +350,7 @@ export function LoopMode({
           </button>
         )}
       />
-      <div className="loop-mode-shell">
+      <div className={`loop-mode-shell${goalChatOpen && goalChat ? " with-goal-dock" : ""}`}>
         <LoopModeRail
           work={work}
           goal={brief.goal}
@@ -401,6 +436,7 @@ export function LoopMode({
               brief={brief}
               busy={busy || workStatus !== "active"}
               error={workStatus === "active" ? error : "Reopen this work to start another run."}
+              onDiscussGoal={openGoalDiscussion}
               goalEditable
               onBrief={setBrief}
               onChooseFolder={() => setFolderPickerOpen(true)}
@@ -416,6 +452,17 @@ export function LoopMode({
             />
           )}
         </main>
+        {goalChatOpen && goalChat && (
+          <aside className="loop-goal-dock">
+            <ChatTile
+              chatSlug={goalChat.slug}
+              projects={project ? [project] : []}
+              works={[work]}
+              onClose={() => setGoalChatOpen(false)}
+              onDraftedGoal={(goal) => setBrief((current) => ({ ...current, goal }))}
+            />
+          </aside>
+        )}
       </div>
 
       {completeOpen && (
@@ -461,6 +508,30 @@ export function LoopMode({
       )}
     </div>
   );
+}
+
+
+/** What the goal discussion opens with.
+ *
+ *  The agent is told the loop's actual stages so the goal it drafts suits
+ *  the pipeline that will run it, and is given one delimiter so the setup
+ *  screen can lift the conclusion out without the user copying anything.
+ */
+function buildGoalSeed(definition: LoopDefinition, goal: string): string {
+  const stages = definition.stages
+    .map((stage) => `- ${stage.name} (${stage.kind.replaceAll("_", " ")})`)
+    .join("\n");
+  return [
+    `Help me shape the goal for a run of the "${definition.name}" loop.`,
+    goal.trim() ? `What I have so far:\n${goal.trim()}` : "I do not have a goal written yet.",
+    `The loop will run these stages in order:\n${stages}`,
+    "Ask whatever you need to make the goal concrete and testable. Explore the"
+      + " repository if that helps. Do not change any files.",
+    "Whenever we agree on a goal, restate it in full between"
+      + ` ${LOOP_GOAL_OPEN} and ${LOOP_GOAL_CLOSE} on their own lines, written`
+      + " for the stages above: what to build, and what would make it done."
+      + " Everything outside those markers is discussion and is ignored.",
+  ].join("\n\n");
 }
 
 function LoopModeRail({

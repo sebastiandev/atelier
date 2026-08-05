@@ -15135,6 +15135,26 @@ select:disabled {
   grid-row: 2;
   grid-template-columns: var(--loop-rail-width, 280px) minmax(0, 1fr);
 }
+/* The goal discussion sits beside setup as a third column, the same shape
+   Planning uses, so the brief and the conversation are visible together. */
+.loop-mode-shell.with-goal-dock {
+  grid-template-columns: var(--loop-rail-width, 280px) minmax(0, 1fr) var(--loop-dock-width, 420px);
+}
+.loop-goal-dock {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.loop-goal-dock > .chat-tile { width: 100%; min-height: 0; }
+.loop-brief-goal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .loop-mode-shell > .pane-resize-handle {
   right: auto;
   left: calc(var(--loop-rail-width, 280px) - 5px);

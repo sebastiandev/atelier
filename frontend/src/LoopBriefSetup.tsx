@@ -13,6 +13,7 @@ import { CommandPrefixEditor } from "./CommandPrefixEditor";
 import { FolderPickerDialog } from "./FolderPickerDialog";
 import {
   BranchIcon,
+  ChatIcon,
   CheckIcon,
   DocIcon,
   EditIcon,
@@ -48,6 +49,9 @@ type Props = {
   onEditLoop: () => void;
   /** The goal lives on the brief; leave false when the caller owns it. */
   goalEditable?: boolean;
+  /** Opens a discussion beside this screen. What the agent settles on is
+   *  written straight into the goal, so the two never disagree. */
+  onDiscussGoal?: () => void | Promise<void>;
   /** Caption for the goal field. */
   goalLabel?: string;
   onStart: () => void;
@@ -67,6 +71,7 @@ export function LoopBriefSetup({
   onChooseFolder,
   onEditLoop,
   goalEditable = false,
+  onDiscussGoal,
   goalLabel = "Goal",
   onStart,
 }: Props) {
@@ -170,7 +175,14 @@ export function LoopBriefSetup({
       </header>
 
       <section className="loop-brief-goal">
-        <label>{goalLabel}</label>
+        <header className="loop-brief-goal-head">
+          <label>{goalLabel}</label>
+          {onDiscussGoal && (
+            <button type="button" className="btn ghost sm" onClick={() => void onDiscussGoal()}>
+              <ChatIcon size={11} /> Discuss the goal
+            </button>
+          )}
+        </header>
         {goalEditable ? (
           <textarea
             rows={2}
