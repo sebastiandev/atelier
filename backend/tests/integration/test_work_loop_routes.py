@@ -224,6 +224,24 @@ def test_work_loop_brief_round_trips(
     assert fetched.json() == brief
 
 
+def _reviewed_with_required_note(app_client: TestClient) -> dict:
+    """A WRK-001 fork of Atelier Reviewed whose review stage demands a note.
+
+    The built-ins no longer declare ``note_required`` -- a reviewer already
+    gets the goal, the target and the diff -- so the contract is exercised
+    through a definition that opts into it, which is who it is for.
+    """
+    payload = app_client.get("/api/loops/atelier-reviewed").json()
+    review = next(stage for stage in payload["stages"] if stage["id"] == "code-review")
+    review["note_required"] = True
+    saved = app_client.post(
+        "/api/loops",
+        json={**payload, "scope": "work", "work_slug": "WRK-001", "expected_revision": None},
+    )
+    assert saved.status_code == 201, saved.text
+    return saved.json()
+
+
 def test_explicit_brief_must_fill_required_review_note(
     app_client: TestClient,
     tmp_path: Path,
@@ -235,7 +253,7 @@ def test_explicit_brief_must_fill_required_review_note(
     assert created.status_code == 201, created.text
     root = tmp_path / "repository"
     root.mkdir()
-    definition = app_client.get("/api/loops/atelier-reviewed").json()
+    definition = _reviewed_with_required_note(app_client)
 
     response = app_client.post(
         "/api/works/WRK-001/runs",
@@ -356,14 +374,6 @@ def test_verify_follow_up_starts_at_review_and_skips_implementation(
         "running",
         "pending",
     ]
-    assert (
-        next(
-            stage["note"]
-            for stage in rerun["brief"]["stages"]
-            if stage["stage_id"] == "code-review"
-        )
-        == goal
-    )
 
 
 def test_amend_follow_up_pins_feedback_in_the_same_workspace(

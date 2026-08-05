@@ -130,7 +130,7 @@ def _review(definition_id: str, name: str, instructions: str) -> StageDefinition
             agent=LoopAgentPolicy(session=LoopSessionPolicy.FRESH, permissions=LoopPermission.READ),
             report_contract="review",
             retry=LoopRetryPolicy(max_attempts=2, timeout_minutes=15),
-            note_required=True,
+            note_required=False,
             review_gate=LoopReviewGate(),
         ),
         (

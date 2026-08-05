@@ -2289,18 +2289,12 @@ def test_selected_loop_preflight_remembers_reused_stage_config(
     assert started.status_code == 200, started.text
 
 
-@pytest.mark.parametrize(
-    "override",
-    [
-        pytest.param({"model": "gpt-5.5"}, id="model"),
-        pytest.param({"effort": "high"}, id="effort"),
-    ],
-)
-def test_selected_loop_preflights_inherited_stage_policy(
+def _plan_with_a_stage_policy(
     app_client: TestClient,
     test_settings: Settings,
     override: dict[str, str],
-) -> None:
+):
+    """Approve a plan whose review stage inherits amp with ``override`` applied."""
     _create_work(app_client)
     root = test_settings.workspace_root / "repo"
     _start_plan(app_client, root)
@@ -2336,12 +2330,32 @@ def test_selected_loop_preflights_inherited_stage_policy(
         },
     )
 
+    return started
+
+
+def test_selected_loop_preflights_a_model_the_inherited_provider_cannot_serve(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """A model amp does not have is unrunnable, so Start refuses it up front."""
+    started = _plan_with_a_stage_policy(app_client, test_settings, {"model": "gpt-5.5"})
+
     assert started.status_code == 422, started.text
     assert started.json()["detail"]
     assert app_client.get("/api/works/WRK-001/agents").json() == []
     detail = app_client.get("/api/works/WRK-001/plan/artifacts/story-001").json()
     assert detail["artifact"]["runs"] == []
     assert app_client.app.state.loop_runs.list_active() == []
+
+
+def test_an_effort_the_inherited_provider_lacks_is_dropped_rather_than_refused(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """amp has no effort dial, and an effort it cannot honour is not a reason
+    to refuse the run -- the stage is runnable without it. Unlike a model,
+    which leaves nothing to run."""
+    started = _plan_with_a_stage_policy(app_client, test_settings, {"effort": "high"})
+
+    assert started.status_code == 200, started.text
 
 
 def test_background_run_monitor_auto_continues_incomplete_report(
@@ -3454,6 +3468,26 @@ def test_story_run_rejects_a_brief_that_does_not_fit_the_loop(
     assert app_client.get("/api/works/WRK-001/agents").json() == []
 
 
+def _reviewed_with_required_note(app_client: TestClient) -> dict:
+    """A WRK-001 fork of Atelier Reviewed whose review stage demands a note.
+
+    The built-ins no longer declare ``note_required`` -- a reviewer already
+    gets the goal, the target and the diff -- so the contract is exercised
+    through a definition that opts into it, which is who it is for.
+    """
+    payload = app_client.get("/api/loops/atelier-reviewed").json()
+    payload["stages"][0]["agent"]["provider"] = "amp"
+    payload["stages"][0]["agent"]["model"] = "smart"
+    review = next(stage for stage in payload["stages"] if stage["id"] == "code-review")
+    review["note_required"] = True
+    saved = app_client.post(
+        "/api/loops",
+        json={**payload, "scope": "work", "work_slug": "WRK-001", "expected_revision": None},
+    )
+    assert saved.status_code == 201, saved.text
+    return saved.json()
+
+
 def test_story_run_rejects_a_brief_missing_a_required_note(
     app_client: TestClient, test_settings: Settings
 ) -> None:
@@ -3462,11 +3496,14 @@ def test_story_run_rejects_a_brief_missing_a_required_note(
     _start_plan(app_client, test_settings.workspace_root / "repo")
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
 
+    definition = _reviewed_with_required_note(app_client)
+
     res = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
             "brief": _entry_agent_brief(),
-            "loop_definition_id": "atelier-reviewed",
+            "loop_definition_id": definition["id"],
+            "loop_revision": definition["revision"],
         },
     )
 
@@ -3524,25 +3561,13 @@ def test_a_run_started_without_a_brief_still_gets_one(
     _create_work(app_client)
     _start_plan(app_client, test_settings.workspace_root / "repo")
     assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
-    payload = app_client.get("/api/loops/atelier-reviewed").json()
-    payload["stages"][0]["agent"]["provider"] = "amp"
-    payload["stages"][0]["agent"]["model"] = "smart"
-    saved = app_client.post(
-        "/api/loops",
-        json={
-            **payload,
-            "scope": "work",
-            "work_slug": "WRK-001",
-            "expected_revision": None,
-        },
-    )
-    assert saved.status_code == 201, saved.text
+    definition = _reviewed_with_required_note(app_client)
 
     started = app_client.post(
         "/api/works/WRK-001/plan/artifacts/story-001/runs",
         json={
-            "loop_definition_id": saved.json()["id"],
-            "loop_revision": saved.json()["revision"],
+            "loop_definition_id": definition["id"],
+            "loop_revision": definition["revision"],
         },
     )
 

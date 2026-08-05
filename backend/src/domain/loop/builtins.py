@@ -233,7 +233,10 @@ def _review(
         ),
         report_contract="review",
         review_gate=LoopReviewGate(),
-        note_required=True,
+        # The reviewer already gets the goal, the target and the workspace
+        # diff, so it has what it needs without a note. A definition author can
+        # still declare one; the built-ins just don't block Start on it.
+        note_required=False,
         retry=LoopRetryPolicy(max_attempts=2, timeout_minutes=15),
         transitions={
             LoopOutcome.PASS: pass_to,
