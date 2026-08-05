@@ -1011,7 +1011,10 @@
   border-radius: 0;
 }
 
-.chat-right > .turn-metrics {
+/* Also matched inside .chat-page-tile: the bar moved into the tile frame,
+   and a direct-child selector alone would silently drop its styling. */
+.chat-right > .turn-metrics,
+.chat-page-tile .turn-metrics {
   width: min(720px, calc(100% - 48px));
   margin: 0 auto;
   border: 1px solid var(--line-soft);
@@ -1040,10 +1043,18 @@
   padding: 24px 20px 28px;
   contain: layout paint;
 }
-.chat-page-tile .chat-reading {
-  width: min(760px, 100%);
-  margin: 0 auto;
+/* Inside the tile the pane is already the measure, so the transcript,
+   composer and metrics use its full width instead of centring a column and
+   leaving gutters inside a frame. */
+.chat-page-tile .chat-reading,
+.chat-page-tile .chat-composer,
+.chat-page-tile .chat-stalled-banner,
+.chat-page-tile .turn-metrics {
+  max-width: none;
+  width: 100%;
+  margin: 0;
 }
+.chat-page-tile .chat-composer-wrap { padding: 10px 20px 16px; }
 
 .chat-stream {
   flex: 1;
