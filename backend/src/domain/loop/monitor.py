@@ -13,7 +13,7 @@ from src.domain.agents.launch import AgentLaunchRequest, launch_agent
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.agents.turn_monitor import observe_turn
 from src.domain.connections import ConnectionStore
-from src.domain.loop import actions, briefs, pr_lifecycle
+from src.domain.loop import actions, briefs, pass_feedback, pr_lifecycle
 from src.domain.loop import runtime as _loop_runtime
 from src.domain.loop.agent_policy import resolve_stage_agent_config
 from src.domain.loop.dtos import (
@@ -1262,9 +1262,37 @@ async def _send_stage_prompt(
             )
             if value
         )
+    resolution_note = "\n\n".join(
+        value
+        for value in (
+            pass_feedback.context(target.run),
+            # A PR stage already carries the same bundle through `prompt_context`.
+            "" if stage.kind.value == "pr" else pr_lifecycle.pending_feedback_context(target.run),
+            resolution_note.strip(),
+        )
+        if value
+    )
     brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
     brief_note, brief_context = briefs.prompt_values(brief, stage.step_id)
-    changed_files = actions.changed_file_prompt_lines(previous.changed_files)
+    declared = actions.declared_previous_row(
+        actions.dict_or_empty(target.run.get("loop")), stage
+    )
+    summary, findings, evidence, reported_files = (
+        (
+            actions.str_or_empty(declared.get("summary")),
+            tuple(actions.str_list(declared.get("findings"))),
+            actions.str_or_empty(declared.get("validation_evidence")),
+            actions.changed_file_prompt_lines(declared.get("changed_files")),
+        )
+        if declared is not None
+        else (
+            previous.summary,
+            previous.findings,
+            previous.validation_evidence,
+            actions.changed_file_prompt_lines(previous.changed_files),
+        )
+    )
+    changed_files = reported_files
     if not changed_files:
         changed_files = actions.latest_changed_file_prompt_lines(
             actions.dict_or_empty(target.run.get("loop"))
@@ -1287,9 +1315,9 @@ async def _send_stage_prompt(
             artifact_title=target.title,
             source_ref=target.source_ref,
             stage=stage,
-            previous_summary=previous.summary,
-            previous_findings=previous.findings,
-            previous_validation_evidence=previous.validation_evidence,
+            previous_summary=summary,
+            previous_findings=findings,
+            previous_validation_evidence=evidence,
             previous_changed_files=changed_files,
             workspace_diff=workspace_diff,
             resolution_note=resolution_note,
@@ -1516,13 +1544,10 @@ async def _apply_pr_feedback_decision(
         report,
         bypass_review_gate=True,
         pass_already_started=True,
-        # No resolution note: the feedback already reaches the next stage by
-        # whichever route applies. A stage declaring `previous_report` gets it
-        # from `previous_summary`; one that does not gets
-        # `_changes_requested_note`, which is added for exactly that case; a
-        # retry rebuilds it from the durable bundle via
-        # `pending_feedback_context`. Passing it here as well simply added a
-        # third copy of a block that grows with every selected comment.
+        # No resolution note: `_send_stage_prompt` now renders the durable
+        # bundle through `pending_feedback_context` for every stage in the
+        # pass, so passing it here would only add a second copy of a block
+        # that grows with each selected comment.
     )
 
 

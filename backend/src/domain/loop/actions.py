@@ -136,6 +136,28 @@ def stage_row(loop: dict[str, Any], step_id: str) -> dict[str, Any] | None:
     )
 
 
+def declared_previous_row(loop: dict[str, Any], stage: Any) -> dict[str, Any] | None:
+    """Return the stage row a stage's ``previous_report`` context names.
+
+    A stage may declare which earlier stage it reads a report from, so a
+    trailing corrective stage does not mask the substantive one. Both the
+    forward-advance and resume prompt builders resolve it through here.
+
+    Preconditions: ``stage`` is a stage definition with a ``context`` sequence.
+    Postconditions: ``None`` when the stage declares no explicit step or the
+    named step has no row yet, leaving the caller's own fallback in force.
+    """
+    return next(
+        (
+            row
+            for reference in stage.context
+            if reference.kind.value == "previous_report" and reference.step
+            if (row := stage_row(loop, reference.step)) is not None
+        ),
+        None,
+    )
+
+
 def start_next_pass(loop: dict[str, Any]) -> int:
     """Advance and persist the loop's pass counter.
 

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from src.domain.agents.launch import AgentLaunchRequest, launch_agent
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.connections import ConnectionStore
-from src.domain.loop import actions, briefs, pr_lifecycle, runtime
+from src.domain.loop import actions, briefs, pass_feedback, pr_lifecycle, runtime
 from src.domain.loop.agent_policy import apply_retry_overrides
 from src.domain.loop.dtos import (
     LoopContextKind,
@@ -425,7 +425,7 @@ async def request_changes(
         )
     except runtime.AgentNotFound as exc:
         raise LoopAgentNotFound(str(exc)) from exc
-    actions.start_next_pass(loop)
+    pass_feedback.record(loop, note=note, pass_number=actions.start_next_pass(loop))
     approval_row["status"] = LoopStepStatus.CHANGES_REQUESTED.value
     stage_row["status"] = LoopStepStatus.RUNNING.value
     stage_row["attempt"] = actions.int_or_default(stage_row.get("attempt"), 1) + 1
@@ -594,25 +594,19 @@ def _resume_prompt(
         if stage.kind == LoopStepKind.PR
         else TaskStagePrompt
     )
-    feedback_context = (
-        pr_lifecycle.pending_feedback_context(target.run)
-        if stage.kind == LoopStepKind.AGENT_TASK
-        else ""
-    )
+    feedback_context = pr_lifecycle.pending_feedback_context(target.run)
     resolution = "\n\n".join(
-        value for value in (feedback_context, resolution_note.strip()) if value
+        value
+        for value in (
+            pass_feedback.context(target.run),
+            feedback_context,
+            resolution_note.strip(),
+        )
+        if value
     )
     brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
     brief_note, brief_context = briefs.prompt_values(brief, stage.step_id)
-    previous_row = next(
-        (
-            row
-            for reference in stage.context
-            if reference.kind == LoopContextKind.PREVIOUS_REPORT and reference.step
-            if (row := actions.stage_row(loop, reference.step)) is not None
-        ),
-        stage_row,
-    )
+    previous_row = actions.declared_previous_row(loop, stage) or stage_row
     return build_stage_prompt(
         prompt_type(
             run_id=target.run_id,

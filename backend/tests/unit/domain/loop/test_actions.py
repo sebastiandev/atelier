@@ -6,9 +6,11 @@ from src.domain.loop.actions import (
     approved_command_prefix_from_request,
     claim_stale_permission_recovery,
     command_matches_approved_prefix,
+    declared_previous_row,
     latest_changed_file_prompt_lines,
     start_next_pass,
 )
+from src.domain.loop.dtos import LoopContextKind, LoopContextReference
 
 
 def test_start_next_pass_persists_incremented_counter() -> None:
@@ -102,3 +104,50 @@ def test_latest_changed_files_follow_report_time_across_backward_passes() -> Non
     }
 
     assert latest_changed_file_prompt_lines(loop) == ("src/new.py (+4/-1)",)
+
+
+def _stage(*steps: str | None):
+    class _Stage:
+        context = tuple(
+            LoopContextReference(kind=LoopContextKind.PREVIOUS_REPORT, step=step)
+            for step in steps
+        )
+
+    return _Stage()
+
+
+def test_declared_previous_row_returns_the_named_stage() -> None:
+    loop = {
+        "stages": [
+            {"id": "implementation", "summary": "Built the thing."},
+            {"id": "lint", "summary": "Fixed imports."},
+        ]
+    }
+
+    row = declared_previous_row(loop, _stage("implementation"))
+
+    assert row is not None
+    assert row["summary"] == "Built the thing."
+
+
+def test_declared_previous_row_is_none_without_an_explicit_step() -> None:
+    loop = {"stages": [{"id": "implementation", "summary": "Built the thing."}]}
+
+    assert declared_previous_row(loop, _stage(None)) is None
+
+
+def test_declared_previous_row_is_none_when_the_named_stage_has_no_row() -> None:
+    loop = {"stages": [{"id": "lint", "summary": "Fixed imports."}]}
+
+    assert declared_previous_row(loop, _stage("implementation")) is None
+
+
+def test_declared_previous_row_ignores_other_context_kinds() -> None:
+    class _Stage:
+        context = (
+            LoopContextReference(kind=LoopContextKind.WORKSPACE_DIFF, step="implementation"),
+        )
+
+    loop = {"stages": [{"id": "implementation", "summary": "Built the thing."}]}
+
+    assert declared_previous_row(loop, _Stage()) is None
