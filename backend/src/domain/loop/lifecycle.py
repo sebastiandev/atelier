@@ -487,6 +487,8 @@ def accept(target: LoopRunTarget) -> bool:
     run["completed_at"] = now
     loop["status"] = LoopStatus.ACCEPTED.value
     loop["status_reason"] = "The result was approved."
+    # Approving is the answer to any outstanding request for changes.
+    pass_feedback.clear(loop)
     run["loop"] = loop
     return True
 
@@ -595,11 +597,19 @@ def _resume_prompt(
         else TaskStagePrompt
     )
     feedback_context = pr_lifecycle.pending_feedback_context(target.run)
+    # Only the monitor's forward advance is handed a corrective note; a retry
+    # arrives carrying just its own boilerplate, so rebuild the note from the
+    # stage's stored copy rather than restarting the agent with nothing to act
+    # on. Skipped when the caller already supplied it, so it renders once.
+    corrective = actions.str_or_empty(stage_row.get("corrective_note"))
+    if corrective and corrective in resolution_note:
+        corrective = ""
     resolution = "\n\n".join(
         value
         for value in (
             pass_feedback.context(target.run),
             feedback_context,
+            corrective,
             resolution_note.strip(),
         )
         if value

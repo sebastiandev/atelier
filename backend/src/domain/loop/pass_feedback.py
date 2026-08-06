@@ -32,21 +32,37 @@ def record(loop: dict[str, Any], *, note: str, pass_number: int) -> None:
     loop["pass_feedback"] = {"pass_number": pass_number, "note": note.strip()}
 
 
+def clear(loop: dict[str, Any]) -> None:
+    """Drop stored feedback once the run no longer owes an answer to it.
+
+    Preconditions: ``loop`` is a mutable loop-run snapshot.
+    Postconditions: no feedback is stored.
+    """
+    loop.pop("pass_feedback", None)
+
+
 def context(run: dict[str, Any]) -> str:
-    """Return the current pass's requested changes for a stage prompt.
+    """Return the outstanding requested changes for a stage prompt.
+
+    A request stays in force from the pass that carried it until the run is
+    accepted. Scoping it to one exact pass was wrong: a review returning
+    changes_requested advances the counter, so the pass the user wrote
+    against is not the pass still working on the answer.
 
     Preconditions: ``run`` is a loop-run snapshot.
-    Postconditions: empty when no feedback is stored or the stored feedback
-    belongs to an earlier pass, so a later pass never re-litigates it.
+    Postconditions: empty when nothing is stored, or when the stored request
+    belongs to a pass later than the current one, which only happens if a
+    counter was rewound.
     """
     loop = actions.dict_or_empty(run.get("loop"))
     stored = actions.dict_or_empty(loop.get("pass_feedback"))
     note = actions.str_or_empty(stored.get("note"))
     if not note:
         return ""
-    if stored.get("pass_number") != max(1, actions.int_or_default(loop.get("pass_number"), 1)):
+    recorded = actions.int_or_default(stored.get("pass_number"), 0)
+    if recorded > max(1, actions.int_or_default(loop.get("pass_number"), 1)):
         return ""
-    return f"Changes requested by the user for this pass:\n{note}"
+    return f"Changes requested by the user, still in force:\n{note}"
 
 
-__all__ = ["context", "record"]
+__all__ = ["clear", "context", "record"]

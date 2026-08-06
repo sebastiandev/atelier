@@ -1254,14 +1254,17 @@ async def _send_stage_prompt(
     if previous.outcome == LoopOutcome.CHANGES_REQUESTED and not any(
         item.kind == LoopContextKind.PREVIOUS_REPORT for item in stage.context
     ):
+        corrective = _changes_requested_note(previous)
+        # A retry launches a fresh agent and gets no note from its caller, so
+        # the only corrective input this stage ever had has to outlive the
+        # prompt that carried it. A stage declaring `previous_report` rebuilds
+        # it from the report itself and is deliberately not stored here.
+        stage_row["corrective_note"] = corrective
         resolution_note = "\n\n".join(
-            value
-            for value in (
-                _changes_requested_note(previous),
-                resolution_note.strip(),
-            )
-            if value
+            value for value in (corrective, resolution_note.strip()) if value
         )
+    else:
+        stage_row.pop("corrective_note", None)
     resolution_note = "\n\n".join(
         value
         for value in (
