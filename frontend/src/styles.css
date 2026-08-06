@@ -14664,6 +14664,59 @@ select:disabled {
   border-radius: var(--radius-card);
   background: var(--bg-1);
 }
+/* The approval result reuses the sectioned stage report; it reads as one
+   document, so it spans both columns and lets the grid own its spacing. The
+   `.doc` reading measure is dropped here — this panel is the run's final
+   surface and the criteria/findings rows want the full container width. */
+.run-result > .report {
+  max-width: none;
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+/* Reading rhythm for the final surface: the run's whole verdict is on one
+   screen here, so rows get room to breathe and a rule between them. The
+   denser defaults still apply to the report inside a stage's output column. */
+.run-result > .report .report-sec {
+  padding: 15px 18px;
+}
+.run-result > .report .report-summary {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.run-result > .report .crit {
+  gap: 10px;
+  padding: 9px 0;
+  font-size: 13px;
+}
+.run-result > .report .crit + .crit,
+.run-result > .report .file-row + .file-row {
+  border-top: 1px solid var(--line-soft);
+}
+.run-result > .report .crit .cnote {
+  margin-top: 5px;
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+.run-result > .report .finding {
+  gap: 11px;
+  padding: 10px 0;
+}
+.run-result > .report .finding .ftext {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.run-result > .report .finding .floc,
+.run-result > .report .run-evidence {
+  font-size: 11.5px;
+}
+.run-result > .report .report-lbl {
+  margin-bottom: 9px;
+  font-size: 10px;
+}
+.run-result > .report .file-row {
+  padding: 7px 0;
+  font-size: 12.5px;
+}
 .run-result > section > header {
   display: flex;
   min-height: 38px;

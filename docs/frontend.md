@@ -87,6 +87,14 @@ After acceptance, the one-off Create PR action and follow-up chooser belong to
 the final approval occurrence and hide while other stages, including Create PR,
 are inspected. A human **Approve as is** decision preserves the original review
 report for audit history while rendering that review occurrence as completed.
+The approval panel renders the same sectioned `StageReport` every stage
+occurrence uses — summary, acceptance criteria, findings, changed files,
+evidence, divergences — rather than a bare summary paragraph. It sources that
+report from the last occurrence that actually filed one, since the approval
+stage is a human gate and never reports; it drops the `.doc` reading measure
+and loosens row spacing, because the run's whole verdict is read on one screen
+here. The structured fields were always persisted and previously discarded at
+render, which is why agents wrote entire reviews into `summary`.
 Loop-stage `artifact_recorded` stream events bump the Work artifact revision,
 so the left rail refetches newly created PRs without a page reload.
 

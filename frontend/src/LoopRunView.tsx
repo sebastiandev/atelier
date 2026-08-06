@@ -243,6 +243,11 @@ function RunSurfaceContent({
     && (selectedOccurrenceId === null
       || selectedOccurrence?.occurrenceId === terminalOccurrence.occurrenceId);
   const latestPrOccurrence = [...occurrences].reverse().find((item) => item.kind === "pr") ?? null;
+  // The approval stage is a human gate and never files a report of its own, so
+  // the result panel shows the last stage that actually produced one.
+  const resultOccurrence = [...occurrences]
+    .reverse()
+    .find((item) => item.kind !== "user_approval" && Boolean(item.summary)) ?? null;
   const finalApprovalStageId = [...(data.definition?.stages ?? [])]
     .reverse()
     .find((item) => item.kind === "user_approval")?.id;
@@ -493,6 +498,7 @@ function RunSurfaceContent({
               <ResultView
                 busy={busy}
                 data={data}
+                stage={resultOccurrence}
                 onCreatePr={openCreatePr}
               />
             ) : selectedOccurrence ? (
@@ -1298,21 +1304,32 @@ function FailureView({
 function ResultView({
   busy,
   data,
+  stage,
   onCreatePr,
 }: {
   busy: boolean;
   data: RunSurfaceData;
+  stage: RunStageOccurrence | null;
   onCreatePr?: () => void;
 }) {
   return (
     <div className="run-result">
       <div className="run-result-summary doc">
         <CheckIcon size={16} />
-        <div><strong>{data.accepted ? "Result approved" : "Result ready for approval"}</strong><p>{data.summary || "The loop completed without a summary."}</p></div>
+        <div>
+          <strong>{data.accepted ? "Result approved" : "Result ready for approval"}</strong>
+          {/* The report below opens with the same summary, sectioned and
+              whitespace-preserving. Repeat it here only when there is none. */}
+          {!stage && <p>{data.summary || "The loop completed without a summary."}</p>}
+        </div>
         {onCreatePr && <button className="btn primary" disabled={busy} onClick={onCreatePr}><span aria-hidden>⇱</span> Create PR</button>}
       </div>
-      <section><header><strong>Changed files</strong><span>{data.changedFiles.length}</span></header>{data.changedFiles.map((file) => <div className="file-row" key={file.path}><span className="fname">{file.path}</span><span className="fstat"><span className="add">+{file.additions}</span><span className="del">-{file.deletions}</span></span></div>)}{data.changedFiles.length === 0 && <p className="dim">No changed files reported.</p>}</section>
-      <section><header><strong>Validation evidence</strong></header>{data.evidence.map((item) => <span className="run-evidence" key={item}><CheckIcon size={9} /> {item}</span>)}{data.evidence.length === 0 && <p className="dim">No validation evidence reported.</p>}</section>
+      {stage ? <StageReport stage={stage} /> : (
+        <>
+          <section><header><strong>Changed files</strong><span>{data.changedFiles.length}</span></header>{data.changedFiles.map((file) => <div className="file-row" key={file.path}><span className="fname">{file.path}</span><span className="fstat"><span className="add">+{file.additions}</span><span className="del">-{file.deletions}</span></span></div>)}{data.changedFiles.length === 0 && <p className="dim">No changed files reported.</p>}</section>
+          <section><header><strong>Validation evidence</strong></header>{data.evidence.map((item) => <span className="run-evidence" key={item}><CheckIcon size={9} /> {item}</span>)}{data.evidence.length === 0 && <p className="dim">No validation evidence reported.</p>}</section>
+        </>
+      )}
     </div>
   );
 }

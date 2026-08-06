@@ -155,7 +155,14 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         f"{_report_example()}\n\n"
         "Use outcome `blocked_user` only for a concrete decision or action that "
         f"only the user can provide. {changes_guidance} Use explicit `None.` strings "
-        "when a text field has no content."
+        "when a text field has no content.\n\n"
+        "Keep `summary` to a short verdict a reader takes in at a glance -- a "
+        "few sentences, not a recital. Per-criterion detail belongs in "
+        "`criteria`, defects in `findings`, and what you did in `changes`; each "
+        "is rendered as its own section, so repeating them in `summary` only "
+        "buries the verdict. Longer text fields may use `\\n` escapes to "
+        "separate paragraphs, which render as written -- the JSON itself still "
+        "has to be one line."
     )
 
 
