@@ -67,6 +67,7 @@ from src.domain.agents import (
     SessionEstablished,
     StatusChange,
     TurnMetrics,
+    agent_environment,
     command_is_fully_approved,
 )
 from src.infrastructure.agents.acp.mapping import AcpUpdateMapper
@@ -588,7 +589,7 @@ class AcpAdapter:
             cwd=str(self._config.common.workdir),
             start_new_session=os.name == "posix",
             limit=_ACP_STREAM_LIMIT_BYTES,
-            env={**os.environ, **self._environment},
+            env=agent_environment(os.environ, self._environment),
         )
         self._stderr_tail.clear()
         assert self._proc.stdin is not None and self._proc.stdout is not None

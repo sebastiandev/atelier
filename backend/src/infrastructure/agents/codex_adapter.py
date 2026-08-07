@@ -77,6 +77,7 @@ from src.domain.agents import (
     ToolCall,
     ToolResult,
     TurnMetrics,
+    agent_environment,
 )
 from src.infrastructure.agents.atelier_mcp_tools import (
     MCP_SERVER_NAME,
@@ -661,9 +662,7 @@ class _CodexAppServerClient:
         self._closed = False
 
     async def __aenter__(self) -> _CodexAppServerClient:
-        env = os.environ.copy()
-        if self._env is not None:
-            env.update(self._env)
+        env = agent_environment(os.environ, self._env)
         self._proc = await asyncio.create_subprocess_exec(
             self._executable_path,
             "app-server",

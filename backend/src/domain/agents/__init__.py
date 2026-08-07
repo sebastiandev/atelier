@@ -34,6 +34,7 @@ from src.domain.agents.configs import (
     CommonAgentConfig,
 )
 from src.domain.agents.context_render import render_agent_contexts
+from src.domain.agents.environment import agent_environment
 from src.domain.agents.events import (
     AgentEvent,
     ArtifactMarker,
@@ -151,6 +152,7 @@ __all__ = [
     "ToolResult",
     "TurnMetrics",
     "UserAction",
+    "agent_environment",
     "command_is_fully_approved",
     "detect_shared_envs",
     "parse_command_prefix_tokens",
