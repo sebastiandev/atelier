@@ -181,12 +181,7 @@ def _create_pr() -> StageDefinition:
             retry=LoopRetryPolicy(max_attempts=2, timeout_minutes=20),
             pr_config=LoopPrConfig(),
         ),
-        (
-            LoopOutcome.PASS,
-            LoopOutcome.CHANGES_REQUESTED,
-            LoopOutcome.BLOCKED_USER,
-            LoopOutcome.FAILED,
-        ),
+        (LoopOutcome.PASS, LoopOutcome.BLOCKED_USER, LoopOutcome.FAILED),
     )
 
 

@@ -131,8 +131,9 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         else ""
     )
     changes_guidance = (
-        "Use `changes_requested` when a Create PR issue must return through the configured "
-        "implementation path."
+        "Never use `changes_requested`: publishing is the last decision, and review "
+        "findings you cannot act on are not yours to reopen. If you cannot publish, "
+        "use `failed`, or `blocked_user` when only the user can unblock it."
         if value.stage.kind == LoopStepKind.PR
         else "Use `changes_requested` only from a review stage."
     )

@@ -1304,7 +1304,7 @@ def test_human_review_gate_approve_as_is_completes_review(
     }
 
 
-def test_create_pr_check_failure_returns_to_implementation(
+def test_a_create_pr_send_back_fails_the_run_instead_of_reopening_it(
     app_client: TestClient,
     tmp_path: Path,
 ) -> None:
@@ -1331,23 +1331,17 @@ def test_create_pr_check_failure_returns_to_implementation(
         validation_evidence="$ pytest tests/test_changed.py\n1 failed",
     )
 
-    implementing = _wait_for_stage(app_client, "implementation")
-    assert implementing["pass_number"] == 2
-    completed_pr = next(stage for stage in implementing["stages"] if stage["id"] == "create-pr")
-    assert completed_pr["status"] == "changes_requested"
+    # Publishing is the last decision: the PR stage stops the run for a human
+    # rather than starting another implementation pass nobody asked for.
+    failed = _wait_for_status(app_client, "failed")
+    assert failed["pass_number"] == 1
+    pr_row = next(stage for stage in failed["stages"] if stage["id"] == "create-pr")
+    assert pr_row["status"] == "failed"
     implementation = next(
-        stage for stage in implementing["stages"] if stage["id"] == "implementation"
+        stage for stage in failed["stages"] if stage["id"] == "implementation"
     )
-    assert implementation["agent_slug"] != first_implementation
-    inputs = [
-        event["text"]
-        for event in app_client.app.state.workstore.read_transcript_from_cursor(
-            "WRK-001", implementation["agent_slug"], 0
-        )
-        if event.get("type") == "user_input"
-    ]
-    assert "The focused test fails in the changed behavior." in inputs[-1]
-    assert "1 failed" in inputs[-1]
+    assert implementation["agent_slug"] == first_implementation
+    assert "cannot request changes" in failed["status_reason"]
 
 
 def _append_stage_report(

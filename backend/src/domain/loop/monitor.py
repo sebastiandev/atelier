@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -803,6 +803,7 @@ async def _advance_after_stage_report(
     resolution_note: str = "",
 ) -> LoopRunTarget:
     """Persist one stage outcome and enter its configured destination."""
+    report = _without_a_pr_send_back(stage_by_id(definition, current_id), report)
     if report.outcome == LoopOutcome.BLOCKED_USER:
         stage_row["status"] = LoopStepStatus.BLOCKED_USER.value
         run["status"] = LoopRunStatus.BLOCKED.value
@@ -1919,3 +1920,36 @@ def _react_to_terminal_pr(
     )
     run["loop"] = loop
     return True
+
+
+def _without_a_pr_send_back(
+    stage: LoopStepDefinition,
+    report: LoopStageReport,
+) -> LoopStageReport:
+    """Refuse a PR stage's attempt to return work to implementation.
+
+    Publishing is the last decision a run makes: the review passed and the
+    result was approved, so findings the PR stage cannot act on are not its to
+    reopen. Allowing it produced a loop that could not end -- the stage pushed,
+    reported ``changes_requested`` over unaddressed reviewer comments, and the
+    comments only clear on a passing PR stage, so every following pass met the
+    same bundle and sent the work back again.
+
+    Applied here rather than only in the stage definition because a loop
+    authored before this rule still wires the transition, and its runs must not
+    keep circling.
+
+    Preconditions: ``report`` is the consumed report for ``stage``.
+    Postconditions: unchanged unless a PR stage requested changes, which becomes
+    a failure naming the reason.
+    """
+    if stage.kind != LoopStepKind.PR or report.outcome != LoopOutcome.CHANGES_REQUESTED:
+        return report
+    return replace(
+        report,
+        outcome=LoopOutcome.FAILED,
+        summary=(
+            f"{report.summary} (Create PR cannot request changes; publishing is the "
+            "final step, so the run stopped here instead of starting another pass.)"
+        ),
+    )
