@@ -104,6 +104,10 @@ type PlanningModeProps = {
   planningChatProjects: ProjectSummary[];
   planningChatWorks: WorkSummary[];
   selectedDetail: PlanArtifactDetail | null;
+  /** Live PR status by URL, from the polled artifact rows. A run's own PR
+   *  snapshot is only refreshed on demand, so it is the wrong thing to read
+   *  a current status from. */
+  prStatusByUrl: Record<string, string>;
   draft: string;
   error: string | null;
   saving: boolean;
@@ -207,6 +211,7 @@ export function PlanningMode({
   planningChatProjects,
   planningChatWorks,
   selectedDetail,
+  prStatusByUrl,
   draft,
   error,
   saving,
@@ -458,6 +463,7 @@ export function PlanningMode({
       {view.kind === "run" && selectedDetail && selectedRun && selectedRunData ? (
         <PlanningRunRail
           artifact={selectedDetail.artifact}
+          prStatusByUrl={prStatusByUrl}
           railWidth={planningRailWidth}
           run={selectedRun}
           onBack={() => onView({ kind: "artifact", id: selectedDetail.artifact.id })}
@@ -1361,6 +1367,7 @@ function PlanningChatCanvas({
 
 function PlanningRunRail({
   artifact,
+  prStatusByUrl,
   railWidth,
   run,
   onBack,
@@ -1368,6 +1375,7 @@ function PlanningRunRail({
   onViewLoop,
 }: {
   artifact: PlanArtifact;
+  prStatusByUrl: Record<string, string>;
   railWidth: number;
   run: PlanArtifactRun;
   onBack: () => void;
@@ -1384,10 +1392,15 @@ function PlanningRunRail({
       const key = pr.url ?? String(pr.number ?? "");
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      rows.push(pr);
+      // The run snapshot identifies the PR; the polled artifact row says what
+      // it is now. A run only refreshes its own copy when someone asks it to,
+      // so reading the status from there shows a PR as open long after it
+      // merged. Fall back to the snapshot when no artifact row matches.
+      const live = pr.url ? prStatusByUrl[pr.url] : undefined;
+      rows.push(live ? { ...pr, status: live as PrLifecycle["status"] } : pr);
     }
     return rows;
-  }, [artifact.runs]);
+  }, [artifact.runs, prStatusByUrl]);
   return (
     <div className="pm-run-rail-host">
       <RunRail

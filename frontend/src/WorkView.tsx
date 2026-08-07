@@ -277,6 +277,17 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
 
+  // The polled PR statuses, keyed by URL. Loop runs keep their own PR
+  // snapshot, but that one is only refreshed on demand — these rows are the
+  // ones the background poller keeps current, so they own the status pill.
+  const prStatusByUrl = useMemo(() => {
+    const rows: Record<string, string> = {};
+    for (const artifact of artifacts) {
+      if (artifact.type === "pr" && artifact.url) rows[artifact.url] = artifact.status;
+    }
+    return rows;
+  }, [artifacts]);
+
   // Switcher rows. Projects ordered pinned-first; sibling works scoped
   // to the current work's project (or other loose works when the
   // current work is loose). The current work itself is filtered out —
@@ -1858,6 +1869,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           planningChatProjects={allProjects ?? (project ? [project] : [])}
           planningChatWorks={allWorks ?? [work]}
           selectedDetail={planArtifactDetail}
+          prStatusByUrl={prStatusByUrl}
           draft={planDraft}
           error={planError}
           saving={planSaving}

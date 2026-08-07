@@ -651,3 +651,78 @@ def test_re_running_create_pr_still_carries_its_update_instructions() -> None:
     assert "Add focused validation." in context
     # One mention per comment, not one per delivery channel.
     assert context.count("Reduce the number of queries.") == 1
+
+
+def _pr_artifact(url: str, status: str, day: int = 20) -> PrArtifact:
+    return PrArtifact(
+        work_id=1,
+        agent_id=7,
+        title="Story 01",
+        status=status,  # type: ignore[arg-type]
+        created_at=datetime(2026, 7, day, tzinfo=UTC),
+        url=url,
+    )
+
+
+_PR_URL = "https://github.com/acme/repo/pull/13"
+
+
+def test_a_run_without_a_pull_request_has_none_to_compare() -> None:
+    assert pr_lifecycle.has_pull_request({}) is False
+    assert pr_lifecycle.has_pull_request({"pr": {"url": ""}}) is False
+    assert pr_lifecycle.has_pull_request({"pr": {"url": _PR_URL}}) is True
+
+
+@pytest.mark.parametrize("status", ["open", "merged", "closed"])
+def test_the_live_status_comes_from_the_matching_artifact_row(status: str) -> None:
+    loop = {"pr": {"url": _PR_URL, "status": "open"}}
+
+    assert pr_lifecycle.live_pr_status(loop, [_pr_artifact(_PR_URL, status)]) == status
+
+
+def test_an_unrelated_pull_request_does_not_supply_a_status() -> None:
+    loop = {"pr": {"url": _PR_URL, "status": "open"}}
+    other = _pr_artifact("https://github.com/acme/repo/pull/99", "merged")
+
+    assert pr_lifecycle.live_pr_status(loop, [other]) == ""
+
+
+def test_the_newest_row_wins_when_a_pull_request_was_recorded_twice() -> None:
+    loop = {"pr": {"url": _PR_URL, "status": "open"}}
+    rows = [_pr_artifact(_PR_URL, "open", day=20), _pr_artifact(_PR_URL, "merged", day=22)]
+
+    assert pr_lifecycle.live_pr_status(loop, rows) == "merged"
+
+
+def test_adopting_the_live_status_leaves_the_rest_of_the_snapshot_alone() -> None:
+    loop = {"pr": {"url": _PR_URL, "status": "open", "head_sha": "abc", "checks": {"total": 3}}}
+
+    pr_lifecycle.adopt_live_pr_status(loop, "merged")
+
+    assert loop["pr"] == {
+        "url": _PR_URL,
+        "status": "merged",
+        "head_sha": "abc",
+        "checks": {"total": 3},
+    }
+
+
+def test_adopting_a_status_onto_a_run_without_a_pull_request_does_nothing() -> None:
+    loop: dict[str, object] = {}
+
+    pr_lifecycle.adopt_live_pr_status(loop, "merged")
+
+    assert loop == {}
+
+
+def test_clearing_for_a_new_pull_request_keeps_the_reusable_setup() -> None:
+    loop = {
+        "pr": {"url": _PR_URL, "status": "closed"},
+        "pr_comments": [{"comment_id": "1"}],
+        "pending_pr_feedback": {"pass_number": 3},
+        "pr_config": {"base": "master", "status": "open"},
+    }
+
+    pr_lifecycle.clear_for_new_pr(loop)
+
+    assert loop == {"pr_config": {"base": "master", "status": "open"}}

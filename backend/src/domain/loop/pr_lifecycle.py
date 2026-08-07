@@ -807,3 +807,63 @@ __all__ = [
     "prompt_context",
     "snapshot_stage_config",
 ]
+
+
+def has_pull_request(loop: dict[str, Any]) -> bool:
+    """Whether the run stored a pull request at all.
+
+    Callers check this before loading artifacts: most runs never reach the PR
+    stage, and there is nothing to compare them against.
+    """
+    return bool(actions.str_or_empty(actions.dict_or_empty(loop.get("pr")).get("url")))
+
+
+def live_pr_status(loop: dict[str, Any], artifacts: list[PrArtifact]) -> str:
+    """Return the polled status of the run's pull request, or ``""``.
+
+    The run's own ``pr`` snapshot only refreshes when someone asks it to, so it
+    reports a pull request as open long after GitHub moved on. The artifact rows
+    are what the background poller keeps current, and they are already loaded
+    from the same store this module reads elsewhere.
+
+    Preconditions: ``loop`` is a loop-run snapshot; ``artifacts`` are the PR
+    artifacts of its Work. Postconditions: empty when the run has no pull
+    request, its URL is unsupported, or no artifact row matches it.
+    """
+    ref = parse_pr_url(actions.str_or_empty(actions.dict_or_empty(loop.get("pr")).get("url")))
+    if ref is None:
+        return ""
+    matching = [artifact for artifact in artifacts if parse_pr_url(artifact.url) == ref]
+    latest = _latest_artifact(matching)
+    return latest.status if latest is not None else ""
+
+
+def adopt_live_pr_status(loop: dict[str, Any], status: str) -> None:
+    """Record the polled status on the run's own snapshot.
+
+    Preconditions: ``status`` is a known PR status. Postconditions: the snapshot
+    agrees with the poller, so the run stops reporting a stale state; the rest of
+    the snapshot -- checks, comments, head SHA -- is left as the last refresh
+    captured it, because only the status was re-derived.
+    """
+    pr = actions.dict_or_empty(loop.get("pr"))
+    if not pr or pr.get("status") == status:
+        return
+    pr["status"] = status
+    loop["pr"] = pr
+
+
+def clear_for_new_pr(loop: dict[str, Any]) -> None:
+    """Drop the pull request so the PR stage opens a fresh one.
+
+    ``_resolve_pr_completion`` forces the stage to update a stored URL and
+    rejects any other pull request, so a run whose PR is gone can only proceed
+    once the URL is cleared. The reusable setup (``pr_config``) stays: the next
+    pull request wants the same base branch, title template, and reviewers.
+
+    Preconditions: ``loop`` is a mutable loop-run snapshot. Postconditions: no
+    PR, no PR comments, and no pending feedback that referred to them.
+    """
+    loop.pop("pr", None)
+    loop.pop("pr_comments", None)
+    loop.pop("pending_pr_feedback", None)

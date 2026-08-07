@@ -12,6 +12,8 @@ from uuid import uuid4
 from src.domain.agents.launch import AgentLaunchRequest, launch_agent
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.agents.turn_monitor import observe_turn
+from src.domain.artifacts.models import PrArtifact
+from src.domain.artifacts.pr_status import is_terminal_pr_status
 from src.domain.connections import ConnectionStore
 from src.domain.loop import actions, briefs, pass_feedback, pr_lifecycle
 from src.domain.loop import runtime as _loop_runtime
@@ -205,6 +207,11 @@ async def _execute_claimed(
         if actions.run_status(run) != LoopRunStatus.RUNNING:
             return target
         definition = definition_from_snapshot(loop.get("definition_snapshot"))
+        if _react_to_terminal_pr(workstore, req.work_slug, run, loop):
+            _write_run(store, target)
+            if actions.run_status(run) != LoopRunStatus.RUNNING:
+                return target
+            continue
         if isinstance(loop.get("approval_decision"), dict):
             target = await _apply_approval_decision(
                 workstore,
@@ -1852,3 +1859,63 @@ __all__ = [
     "WorkNotFound",
     "execute",
 ]
+
+
+def _react_to_terminal_pr(
+    workstore: WorkStore,
+    work_slug: str,
+    run: dict[str, Any],
+    loop: dict[str, Any],
+) -> bool:
+    """Handle a run whose pull request has left GitHub's open set.
+
+    ``_resolve_pr_completion`` forces the PR stage to update the stored URL and
+    refuses any other pull request, so a run pointing at a finished PR cannot
+    complete -- and a run that keeps iterating against a merged one produces
+    passes nobody asked for. The two endings differ:
+
+    - **merged** -- the work landed. Block for a human, who starts a new run if
+      more is needed. Continuing would reopen decisions already made.
+    - **closed** -- the pull request was abandoned but the work was not. Drop it
+      and let the PR stage open a fresh one.
+
+    Preconditions: ``run`` is running and ``loop`` is its snapshot.
+    Postconditions: ``True`` when the snapshot changed and must be persisted.
+    """
+    if not pr_lifecycle.has_pull_request(loop):
+        return False
+    status = pr_lifecycle.live_pr_status(
+        loop,
+        [
+            artifact
+            for artifact in workstore.list_artifacts_for_work(work_slug)
+            if isinstance(artifact, PrArtifact)
+        ],
+    )
+    if not is_terminal_pr_status(status):
+        if not status:
+            return False
+        # Adopt a non-terminal correction too (draft promoted to open, say), so
+        # the run stops reporting a state the poller has already moved past.
+        before = actions.dict_or_empty(loop.get("pr")).get("status")
+        pr_lifecycle.adopt_live_pr_status(loop, status)
+        if before == status:
+            return False
+        run["loop"] = loop
+        return True
+    url = actions.str_or_empty(actions.dict_or_empty(loop.get("pr")).get("url"))
+    if status == "closed":
+        pr_lifecycle.clear_for_new_pr(loop)
+        loop["status_reason"] = f"{url} was closed; the PR stage will open a new one."
+        run["loop"] = loop
+        return True
+    pr_lifecycle.adopt_live_pr_status(loop, status)
+    run["status"] = LoopRunStatus.BLOCKED.value
+    run["completed_at"] = actions.now_iso()
+    loop["status"] = LoopStatus.BLOCKED_USER.value
+    loop["status_reason"] = (
+        f"{url} was merged, so this run has nowhere to push. "
+        "Start a new run for any further work."
+    )
+    run["loop"] = loop
+    return True

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.domain.agents.launch import AgentLaunchRequest, launch_agent
 from src.domain.agents.ports import AgentAdapterFactory
+from src.domain.artifacts.models import PrArtifact
 from src.domain.connections import ConnectionStore
 from src.domain.loop import actions, briefs, pass_feedback, pr_lifecycle, runtime
 from src.domain.loop.agent_policy import apply_retry_overrides
@@ -117,6 +118,14 @@ async def resume(
     if current_status not in expected:
         state = "failed or inactive" if retry_failed else "blocked for user input"
         raise LoopRunNotResumable(f"loop run is not {state}: {target.run_id}")
+
+    # A merged pull request ends this run's road: the PR stage may only update
+    # the URL it stored, so anything produced from here cannot be pushed. Refuse
+    # to restart rather than let the work run and strand it.
+    if _pr_artifacts_show_merged(workstore, target.work_slug, loop):
+        raise LoopRunNotResumable(
+            f"the pull request for this run was merged; start a new run: {target.run_id}"
+        )
 
     review_gate = loop.get("review_gate")
     if not retry_failed and isinstance(review_gate, dict):
@@ -657,3 +666,24 @@ __all__ = [
     "resume",
     "stop_stage",
 ]
+
+
+def _pr_artifacts_show_merged(
+    workstore: WorkStore,
+    work_slug: str,
+    loop: dict[str, Any],
+) -> bool:
+    """Whether the poller has seen this run's pull request merged."""
+    if not pr_lifecycle.has_pull_request(loop):
+        return False
+    return (
+        pr_lifecycle.live_pr_status(
+            loop,
+            [
+                artifact
+                for artifact in workstore.list_artifacts_for_work(work_slug)
+                if isinstance(artifact, PrArtifact)
+            ],
+        )
+        == "merged"
+    )

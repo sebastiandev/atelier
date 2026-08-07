@@ -20,6 +20,7 @@ from src.domain.loop import monitor as loop_monitor
 from src.domain.loop.dtos import LoopFailureKind
 from src.domain.loop.store import LoopRunStore, loop_run_key
 from src.domain.supervisor import service as supervisor_service
+from src.domain.workstore.dtos import RecordArtifactRequest
 from src.infrastructure.agents import StubAgentAdapter
 from src.infrastructure.agents.factory import build_adapter
 from src.settings import Settings
@@ -1523,3 +1524,59 @@ def _wait_for_agent_idle(
             return
         time.sleep(0.02)
     raise AssertionError(f"agent did not become idle: {agent_slug}")
+
+
+def test_a_merged_pull_request_stops_the_run_from_being_retried(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """A merged PR leaves the run nowhere to push, so it must not restart."""
+    agent_slug = _fail_run_for_retry(app_client, tmp_path)
+    assert agent_slug
+    store = LoopRunStore(app_client.app.state.loop_runs)
+    target = store.load("WRK-001", "run-001")
+    assert target is not None
+    pr_url = "https://github.com/acme/repo/pull/13"
+    target.run["loop"]["pr"] = {"url": pr_url, "status": "open"}
+    store.save(target)
+    app_client.app.state.workstore.record_artifact(
+        RecordArtifactRequest(
+            work_slug="WRK-001",
+            type="pr",
+            title="Story 01",
+            status="merged",
+            url=pr_url,
+        )
+    )
+
+    response = app_client.post("/api/works/WRK-001/runs/run-001/retry-stage")
+
+    assert response.status_code == 422, response.text
+    assert "merged" in response.text
+
+
+def test_an_open_pull_request_leaves_the_retry_alone(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    agent_slug = _fail_run_for_retry(app_client, tmp_path)
+    assert agent_slug
+    store = LoopRunStore(app_client.app.state.loop_runs)
+    target = store.load("WRK-001", "run-001")
+    assert target is not None
+    pr_url = "https://github.com/acme/repo/pull/13"
+    target.run["loop"]["pr"] = {"url": pr_url, "status": "open"}
+    store.save(target)
+    app_client.app.state.workstore.record_artifact(
+        RecordArtifactRequest(
+            work_slug="WRK-001",
+            type="pr",
+            title="Story 01",
+            status="open",
+            url=pr_url,
+        )
+    )
+
+    response = app_client.post("/api/works/WRK-001/runs/run-001/retry-stage")
+
+    assert response.status_code == 200, response.text
