@@ -1618,6 +1618,18 @@ async def _apply_review_gate_decision(
             pass_limits[stage_id] = next_limit
     loop.pop("review_gate", None)
     loop.pop("review_gate_decision", None)
+    instruction = actions.str_or_empty(decision.get("instruction"))
+    # A send-back note is a request for changes like any other: it has to
+    # outlive the one prompt that carried it, or a retry of the stage it was
+    # sent to relaunches the agent with the findings but not the reason. Stored
+    # rather than passed so `pass_feedback` renders it exactly once.
+    durable_instruction = bool(instruction) and choice == "send_back"
+    if durable_instruction:
+        pass_feedback.record(
+            loop,
+            note=instruction,
+            pass_number=max(1, actions.int_or_default(loop.get("pass_number"), 1)),
+        )
     report = LoopStageReport(
         outcome=(LoopOutcome.PASS if choice == "approve_as_is" else LoopOutcome.CHANGES_REQUESTED),
         summary=actions.str_or_empty(gate.get("summary")),
@@ -1643,7 +1655,7 @@ async def _apply_review_gate_decision(
         stage_row,
         report,
         bypass_review_gate=True,
-        resolution_note=actions.str_or_empty(decision.get("instruction")),
+        resolution_note="" if durable_instruction else instruction,
     )
 
 

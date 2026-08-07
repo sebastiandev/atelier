@@ -1100,10 +1100,11 @@ def test_intermediate_agent_message_does_not_consume_report_retry(
     assert completed["stages"][0]["attempt"] == 1
 
 
-def test_human_review_gate_pauses_and_sends_only_enforced_findings(
+def _send_back_from_a_human_review_gate(
     app_client: TestClient,
     tmp_path: Path,
-) -> None:
+) -> tuple[str, dict[str, Any]]:
+    """Drive a gated run to a send-back; return the first agent and the run."""
     created = app_client.post(
         "/api/works",
         json={"name": "Gated work", "description": "Review before iterating."},
@@ -1160,7 +1161,14 @@ def test_human_review_gate_pauses_and_sends_only_enforced_findings(
         },
     )
     assert resumed.status_code == 200, resumed.text
-    implementing = _wait_for_stage(app_client, "implementation")
+    return implementation_slug, _wait_for_stage(app_client, "implementation")
+
+
+def test_human_review_gate_pauses_and_sends_only_enforced_findings(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    implementation_slug, implementing = _send_back_from_a_human_review_gate(app_client, tmp_path)
     assert implementing["status"] == "running"
     assert implementing["pass_number"] == 2
     assert implementing["waived_findings_count"] == 1
@@ -1191,6 +1199,38 @@ def test_human_review_gate_pauses_and_sends_only_enforced_findings(
     assert "Fix the race." in inputs[-1]
     assert "Rename the fixture." not in inputs[-1]
     assert "Use the shared lock helper." in inputs[-1]
+
+
+def test_send_back_note_survives_stopping_and_retrying_the_stage(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    _, implementing = _send_back_from_a_human_review_gate(app_client, tmp_path)
+    sent_back_slug = next(
+        stage for stage in implementing["stages"] if stage["id"] == "implementation"
+    )["agent_slug"]
+    _wait_for_agent_idle(app_client, sent_back_slug)
+
+    stopped = app_client.post("/api/works/WRK-001/runs/run-001/stop-stage")
+    assert stopped.status_code == 200, stopped.text
+    retried = app_client.post("/api/works/WRK-001/runs/run-001/retry-stage")
+    assert retried.status_code == 200, retried.text
+
+    retry_slug = next(
+        stage for stage in retried.json()["stages"] if stage["id"] == "implementation"
+    )["agent_slug"]
+    assert retry_slug != sent_back_slug
+    prompt = [
+        event["text"]
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", retry_slug, 0
+        )
+        if event.get("type") == "user_input"
+    ][-1]
+    # The retry launches a fresh agent, so the reason for the send-back has to
+    # come from the loop rather than the prompt that carried it originally.
+    assert "Use the shared lock helper." in prompt
+    assert "Fix the race." in prompt
 
 
 def test_human_review_gate_approve_as_is_completes_review(
