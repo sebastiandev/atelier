@@ -846,7 +846,13 @@ async def _advance_after_stage_report(
         actions.start_next_pass(loop)
     if next_stage.kind == LoopStepKind.USER_APPROVAL:
         next_row["status"] = LoopStepStatus.PENDING.value
-        _await_approval(run, loop, current_id=next_stage.step_id)
+        approval_pass = next_stage.transitions.get(LoopOutcome.PASS)
+        _await_approval(
+            run,
+            loop,
+            current_id=next_stage.step_id,
+            continues=bool(approval_pass) and approval_pass != "complete",
+        )
         _write_run(store, target)
         return target
     if next_stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
@@ -1721,12 +1727,22 @@ def _copy_report_to_run(run: dict[str, Any], report: LoopStageReport) -> None:
     run["validation_evidence"] = report.validation_evidence
 
 
-def _await_approval(run: dict[str, Any], loop: dict[str, Any], *, current_id: str | None) -> None:
+def _await_approval(
+    run: dict[str, Any],
+    loop: dict[str, Any],
+    *,
+    current_id: str | None,
+    continues: bool = False,
+) -> None:
     now = actions.now_iso()
     run["status"] = LoopRunStatus.COMPLETED_PENDING_REVIEW.value
     run["completed_at"] = now
     loop["status"] = LoopStatus.AWAITING_APPROVAL.value
-    loop["status_reason"] = "All automatic stages passed; result approval is required."
+    loop["status_reason"] = (
+        "Paused for your check; approving starts the next stage."
+        if continues
+        else "All automatic stages passed; result approval is required."
+    )
     loop["current_stage_id"] = current_id or ""
     run["loop"] = loop
 

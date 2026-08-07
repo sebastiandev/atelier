@@ -1404,6 +1404,11 @@ function RunActions({
 }) {
   const active = ["pending", "running", "waiting_report", "assessing", "needs_agent", "blocked_user"].includes(data.status);
   const resultReady = ["completed", "awaiting_approval", "accepted", "cleaned"].includes(data.status);
+  // A mid-pipeline approval stage hands off to a later stage instead of finishing the run.
+  const approvalPass = data.definition?.stages
+    .find((item) => item.id === data.currentStageId && item.kind === "user_approval")
+    ?.transitions.pass;
+  const approvalContinues = Boolean(approvalPass) && approvalPass !== "complete";
   return (
     <footer className="run-surface-actions">
       {agentStage?.agent_slug && <button className="btn" onClick={onTranscript}><DocIcon size={12} /> Open transcript</button>}
@@ -1414,7 +1419,7 @@ function RunActions({
       {active && onStopStage && <button className="btn ghost" disabled={busy} onClick={() => window.confirm("Stop the running stage? The run keeps its workspace and you can retry the stage afterwards.") && void onStopStage()}>Stop stage</button>}
       {active && onCancel && <button className="btn danger ghost" disabled={busy} onClick={() => window.confirm("Cancel this run? Its shared workspace will remain available.") && void onCancel()}>Cancel run</button>}
       {resultReady && !data.accepted && onRequestChanges && <button className="btn" disabled={busy} onClick={onRequestChanges}><ReturnIcon size={12} /> Request changes</button>}
-      {resultReady && !data.accepted && onApprove && <button className="btn approve" disabled={busy} onClick={() => void onApprove()}><CheckIcon size={12} /> Approve result</button>}
+      {resultReady && !data.accepted && onApprove && <button className="btn approve" disabled={busy} onClick={() => void onApprove()}><CheckIcon size={12} /> {approvalContinues ? "Approve · continue" : "Approve result"}</button>}
       {data.accepted && onEditLoop && <button className="btn ghost" onClick={onEditLoop}>Edit loop → future runs</button>}
       {data.accepted && onChangeLoop && <button className="btn ghost" disabled={busy} onClick={() => void onChangeLoop()}>Change loop → new run</button>}
     </footer>
