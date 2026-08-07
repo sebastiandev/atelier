@@ -32,7 +32,7 @@ import {
   useProviderDescriptors,
 } from "./providerDescriptors";
 import type { ProviderDescriptor } from "./api";
-import type { PlanningAgentConfig } from "./planningSetup";
+import { overrideDelta, type PlanningAgentConfig } from "./planningSetup";
 
 type Props = {
   brief: LoopBrief;
@@ -621,20 +621,6 @@ function entryAgentOptions(
 }
 
 
-function overrideDelta(
-  next: PlanningAgentConfig,
-  inherited: PlanningAgentConfig | null,
-): LoopBriefAgent {
-  const options: Record<string, string> = {};
-  for (const [key, value] of Object.entries(next.options)) {
-    if (inherited?.options?.[key] !== value) options[key] = value;
-  }
-  return {
-    provider: next.provider === inherited?.provider ? null : next.provider,
-    model: next.model === inherited?.model ? null : next.model,
-    options,
-  };
-}
 
 
 function completeAgent(

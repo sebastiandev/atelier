@@ -208,3 +208,26 @@ export function planningProfileDefinition(
   );
 }
 
+
+
+/** Turn a stage's picked agent config into the sparse override the brief stores.
+ *
+ *  The provider and model the person picked are always recorded, even when they
+ *  match the stage this one would otherwise inherit from. Collapsing an equal
+ *  pick to `null` used to read as "inherit", so deliberately choosing the entry
+ *  stage's model meant this stage silently followed that stage's *next* change.
+ *  `null` belongs to the explicit "reset to inherit" action and nothing else.
+ *
+ *  Options stay sparse: only the ones that differ from the inherited config are
+ *  stored, so an untouched provider default never outranks the loop definition.
+ */
+export function overrideDelta(
+  next: PlanningAgentConfig,
+  inherited: PlanningAgentConfig | null,
+): { provider: string | null; model: string | null; options: Record<string, string> } {
+  const options: Record<string, string> = {};
+  for (const [key, value] of Object.entries(next.options)) {
+    if (inherited?.options?.[key] !== value) options[key] = value;
+  }
+  return { provider: next.provider, model: next.model, options };
+}
