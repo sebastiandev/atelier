@@ -1160,6 +1160,7 @@ function RetryStageControls({
   const [open, setOpen] = useState(false);
   const [model, setModel] = useState(seed.model);
   const [effort, setEffort] = useState<string | null>(null);
+  const [note, setNote] = useState("");
 
   const effortOption = descriptor ? providerEffortOption(descriptor, model) : null;
   const effortKey = effortOption?.key ?? null;
@@ -1183,11 +1184,14 @@ function RetryStageControls({
   const effortChanged =
     effortKey !== null && effectiveEffort !== null && effectiveEffort !== seedEffort;
 
+  const instructed = note.trim() !== "";
+
   function retry() {
     const override: RetryStageOverride = {};
     if (modelChanged) override.model = model;
     if (effortChanged) override.effort = effectiveEffort;
-    void onRetry(modelChanged || effortChanged ? override : undefined);
+    if (instructed) override.note = note.trim();
+    void onRetry(modelChanged || effortChanged || instructed ? override : undefined);
   }
 
   return (
@@ -1196,24 +1200,35 @@ function RetryStageControls({
         <button className="btn primary sm" disabled={busy} onClick={retry}>
           <LoopIcon size={11} /> {label}
         </button>
-        {descriptor && (
-          <button className="btn ghost sm" disabled={busy} onClick={() => setOpen((value) => !value)}>
-            {open ? "Use current model" : "Change model / effort"}
-          </button>
-        )}
+        <button className="btn ghost sm" disabled={busy} onClick={() => setOpen((value) => !value)}>
+          {open ? "Hide options" : descriptor ? "Add instructions / change model" : "Add instructions"}
+        </button>
       </div>
       <span>{hint}</span>
-      {open && descriptor && (
+      {open && (
         <div className="retry-overrides">
-          <label>
-            <span>Model</span>
-            <select className="input sm" value={model} disabled={busy} onChange={(event) => setModel(event.target.value)}>
-              {models.map((choice) => (
-                <option key={choice.value} value={choice.value}>{choice.label}</option>
-              ))}
-            </select>
+          <label className="retry-note">
+            <span>Instructions for this attempt</span>
+            <textarea
+              className="input sm"
+              disabled={busy}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder="What to do differently on this attempt"
+              rows={3}
+              value={note}
+            />
           </label>
-          {effortOption && (
+          {descriptor && (
+            <label>
+              <span>Model</span>
+              <select className="input sm" value={model} disabled={busy} onChange={(event) => setModel(event.target.value)}>
+                {models.map((choice) => (
+                  <option key={choice.value} value={choice.value}>{choice.label}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {descriptor && effortOption && (
             <label>
               <span>Effort</span>
               <select className="input sm" value={effectiveEffort ?? ""} disabled={busy} onChange={(event) => setEffort(event.target.value)}>

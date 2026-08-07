@@ -52,7 +52,10 @@ class RetryArtifactStageRequest:
     """Command input for retrying one failed artifact-run stage.
 
     ``model``/``effort`` optionally override the retry agent on the same
-    provider; both absent reuses the failed attempt's configuration.
+    provider; both absent reuses the failed attempt's configuration. ``note``
+    is a one-shot instruction for this attempt -- what to do differently -- and
+    is deliberately not recorded as durable feedback: it answers the failure,
+    not the run.
     """
 
     work_slug: str
@@ -60,6 +63,7 @@ class RetryArtifactStageRequest:
     run_id: str
     model: str | None = None
     effort: str | None = None
+    note: str = ""
 
 
 async def execute(
@@ -104,6 +108,7 @@ async def execute(
             retry_failed=True,
             retry_model=req.model,
             retry_effort=req.effort,
+            resolution_note=req.note,
         )
     except lifecycle.LoopAgentNotFound as exc:
         raise AgentNotFound(str(exc)) from exc

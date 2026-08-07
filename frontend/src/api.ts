@@ -1688,6 +1688,9 @@ export function resumeWorkLoopRun(
 export interface RetryStageOverride {
   model?: string | null;
   effort?: string | null;
+  /** What to do differently on this attempt. Reaches the retry agent's prompt
+   *  and is not kept as run-wide requested changes. */
+  note?: string;
 }
 
 /** Shared by the standalone-Loop and Planning retry verbs: the body is sent
@@ -1697,7 +1700,8 @@ function retryStageInit(override?: RetryStageOverride): RequestInit {
   const overriding =
     override != null &&
     ((override.model != null && override.model !== "") ||
-      (override.effort != null && override.effort !== ""));
+      (override.effort != null && override.effort !== "") ||
+      (override.note != null && override.note.trim() !== ""));
   if (!overriding) return { method: "POST" };
   return {
     method: "POST",
@@ -1705,6 +1709,7 @@ function retryStageInit(override?: RetryStageOverride): RequestInit {
     body: JSON.stringify({
       model: override?.model ?? null,
       effort: override?.effort ?? null,
+      note: override?.note?.trim() ?? "",
     }),
   };
 }

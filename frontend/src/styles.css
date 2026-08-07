@@ -14611,6 +14611,20 @@ select:disabled {
   text-transform: none;
   letter-spacing: 0;
 }
+/* The note takes the whole row and stacks: it is prose, not a picker. */
+.retry-overrides .retry-note {
+  flex: 1 0 100%;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.retry-overrides .retry-note textarea.input.sm {
+  height: auto;
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  line-height: 1.45;
+  resize: vertical;
+}
 .run-last-output {
   overflow: hidden;
   border-radius: var(--radius-card);

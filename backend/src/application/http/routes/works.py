@@ -655,6 +655,7 @@ async def retry_work_loop_run_stage_endpoint(
                 run_id,
                 model=payload.model if payload is not None else None,
                 effort=payload.effort if payload is not None else None,
+                note=payload.note if payload is not None else "",
             ),
         )
     except loop_run_commands.RunNotFound as exc:
@@ -2155,6 +2156,7 @@ async def retry_work_plan_artifact_run_stage_endpoint(
                 run_id=run_id,
                 model=payload.model if payload is not None else None,
                 effort=payload.effort if payload is not None else None,
+                note=payload.note if payload is not None else "",
             ),
         )
     except (

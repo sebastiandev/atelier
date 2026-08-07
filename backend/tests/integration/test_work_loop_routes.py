@@ -1580,3 +1580,49 @@ def test_an_open_pull_request_leaves_the_retry_alone(
     response = app_client.post("/api/works/WRK-001/runs/run-001/retry-stage")
 
     assert response.status_code == 200, response.text
+
+
+def test_a_retry_note_reaches_the_new_agent_alongside_the_continuation_hint(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """The note answers this attempt; the hint still explains the workspace."""
+    _fail_run_for_retry(app_client, tmp_path)
+
+    response = app_client.post(
+        "/api/works/WRK-001/runs/run-001/retry-stage",
+        json={"note": "Restore the parity test from fe901fbc before continuing."},
+    )
+
+    assert response.status_code == 200, response.text
+    retry_slug = response.json()["stages"][0]["agent_slug"]
+    prompt = [
+        event["text"]
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", retry_slug, 0
+        )
+        if event.get("type") == "user_input"
+    ][-1]
+    assert "Restore the parity test from fe901fbc before continuing." in prompt
+    assert "previous attempt" in prompt
+
+
+def test_a_retry_without_a_note_is_unchanged(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    _fail_run_for_retry(app_client, tmp_path)
+
+    response = app_client.post("/api/works/WRK-001/runs/run-001/retry-stage", json={"note": "  "})
+
+    assert response.status_code == 200, response.text
+    retry_slug = response.json()["stages"][0]["agent_slug"]
+    prompt = [
+        event["text"]
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", retry_slug, 0
+        )
+        if event.get("type") == "user_input"
+    ][-1]
+    # Nothing is inserted between the continuation hint and the report contract.
+    assert "proceed normally.\n\nWhen this stage reaches a stopping point" in prompt

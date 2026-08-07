@@ -120,13 +120,17 @@ class RetryStageRequest:
     """Command input for retrying one failed stage in place.
 
     ``model``/``effort`` optionally override the retry agent on the same
-    provider; both absent reuses the failed attempt's configuration.
+    provider; both absent reuses the failed attempt's configuration. ``note``
+    is a one-shot instruction for this attempt -- what to do differently -- and
+    is deliberately not recorded as durable feedback: it answers the failure,
+    not the run.
     """
 
     work_slug: str
     run_id: str
     model: str | None = None
     effort: str | None = None
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -373,6 +377,7 @@ async def retry_stage(
         retry_failed=True,
         retry_model=req.model,
         retry_effort=req.effort,
+        resolution_note=req.note,
     )
     store.save(target)
     return get_run(loop_runs, key)

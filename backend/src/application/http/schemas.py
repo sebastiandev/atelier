@@ -926,6 +926,9 @@ class RetryWorkLoopRunStageRequest(BaseModel):
     # reuses the failed attempt's model and effort.
     model: str | None = None
     effort: str | None = None
+    # What to do differently on this attempt. One-shot: it reaches the retry
+    # agent's prompt and is not kept as run-wide requested changes.
+    note: str = ""
 
 
 class CreatePrStageRequest(BaseModel):
