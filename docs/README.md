@@ -19,6 +19,7 @@ the code wins — but please update the doc.
 | [`troubleshooting.md`](troubleshooting.md) | Evidence-first checks for stuck streams, reconnect loops, and stale agent/chat UI states |
 | [`unified-loop-runs.md`](unified-loop-runs.md) | **Proposal, not implemented.** Collapsing objective and story runs into one entity with a nullable source |
 | [`loop-storage-refactor.md`](loop-storage-refactor.md) | **Draft spec, pending sign-off.** Moving loops, stages, and manifests out of `.atelier` into their own shape |
+| [`spec-stage-io-and-feedback.md`](spec-stage-io-and-feedback.md) | **Draft spec, decisions settled.** Declared stage inputs, one feedback record answered by its verifying stage, and history that reads as history |
 | [`loop-import-export.md`](loop-import-export.md) | **Draft spec, pending sign-off.** Importing and exporting loop and stage definitions |
 
 ## Other authoritative sources
