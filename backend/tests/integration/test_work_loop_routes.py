@@ -1351,6 +1351,7 @@ def _append_stage_report(
     findings: list[str],
     *,
     validation_evidence: str = "tests passed",
+    artifact_refs: list[str] | None = None,
 ) -> None:
     """Append one complete loop report and idle marker for an active stage."""
     _wait_for_agent_idle(client, agent_slug)
@@ -1370,7 +1371,7 @@ def _append_stage_report(
                         "divergences": "None.",
                         "skipped_scope": "None.",
                         "blocker": "None.",
-                        "artifact_refs": [],
+                        "artifact_refs": artifact_refs or [],
                     }
                 }
             ),
@@ -1620,3 +1621,80 @@ def test_a_retry_without_a_note_is_unchanged(
     ][-1]
     # Nothing is inserted between the continuation hint and the report contract.
     assert "proceed normally.\n\nWhen this stage reaches a stopping point" in prompt
+
+
+def test_selected_pr_feedback_still_starts_an_implementation_pass(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """The PR stage's return edge is the user's, even though the agent may not
+    use it: sending feedback back for implementation must keep working."""
+    started = _start_run(app_client, tmp_path, git=True)
+    _complete_and_accept(app_client, started)
+    assert (
+        app_client.post(
+            "/api/works/WRK-001/runs/run-001/create-pr",
+            json={"name": "Complete the loop workflow", "provider": "amp", "model": "smart"},
+        ).status_code
+        == 200
+    )
+    creating_pr = _wait_for_stage(app_client, "create-pr")
+    pr_stage = next(stage for stage in creating_pr["stages"] if stage["id"] == "create-pr")
+    _append_stage_report(
+        app_client,
+        pr_stage["agent_slug"],
+        "pass",
+        [],
+        artifact_refs=["https://github.com/acme/repo/pull/13"],
+    )
+    _wait_for_status(app_client, "accepted")
+    store = LoopRunStore(app_client.app.state.loop_runs)
+    target = store.load("WRK-001", "run-001")
+    assert target is not None
+    pr_stage_row = next(
+        row for row in target.run["loop"]["stages"] if row["id"] == "create-pr"
+    )
+    target.run["loop"]["pr_comments"] = [
+        {
+            "id": "PRRC_selected",
+            "author": "reviewer",
+            "body": "Drop the SELECT FOR UPDATE.",
+            "location": "kernel/move_lpn.py:34",
+            "created_at": "2126-01-01T00:00:00+00:00",
+        },
+        {
+            "id": "PRRC_ignored",
+            "author": "reviewer",
+            "body": "Praise: nice work on the race.",
+            "created_at": "2126-01-01T00:00:00+00:00",
+        },
+    ]
+    pr_stage_row["push_at"] = "2026-01-01T00:00:00+00:00"
+    store.save(target)
+
+    response = app_client.post(
+        "/api/works/WRK-001/runs/run-001/pr-feedback",
+        json={
+            "comments": [{"comment_id": "PRRC_selected", "instruction": "Use the lock helper."}],
+            "instruction": "The reviewer wants the lock removed.",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    implementing = _wait_for_stage(app_client, "implementation")
+    assert implementing["status"] == "running"
+    implementation = next(
+        stage for stage in implementing["stages"] if stage["id"] == "implementation"
+    )
+    prompt = [
+        event["text"]
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", implementation["agent_slug"], 0
+        )
+        if event.get("type") == "user_input"
+    ][-1]
+    assert "The reviewer wants the lock removed." in prompt
+    # The selected comment, its per-comment instruction, and nothing else.
+    assert "Drop the SELECT FOR UPDATE." in prompt
+    assert "Use the lock helper." in prompt
+    assert "Praise: nice work on the race." not in prompt

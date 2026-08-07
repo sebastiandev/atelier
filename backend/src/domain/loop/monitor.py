@@ -801,9 +801,11 @@ async def _advance_after_stage_report(
     bypass_review_gate: bool = False,
     pass_already_started: bool = False,
     resolution_note: str = "",
+    agent_reported: bool = True,
 ) -> LoopRunTarget:
     """Persist one stage outcome and enter its configured destination."""
-    report = _without_a_pr_send_back(stage_by_id(definition, current_id), report)
+    if agent_reported:
+        report = _without_a_pr_send_back(stage_by_id(definition, current_id), report)
     if report.outcome == LoopOutcome.BLOCKED_USER:
         stage_row["status"] = LoopStepStatus.BLOCKED_USER.value
         run["status"] = LoopRunStatus.BLOCKED.value
@@ -1540,6 +1542,8 @@ async def _apply_pr_feedback_decision(
         outcome=LoopOutcome.CHANGES_REQUESTED,
         summary=summary,
     )
+    # The user chose to send this PR feedback back for implementation, so the
+    # stage's return edge is being used the way it was built to be used.
     return await _advance_after_stage_report(
         workstore,
         store,
@@ -1560,6 +1564,7 @@ async def _apply_pr_feedback_decision(
         stage_row,
         report,
         bypass_review_gate=True,
+        agent_reported=False,
         pass_already_started=True,
         # No resolution note: `_send_stage_prompt` now renders the durable
         # bundle through `pending_feedback_context` for every stage in the
@@ -1938,6 +1943,11 @@ def _without_a_pr_send_back(
     Applied here rather than only in the stage definition because a loop
     authored before this rule still wires the transition, and its runs must not
     keep circling.
+
+    Only agent-produced reports are refused. The same return edge carries the
+    user's own "send this PR feedback back for implementation" decision, which
+    ``_apply_pr_feedback_decision`` synthesises as a changes-requested report;
+    that is the edge working as designed and must keep working.
 
     Preconditions: ``report`` is the consumed report for ``stage``.
     Postconditions: unchanged unless a PR stage requested changes, which becomes
