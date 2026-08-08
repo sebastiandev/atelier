@@ -39,11 +39,9 @@ from src.domain.loop.ports import (
     LoopRunStateStore,
 )
 from src.domain.loop.prompts import (
-    PrStagePrompt,
-    ReviewStagePrompt,
-    TaskStagePrompt,
     build_report_blocks,
     build_stage_prompt,
+    prompt_type_for,
     stage_inactivity_recovery_prompt,
     stage_report_repair_prompt,
 )
@@ -1266,13 +1264,7 @@ async def _send_stage_prompt(
     *,
     resolution_note: str = "",
 ) -> None:
-    prompt_type = (
-        ReviewStagePrompt
-        if stage.kind == LoopStepKind.AGENT_REVIEW
-        else PrStagePrompt
-        if stage.kind.value == "pr"
-        else TaskStagePrompt
-    )
+    prompt_type = prompt_type_for(stage)
     if stage.kind.value == "pr":
         pr_lifecycle.snapshot_stage_config(target, stage)
         resolution_note = "\n\n".join(

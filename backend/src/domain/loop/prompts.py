@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import singledispatch
 from typing import Any
 
-from src.domain.loop.dtos import LoopContextKind, LoopStepDefinition, LoopStepKind
+from src.domain.loop.dtos import LoopContextKind, LoopStepDefinition
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,15 @@ class PrStagePrompt(StagePromptInput):
     """Prompt input for narrow write-capable pull-request preparation."""
 
 
+PROMPT_BY_CONTRACT: dict[str, type[StagePromptInput]] = {}
+"""Which prompt a stage gets, keyed on the contract it declares.
+
+Populated by the registrations below. Callers select through this rather than
+branching on the stage kind: what posture an agent needs and what its report
+must contain is a property of the contract, and the contract is declared.
+"""
+
+
 @singledispatch
 def build_stage_prompt(value: StagePromptInput) -> str:
     """Render the provider prompt for a typed stage input."""
@@ -109,6 +118,21 @@ def _pr_prompt(value: PrStagePrompt) -> str:
     )
 
 
+PROMPT_BY_CONTRACT.update(
+    {
+        "implementation": TaskStagePrompt,
+        "review": ReviewStagePrompt,
+        "pr": PrStagePrompt,
+        "generic": TaskStagePrompt,
+    }
+)
+
+
+def prompt_type_for(stage: LoopStepDefinition) -> type[StagePromptInput]:
+    """Return the prompt a stage's declared report contract asks for."""
+    return PROMPT_BY_CONTRACT.get(stage.report_contract, TaskStagePrompt)
+
+
 def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
     context_kinds = {item.kind for item in value.stage.context}
     previous = "".join(_report_block(report) for report in value.reports)
@@ -140,7 +164,7 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         "Never use `changes_requested`: publishing is the last decision, and review "
         "findings you cannot act on are not yours to reopen. If you cannot publish, "
         "use `failed`, or `blocked_user` when only the user can unblock it."
-        if value.stage.kind == LoopStepKind.PR
+        if value.stage.report_contract == "pr"
         else "Use `changes_requested` only from a review stage."
     )
     return (
@@ -328,11 +352,13 @@ def stage_inactivity_recovery_prompt(
 
 
 __all__ = [
+    "PROMPT_BY_CONTRACT",
     "PrStagePrompt",
     "ReviewStagePrompt",
     "StagePromptInput",
     "TaskStagePrompt",
     "build_stage_prompt",
+    "prompt_type_for",
     "stage_inactivity_recovery_prompt",
     "stage_report_repair_prompt",
 ]

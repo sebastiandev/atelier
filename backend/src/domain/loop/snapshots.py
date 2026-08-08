@@ -189,7 +189,9 @@ def _stage_from_snapshot(value: object) -> LoopStepDefinition:
         reports=reports_from_raw(value.get("reports"), context),
         history=history_from_raw(value.get("history")),
         agent=_agent_from_snapshot(value.get("agent")),
-        report_contract=_optional_string(value.get("report_contract")) or "generic",
+        report_contract=report_contract_from_raw(
+            value.get("report_contract"), LoopStepKind(_string(value, "kind"))
+        ),
         retry=LoopRetryPolicy(
             max_attempts=_integer(retry.get("max_attempts"), 2),
             timeout_minutes=_integer(retry.get("timeout_minutes"), 20),
@@ -383,6 +385,27 @@ def loop_stage_from_document(value: object) -> LoopStepDefinition:
     """
     history_or_raise((value if isinstance(value, dict) else {}).get("history"))
     return loop_stage_from_snapshot(value)
+
+
+_CONTRACT_BY_KIND = {
+    LoopStepKind.AGENT_TASK: "implementation",
+    LoopStepKind.AGENT_REVIEW: "review",
+    LoopStepKind.PR: "pr",
+}
+
+
+def report_contract_from_raw(value: object, kind: LoopStepKind) -> str:
+    """Return the stage's report contract, defaulting from what it is.
+
+    The contract was always implied by the stage kind -- the prompt builder
+    picked its posture and its report rules by branching on it. Supplying the
+    implied value here makes the field say what the branch used to, so nothing
+    downstream has to ask what kind of stage it is.
+    """
+    return (
+        _optional_string(value)
+        or _CONTRACT_BY_KIND.get(kind, "generic")
+    )
 
 
 def history_or_raise(value: object) -> LoopHistoryLevel:
@@ -614,6 +637,7 @@ __all__ = [
     "loop_stage_from_document",
     "loop_stage_from_snapshot",
     "loop_stage_snapshot",
+    "report_contract_from_raw",
     "reports_from_raw",
     "stage_overrides_from_snapshot",
     "stage_overrides_snapshot",

@@ -40,6 +40,7 @@ from src.domain.loop.snapshots import (
     inputs_from_raw,
     loop_pr_config_from_snapshot,
     loop_pr_config_snapshot,
+    report_contract_from_raw,
     reports_from_raw,
     stage_overrides_from_snapshot,
     stage_overrides_snapshot,
@@ -264,7 +265,7 @@ def _stage_from_data(
         reports=reports_from_raw(value.get("reports"), context_raw),
         history=history_or_raise(value.get("history")),
         agent=_agent_from_data(agent_raw, kind),
-        report_contract=_optional_str(value.get("report_contract")) or "generic",
+        report_contract=report_contract_from_raw(value.get("report_contract"), kind),
         retry=_retry_from_data(retry_raw),
         transitions=_transitions_from_data(transitions_raw),
         check_adapter=(

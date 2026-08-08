@@ -23,12 +23,11 @@ from src.domain.loop.dtos import (
 )
 from src.domain.loop.models import LoopRunTarget
 from src.domain.loop.prompts import (
-    PrStagePrompt,
-    ReviewStagePrompt,
     StageReportBlock,
     TaskStagePrompt,
     build_report_blocks,
     build_stage_prompt,
+    prompt_type_for,
 )
 from src.domain.loop.snapshots import definition_from_snapshot
 from src.domain.loop.transitions import stage_by_id
@@ -663,13 +662,7 @@ def _resume_prompt(
     workspace_diff: str,
 ) -> str:
     """Build the typed continuation prompt for one paused stage."""
-    prompt_type = (
-        ReviewStagePrompt
-        if stage.kind == LoopStepKind.AGENT_REVIEW
-        else PrStagePrompt
-        if stage.kind == LoopStepKind.PR
-        else TaskStagePrompt
-    )
+    prompt_type = prompt_type_for(stage)
     resolution = "\n\n".join(
         value
         for value in (
