@@ -188,7 +188,6 @@ def _stage_from_snapshot(value: object) -> LoopStepDefinition:
         context=inputs_from_raw(value, context),
         reports=reports_from_raw(value.get("reports"), context),
         history=history_from_raw(value.get("history")),
-        warnings=history_warnings(value.get("history")),
         agent=_agent_from_snapshot(value.get("agent")),
         report_contract=_optional_string(value.get("report_contract")) or "generic",
         retry=LoopRetryPolicy(
@@ -369,17 +368,33 @@ def history_from_raw(value: object) -> LoopHistoryLevel:
         return LoopHistoryLevel.NONE
 
 
-def history_warnings(value: object) -> tuple[str, ...]:
-    """Return a note when a stage asked for a history level that is not one.
+def loop_stage_from_document(value: object) -> LoopStepDefinition:
+    """Read one stage from a document the user can still edit, refusing typos.
 
-    Coercing an unrecognised value to ``none`` is right -- a typo in one field
-    should not stop a run -- but doing it in silence meant a stage simply never
-    got the history it asked for and nobody could see why.
+    The lenient reader above exists for pinned run snapshots, which must load
+    or the run is stranded. A ``loop.yaml`` or an imported document is not that
+    -- the user can fix it -- so a value this build cannot honour is refused
+    here instead of being quietly coerced. Both callers already turn the
+    ``ValueError`` into an invalid definition with the message attached.
+
+    Preconditions: ``value`` is one raw stage mapping.
+    Postconditions: as :func:`loop_stage_from_snapshot`, or ``ValueError``
+    naming what could not be read.
+    """
+    history_or_raise((value if isinstance(value, dict) else {}).get("history"))
+    return loop_stage_from_snapshot(value)
+
+
+def history_or_raise(value: object) -> LoopHistoryLevel:
+    """Return a stage's history level, refusing a value that is not one.
+
+    The strict counterpart to :func:`history_from_raw`, for the readers whose
+    input the user can still correct.
     """
     raw = _optional_string(value)
-    if not raw or raw in set(LoopHistoryLevel):
-        return ()
-    return (f"history: {raw!r} is not a history level, so none was used",)
+    if raw and raw not in set(LoopHistoryLevel):
+        raise ValueError(f"stage history {raw!r} is not none, summaries, or full")
+    return history_from_raw(value)
 
 
 def _context_from_snapshot(value: object) -> LoopContextReference:
@@ -592,10 +607,11 @@ __all__ = [
     "definition_from_snapshot",
     "definition_snapshot",
     "history_from_raw",
-    "history_warnings",
+    "history_or_raise",
     "inputs_from_raw",
     "loop_pr_config_from_snapshot",
     "loop_pr_config_snapshot",
+    "loop_stage_from_document",
     "loop_stage_from_snapshot",
     "loop_stage_snapshot",
     "reports_from_raw",

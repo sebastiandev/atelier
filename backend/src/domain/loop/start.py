@@ -340,20 +340,13 @@ async def start(
     if source is not None:
         pr_lifecycle.inherit_existing_pr(loop, source_loop)
     loop["last_checked_seq"] = cursor
-    # A stage's own parse warnings sit alongside its context warnings: both say
-    # what the run could not honour, and neither is worth refusing to start over.
-    declared_warnings = {stage.step_id: stage.warnings for stage in definition.stages}
     for stage_row in loop["stages"]:
         if not isinstance(stage_row, dict):
             continue
-        step_id = actions.str_or_empty(stage_row.get("id"))
-        stage_resolution = resolutions.get(step_id)
+        stage_resolution = resolutions.get(actions.str_or_empty(stage_row.get("id")))
         if stage_resolution is not None:
             stage_row["resolved_context"] = list(stage_resolution.entries)
-            stage_row["context_warnings"] = [
-                *declared_warnings.get(step_id, ()),
-                *stage_resolution.warnings,
-            ]
+            stage_row["context_warnings"] = list(stage_resolution.warnings)
     waiting_approval = entry.kind == LoopStepKind.USER_APPROVAL
     if waiting_approval:
         loop["status"] = LoopStatus.AWAITING_APPROVAL.value

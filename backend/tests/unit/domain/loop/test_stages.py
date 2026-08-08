@@ -4,8 +4,6 @@ from dataclasses import replace
 
 import pytest
 
-from src.domain.loop.builtins import builtin_loop_definition
-from src.domain.loop.definitions import definition_revision
 from src.domain.loop.dtos import (
     LoopContextKind,
     LoopContextReference,
@@ -19,6 +17,7 @@ from src.domain.loop.dtos import (
     StageOverrides,
 )
 from src.domain.loop.snapshots import (
+    loop_stage_from_document,
     loop_stage_from_snapshot,
     loop_stage_snapshot,
     stage_overrides_from_snapshot,
@@ -263,9 +262,26 @@ def test_a_legacy_override_context_is_normalised_like_a_stage_body() -> None:
     ]
 
 
-def test_an_unreadable_history_level_warns_instead_of_failing() -> None:
-    """A typo in one field should not stop a run, but coercing it in silence
-    meant the stage never got the history it asked for and nobody could see why."""
+def test_a_document_refuses_a_history_level_that_is_not_one() -> None:
+    """A `loop.yaml` or an imported document is something the user can fix, so
+    the reader says so instead of quietly running without the history asked for.
+    Both callers already turn this into an invalid definition with the message."""
+    with pytest.raises(ValueError, match="none, summaries, or full"):
+        loop_stage_from_document(
+            {
+                "id": "review",
+                "name": "Review",
+                "kind": "agent_review",
+                "context": [],
+                "reports": [],
+                "history": "sumaries",
+                "transitions": {},
+            }
+        )
+
+
+def test_a_pinned_run_snapshot_still_loads_what_it_cannot_honour() -> None:
+    """A run already in flight cannot be fixed by refusing to load it."""
     stage = loop_stage_from_snapshot(
         {
             "id": "review",
@@ -279,11 +295,10 @@ def test_an_unreadable_history_level_warns_instead_of_failing() -> None:
     )
 
     assert stage.history == LoopHistoryLevel.NONE
-    assert stage.warnings == ("history: 'sumaries' is not a history level, so none was used",)
 
 
-def test_a_readable_history_level_warns_about_nothing() -> None:
-    stage = loop_stage_from_snapshot(
+def test_a_readable_history_level_is_taken_as_written() -> None:
+    stage = loop_stage_from_document(
         {
             "id": "review",
             "name": "Review",
@@ -296,19 +311,3 @@ def test_a_readable_history_level_warns_about_nothing() -> None:
     )
 
     assert stage.history == LoopHistoryLevel.FULL
-    assert stage.warnings == ()
-
-
-def test_a_parse_warning_does_not_move_the_revision() -> None:
-    """It is derived on read, not part of what the definition is."""
-    base = builtin_loop_definition("atelier-reviewed")
-    assert base is not None
-    warned = replace(
-        base,
-        stages=tuple(
-            replace(stage, warnings=("history: 'x' is not a history level",))
-            for stage in base.stages
-        ),
-    )
-
-    assert definition_revision(warned) == definition_revision(base)

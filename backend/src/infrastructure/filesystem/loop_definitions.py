@@ -36,8 +36,7 @@ from src.domain.loop.dtos import (
     StageDefinitionRef,
 )
 from src.domain.loop.snapshots import (
-    history_from_raw,
-    history_warnings,
+    history_or_raise,
     inputs_from_raw,
     loop_pr_config_from_snapshot,
     loop_pr_config_snapshot,
@@ -263,8 +262,7 @@ def _stage_from_data(
         # declared reads exactly as a pinned run snapshot of the same age does.
         context=inputs_from_raw(value, context_raw),
         reports=reports_from_raw(value.get("reports"), context_raw),
-        history=history_from_raw(value.get("history")),
-        warnings=history_warnings(value.get("history")),
+        history=history_or_raise(value.get("history")),
         agent=_agent_from_data(agent_raw, kind),
         report_contract=_optional_str(value.get("report_contract")) or "generic",
         retry=_retry_from_data(retry_raw),

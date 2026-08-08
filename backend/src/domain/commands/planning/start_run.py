@@ -274,20 +274,13 @@ async def execute(
         entry_is_agent=followups.entry_needs_agent(entry),
     )
     loop["last_checked_seq"] = cursor
-    # A stage's own parse warnings sit alongside its context warnings: both say
-    # what the run could not honour, and neither is worth refusing to start over.
-    declared_warnings = {stage.step_id: stage.warnings for stage in definition.stages}
     for stage_row in loop["stages"]:
         if not isinstance(stage_row, dict):
             continue
-        step_id = actions.str_or_empty(stage_row.get("id"))
-        resolution = resolutions.get(step_id)
+        resolution = resolutions.get(actions.str_or_empty(stage_row.get("id")))
         if resolution is not None:
             stage_row["resolved_context"] = list(resolution.entries)
-            stage_row["context_warnings"] = [
-                *declared_warnings.get(step_id, ()),
-                *resolution.warnings,
-            ]
+            stage_row["context_warnings"] = list(resolution.warnings)
     run: dict[str, object] = {
         "id": run_id,
         "agent_slug": agent_slug,

@@ -28,7 +28,11 @@ from src.domain.loop.dtos import (
     StageDefinitionRef,
     StageOverrides,
 )
-from src.domain.loop.snapshots import loop_stage_from_snapshot, loop_stage_snapshot
+from src.domain.loop.snapshots import (
+    loop_stage_from_document,
+    loop_stage_from_snapshot,
+    loop_stage_snapshot,
+)
 
 TRANSPORT_SCHEMA_VERSION = 1
 
@@ -221,7 +225,7 @@ def _parse_stage(value: object) -> ImportedStage:
         for key, item in value.items()
         if key not in {"linked_from", "outcomes", "description", "forked_from"}
     }
-    stage = loop_stage_from_snapshot(body)
+    stage = loop_stage_from_document(body)
     linked_raw = value.get("linked_from")
     if linked_raw is None:
         return ImportedStage(stage=stage)

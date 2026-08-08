@@ -441,15 +441,6 @@ class LoopStepDefinition:
     context: tuple[LoopContextReference, ...] = ()
     reports: tuple[LoopReportReference, ...] = ()
     history: LoopHistoryLevel = LoopHistoryLevel.NONE
-    warnings: tuple[str, ...] = ()
-    """What the reader could not honour in this stage's declaration.
-
-    Derived on read, never persisted and never part of the revision. Reading is
-    lenient so a pinned run always starts -- a run cannot be fixed by refusing
-    to load it. Validation is not: a definition the user can still edit is
-    invalid while it carries one of these, which is how a typo in a hand-edited
-    file or an imported document gets reported instead of silently ignored.
-    """
     agent: LoopAgentPolicy | None = None
     report_contract: str = "generic"
     retry: LoopRetryPolicy = field(default_factory=LoopRetryPolicy)

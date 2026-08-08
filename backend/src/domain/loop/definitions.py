@@ -104,12 +104,6 @@ def validate_definition(definition: LoopDefinition) -> tuple[str, ...]:
     for stage in definition.stages:
         errors.extend(_validate_stage(stage, known))
         errors.extend(_validate_reports(stage, definition.stages))
-        # Whatever the reader could not honour is an error *here*, where the
-        # definition is one the user can edit: the editor rejects it before it
-        # is ever written, so anything that reaches this point came from a
-        # hand-edited file or an import, and both are fixable. Reading stays
-        # lenient so a pinned run -- which is never validated -- keeps running.
-        errors.extend(f"Stage {stage.step_id!r} {note}." for note in stage.warnings)
 
     reachable = _reachable_stage_ids(definition.stages)
     for stage_id in ids:
@@ -132,10 +126,6 @@ def definition_revision(definition: LoopDefinition) -> str:
     data.pop("revision", None)
     data.pop("errors", None)
     for stage in data.get("stages", []):
-        # Derived on read, so it is not part of what the definition *is*;
-        # hashing it would move a revision because a value failed to parse.
-        if isinstance(stage, dict):
-            stage.pop("warnings", None)
         agent = stage.get("agent") if isinstance(stage, dict) else None
         if isinstance(agent, dict) and agent.get("approved_command_prefixes") is None:
             agent.pop("approved_command_prefixes", None)
