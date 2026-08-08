@@ -37,6 +37,7 @@ from src.domain.loop.dtos import (
 )
 from src.domain.loop.snapshots import (
     history_from_raw,
+    history_warnings,
     inputs_from_raw,
     loop_pr_config_from_snapshot,
     loop_pr_config_snapshot,
@@ -263,6 +264,7 @@ def _stage_from_data(
         context=inputs_from_raw(value, context_raw),
         reports=reports_from_raw(value.get("reports"), context_raw),
         history=history_from_raw(value.get("history")),
+        warnings=history_warnings(value.get("history")),
         agent=_agent_from_data(agent_raw, kind),
         report_contract=_optional_str(value.get("report_contract")) or "generic",
         retry=_retry_from_data(retry_raw),

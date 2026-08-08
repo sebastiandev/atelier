@@ -732,3 +732,22 @@ def test_clearing_for_a_new_pull_request_keeps_the_reusable_setup() -> None:
     pr_lifecycle.clear_for_new_pr(loop)
 
     assert loop == {"pr_config": {"base": "master", "status": "open"}}
+
+
+def test_pr_feedback_without_a_review_is_answered_by_the_approval() -> None:
+    """Never by the PR stage. Binding the record to the stage that publishes is
+    the coupling this spec removed: a publishing stage cannot act on a change
+    request, so it could never discharge feedback it was handed itself."""
+    target = _accepted_target()
+    pr_lifecycle.add_one_off_stage(target, pr_lifecycle.PrSetup(name="feat: complete the goal"))
+    loop = target.run["loop"]
+    loop.pop("approval_decision")
+    target.run["status"] = "accepted"
+    loop["status"] = "accepted"
+    loop["stages"][-1]["status"] = "passed"
+    loop["pr"] = {"url": "https://github.com/acme/repo/pull/12"}
+
+    pr_lifecycle.prepare_feedback(target, (), "Drop the lock.")
+
+    assert [row["kind"] for row in loop["stages"]] == ["agent_task", "user_approval", "pr"]
+    assert feedback.records(loop)[-1]["answered_by"] == "approve"

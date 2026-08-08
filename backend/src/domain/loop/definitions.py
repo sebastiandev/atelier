@@ -126,6 +126,10 @@ def definition_revision(definition: LoopDefinition) -> str:
     data.pop("revision", None)
     data.pop("errors", None)
     for stage in data.get("stages", []):
+        # Derived on read, so it is not part of what the definition *is*;
+        # hashing it would move a revision because a value failed to parse.
+        if isinstance(stage, dict):
+            stage.pop("warnings", None)
         agent = stage.get("agent") if isinstance(stage, dict) else None
         if isinstance(agent, dict) and agent.get("approved_command_prefixes") is None:
             agent.pop("approved_command_prefixes", None)

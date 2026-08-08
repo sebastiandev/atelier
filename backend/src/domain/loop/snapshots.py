@@ -188,6 +188,7 @@ def _stage_from_snapshot(value: object) -> LoopStepDefinition:
         context=inputs_from_raw(value, context),
         reports=reports_from_raw(value.get("reports"), context),
         history=history_from_raw(value.get("history")),
+        warnings=history_warnings(value.get("history")),
         agent=_agent_from_snapshot(value.get("agent")),
         report_contract=_optional_string(value.get("report_contract")) or "generic",
         retry=LoopRetryPolicy(
@@ -366,6 +367,19 @@ def history_from_raw(value: object) -> LoopHistoryLevel:
         return LoopHistoryLevel(_optional_string(value))
     except ValueError:
         return LoopHistoryLevel.NONE
+
+
+def history_warnings(value: object) -> tuple[str, ...]:
+    """Return a note when a stage asked for a history level that is not one.
+
+    Coercing an unrecognised value to ``none`` is right -- a typo in one field
+    should not stop a run -- but doing it in silence meant a stage simply never
+    got the history it asked for and nobody could see why.
+    """
+    raw = _optional_string(value)
+    if not raw or raw in set(LoopHistoryLevel):
+        return ()
+    return (f"history: {raw!r} is not a history level, so none was used",)
 
 
 def _context_from_snapshot(value: object) -> LoopContextReference:
@@ -578,6 +592,7 @@ __all__ = [
     "definition_from_snapshot",
     "definition_snapshot",
     "history_from_raw",
+    "history_warnings",
     "inputs_from_raw",
     "loop_pr_config_from_snapshot",
     "loop_pr_config_snapshot",

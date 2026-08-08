@@ -168,6 +168,34 @@ def declared_report_rows(
     return list(resolved.items())
 
 
+def unresolved_report_warnings(
+    loop: dict[str, Any], stage: Any, last_reported_id: str = ""
+) -> list[str]:
+    """Return a note for each required report the run cannot supply.
+
+    A stage cannot conjure an account of work that was never reported, and
+    neither can the user, so this never blocks -- it says plainly that the
+    input is absent rather than leaving a hole where the agent expects a
+    report and letting it guess what belonged there.
+
+    Preconditions: as :func:`declared_report_rows`.
+    Postconditions: one line per required declaration that resolved to
+    nothing; optional declarations are silent, which is what optional means.
+    """
+    resolved = {step_id for step_id, _ in declared_report_rows(loop, stage, last_reported_id)}
+    fallback = last_reported_id or _latest_reporting_stage(loop, stage)
+    notes = []
+    for reference in getattr(stage, "reports", ()):
+        if not reference.required:
+            continue
+        step_id = fallback if reference.from_stage == PREVIOUS_STAGE else reference.from_stage
+        if step_id and step_id in resolved:
+            continue
+        named = step_id or "the preceding stage"
+        notes.append(f"required report from {named}: never reported")
+    return notes
+
+
 def _latest_reporting_stage(loop: dict[str, Any], stage: Any) -> str:
     """Return the stage that reported most recently, other than this one.
 
@@ -469,4 +497,5 @@ __all__ = [
     "str_list",
     "str_or_empty",
     "str_or_none",
+    "unresolved_report_warnings",
 ]

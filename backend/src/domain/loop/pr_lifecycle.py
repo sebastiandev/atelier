@@ -661,19 +661,24 @@ def _verifying_stage_id(loop: dict[str, Any], pr_stage: dict[str, Any]) -> str:
     """Return the stage whose pass discharges pull-request feedback.
 
     The code review is what inspects the answer, so it is what answers the
-    request. A loop without one falls back to its PR stage, which at least
-    keeps the record bound to a stage that has to pass before the run ends.
+    request. A loop without one falls back to its approval stage -- the user
+    saying the result is good is a real verification of whether the feedback
+    was addressed, and every loop is validated to have one.
+
+    Never the PR stage. Binding the record to the stage that publishes is
+    exactly the coupling this spec removed: the PR stage would have had to pass
+    to discharge feedback it was itself being handed, and a publishing stage
+    cannot act on a change request.
     """
-    rows = loop.get("stages")
-    review = next(
-        (
-            row
-            for row in reversed(rows if isinstance(rows, list) else [])
-            if isinstance(row, dict) and row.get("kind") == "agent_review"
-        ),
+    rows = [row for row in loop.get("stages", []) if isinstance(row, dict)]
+    verifier = next(
+        (row for row in reversed(rows) if row.get("kind") == "agent_review"),
+        None,
+    ) or next(
+        (row for row in reversed(rows) if row.get("kind") == "user_approval"),
         None,
     )
-    return actions.str_or_empty((review or pr_stage).get("id"))
+    return actions.str_or_empty((verifier or pr_stage).get("id"))
 
 
 def _comment_thread(comments: list[object], selected: dict[str, Any]) -> list[dict[str, Any]]:

@@ -457,7 +457,12 @@ async def request_changes(
                     ),
                     resolution_note=note,
                     resolved_context=tuple(actions.str_list(stage_row.get("resolved_context"))),
-                    context_warnings=tuple(actions.str_list(stage_row.get("context_warnings"))),
+                    context_warnings=(
+                *actions.str_list(stage_row.get("context_warnings")),
+                *actions.unresolved_report_warnings(
+                    loop, stage, actions.str_or_empty(loop.get("previous_stage_id"))
+                ),
+            ),
                     brief_note=brief_note,
                     brief_context=brief_context,
                 )
@@ -710,7 +715,12 @@ def _resume_prompt(
             workspace_diff=workspace_diff,
             resolution_note=resolution,
             resolved_context=tuple(actions.str_list(stage_row.get("resolved_context"))),
-            context_warnings=tuple(actions.str_list(stage_row.get("context_warnings"))),
+            context_warnings=(
+                *actions.str_list(stage_row.get("context_warnings")),
+                *actions.unresolved_report_warnings(
+                    loop, stage, actions.str_or_empty(loop.get("previous_stage_id"))
+                ),
+            ),
             brief_note=brief_note,
             brief_context=brief_context,
             waived_findings=_declared_waived(stage, loop),

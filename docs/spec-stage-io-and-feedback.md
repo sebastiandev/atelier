@@ -190,14 +190,14 @@ implementation:
 - **A retry note does carry `answered_by`.** The draft left it blank. It has to
   name the stage the note was sent to, because that is what `close_attempt`
   keys on to end the record when the attempt reports.
-- **PR feedback falls back to the PR stage when the loop has no review.** The
-  table assumes a code review exists. `atelier-fast` has none, and an
-  unanswerable record would be worse, so `_verifying_stage_id` falls back.
-  **This is load-bearing for Phase 4**: the fallback only avoids the §1
-  cycling defect because a PR stage is currently denied open feedback by
-  `monitor._open_feedback_for`. Removing that `stage.kind` stopgap without
-  giving the PR stage a declaration that withholds feedback re-creates the
-  deadlock this spec exists to close.
+- **PR feedback falls back to the approval stage when the loop has no review.**
+  The table assumes a code review exists; `atelier-fast` has none. It falls back
+  to the approval, never to the PR stage — the user saying the result is good is
+  a real verification of whether the feedback was addressed, and every loop is
+  validated to have an approval. Binding the record to the stage that publishes
+  was the §1 coupling itself: a publishing stage cannot act on a change request,
+  so it could never discharge feedback it was handed. With the approval as the
+  fallback, nothing about answering depends on a `stage.kind` check any more.
 
 ### 3f. Answering
 

@@ -256,7 +256,7 @@ def _context_index(value: StagePromptInput) -> str:
             for entry in value.resolved_context
             if not entry.endswith(": resolved when the stage starts")
         ]
-        lines.extend(f"- optional missing: {item}" for item in value.context_warnings)
+        lines.extend(f"- {item}" for item in value.context_warnings)
         return "\n\nResolved context index:\n" + "\n".join(lines) if lines else ""
     lines = []
     for item in context:

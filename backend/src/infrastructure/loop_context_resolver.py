@@ -40,7 +40,12 @@ class FilesystemLoopContextResolver:
                 entries.extend(resolved)
                 continue
             message = _missing_label(reference)
-            (missing if reference.required else warnings).append(message)
+            if reference.required:
+                missing.append(message)
+            else:
+                # Worded here rather than by the renderer, so a warning from
+                # anywhere else can say what it actually is.
+                warnings.append(f"optional missing: {message}")
         return LoopContextResolution(
             entries=tuple(dict.fromkeys(entries)),
             missing_required=tuple(missing),

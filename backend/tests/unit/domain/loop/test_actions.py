@@ -9,6 +9,7 @@ from src.domain.loop.actions import (
     declared_report_rows,
     latest_changed_file_prompt_lines,
     start_next_pass,
+    unresolved_report_warnings,
 )
 from src.domain.loop.dtos import LoopReportReference
 
@@ -159,3 +160,22 @@ def test_a_report_naming_a_stage_with_no_row_is_skipped() -> None:
 
 def test_a_previous_with_nothing_to_resolve_against_is_skipped() -> None:
     assert declared_report_rows(_LOOP, _stage("previous"), "") == []
+
+
+def test_a_required_report_that_was_never_produced_warns() -> None:
+    """Neither the stage nor the user can conjure an account of work that was
+    never reported, so this says so plainly rather than blocking the run."""
+    warnings = unresolved_report_warnings(_LOOP, _stage("security-review"), "")
+
+    assert warnings == ["required report from security-review: never reported"]
+
+
+def test_an_optional_report_that_is_absent_says_nothing() -> None:
+    class _Stage:
+        reports = (LoopReportReference(from_stage="security-review", required=False),)
+
+    assert unresolved_report_warnings(_LOOP, _Stage(), "") == []
+
+
+def test_a_resolved_required_report_warns_about_nothing() -> None:
+    assert unresolved_report_warnings(_LOOP, _stage("implementation"), "") == []

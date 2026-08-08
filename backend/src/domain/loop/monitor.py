@@ -1327,7 +1327,10 @@ async def _send_stage_prompt(
             workspace_diff=workspace_diff,
             resolution_note=resolution_note,
             resolved_context=tuple(actions.str_list(stage_row.get("resolved_context"))),
-            context_warnings=tuple(actions.str_list(stage_row.get("context_warnings"))),
+            context_warnings=(
+                *actions.str_list(stage_row.get("context_warnings")),
+                *actions.unresolved_report_warnings(loop, stage, previous_stage_id),
+            ),
             brief_note=brief_note,
             brief_context=brief_context,
             waived_findings=_declared_waived(stage, loop),

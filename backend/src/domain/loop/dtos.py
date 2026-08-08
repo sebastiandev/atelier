@@ -441,6 +441,13 @@ class LoopStepDefinition:
     context: tuple[LoopContextReference, ...] = ()
     reports: tuple[LoopReportReference, ...] = ()
     history: LoopHistoryLevel = LoopHistoryLevel.NONE
+    warnings: tuple[str, ...] = ()
+    """Non-blocking notes about this stage's own declaration.
+
+    Derived on read, never persisted and never part of the revision: a
+    definition that cannot be parsed exactly as written still has to run, so
+    what could not be honoured is reported rather than raised.
+    """
     agent: LoopAgentPolicy | None = None
     report_contract: str = "generic"
     retry: LoopRetryPolicy = field(default_factory=LoopRetryPolicy)

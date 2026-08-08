@@ -4,6 +4,8 @@ from dataclasses import replace
 
 import pytest
 
+from src.domain.loop.builtins import builtin_loop_definition
+from src.domain.loop.definitions import definition_revision
 from src.domain.loop.dtos import (
     LoopContextKind,
     LoopContextReference,
@@ -259,3 +261,54 @@ def test_a_legacy_override_context_is_normalised_like_a_stage_body() -> None:
         "workspace_diff",
         "feedback",
     ]
+
+
+def test_an_unreadable_history_level_warns_instead_of_failing() -> None:
+    """A typo in one field should not stop a run, but coercing it in silence
+    meant the stage never got the history it asked for and nobody could see why."""
+    stage = loop_stage_from_snapshot(
+        {
+            "id": "review",
+            "name": "Review",
+            "kind": "agent_review",
+            "context": [],
+            "reports": [],
+            "history": "sumaries",
+            "transitions": {},
+        }
+    )
+
+    assert stage.history == LoopHistoryLevel.NONE
+    assert stage.warnings == ("history: 'sumaries' is not a history level, so none was used",)
+
+
+def test_a_readable_history_level_warns_about_nothing() -> None:
+    stage = loop_stage_from_snapshot(
+        {
+            "id": "review",
+            "name": "Review",
+            "kind": "agent_review",
+            "context": [],
+            "reports": [],
+            "history": "full",
+            "transitions": {},
+        }
+    )
+
+    assert stage.history == LoopHistoryLevel.FULL
+    assert stage.warnings == ()
+
+
+def test_a_parse_warning_does_not_move_the_revision() -> None:
+    """It is derived on read, not part of what the definition is."""
+    base = builtin_loop_definition("atelier-reviewed")
+    assert base is not None
+    warned = replace(
+        base,
+        stages=tuple(
+            replace(stage, warnings=("history: 'x' is not a history level",))
+            for stage in base.stages
+        ),
+    )
+
+    assert definition_revision(warned) == definition_revision(base)
