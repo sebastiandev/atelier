@@ -437,6 +437,11 @@ async def request_changes(
                         if stage.reports
                         else ()
                     ),
+                    # This stage is being sent back to on a loop that already
+                    # has a full ledger, so it is the last place that should
+                    # start with no account of what came before.
+                    history=history.lines(loop, stage.history),
+                    waived_findings=_declared_waived(stage, loop),
                     previous_changed_files=actions.latest_changed_file_prompt_lines(loop),
                     workspace_diff=(
                         runtime.workspace_prompt_context(
@@ -637,6 +642,13 @@ def _retry_note(resolution_note: str) -> str:
     )
 
 
+def _declared_waived(stage: LoopStepDefinition, loop: dict[str, Any]) -> tuple[str, ...]:
+    """Return the dismissed findings, when the stage declares that input."""
+    if not any(item.kind == LoopContextKind.WAIVED_FINDINGS for item in stage.context):
+        return ()
+    return tuple(feedback.dismissed(loop))
+
+
 def _resume_prompt(
     target: LoopRunTarget,
     loop: dict[str, Any],
@@ -701,13 +713,7 @@ def _resume_prompt(
             context_warnings=tuple(actions.str_list(stage_row.get("context_warnings"))),
             brief_note=brief_note,
             brief_context=brief_context,
-            waived_findings=(
-                tuple(feedback.dismissed(loop))
-                if any(
-                    item.kind == LoopContextKind.WAIVED_FINDINGS for item in stage.context
-                )
-                else ()
-            ),
+            waived_findings=_declared_waived(stage, loop),
         )
     )
 

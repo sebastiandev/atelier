@@ -124,10 +124,12 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
             value.workspace_diff.strip() or "Workspace state unavailable."
         )
     history = "\n\n" + "\n".join(value.history) if value.history else ""
-    happened = (
-        f"{history}{previous}{changed_files}{workspace}"
-        or "\nNothing yet; this is the first stage of the run."
-    )
+    # Omitted entirely when there is nothing to say. Claiming "nothing has
+    # happened yet" would be a lie to any stage that simply declares no
+    # history and no diff -- and a heading with nothing under it is worse than
+    # no heading.
+    happened = f"{history}{previous}{changed_files}{workspace}"
+    already_happened = f"\n## What has already happened{happened}" if happened else ""
     waived = (
         "\n\n## Already dismissed by the user -- do not raise again\n"
         + "\n".join(f"- {item}" for item in value.waived_findings)
@@ -157,7 +159,7 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         # let a request the user had already withdrawn keep reading as a live
         # order, and what made an agent treat a prior stage's findings as its
         # own instructions.
-        f"\n## What has already happened{happened}"
+        f"{already_happened}"
         f"{waived}"
         f"\n\n## Your task now\n{value.stage.instructions.strip()}"
         f"{_brief(value)}"
@@ -213,14 +215,18 @@ def _latest_pass(row: dict[str, Any]) -> int:
 
 
 def _open_requests(value: StagePromptInput) -> str:
-    """Render the outstanding requests as part of the stage's task.
+    """Render what the user is asking of this attempt, as part of its task.
 
-    Only these are instructions. An answered request reads as history, and a
-    stage that declares no feedback receives none at all -- the caller decides
-    by declaration, so there is nothing to suppress here.
+    Carries whatever the caller put on this channel: the stage's open
+    feedback when it declares that input, a retry hint, a review gate's
+    instruction, or a PR stage's setup. All of it is imperative, which is why
+    it sits here and not in the account of what already happened.
     """
     note = value.resolution_note.strip()
-    return f"\n\n{note}" if note else ""
+    # Labelled, because this zone also holds the stage's own instructions and
+    # its context index. Without the label the user's words read as though the
+    # loop had always said them.
+    return f"\n\nAsked of you for this attempt:\n{note}" if note else ""
 
 
 def _report_block(report: StageReportBlock) -> str:

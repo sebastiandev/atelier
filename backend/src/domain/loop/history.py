@@ -51,16 +51,27 @@ def lines(
     """
     if level == LoopHistoryLevel.NONE:
         return ()
+    # A dismissed finding is settled. The report ledger keeps it, deliberately,
+    # as the record of what the reviewer said -- but replaying it here would
+    # put it back in front of an agent as live account of the run, which is
+    # the very loop the dismissal exists to break.
+    dismissed = frozenset(feedback.dismissed(loop))
     events = sorted(
-        (*_stage_events(loop, rendered_in_full), *_feedback_events(loop)),
-        key=lambda event: (event["pass_number"], event["seq"]),
+        (*_stage_events(loop, rendered_in_full, dismissed), *_feedback_events(loop)),
+        key=lambda event: (event["pass_number"], event["at"], event["seq"]),
     )
     if not events:
         return ()
-    current = max(1, actions.int_or_default(loop.get("pass_number"), 1))
+    # From the events, not the run: a snapshot with no pass counter would
+    # otherwise roll nothing up and hand a long run every pass in full, which
+    # is the failure this cap exists to prevent. It has to fail closed.
+    current = max(
+        max(1, actions.int_or_default(loop.get("pass_number"), 1)),
+        max(event["pass_number"] for event in events),
+    )
     oldest_rendered = current - ROLL_UP_AFTER_PASSES + 1
     rolled = [event for event in events if event["pass_number"] < oldest_rendered]
-    recent = [event for event in events if event["pass_number"] >= oldest_rendered]
+    recent = [event for event in events if oldest_rendered <= event["pass_number"] <= current]
     return (
         *_rolled_up(rolled),
         *(_render(event, level) for event in recent),
@@ -70,6 +81,7 @@ def lines(
 def _stage_events(
     loop: dict[str, Any],
     rendered_in_full: frozenset[str],
+    dismissed: frozenset[str],
 ) -> list[dict[str, Any]]:
     """Return one event per stage report occurrence in the run."""
     rows = loop.get("stages")
@@ -90,10 +102,17 @@ def _stage_events(
                     "kind": "stage",
                     "name": name,
                     "pass_number": max(1, actions.int_or_default(report.get("pass_number"), 1)),
+                    # `seq` counts one agent's transcript, so it cannot order
+                    # two stages against each other; the timestamp can.
+                    "at": actions.str_or_empty(report.get("recorded_at")),
                     "seq": actions.int_or_default(report.get("seq"), 0),
                     "outcome": actions.str_or_empty(report.get("outcome")),
                     "summary": actions.str_or_empty(report.get("summary")).strip(),
-                    "findings": actions.str_list(report.get("findings")),
+                    "findings": [
+                        item
+                        for item in actions.str_list(report.get("findings"))
+                        if item not in dismissed
+                    ],
                     "evidence": actions.str_or_empty(report.get("validation_evidence")).strip(),
                 }
             )
@@ -114,12 +133,19 @@ def _feedback_events(loop: dict[str, Any]) -> list[dict[str, Any]]:
             "pass_number": max(1, entry["pass_number"]),
             # After every stage report of the same pass: a request is answered
             # by work, so it reads last.
+            "at": "\uffff",
             "seq": 10**9,
-            "note": entry["note"] or _items_gist(entry["items"]),
+            "note": _one_line(entry["note"]) or _items_gist(entry["items"]),
         }
         for entry in feedback.records(loop)
         if entry["state"] == feedback.ANSWERED
-        and (entry["note"] or entry["items"])
+        # An attempt-scoped note was a hint for one relaunch, not something the
+        # user asked of the run; reading it back as a standing request that got
+        # answered overstates it.
+        and entry["scope"] == feedback.SCOPE_OPEN
+        # Something to quote, or the line says nothing at all -- which is the
+        # ambiguous one-liner this module exists to avoid.
+        and (_one_line(entry["note"]) or _items_gist(entry["items"]))
     ]
 
 
@@ -136,20 +162,28 @@ def _render(event: dict[str, Any], level: LoopHistoryLevel) -> str:
 def _summary_body(event: dict[str, Any]) -> str:
     """Return the one-line account of one stage report.
 
-    A bare outcome and a count is the thing this replaces, so a
-    changes-requested line carries the gist of what was actually found.
+    A bare outcome and a count is the thing this replaces, so what a stage
+    said and what a review found both survive: dropping the summary in favour
+    of the findings loses the reason, and dropping the outcome makes a
+    changes-requested report read exactly like a passing one.
     """
-    summary = event["summary"] or _NO_SUMMARY
-    if event["outcome"] == "changes_requested" and event["findings"]:
-        return f"changes requested -- {_gist(event['findings'])}"
-    if event["outcome"] in {"failed", "blocked_user"}:
-        return f"{event['outcome'].replace('_', ' ')} -- {summary}"
-    return summary
+    summary = _one_line(event["summary"]) or _NO_SUMMARY
+    gist = _gist(event["findings"])
+    outcome = event["outcome"].replace("_", " ")
+    if outcome and outcome != "pass":
+        return f"{outcome} -- {summary}" + (f" ({gist})" if gist else "")
+    return summary + (f" ({gist})" if gist else "")
 
 
 def _full_body(event: dict[str, Any]) -> str:
-    """Return the verbatim account of one stage report."""
-    parts = [event["summary"] or _NO_SUMMARY]
+    """Return the verbatim account of one stage report.
+
+    Carries the outcome as the summary level does: without it the higher level
+    was the less informative of the two, which cannot be right.
+    """
+    outcome = event["outcome"].replace("_", " ")
+    summary = event["summary"] or _NO_SUMMARY
+    parts = [f"{outcome} -- {summary}" if outcome and outcome != "pass" else summary]
     if event["findings"]:
         parts.extend(f"  - {item}" for item in event["findings"])
     if event["evidence"]:
@@ -172,19 +206,28 @@ def _rolled_up(events: list[dict[str, Any]]) -> tuple[str, ...]:
 
 
 def _outcome_gist(event: dict[str, Any]) -> str:
-    """Return the shortest honest account of one stage report."""
-    if event["outcome"] == "changes_requested":
-        return (
-            f"changes requested ({_gist(event['findings'])})"
-            if event["findings"]
-            else "changes requested"
-        )
-    return event["outcome"].replace("_", " ") or _NO_SUMMARY
+    """Return the shortest account of one stage report that still says something.
+
+    A rolled-up pass is still meant to be readable, so it keeps the outcome
+    and the summary. Collapsing to the bare outcome saved nothing -- at
+    ``summaries`` the event was already one line -- and threw away the only
+    part an agent could act on.
+    """
+    outcome = event["outcome"].replace("_", " ") or "no outcome reported"
+    summary = _one_line(event["summary"])
+    return f"{outcome} -- {summary}" if summary else outcome
+
+
+def _one_line(value: str) -> str:
+    """Collapse text to a single line so one event stays one line."""
+    return " ".join(value.split())
 
 
 def _gist(findings: list[str]) -> str:
-    """Return the findings as one readable clause."""
-    return "; ".join(item.strip().rstrip(".") for item in findings if item.strip())
+    """Return the findings as one readable clause, or nothing to say."""
+    return "; ".join(
+        gist for item in findings if (gist := _one_line(item).rstrip("."))
+    )
 
 
 def _items_gist(items: list[dict[str, Any]]) -> str:
@@ -192,7 +235,7 @@ def _items_gist(items: list[dict[str, Any]]) -> str:
     return "; ".join(
         body
         for item in items
-        if (body := actions.str_or_empty(item.get("body")).strip().rstrip("."))
+        if (body := _one_line(actions.str_or_empty(item.get("body"))).rstrip("."))
     )
 
 

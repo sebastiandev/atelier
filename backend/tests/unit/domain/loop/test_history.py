@@ -127,11 +127,11 @@ def test_passes_beyond_the_cap_collapse_to_one_line_each() -> None:
 
     lines = history.lines(loop, LoopHistoryLevel.FULL)
 
-    # Passes 1-2 roll up; 3-6 stay, which is the cap of four.
-    assert lines[0] == "pass 1 -- Implementation: pass"
-    assert lines[1] == "pass 2 -- Implementation: pass"
-    assert "Pass 1 work." not in "\n".join(lines)
-    assert "Pass 6 work." in "\n".join(lines)
+    # Passes 1-2 roll up; 3-6 stay, which is the cap of four. A rolled-up pass
+    # is still meant to be readable, so it keeps what the stage said.
+    assert lines[0] == "pass 1 -- Implementation: pass -- Pass 1 work."
+    assert lines[1] == "pass 2 -- Implementation: pass -- Pass 2 work."
+    assert "\n".join(lines).count("Pass 6 work.") == 1
 
 
 def test_events_render_oldest_first() -> None:
@@ -164,3 +164,181 @@ def test_an_occurrence_already_rendered_as_a_report_is_not_repeated() -> None:
 
     assert "Older pass." in "\n".join(lines)
     assert "Newest pass." not in "\n".join(lines)
+
+
+def test_changes_requested_keeps_the_reason_as_well_as_the_findings() -> None:
+    """The findings say what is wrong; the summary says why. Trading one for
+    the other is the loss this level exists to avoid."""
+    loop = _loop(
+        {
+            "stage": "review",
+            "pass_number": 1,
+            "outcome": "changes_requested",
+            "summary": "Two problems.",
+            "findings": ["Timeline parity."],
+        }
+    )
+
+    line = history.lines(loop, LoopHistoryLevel.SUMMARIES)[0]
+
+    assert "changes requested" in line
+    assert "Two problems." in line
+    assert "Timeline parity" in line
+
+
+def test_a_changes_requested_report_without_findings_still_says_so() -> None:
+    """Otherwise it is indistinguishable from a stage that passed."""
+    loop = _loop(
+        {
+            "stage": "review",
+            "pass_number": 1,
+            "outcome": "changes_requested",
+            "summary": "See the inline notes.",
+            "findings": [],
+        }
+    )
+
+    assert history.lines(loop, LoopHistoryLevel.SUMMARIES) == (
+        "pass 1 -- Review: changes requested -- See the inline notes.",
+    )
+
+
+def test_one_event_stays_one_line() -> None:
+    loop = _loop(
+        {
+            "stage": "implementation",
+            "pass_number": 1,
+            "outcome": "pass",
+            "summary": "Did it.\nThen did more.",
+        }
+    )
+
+    assert history.lines(loop, LoopHistoryLevel.SUMMARIES) == (
+        "pass 1 -- Implementation: Did it. Then did more.",
+    )
+
+
+def test_blank_findings_do_not_leave_a_dangling_clause() -> None:
+    loop = _loop(
+        {
+            "stage": "review",
+            "pass_number": 1,
+            "outcome": "changes_requested",
+            "summary": "Something.",
+            "findings": ["  ", ""],
+        }
+    )
+
+    assert history.lines(loop, LoopHistoryLevel.SUMMARIES) == (
+        "pass 1 -- Review: changes requested -- Something.",
+    )
+
+
+def test_stage_order_follows_when_they_reported_not_their_transcripts() -> None:
+    """`seq` counts one agent's transcript, so it cannot order two stages
+    against each other -- the review below has the lower seq of the two."""
+    loop = {
+        "pass_number": 1,
+        "stages": [
+            {
+                "id": "review",
+                "name": "Review",
+                "reports": [
+                    {
+                        "seq": 2,
+                        "pass_number": 1,
+                        "outcome": "pass",
+                        "summary": "Second.",
+                        "recorded_at": "2026-08-08T10:05:00+00:00",
+                    }
+                ],
+            },
+            {
+                "id": "implementation",
+                "name": "Implementation",
+                "reports": [
+                    {
+                        "seq": 97,
+                        "pass_number": 1,
+                        "outcome": "pass",
+                        "summary": "First.",
+                        "recorded_at": "2026-08-08T10:00:00+00:00",
+                    }
+                ],
+            },
+        ],
+    }
+
+    lines = history.lines(loop, LoopHistoryLevel.SUMMARIES)
+
+    assert [line.split(": ")[-1] for line in lines] == ["First.", "Second."]
+
+
+def test_the_cap_still_applies_when_the_run_lost_its_pass_counter() -> None:
+    """It has to fail closed: deriving the current pass only from the run
+    would hand a long run every pass in full."""
+    reports = [
+        {"stage": "impl", "pass_number": number, "outcome": "pass", "summary": f"Pass {number}."}
+        for number in range(1, 8)
+    ]
+    loop = _loop(*reports)
+    loop.pop("pass_number")
+
+    lines = history.lines(loop, LoopHistoryLevel.FULL)
+
+    # Passes 1-3 rolled to one line each; 4-7 rendered in full.
+    assert lines[0] == "pass 1 -- Impl: pass -- Pass 1."
+    assert len(lines) == 7
+
+
+def test_history_does_not_replay_findings_the_user_dismissed() -> None:
+    """The report ledger keeps them as the record of what the reviewer said.
+    Quoting them back as live account is the loop dismissal exists to break."""
+    loop = _loop(
+        {
+            "stage": "review",
+            "pass_number": 1,
+            "outcome": "changes_requested",
+            "summary": "Two problems.",
+            "findings": ["Fix the race.", "Rename the fixture."],
+        }
+    )
+    feedback.waive(loop, ["Rename the fixture."])
+
+    line = history.lines(loop, LoopHistoryLevel.SUMMARIES)[0]
+
+    assert "Fix the race" in line
+    assert "Rename the fixture" not in line
+
+
+def test_an_attempt_scoped_note_is_not_replayed_as_a_standing_request() -> None:
+    loop = _loop(
+        {"stage": "impl", "pass_number": 1, "outcome": "pass", "summary": "Did it."}
+    )
+    feedback.record(
+        loop,
+        source="retry",
+        note="Use the running container.",
+        pass_number=1,
+        scope=feedback.SCOPE_ATTEMPT,
+    )
+    loop["feedback"][0]["state"] = "answered"
+
+    assert "Use the running container." not in "\n".join(
+        history.lines(loop, LoopHistoryLevel.SUMMARIES)
+    )
+
+
+def test_full_history_says_what_the_outcome_was() -> None:
+    """Otherwise the higher level is the less informative of the two."""
+    loop = _loop(
+        {
+            "stage": "review",
+            "pass_number": 1,
+            "outcome": "changes_requested",
+            "summary": "Two problems.",
+            "findings": ["Timeline parity."],
+        }
+    )
+
+    assert "changes requested" in "\n".join(history.lines(loop, LoopHistoryLevel.FULL))
