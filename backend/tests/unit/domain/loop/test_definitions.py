@@ -10,8 +10,10 @@ from src.domain.loop.dtos import (
     LoopContextKind,
     LoopContextReference,
     LoopDefinition,
+    LoopHistoryLevel,
     LoopReportReference,
 )
+from src.domain.loop.snapshots import loop_stage_from_snapshot
 
 
 def test_builtins_are_valid_and_revisioned() -> None:
@@ -132,3 +134,43 @@ def test_a_report_from_an_unknown_stage_is_rejected() -> None:
 
 def test_the_symbolic_previous_is_always_valid() -> None:
     assert validate_definition(_reporting_loop("previous")) == ()
+
+
+def test_a_definition_carrying_an_unreadable_value_is_invalid() -> None:
+    """The editor rejects it before it is written, so anything that reaches a
+    stored definition came from a hand-edited file or an import — both fixable,
+    so both are reported rather than silently ignored."""
+    base = builtin_loop_definition("atelier-reviewed")
+    assert base is not None
+    stored = replace(
+        base,
+        stages=tuple(
+            replace(stage, warnings=("history: 'sumaries' is not a history level",))
+            if stage.step_id == "implementation"
+            else stage
+            for stage in base.stages
+        ),
+    )
+
+    errors = validate_definition(stored)
+
+    assert any("sumaries" in error for error in errors)
+
+
+def test_a_pinned_run_still_loads_a_stage_it_cannot_fully_honour() -> None:
+    """Reading stays lenient: a run in flight cannot be fixed by refusing to
+    load it, so the value is coerced and the note carried."""
+    stage = loop_stage_from_snapshot(
+        {
+            "id": "implementation",
+            "name": "Implementation",
+            "kind": "agent_task",
+            "context": [],
+            "reports": [],
+            "history": "sumaries",
+            "transitions": {},
+        }
+    )
+
+    assert stage.history == LoopHistoryLevel.NONE
+    assert stage.warnings

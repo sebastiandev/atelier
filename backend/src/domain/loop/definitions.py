@@ -104,6 +104,12 @@ def validate_definition(definition: LoopDefinition) -> tuple[str, ...]:
     for stage in definition.stages:
         errors.extend(_validate_stage(stage, known))
         errors.extend(_validate_reports(stage, definition.stages))
+        # Whatever the reader could not honour is an error *here*, where the
+        # definition is one the user can edit: the editor rejects it before it
+        # is ever written, so anything that reaches this point came from a
+        # hand-edited file or an import, and both are fixable. Reading stays
+        # lenient so a pinned run -- which is never validated -- keeps running.
+        errors.extend(f"Stage {stage.step_id!r} {note}." for note in stage.warnings)
 
     reachable = _reachable_stage_ids(definition.stages)
     for stage_id in ids:
