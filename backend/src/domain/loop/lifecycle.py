@@ -8,7 +8,7 @@ from src.domain.agents.launch import AgentLaunchRequest, launch_agent
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.artifacts.models import PrArtifact
 from src.domain.connections import ConnectionStore
-from src.domain.loop import actions, briefs, feedback, pr_lifecycle, runtime
+from src.domain.loop import actions, briefs, feedback, history, pr_lifecycle, runtime
 from src.domain.loop.agent_policy import apply_retry_overrides
 from src.domain.loop.dtos import (
     LoopContextKind,
@@ -684,6 +684,9 @@ def _resume_prompt(
             source_ref=target.source_ref,
             stage=stage,
             reports=build_report_blocks(report_rows),
+            history=history.lines(
+                loop, stage.history, frozenset(step for step, _ in report_rows)
+            ),
             previous_changed_files=next(
                 (
                     lines

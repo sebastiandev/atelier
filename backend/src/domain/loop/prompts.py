@@ -37,6 +37,7 @@ class StagePromptInput:
     source_ref: str
     stage: LoopStepDefinition
     reports: tuple[StageReportBlock, ...] = ()
+    history: tuple[str, ...] = ()
     previous_changed_files: tuple[str, ...] = ()
     workspace_diff: str = ""
     resolution_note: str = ""
@@ -122,13 +123,13 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         workspace = "\n\nCurrent workspace diff:\n" + (
             value.workspace_diff.strip() or "Workspace state unavailable."
         )
-    resolution = (
-        f"\n\nUser resolution:\n{value.resolution_note.strip()}"
-        if value.resolution_note.strip()
-        else ""
+    history = "\n\n" + "\n".join(value.history) if value.history else ""
+    happened = (
+        f"{history}{previous}{changed_files}{workspace}"
+        or "\nNothing yet; this is the first stage of the run."
     )
     waived = (
-        "\n\nAlready dismissed by the user -- do not raise again:\n"
+        "\n\n## Already dismissed by the user -- do not raise again\n"
         + "\n".join(f"- {item}" for item in value.waived_findings)
         if value.waived_findings
         else ""
@@ -149,11 +150,19 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         "authoritative. Stage instructions describe how to act; they must not replace "
         "or broaden the target. If they conflict, follow the target and report the "
         "conflict instead of implementing unrelated work.\n\n"
-        f"{posture}\n\n"
-        f"Stage instructions:\n{value.stage.instructions.strip()}"
+        f"{posture}\n"
+        # Three zones, and the boundary between them is the point. Everything
+        # above "Your task now" is an account of what already happened, in the
+        # past tense; everything below it is what to do. Mixing them is what
+        # let a request the user had already withdrawn keep reading as a live
+        # order, and what made an agent treat a prior stage's findings as its
+        # own instructions.
+        f"\n## What has already happened{happened}"
+        f"{waived}"
+        f"\n\n## Your task now\n{value.stage.instructions.strip()}"
         f"{_brief(value)}"
         f"{_context_index(value)}"
-        f"{previous}{changed_files}{workspace}{waived}{resolution}\n\n"
+        f"{_open_requests(value)}\n\n"
         "When this stage reaches a stopping point, respond with exactly one "
         "single-line JSON report and no Markdown fence:\n"
         f"{_report_example()}\n\n"
@@ -201,6 +210,17 @@ def _latest_pass(row: dict[str, Any]) -> int:
     latest = reports[-1] if isinstance(reports, list) and reports else None
     number = latest.get("pass_number") if isinstance(latest, dict) else None
     return number if isinstance(number, int) and not isinstance(number, bool) else 0
+
+
+def _open_requests(value: StagePromptInput) -> str:
+    """Render the outstanding requests as part of the stage's task.
+
+    Only these are instructions. An answered request reads as history, and a
+    stage that declares no feedback receives none at all -- the caller decides
+    by declaration, so there is nothing to suppress here.
+    """
+    note = value.resolution_note.strip()
+    return f"\n\n{note}" if note else ""
 
 
 def _report_block(report: StageReportBlock) -> str:

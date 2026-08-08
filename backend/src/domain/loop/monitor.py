@@ -15,7 +15,7 @@ from src.domain.agents.turn_monitor import observe_turn
 from src.domain.artifacts.models import PrArtifact
 from src.domain.artifacts.pr_status import is_terminal_pr_status
 from src.domain.connections import ConnectionStore
-from src.domain.loop import actions, briefs, feedback, pr_lifecycle
+from src.domain.loop import actions, briefs, feedback, history, pr_lifecycle
 from src.domain.loop import runtime as _loop_runtime
 from src.domain.loop.agent_policy import resolve_stage_agent_config
 from src.domain.loop.dtos import (
@@ -1320,6 +1320,9 @@ async def _send_stage_prompt(
             source_ref=target.source_ref,
             stage=stage,
             reports=build_report_blocks(report_rows),
+            history=history.lines(
+                loop, stage.history, frozenset(step for step, _ in report_rows)
+            ),
             previous_changed_files=changed_files,
             workspace_diff=workspace_diff,
             resolution_note=resolution_note,

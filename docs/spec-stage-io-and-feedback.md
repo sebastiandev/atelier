@@ -374,7 +374,7 @@ the measurable outcome of this section.
 |---|---|---|
 | **1** ✅ | `Feedback` record + store; migrate the five writers; `answered_by` on gate pass; `waived_findings` incl. `approve_as_is` | Deadlock gone; reviewer stops re-raising dismissed findings |
 | **2** ✅ | `inputs` / `reports` / `history` declaration; delete `corrective_note` and the suppression rules; validation | Composable stages; two-report reviewers |
-| **3** | Prompt zones + roll-up | Prompt pollution fixed |
+| **3** ✅ | Prompt zones + roll-up | Prompt pollution fixed |
 | **4** | `on_feedback` per stage; `run_stage` dispatch (§6b); loop-editor UI for all of it | Configurable routing; zero kind checks in the orchestrator |
 
 Phase 1 is where the defects live. Phases 2–3 are what stop them recurring.

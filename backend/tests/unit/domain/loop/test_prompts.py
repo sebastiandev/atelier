@@ -178,13 +178,13 @@ def test_a_declared_report_carries_its_content_once() -> None:
     assert prompt.count("Address this pull-request feedback") == 1
 
 
-def test_a_resolution_note_is_still_rendered_for_other_flows() -> None:
-    """Dropping the PR-feedback copy must not mute a human's resume note or a
-    review gate instruction, which use the same channel."""
+def test_an_open_request_is_part_of_the_task_not_the_history() -> None:
+    """An outstanding request is the only kind that reads as an instruction,
+    so it belongs below the task heading and nowhere above it."""
     prompt = _task_prompt(_task_stage(), resolution_note="Rebase onto master first.")
 
-    assert "User resolution:" in prompt
     assert "Rebase onto master first." in prompt
+    assert prompt.index("## Your task now") < prompt.index("Rebase onto master first.")
 
 
 def test_two_reports_render_as_separate_labelled_blocks() -> None:

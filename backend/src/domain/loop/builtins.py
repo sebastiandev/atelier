@@ -9,6 +9,7 @@ from src.domain.loop.dtos import (
     LoopContextReference,
     LoopDefinition,
     LoopDefinitionScope,
+    LoopHistoryLevel,
     LoopOutcome,
     LoopPermission,
     LoopReportField,
@@ -168,6 +169,9 @@ def _implementation(pass_to: str) -> LoopStepDefinition:
         # back for. This used to arrive as an injected corrective note; it is
         # a report, and now it is declared as one.
         reports=(LoopReportReference(),),
+        # A fresh agent every pass, so without this it cannot tell a first
+        # attempt from a fourth and retries what has already failed twice.
+        history=LoopHistoryLevel.SUMMARIES,
         agent=LoopAgentPolicy(
             session=LoopSessionPolicy.FRESH,
             permissions=LoopPermission.WRITE,
@@ -228,6 +232,7 @@ def _review(
         # Named rather than symbolic: a trailing corrective stage must not mask
         # the substantive account the review is configured to read.
         reports=(LoopReportReference("implementation"),),
+        history=LoopHistoryLevel.SUMMARIES,
         agent=LoopAgentPolicy(
             session=LoopSessionPolicy.FRESH,
             permissions=LoopPermission.READ,
