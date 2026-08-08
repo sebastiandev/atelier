@@ -160,7 +160,7 @@ def _implementation(pass_to: str) -> LoopStepDefinition:
         name="Implementation",
         kind=LoopStepKind.AGENT_TASK,
         instructions=_IMPLEMENTATION,
-        context=(
+        inputs=(
             LoopContextReference(LoopContextKind.TARGET, required=True),
             LoopContextReference(LoopContextKind.PLAN_INDEX),
             LoopContextReference(LoopContextKind.FEEDBACK),
@@ -222,7 +222,7 @@ def _review(
         name=name,
         kind=LoopStepKind.AGENT_REVIEW,
         instructions=instructions,
-        context=(
+        inputs=(
             LoopContextReference(LoopContextKind.TARGET, required=True),
             LoopContextReference(LoopContextKind.WORKSPACE_DIFF, required=True),
             LoopContextReference(LoopContextKind.WAIVED_FINDINGS),

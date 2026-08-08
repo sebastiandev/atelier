@@ -165,7 +165,7 @@ def resolve_stage_link(
         for field in (
             "name",
             "instructions",
-            "context",
+            "inputs",
             "reports",
             "history",
             "agent",

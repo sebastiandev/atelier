@@ -27,7 +27,7 @@ def _stage(*kinds: LoopContextKind, reports: tuple[str, ...] = ()) -> LoopStepDe
         name="Review",
         kind=LoopStepKind.AGENT_REVIEW,
         instructions="Review the implementation.",
-        context=tuple(LoopContextReference(kind) for kind in kinds),
+        inputs=tuple(LoopContextReference(kind) for kind in kinds),
         reports=tuple(LoopReportReference(from_stage=item) for item in reports),
     )
 
@@ -142,7 +142,7 @@ def _task_stage(*kinds: LoopContextKind, reports: tuple[str, ...] = ()) -> LoopS
         name="Implementation",
         kind=LoopStepKind.AGENT_TASK,
         instructions="Implement the target.",
-        context=tuple(LoopContextReference(kind) for kind in kinds),
+        inputs=tuple(LoopContextReference(kind) for kind in kinds),
         reports=tuple(LoopReportReference(from_stage=item) for item in reports),
     )
 

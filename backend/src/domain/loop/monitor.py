@@ -1300,7 +1300,7 @@ async def _send_stage_prompt(
             work_slug=req.work_slug,
             agent_slug=agent_slug,
         )
-        if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.context)
+        if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs)
         else ""
     )
     prompt = build_stage_prompt(
@@ -1377,14 +1377,14 @@ def _declared_feedback(stage: LoopStepDefinition, run: dict[str, Any]) -> str:
     report changes_requested, which reopened the pass that produced the request
     -- the run cycled and pushed every pass.
     """
-    if not any(item.kind == LoopContextKind.FEEDBACK for item in stage.context):
+    if not any(item.kind == LoopContextKind.FEEDBACK for item in stage.inputs):
         return ""
     return feedback.context(run)
 
 
 def _declared_waived(stage: LoopStepDefinition, loop: dict[str, Any]) -> tuple[str, ...]:
     """Return the dismissed findings, when the stage declares that input."""
-    if not any(item.kind == LoopContextKind.WAIVED_FINDINGS for item in stage.context):
+    if not any(item.kind == LoopContextKind.WAIVED_FINDINGS for item in stage.inputs):
         return ()
     return tuple(feedback.dismissed(loop))
 

@@ -1083,9 +1083,15 @@ class StageDefinitionRefSchema(BaseModel):
 
 
 class StageOverridesSchema(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str | None = None
     instructions: str | None = None
-    context: list[LoopContextReferenceSchema] | None = None
+    inputs: list[LoopContextReferenceSchema] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("inputs", "context"),
+        serialization_alias="inputs",
+    )
     reports: list[LoopReportReferenceSchema] | None = None
     history: Literal["none", "summaries", "full"] | None = None
     agent: LoopAgentPolicySchema | None = None
@@ -1099,11 +1105,19 @@ class StageOverridesSchema(BaseModel):
 
 
 class LoopStepDefinitionSchema(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     kind: LoopStepKind
     instructions: str = ""
-    context: list[LoopContextReferenceSchema] = Field(default_factory=list)
+    # `inputs` is the name; `context` is accepted so a client that has not
+    # caught up still validates, and a stored stage body round-trips either way.
+    inputs: list[LoopContextReferenceSchema] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("inputs", "context"),
+        serialization_alias="inputs",
+    )
     # Always emitted, matching the snapshot: its presence is what marks a stage
     # as stating its own inputs, and the run view compares the two shapes.
     reports: list[LoopReportReferenceSchema] = Field(default_factory=list)

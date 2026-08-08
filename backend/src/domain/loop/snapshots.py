@@ -86,7 +86,7 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
         "name": stage.name,
         "kind": stage.kind.value,
         "instructions": stage.instructions,
-        "context": [
+        "inputs": [
             {
                 "kind": item.kind.value,
                 "required": item.required,
@@ -94,7 +94,7 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
                 "step": item.step,
                 "ref": item.ref,
             }
-            for item in stage.context
+            for item in stage.inputs
             # `previous_report` is not an input any more: it is read back as a
             # `reports` entry below, and writing it in both places would put
             # the same declaration in two shapes again.
@@ -173,7 +173,7 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
 def _stage_from_snapshot(value: object) -> LoopStepDefinition:
     if not isinstance(value, dict):
         raise ValueError("loop stage snapshot must be a mapping")
-    context = value.get("context", [])
+    context = raw_inputs(value)
     transitions = value.get("transitions", {})
     retry = value.get("retry", {})
     if not isinstance(context, list) or not isinstance(transitions, dict):
@@ -185,7 +185,7 @@ def _stage_from_snapshot(value: object) -> LoopStepDefinition:
         name=_string(value, "name"),
         kind=LoopStepKind(_string(value, "kind")),
         instructions=_optional_string(value.get("instructions")),
-        context=inputs_from_raw(value, context),
+        inputs=inputs_from_raw(value, context),
         reports=reports_from_raw(value.get("reports"), context),
         history=history_from_raw(value.get("history")),
         agent=_agent_from_snapshot(value.get("agent")),
@@ -274,6 +274,20 @@ def loop_pr_config_from_snapshot(value: object) -> LoopPrConfig | None:
         base_branch=_optional_string(value.get("base_branch")) or "master",
         branch_name=_optional_string(value.get("branch_name")) or None,
     )
+
+
+def raw_inputs(stage: dict[str, Any]) -> list[Any]:
+    """Return a stage's raw input list under either key it may be stored as.
+
+    ``inputs`` is what this build writes. ``context`` is what every definition
+    written before the rename holds, and reading both is the whole cost of the
+    rename -- nothing downstream ever sees the old name.
+    """
+    for key in ("inputs", "context"):
+        value = stage.get(key)
+        if isinstance(value, list):
+            return value
+    return []
 
 
 def inputs_from_raw(
@@ -496,8 +510,8 @@ def _overrides_snapshot(overrides: StageOverrides) -> dict[str, Any]:
         ]
     if overrides.history is not None:
         value["history"] = overrides.history.value
-    if overrides.context is not None:
-        value["context"] = [
+    if overrides.inputs is not None:
+        value["inputs"] = [
             {
                 "kind": item.kind.value,
                 "required": item.required,
@@ -505,7 +519,7 @@ def _overrides_snapshot(overrides: StageOverrides) -> dict[str, Any]:
                 "step": item.step,
                 "ref": item.ref,
             }
-            for item in overrides.context
+            for item in overrides.inputs
         ]
     if overrides.agent is not None:
         value["agent"] = _stage_snapshot(
@@ -548,7 +562,7 @@ def _overrides_from_snapshot(value: object) -> StageOverrides | None:
         return None
     if not isinstance(value, dict):
         raise ValueError("stage overrides must be a mapping")
-    raw_context = value.get("context")
+    raw_context = raw_inputs(value) if ("inputs" in value or "context" in value) else None
     raw_retry = value.get("retry")
     raw_command = value.get("check_command")
     return StageOverrides(
@@ -561,7 +575,7 @@ def _overrides_from_snapshot(value: object) -> StageOverrides | None:
         # renders any more, and replaces the base's inputs wholesale -- so
         # without converting it here a linked stage loses both its report and
         # the inputs its base was granted.
-        context=(
+        inputs=(
             inputs_from_raw(value, raw_context) if isinstance(raw_context, list) else None
         ),
         reports=(
@@ -637,6 +651,7 @@ __all__ = [
     "loop_stage_from_document",
     "loop_stage_from_snapshot",
     "loop_stage_snapshot",
+    "raw_inputs",
     "report_contract_from_raw",
     "reports_from_raw",
     "stage_overrides_from_snapshot",

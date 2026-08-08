@@ -179,7 +179,7 @@ export function LoopRunInspector({
             </p>
             {selectedBrief?.note && <p className="run-loop-inspector-copy brief"><em className="tag info">brief</em>{selectedBrief.note}</p>}
           </InspectorField>
-          <InspectorField label={`Context · ${(selectedDefinition?.context.length ?? 0) + (selectedBrief?.context.length ?? 0)} refs`}>
+          <InspectorField label={`Context · ${(selectedDefinition?.inputs.length ?? 0) + (selectedBrief?.context.length ?? 0)} refs`}>
             <ContextRows definition={selectedDefinition} run={selectedRunStage} workContext={selectedBrief?.context ?? []} />
           </InspectorField>
           {selectedDefinition?.kind === "deterministic_check" && (
@@ -236,12 +236,12 @@ function ContextRows({
   run: PlanLoopStageRun;
   workContext: NonNullable<LoopBrief["stages"][number]>["context"];
 }) {
-  if ((!definition || definition.context.length === 0) && workContext.length === 0) {
+  if ((!definition || definition.inputs.length === 0) && workContext.length === 0) {
     return <span className="dim">No stage context configured.</span>;
   }
   return (
     <div className="run-loop-inspector-context">
-      {(definition?.context ?? []).map((context, index) => {
+      {(definition?.inputs ?? []).map((context, index) => {
         const label = context.paths.join(", ") || context.ref || context.step || context.kind;
         const warned = run.context_warnings.some((warning) => warning.includes(label));
         return (

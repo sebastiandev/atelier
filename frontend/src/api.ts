@@ -646,7 +646,7 @@ export type LoopStepDefinition = {
   name: string;
   kind: LoopStepKind;
   instructions: string;
-  context: LoopContextReference[];
+  inputs: LoopContextReference[];
   reports?: LoopReportReference[];
   history?: LoopHistoryLevel;
   agent: LoopAgentPolicy | null;
@@ -665,7 +665,7 @@ export type LoopStepDefinition = {
 export type StageOverrides = {
   name?: string | null;
   instructions?: string | null;
-  context?: LoopContextReference[] | null;
+  inputs?: LoopContextReference[] | null;
   reports?: LoopReportReference[] | null;
   history?: LoopHistoryLevel | null;
   agent?: LoopAgentPolicy | null;

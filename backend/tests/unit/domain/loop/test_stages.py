@@ -130,7 +130,7 @@ def test_a_legacy_previous_report_context_reads_as_a_declared_report() -> None:
     # Feedback and dismissed findings used to be injected by stage kind. A
     # review written before inputs were declared is granted both, or it would
     # start re-raising findings the user had already waived.
-    assert [item.kind.value for item in stage.context] == [
+    assert [item.kind.value for item in stage.inputs] == [
         "workspace_diff",
         "feedback",
         "waived_findings",
@@ -151,7 +151,7 @@ def test_a_legacy_previous_report_without_a_step_reads_as_previous() -> None:
     assert stage.reports == (LoopReportReference(from_stage="previous"),)
     # A publishing stage is not granted feedback: handing it the open block is
     # what made it report changes_requested and cycle the run.
-    assert stage.context == ()
+    assert stage.inputs == ()
 
 
 def test_a_stage_written_with_declarations_is_taken_at_its_word() -> None:
@@ -167,7 +167,7 @@ def test_a_stage_written_with_declarations_is_taken_at_its_word() -> None:
     )
 
     assert stage.reports == (LoopReportReference(from_stage="implementation", required=False),)
-    assert stage.context == ()
+    assert stage.inputs == ()
 
 
 def test_declarations_round_trip_through_a_snapshot() -> None:
@@ -176,7 +176,7 @@ def test_declarations_round_trip_through_a_snapshot() -> None:
         name="Review",
         kind=LoopStepKind.AGENT_REVIEW,
         instructions="Review it.",
-        context=(LoopContextReference(LoopContextKind.WAIVED_FINDINGS),),
+        inputs=(LoopContextReference(LoopContextKind.WAIVED_FINDINGS),),
         reports=(
             LoopReportReference(from_stage="implementation"),
             LoopReportReference(from_stage="lint", required=False),
@@ -188,7 +188,7 @@ def test_declarations_round_trip_through_a_snapshot() -> None:
 
     assert restored.reports == stage.reports
     assert restored.history == LoopHistoryLevel.SUMMARIES
-    assert restored.context == stage.context
+    assert restored.inputs == stage.inputs
 
 
 def test_a_stage_that_declares_no_feedback_keeps_declaring_none() -> None:
@@ -205,8 +205,8 @@ def test_a_stage_that_declares_no_feedback_keeps_declaring_none() -> None:
     once = loop_stage_from_snapshot(loop_stage_snapshot(stage))
     twice = loop_stage_from_snapshot(loop_stage_snapshot(once))
 
-    assert once.context == ()
-    assert twice.context == ()
+    assert once.inputs == ()
+    assert twice.inputs == ()
 
 
 def test_a_legacy_review_still_gets_the_findings_the_user_dismissed() -> None:
@@ -222,7 +222,7 @@ def test_a_legacy_review_still_gets_the_findings_the_user_dismissed() -> None:
         }
     )
 
-    assert [item.kind.value for item in stage.context] == [
+    assert [item.kind.value for item in stage.inputs] == [
         "workspace_diff",
         "feedback",
         "waived_findings",
@@ -256,7 +256,7 @@ def test_a_legacy_override_context_is_normalised_like_a_stage_body() -> None:
 
     assert restored is not None
     assert restored.reports == (LoopReportReference(from_stage="implementation"),)
-    assert [item.kind.value for item in (restored.context or ())] == [
+    assert [item.kind.value for item in (restored.inputs or ())] == [
         "workspace_diff",
         "feedback",
     ]

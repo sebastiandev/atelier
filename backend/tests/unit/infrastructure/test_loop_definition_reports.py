@@ -38,5 +38,5 @@ def test_a_stored_loop_written_before_reports_existed_converts_on_read() -> None
         replace(base, definition_id="my-loop", scope=LoopDefinitionScope.LIBRARY)
     ).stages if stage.step_id == "code-review")
 
-    assert [item.kind.value for item in review.context].count("waived_findings") == 1
-    assert [item.kind.value for item in review.context].count("feedback") == 1
+    assert [item.kind.value for item in review.inputs].count("waived_findings") == 1
+    assert [item.kind.value for item in review.inputs].count("feedback") == 1

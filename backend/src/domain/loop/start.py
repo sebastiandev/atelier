@@ -280,7 +280,7 @@ async def start(
                 work_slug=spec.work_slug,
                 agent_slug=agent.slug,
             )
-            if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in entry.context)
+            if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in entry.inputs)
             else ""
         )
         await runtime.send_loop_prompt(
@@ -410,7 +410,7 @@ def _resolve_contexts(
                 plan_index_ref=str(root / "planning-index-unavailable"),
                 dependencies=(),
                 shared_context_refs=shared_refs,
-                references=stage.context,
+                references=stage.inputs,
             )
         )
         for stage in stages

@@ -260,7 +260,7 @@ def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
     if stage.retry.timeout_minutes < 1:
         errors.append(f"{label} timeout must be at least one minute.")
 
-    for context in stage.context:
+    for context in stage.inputs:
         if context.kind == LoopContextKind.PREVIOUS_REPORT:
             if context.step and context.step not in known:
                 errors.append(f"{label} references an unknown previous-report stage.")

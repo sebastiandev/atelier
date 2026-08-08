@@ -293,7 +293,7 @@ def overrides_from_drift(
         instructions=(
             effective.instructions if effective.instructions != base.instructions else None
         ),
-        context=effective.context if effective.context != base.context else None,
+        inputs=effective.inputs if effective.inputs != base.inputs else None,
         reports=effective.reports if effective.reports != base.reports else None,
         history=effective.history if effective.history != base.history else None,
         agent=effective.agent if effective.agent != base.agent else None,
@@ -318,7 +318,7 @@ def overrides_from_drift(
     changed = (
         overrides.name,
         overrides.instructions,
-        overrides.context,
+        overrides.inputs,
         overrides.reports,
         overrides.history,
         overrides.agent,

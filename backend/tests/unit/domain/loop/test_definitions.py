@@ -36,8 +36,8 @@ def test_unsafe_context_path_invalidates_definition() -> None:
             source.stages[0],
             replace(
                 review,
-                context=(
-                    *review.context,
+                inputs=(
+                    *review.inputs,
                     LoopContextReference(
                         LoopContextKind.FILES,
                         paths=("../outside.md",),

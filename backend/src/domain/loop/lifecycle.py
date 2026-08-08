@@ -218,7 +218,7 @@ async def resume(
                             agent_slug=agent_slug,
                         )
                         if any(
-                            item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.context
+                            item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs
                         )
                         else ""
                     ),
@@ -450,7 +450,7 @@ async def request_changes(
                             agent_slug=agent_slug,
                         )
                         if any(
-                            item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.context
+                            item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs
                         )
                         else ""
                     ),
@@ -648,7 +648,7 @@ def _retry_note(resolution_note: str) -> str:
 
 def _declared_waived(stage: LoopStepDefinition, loop: dict[str, Any]) -> tuple[str, ...]:
     """Return the dismissed findings, when the stage declares that input."""
-    if not any(item.kind == LoopContextKind.WAIVED_FINDINGS for item in stage.context):
+    if not any(item.kind == LoopContextKind.WAIVED_FINDINGS for item in stage.inputs):
         return ()
     return tuple(feedback.dismissed(loop))
 
@@ -673,7 +673,7 @@ def _resume_prompt(
             if stage.kind == LoopStepKind.PR
             else (
                 feedback.context(target.run)
-                if any(item.kind == LoopContextKind.FEEDBACK for item in stage.context)
+                if any(item.kind == LoopContextKind.FEEDBACK for item in stage.inputs)
                 else ""
             ),
             resolution_note.strip(),

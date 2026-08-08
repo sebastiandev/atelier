@@ -40,6 +40,7 @@ from src.domain.loop.snapshots import (
     inputs_from_raw,
     loop_pr_config_from_snapshot,
     loop_pr_config_snapshot,
+    raw_inputs,
     report_contract_from_raw,
     reports_from_raw,
     stage_overrides_from_snapshot,
@@ -247,9 +248,9 @@ def _stage_from_data(
             "run scripts/migrate-loops.py"
         )
 
-    context_raw = value.get("context", [])
+    context_raw = raw_inputs(value)
     if not isinstance(context_raw, list):
-        raise ValueError(f"stage {step_id!r} context must be a list")
+        raise ValueError(f"stage {step_id!r} inputs must be a list")
     agent_raw = value.get("agent")
     retry_raw = value.get("retry", {})
     transitions_raw = value.get("transitions", {})
@@ -261,7 +262,7 @@ def _stage_from_data(
         instructions=instructions,
         # Through the shared seam, so a loop stored on disk before inputs were
         # declared reads exactly as a pinned run snapshot of the same age does.
-        context=inputs_from_raw(value, context_raw),
+        inputs=inputs_from_raw(value, context_raw),
         reports=reports_from_raw(value.get("reports"), context_raw),
         history=history_or_raise(value.get("history")),
         agent=_agent_from_data(agent_raw, kind),
@@ -404,10 +405,10 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
         }
     if stage.pr_config is not None:
         data["pr_config"] = loop_pr_config_snapshot(stage.pr_config)
-    if stage.context:
-        data["context"] = [
+    if stage.inputs:
+        data["inputs"] = [
             _context_to_data(item)
-            for item in stage.context
+            for item in stage.inputs
             if item.kind != LoopContextKind.PREVIOUS_REPORT
         ]
     # Always written, empty or not: its presence marks the stage as stating its

@@ -381,7 +381,7 @@ class StageOverrides:
 
     name: str | None = None
     instructions: str | None = None
-    context: tuple[LoopContextReference, ...] | None = None
+    inputs: tuple[LoopContextReference, ...] | None = None
     reports: tuple[LoopReportReference, ...] | None = None
     history: LoopHistoryLevel | None = None
     agent: LoopAgentPolicy | None = None
@@ -438,7 +438,7 @@ class LoopStepDefinition:
     name: str
     kind: LoopStepKind
     instructions: str = ""
-    context: tuple[LoopContextReference, ...] = ()
+    inputs: tuple[LoopContextReference, ...] = ()
     reports: tuple[LoopReportReference, ...] = ()
     history: LoopHistoryLevel = LoopHistoryLevel.NONE
     agent: LoopAgentPolicy | None = None

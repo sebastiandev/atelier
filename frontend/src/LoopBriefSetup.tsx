@@ -378,8 +378,8 @@ function StageBriefCard({
         </div>
         {pinned && <div className="loop-brief-pinned"><span>{pinned}</span><em className="tag">template</em></div>}
         {expanded && (
-          <ContextGroup title="Context" meta={`${stage.context.length} refs · read-only`}>
-            {stage.context.map((context, index) => (
+          <ContextGroup title="Context" meta={`${stage.inputs.length} refs · read-only`}>
+            {stage.inputs.map((context, index) => (
               <div className="loop-brief-context-row template" key={`${context.kind}-${index}`}>
                 <CheckIcon size={10} />
                 <code>{templateContextLabel(context)}</code>
@@ -387,7 +387,7 @@ function StageBriefCard({
                 <em className="tag">template</em>
               </div>
             ))}
-            {stage.context.length === 0 && <span className="loop-brief-empty">No template context.</span>}
+            {stage.inputs.length === 0 && <span className="loop-brief-empty">No template context.</span>}
           </ContextGroup>
         )}
       </div>
@@ -458,7 +458,7 @@ function StageBriefCard({
 
         {!expanded ? (
           <div className="loop-brief-context-summary">
-            <span>context · {stage.context.length} from loop · {brief.context.length} added</span>
+            <span>context · {stage.inputs.length} from loop · {brief.context.length} added</span>
             <button type="button" onClick={() => onAddContext("file")}>+ add for this work</button>
             <button type="button" onClick={onExpand}>expand ▸</button>
           </div>
@@ -553,7 +553,7 @@ function instructionSummary(instructions: string): string {
   return instructions.split(/\n+/).map((line) => line.replace(/^#+\s*/, "").trim()).find(Boolean) || "stage instructions";
 }
 
-function templateContextLabel(context: LoopStepDefinition["context"][number]): string {
+function templateContextLabel(context: LoopStepDefinition["inputs"][number]): string {
   return context.paths.join(", ") || context.ref || context.step || context.kind.replaceAll("_", " ");
 }
 

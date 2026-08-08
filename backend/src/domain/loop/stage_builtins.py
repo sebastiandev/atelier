@@ -85,7 +85,7 @@ def _implement() -> StageDefinition:
                 "Implement the target end to end. Follow repository guidance, "
                 "update tests, and report changed files and validation evidence."
             ),
-            context=(LoopContextReference(LoopContextKind.TARGET, required=True),),
+            inputs=(LoopContextReference(LoopContextKind.TARGET, required=True),),
             agent=LoopAgentPolicy(
                 session=LoopSessionPolicy.FRESH, permissions=LoopPermission.WRITE
             ),
@@ -124,7 +124,7 @@ def _review(definition_id: str, name: str, instructions: str) -> StageDefinition
             name=name,
             kind=LoopStepKind.AGENT_REVIEW,
             instructions=instructions,
-            context=(
+            inputs=(
                 LoopContextReference(LoopContextKind.TARGET, required=True),
                 LoopContextReference(LoopContextKind.WORKSPACE_DIFF, required=True),
             ),
@@ -168,7 +168,7 @@ def _create_pr() -> StageDefinition:
             name="Create PR",
             kind=LoopStepKind.PR,
             instructions=CREATE_PR_STAGE_INSTRUCTIONS,
-            context=(
+            inputs=(
                 LoopContextReference(LoopContextKind.WORKSPACE_DIFF, required=True),
                 LoopContextReference(LoopContextKind.CHANGED_FILES, required=True),
             ),

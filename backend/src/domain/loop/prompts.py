@@ -134,7 +134,7 @@ def prompt_type_for(stage: LoopStepDefinition) -> type[StagePromptInput]:
 
 
 def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
-    context_kinds = {item.kind for item in value.stage.context}
+    context_kinds = {item.kind for item in value.stage.inputs}
     previous = "".join(_report_block(report) for report in value.reports)
     changed_files = ""
     if LoopContextKind.CHANGED_FILES in context_kinds:
@@ -271,7 +271,7 @@ def _report_block(report: StageReportBlock) -> str:
 
 
 def _context_index(value: StagePromptInput) -> str:
-    context = value.stage.context
+    context = value.stage.inputs
     if not context:
         return ""
     if value.resolved_context:

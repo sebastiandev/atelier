@@ -2033,7 +2033,7 @@ def test_required_loop_context_blocks_before_agent_launch(
     assert forked.status_code == 201, forked.text
     definition = forked.json()
     review = next(stage for stage in definition["stages"] if stage["id"] == "code-review")
-    files_context = next(item for item in review["context"] if item["kind"] == "files")
+    files_context = next(item for item in review["inputs"] if item["kind"] == "files")
     files_context["required"] = True
     files_context["paths"] = ["docs/required-policy.md"]
     saved = app_client.put(

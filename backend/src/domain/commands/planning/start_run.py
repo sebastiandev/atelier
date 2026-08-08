@@ -242,7 +242,7 @@ async def execute(
                 agent_slug=agent_slug,
             )
             if any(
-                item.kind == LoopContextKind.WORKSPACE_DIFF for item in entry.context
+                item.kind == LoopContextKind.WORKSPACE_DIFF for item in entry.inputs
             )
             else ""
         ),
@@ -525,7 +525,7 @@ def _resolve_contexts(
                 plan_index_ref=str(plan_index),
                 dependencies=tuple(detail.artifact.dependencies),
                 shared_context_refs=shared_refs,
-                references=stage.context,
+                references=stage.inputs,
             )
         )
         for stage in definition.stages

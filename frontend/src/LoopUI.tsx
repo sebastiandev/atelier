@@ -723,11 +723,11 @@ function EditableRuntimeInputs({ stage, onPatch }: {
   stage: LoopStepDefinition;
   onPatch: (patch: Partial<LoopStepDefinition>) => void;
 }) {
-  const runtime = stage.context
+  const runtime = stage.inputs
     .map((item, index) => ({ item, index }))
     .filter(({ item }) => RUNTIME_CONTEXT_KINDS.some((kind) => kind.kind === item.kind));
   function patch(index: number, item: LoopContextReference) {
-    onPatch({ context: stage.context.map((current, itemIndex) => itemIndex === index ? item : current) });
+    onPatch({ inputs: stage.inputs.map((current, itemIndex) => itemIndex === index ? item : current) });
   }
   return <section className="loop-inspector-field stage-editor-section stage-runtime-editable">
     <header><strong>Run-time inputs</strong><small>bound by this loop · editable here, in the loop's context</small></header>
@@ -737,12 +737,12 @@ function EditableRuntimeInputs({ stage, onPatch }: {
         <select aria-label="Run-time input" value={item.kind} onChange={(event) => patch(index, { ...item, kind: event.target.value as LoopContextKind })}>{RUNTIME_CONTEXT_KINDS.map((kind) => <option key={kind.kind} value={kind.kind}>{kind.label.toLowerCase()}</option>)}</select>
         <button type="button" className={item.required ? "required active" : "required"} onClick={() => patch(index, { ...item, required: !item.required })}>{item.required ? "required" : "optional"}</button>
         <em className="tag info">injected</em>
-        <button type="button" className="btn ghost icon sm" onClick={() => onPatch({ context: stage.context.filter((_, itemIndex) => itemIndex !== index) })} aria-label={`Remove ${item.kind}`}>×</button>
+        <button type="button" className="btn ghost icon sm" onClick={() => onPatch({ inputs: stage.inputs.filter((_, itemIndex) => itemIndex !== index) })} aria-label={`Remove ${item.kind}`}>×</button>
       </div>)}
     </div>
     <label className="stage-runtime-add">+ add input<select aria-label="Add run-time input" value="" onChange={(event) => {
       if (!event.target.value) return;
-      onPatch({ context: [...stage.context, { kind: event.target.value as LoopContextKind, required: false, paths: [], step: null, ref: null }] });
+      onPatch({ inputs: [...stage.inputs, { kind: event.target.value as LoopContextKind, required: false, paths: [], step: null, ref: null }] });
     }}><option value="">Choose…</option>{RUNTIME_CONTEXT_KINDS.map((kind) => <option key={kind.kind} value={kind.kind}>{kind.label}</option>)}</select></label>
     <small className="stage-editor-footnote">The library copy keeps these read-only. Loops adjust them at link time.</small>
   </section>;
@@ -757,7 +757,7 @@ function StageContextSections({ stage, stages, rootPath, editableInputs, showBun
   onRootPath: (path: string) => void;
   onPatch: (patch: Partial<LoopStepDefinition>) => void;
 }) {
-  const runtimeInputs = stage.context.filter((item) =>
+  const runtimeInputs = stage.inputs.filter((item) =>
     RUNTIME_CONTEXT_KINDS.some((kind) => kind.kind === item.kind),
   );
   return <>
@@ -808,9 +808,9 @@ function ContextSubsetPanel({ stage, stages, rootPath, kinds, label, hint, addLa
   onPatch: (patch: Partial<LoopStepDefinition>) => void;
 }) {
   const allowed = new Set(kinds.map((item) => item.kind));
-  const subset = stage.context.filter((item) => allowed.has(item.kind));
+  const subset = stage.inputs.filter((item) => allowed.has(item.kind));
   return <ContextPanel
-    stage={{ ...stage, context: subset }}
+    stage={{ ...stage, inputs: subset }}
     stages={stages}
     rootPath={rootPath}
     kinds={kinds}
@@ -822,9 +822,9 @@ function ContextSubsetPanel({ stage, stages, rootPath, kinds, label, hint, addLa
     showSafetyNote={false}
     onRootPath={onRootPath}
     onPatch={(patch) => {
-      if (patch.context === undefined) return;
-      const other = stage.context.filter((item) => !allowed.has(item.kind));
-      onPatch({ context: subsetFirst ? [...patch.context, ...other] : [...other, ...patch.context] });
+      if (patch.inputs === undefined) return;
+      const other = stage.inputs.filter((item) => !allowed.has(item.kind));
+      onPatch({ inputs: subsetFirst ? [...patch.inputs, ...other] : [...other, ...patch.inputs] });
     }}
   />;
 }
@@ -1416,7 +1416,7 @@ function StageTimelineCard({
           <span className="loop-stage-card-meta">
             {stage.agent && <><i>{stage.agent.permissions ?? "inherit"}</i><i>{stage.agent.session} session</i></>}
             {stage.note_required != null && <i>brief {stage.note_required ? "required" : "optional"}</i>}
-            {stage.context.length > 0 && <i>{stage.context.length} context</i>}
+            {stage.inputs.length > 0 && <i>{stage.inputs.length} context</i>}
             {stage.kind === "user_approval" && <i>waits for you</i>}
           </span>
           <span className="loop-stage-card-actions" onClick={(event) => event.stopPropagation()}>
@@ -1579,12 +1579,12 @@ function ContextPanel({ stage, stages, rootPath, kinds = CONTEXT_KINDS, label = 
   onRootPath: (path: string) => void;
   onPatch: (patch: Partial<LoopStepDefinition>) => void;
 }) {
-  const context = stage.context;
+  const inputs = stage.inputs;
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
   const [pickerError, setPickerError] = useState<string | null>(null);
   const [choosingRoot, setChoosingRoot] = useState(false);
   function patch(index: number, next: LoopContextReference) {
-    onPatch({ context: context.map((item, itemIndex) => itemIndex === index ? next : item) });
+    onPatch({ inputs: inputs.map((item, itemIndex) => itemIndex === index ? next : item) });
   }
   function choosePath(index: number) {
     setPickerError(null);
@@ -1592,14 +1592,14 @@ function ContextPanel({ stage, stages, rootPath, kinds = CONTEXT_KINDS, label = 
     setChoosingRoot(!rootPath);
   }
   function add(kind: LoopContextKind) {
-    onPatch({ context: [...context, { kind, required: false, paths: [], step: null, ref: null }] });
-    if (compact && (kind === "files" || kind === "folder")) choosePath(context.length);
+    onPatch({ inputs: [...inputs, { kind, required: false, paths: [], step: null, ref: null }] });
+    if (compact && (kind === "files" || kind === "folder")) choosePath(inputs.length);
   }
   return (
     <>
       <InspectorField label={label} hint={hint}>
         <div className={`loop-context-list${compact ? " stage-bundled-list" : ""}`}>
-          {context.map((item, index) => {
+          {inputs.map((item, index) => {
             const meta = CONTEXT_KINDS.find((row) => row.kind === item.kind)!;
             if (compact) {
               const kindLabel = item.kind === "files" ? "file" : item.kind === "shared_context" ? "shared context" : item.kind;
@@ -1612,7 +1612,7 @@ function ContextPanel({ stage, stages, rootPath, kinds = CONTEXT_KINDS, label = 
                   ) : <code title={value}>{value}</code>}
                   <span>{kindLabel} · <button className={item.required ? "active" : ""} onClick={() => patch(index, { ...item, required: !item.required })}>{item.required ? "required" : "optional"}</button></span>
                   {!item.paths.length && (item.kind === "files" || item.kind === "folder") && <button className="btn sm" onClick={() => choosePath(index)}>Choose</button>}
-                  <button className="btn ghost icon sm" onClick={() => onPatch({ context: context.filter((_, itemIndex) => itemIndex !== index) })} aria-label={`Remove ${meta.label}`}>×</button>
+                  <button className="btn ghost icon sm" onClick={() => onPatch({ inputs: inputs.filter((_, itemIndex) => itemIndex !== index) })} aria-label={`Remove ${meta.label}`}>×</button>
                 </div>
               );
             }
@@ -1634,11 +1634,11 @@ function ContextPanel({ stage, stages, rootPath, kinds = CONTEXT_KINDS, label = 
                   {(item.kind === "note" || item.kind === "shared_context") && <input value={item.ref ?? ""} onChange={(event) => patch(index, { ...item, ref: event.target.value || null })} placeholder={item.kind === "note" ? "Context note" : "Shared context reference"} />}
                 </span>
                 <button className={"loop-required-toggle" + (item.required ? " active" : "")} onClick={() => patch(index, { ...item, required: !item.required })}>{item.required ? "required" : "optional"}</button>
-                <button className="btn ghost icon sm" onClick={() => onPatch({ context: context.filter((_, itemIndex) => itemIndex !== index) })}>×</button>
+                <button className="btn ghost icon sm" onClick={() => onPatch({ inputs: inputs.filter((_, itemIndex) => itemIndex !== index) })}>×</button>
               </div>
             );
           })}
-          {context.length === 0 && !compact && <div className="loop-inspector-note">No context references yet.</div>}
+          {inputs.length === 0 && !compact && <div className="loop-inspector-note">No context references yet.</div>}
         </div>
         {compact && <div className="loop-add-context stage-context-add">{kinds.filter((item) => item.kind !== "shared_context").map((item) => <button key={item.kind} onClick={() => add(item.kind)}>{item.kind === "files" ? "@" : item.kind === "folder" ? <FolderIcon size={10} /> : <EditIcon size={10} />} {item.kind === "files" ? "File" : item.label}</button>)}</div>}
       </InspectorField>
@@ -1659,11 +1659,11 @@ function ContextPanel({ stage, stages, rootPath, kinds = CONTEXT_KINDS, label = 
       {pickerIndex !== null && rootPath && (
         <FolderPickerDialog
           initialPath={rootPath}
-          mode={context[pickerIndex]?.kind === "files" ? "file" : "folder"}
+          mode={inputs[pickerIndex]?.kind === "files" ? "file" : "folder"}
           onCancel={() => setPickerIndex(null)}
           onPick={(path) => {
             const relative = relativeContextPath(rootPath, path);
-            const item = context[pickerIndex];
+            const item = inputs[pickerIndex];
             if (!relative || !item) {
               setPickerError("Choose a path inside the working folder.");
               setPickerIndex(null);
@@ -2017,7 +2017,7 @@ function stageFromPreset(preset: StagePreset, existing: LoopStepDefinition[]): L
     name: meta.name,
     kind: meta.kind,
     instructions: approval || check ? "" : presetInstructions(preset),
-    context: approval ? [] : pr ? [
+    inputs: approval ? [] : pr ? [
       { kind: "workspace_diff", required: true, paths: [], step: null, ref: null },
       { kind: "changed_files", required: true, paths: [], step: null, ref: null },
       { kind: "previous_report", required: true, paths: [], step: null, ref: null },
@@ -2098,7 +2098,7 @@ function newStageSeed(): StageEditorSeed {
 function newLocalStageSeed(existing: LoopStepDefinition[]): StageEditorSeed {
   const stage = stageFromPreset("custom", existing);
   stage.name = "";
-  stage.context = [];
+  stage.inputs = [];
   stage.transitions = {};
   return {
     definition: {
@@ -2123,7 +2123,7 @@ function withoutWiring(patch: Partial<LoopStepDefinition>): StageOverrides {
   return {
     ...(patch.name !== undefined ? { name: patch.name } : {}),
     ...(patch.instructions !== undefined ? { instructions: patch.instructions } : {}),
-    ...(patch.context !== undefined ? { context: patch.context } : {}),
+    ...(patch.inputs !== undefined ? { inputs: patch.inputs } : {}),
     ...(patch.agent !== undefined ? { agent: patch.agent } : {}),
     ...(patch.report_contract !== undefined ? { report_contract: patch.report_contract } : {}),
     ...(patch.retry !== undefined ? { retry: patch.retry } : {}),
@@ -2153,7 +2153,7 @@ function stageKindPatch(kind: LoopStepKind): Partial<LoopStepDefinition> {
   return {
     kind,
     instructions: defaults.instructions,
-    context: defaults.context,
+    inputs: defaults.inputs,
     agent: defaults.agent,
     report_contract: defaults.report_contract,
     retry: defaults.retry,
