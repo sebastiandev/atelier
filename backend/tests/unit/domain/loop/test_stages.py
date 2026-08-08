@@ -5,11 +5,18 @@ from dataclasses import replace
 import pytest
 
 from src.domain.loop.dtos import (
+    LoopContextKind,
+    LoopContextReference,
+    LoopHistoryLevel,
     LoopOutcome,
     LoopPrConfig,
+    LoopReportReference,
+    LoopStepDefinition,
+    LoopStepKind,
     StageDefinitionRef,
     StageOverrides,
 )
+from src.domain.loop.snapshots import loop_stage_from_snapshot, loop_stage_snapshot
 from src.domain.loop.stage_builtins import builtin_stage_definition
 from src.domain.loop.stages import (
     StageDefinitionInvalid,
@@ -96,3 +103,76 @@ def test_routed_undeclared_outcome_is_still_rejected() -> None:
 
     with pytest.raises(StageDefinitionInvalid, match="changes_requested"):
         resolve_stage_link(instance, source)
+
+
+def test_a_legacy_previous_report_context_reads_as_a_declared_report() -> None:
+    """The one seam. Everything downstream only ever sees the new shape."""
+    stage = loop_stage_from_snapshot(
+        {
+            "id": "code-review",
+            "name": "Code review",
+            "kind": "agent_review",
+            "context": [
+                {"kind": "workspace_diff", "required": True},
+                {"kind": "previous_report", "required": True, "step": "implementation"},
+            ],
+            "transitions": {},
+        }
+    )
+
+    assert stage.reports == (LoopReportReference(from_stage="implementation"),)
+    assert [item.kind.value for item in stage.context] == ["workspace_diff", "feedback"]
+
+
+def test_a_legacy_previous_report_without_a_step_reads_as_previous() -> None:
+    stage = loop_stage_from_snapshot(
+        {
+            "id": "create-pr",
+            "name": "Create PR",
+            "kind": "pr",
+            "context": [{"kind": "previous_report", "required": True}],
+            "transitions": {},
+        }
+    )
+
+    assert stage.reports == (LoopReportReference(from_stage="previous"),)
+    # A publishing stage is not granted feedback: handing it the open block is
+    # what made it report changes_requested and cycle the run.
+    assert stage.context == ()
+
+
+def test_a_stage_written_with_declarations_is_taken_at_its_word() -> None:
+    stage = loop_stage_from_snapshot(
+        {
+            "id": "publish",
+            "name": "Publish",
+            "kind": "agent_task",
+            "context": [],
+            "reports": [{"from": "implementation", "required": False}],
+            "transitions": {},
+        }
+    )
+
+    assert stage.reports == (LoopReportReference(from_stage="implementation", required=False),)
+    assert stage.context == ()
+
+
+def test_declarations_round_trip_through_a_snapshot() -> None:
+    stage = LoopStepDefinition(
+        step_id="review",
+        name="Review",
+        kind=LoopStepKind.AGENT_REVIEW,
+        instructions="Review it.",
+        context=(LoopContextReference(LoopContextKind.WAIVED_FINDINGS),),
+        reports=(
+            LoopReportReference(from_stage="implementation"),
+            LoopReportReference(from_stage="lint", required=False),
+        ),
+        history=LoopHistoryLevel.SUMMARIES,
+    )
+
+    restored = loop_stage_from_snapshot(loop_stage_snapshot(stage))
+
+    assert restored.reports == stage.reports
+    assert restored.history == LoopHistoryLevel.SUMMARIES
+    assert restored.context == stage.context

@@ -12,6 +12,7 @@ from src.domain.loop.dtos import (
     LoopOutcome,
     LoopPermission,
     LoopReportField,
+    LoopReportReference,
     LoopReportSchema,
     LoopRetryPolicy,
     LoopReviewGate,
@@ -161,7 +162,12 @@ def _implementation(pass_to: str) -> LoopStepDefinition:
         context=(
             LoopContextReference(LoopContextKind.TARGET, required=True),
             LoopContextReference(LoopContextKind.PLAN_INDEX),
+            LoopContextReference(LoopContextKind.FEEDBACK),
         ),
+        # The stage a review sends back to has to be shown what it was sent
+        # back for. This used to arrive as an injected corrective note; it is
+        # a report, and now it is declared as one.
+        reports=(LoopReportReference(),),
         agent=LoopAgentPolicy(
             session=LoopSessionPolicy.FRESH,
             permissions=LoopPermission.WRITE,
@@ -215,13 +221,13 @@ def _review(
         context=(
             LoopContextReference(LoopContextKind.TARGET, required=True),
             LoopContextReference(LoopContextKind.WORKSPACE_DIFF, required=True),
-            LoopContextReference(
-                LoopContextKind.PREVIOUS_REPORT,
-                required=True,
-                step="implementation",
-            ),
+            LoopContextReference(LoopContextKind.WAIVED_FINDINGS),
+            LoopContextReference(LoopContextKind.FEEDBACK),
             LoopContextReference(LoopContextKind.FILES, paths=policy_paths),
         ),
+        # Named rather than symbolic: a trailing corrective stage must not mask
+        # the substantive account the review is configured to read.
+        reports=(LoopReportReference("implementation"),),
         agent=LoopAgentPolicy(
             session=LoopSessionPolicy.FRESH,
             permissions=LoopPermission.READ,

@@ -6,11 +6,11 @@ from src.domain.loop.actions import (
     approved_command_prefix_from_request,
     claim_stale_permission_recovery,
     command_matches_approved_prefix,
-    declared_previous_row,
+    declared_report_rows,
     latest_changed_file_prompt_lines,
     start_next_pass,
 )
-from src.domain.loop.dtos import LoopContextKind, LoopContextReference
+from src.domain.loop.dtos import LoopReportReference
 
 
 def test_start_next_pass_persists_incremented_counter() -> None:
@@ -106,48 +106,56 @@ def test_latest_changed_files_follow_report_time_across_backward_passes() -> Non
     assert latest_changed_file_prompt_lines(loop) == ("src/new.py (+4/-1)",)
 
 
-def _stage(*steps: str | None):
+def _stage(*sources: str):
     class _Stage:
-        context = tuple(
-            LoopContextReference(kind=LoopContextKind.PREVIOUS_REPORT, step=step)
-            for step in steps
-        )
+        reports = tuple(LoopReportReference(from_stage=source) for source in sources)
 
     return _Stage()
 
 
-def test_declared_previous_row_returns_the_named_stage() -> None:
-    loop = {
-        "stages": [
-            {"id": "implementation", "summary": "Built the thing."},
-            {"id": "lint", "summary": "Fixed imports."},
-        ]
-    }
-
-    row = declared_previous_row(loop, _stage("implementation"))
-
-    assert row is not None
-    assert row["summary"] == "Built the thing."
+_LOOP = {
+    "stages": [
+        {"id": "implementation", "summary": "Built the thing."},
+        {"id": "lint", "summary": "Fixed imports."},
+    ]
+}
 
 
-def test_declared_previous_row_is_none_without_an_explicit_step() -> None:
-    loop = {"stages": [{"id": "implementation", "summary": "Built the thing."}]}
+def test_a_named_report_resolves_to_that_stage() -> None:
+    rows = declared_report_rows(_LOOP, _stage("implementation"), "lint")
 
-    assert declared_previous_row(loop, _stage(None)) is None
-
-
-def test_declared_previous_row_is_none_when_the_named_stage_has_no_row() -> None:
-    loop = {"stages": [{"id": "lint", "summary": "Fixed imports."}]}
-
-    assert declared_previous_row(loop, _stage("implementation")) is None
+    assert [(step, row["summary"]) for step, row in rows] == [
+        ("implementation", "Built the thing.")
+    ]
 
 
-def test_declared_previous_row_ignores_other_context_kinds() -> None:
-    class _Stage:
-        context = (
-            LoopContextReference(kind=LoopContextKind.WORKSPACE_DIFF, step="implementation"),
-        )
+def test_several_reports_resolve_in_declaration_order() -> None:
+    """A reviewer judging whether a correction answered the original finding
+    needs both accounts, which the single previous_report could never carry."""
+    rows = declared_report_rows(_LOOP, _stage("implementation", "lint"), "")
 
-    loop = {"stages": [{"id": "implementation", "summary": "Built the thing."}]}
+    assert [step for step, _ in rows] == ["implementation", "lint"]
 
-    assert declared_previous_row(loop, _Stage()) is None
+
+def test_previous_resolves_to_the_stage_that_reported_into_this_one() -> None:
+    rows = declared_report_rows(_LOOP, _stage("previous"), "lint")
+
+    assert [step for step, _ in rows] == ["lint"]
+
+
+def test_a_previous_that_repeats_a_named_stage_renders_once() -> None:
+    rows = declared_report_rows(_LOOP, _stage("implementation", "previous"), "implementation")
+
+    assert [step for step, _ in rows] == ["implementation"]
+
+
+def test_a_stage_declaring_no_report_resolves_none() -> None:
+    assert declared_report_rows(_LOOP, _stage(), "implementation") == []
+
+
+def test_a_report_naming_a_stage_with_no_row_is_skipped() -> None:
+    assert declared_report_rows(_LOOP, _stage("security-review"), "") == []
+
+
+def test_a_previous_with_nothing_to_resolve_against_is_skipped() -> None:
+    assert declared_report_rows(_LOOP, _stage("previous"), "") == []

@@ -5,15 +5,18 @@ from __future__ import annotations
 from typing import Any
 
 from src.domain.loop.dtos import (
+    PREVIOUS_STAGE,
     LoopAgentPolicy,
     LoopContextKind,
     LoopContextReference,
     LoopDefinition,
     LoopDefinitionScope,
+    LoopHistoryLevel,
     LoopOutcome,
     LoopPermission,
     LoopPrConfig,
     LoopReportField,
+    LoopReportReference,
     LoopReportSchema,
     LoopRetryPolicy,
     LoopReviewGate,
@@ -85,6 +88,10 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
                 "ref": item.ref,
             }
             for item in stage.context
+            # `previous_report` is not an input any more: it is read back as a
+            # `reports` entry below, and writing it in both places would put
+            # the same declaration in two shapes again.
+            if item.kind != LoopContextKind.PREVIOUS_REPORT
         ],
         "agent": (
             {
@@ -127,6 +134,14 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
         "check_adapter": stage.check_adapter,
         "check_command": list(stage.check_command),
     }
+    # Emitted only when declared, so a definition that never asked for either
+    # serialises exactly as it did before they existed.
+    if stage.reports:
+        value["reports"] = [
+            {"from": item.from_stage, "required": item.required} for item in stage.reports
+        ]
+    if stage.history != LoopHistoryLevel.NONE:
+        value["history"] = stage.history.value
     if stage.note_required is not None:
         value["note_required"] = stage.note_required
     if stage.review_gate is not None:
@@ -162,7 +177,9 @@ def _stage_from_snapshot(value: object) -> LoopStepDefinition:
         name=_string(value, "name"),
         kind=LoopStepKind(_string(value, "kind")),
         instructions=_optional_string(value.get("instructions")),
-        context=tuple(_context_from_snapshot(item) for item in context),
+        context=_inputs_from_snapshot(value, context),
+        reports=_reports_from_snapshot(value.get("reports"), context),
+        history=_history_from_snapshot(value.get("history")),
         agent=_agent_from_snapshot(value.get("agent")),
         report_contract=_optional_string(value.get("report_contract")) or "generic",
         retry=LoopRetryPolicy(
@@ -247,6 +264,77 @@ def loop_pr_config_from_snapshot(value: object) -> LoopPrConfig | None:
         base_branch=_optional_string(value.get("base_branch")) or "master",
         branch_name=_optional_string(value.get("branch_name")) or None,
     )
+
+
+def _inputs_from_snapshot(
+    stage: dict[str, Any],
+    context: list[Any],
+) -> tuple[LoopContextReference, ...]:
+    """Read a stage's declared inputs, converting the old shape when needed.
+
+    Two conversions. ``previous_report`` is not an input any more, so it drops
+    out here and comes back through :func:`_reports_from_snapshot`. And
+    feedback used to be injected into every stage except a PR stage rather than
+    declared, so a definition written before this existed is granted it on the
+    same terms -- otherwise every loop a user already has would silently stop
+    telling its stages what was asked of them.
+
+    Preconditions: ``stage`` is the raw stage snapshot; ``context`` is its raw
+    context list. Postconditions: the declared inputs, with at most one
+    ``feedback`` entry.
+    """
+    inputs = tuple(
+        item
+        for item in (_context_from_snapshot(row) for row in context)
+        if item.kind != LoopContextKind.PREVIOUS_REPORT
+    )
+    declares_feedback = any(item.kind == LoopContextKind.FEEDBACK for item in inputs)
+    written_before_inputs_existed = "reports" not in stage and not declares_feedback
+    if written_before_inputs_existed and _optional_string(stage.get("kind")) != LoopStepKind.PR:
+        return (*inputs, LoopContextReference(LoopContextKind.FEEDBACK))
+    return inputs
+
+
+def _reports_from_snapshot(value: object, context: list[Any]) -> tuple[LoopReportReference, ...]:
+    """Read a stage's declared reports, converting the old shape when absent.
+
+    This is the seam. A definition written before reports existed declared at
+    most one report as a ``previous_report`` context entry, whose optional
+    ``step`` named the stage to read; without a step it meant whichever stage
+    ran last. Both map onto one reference, so nothing downstream ever sees the
+    old shape.
+
+    Preconditions: ``context`` is the snapshot's raw context list.
+    Postconditions: an explicit ``reports`` list wins; otherwise the converted
+    entries, in declaration order. A stage that declared no report gets none --
+    which is what it effectively had.
+    """
+    if isinstance(value, list):
+        return tuple(
+            LoopReportReference(
+                from_stage=_optional_string(item.get("from")) or PREVIOUS_STAGE,
+                required=bool(item.get("required", True)),
+            )
+            for item in value
+            if isinstance(item, dict)
+        )
+    return tuple(
+        LoopReportReference(
+            from_stage=_optional_string(item.get("step")) or PREVIOUS_STAGE,
+            required=bool(item.get("required", False)),
+        )
+        for item in context
+        if isinstance(item, dict)
+        and _optional_string(item.get("kind")) == LoopContextKind.PREVIOUS_REPORT.value
+    )
+
+
+def _history_from_snapshot(value: object) -> LoopHistoryLevel:
+    """Read a stage's history level, defaulting to the old behaviour of none."""
+    try:
+        return LoopHistoryLevel(_optional_string(value))
+    except ValueError:
+        return LoopHistoryLevel.NONE
 
 
 def _context_from_snapshot(value: object) -> LoopContextReference:

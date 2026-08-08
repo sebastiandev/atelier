@@ -42,6 +42,7 @@ from src.domain.loop.prompts import (
     PrStagePrompt,
     ReviewStagePrompt,
     TaskStagePrompt,
+    build_report_blocks,
     build_stage_prompt,
     stage_inactivity_recovery_prompt,
     stage_report_repair_prompt,
@@ -924,7 +925,7 @@ async def _advance_after_stage_report(
         next_stage,
         next_row,
         next_agent,
-        report,
+        current_id,
         resolution_note=resolution_note,
     )
     next_row["status"] = LoopStepStatus.RUNNING.value
@@ -939,6 +940,10 @@ async def _advance_after_stage_report(
     ):
         loop["source_agent_slug"] = next_agent
     loop["current_stage_id"] = next_stage.step_id
+    # What `previous` resolves to. A retry builds its prompt long after this
+    # transition and cannot re-derive it from stage order, because the stage
+    # that reported into this one is not always the one before it.
+    loop["previous_stage_id"] = current_id
     loop["last_checked_seq"] = cursor
     loop["status"] = LoopStatus.RUNNING.value
     loop["status_reason"] = f"{next_stage.name} is running."
@@ -1257,7 +1262,7 @@ async def _send_stage_prompt(
     stage: LoopStepDefinition,
     stage_row: dict[str, Any],
     agent_slug: str,
-    previous: LoopStageReport,
+    previous_stage_id: str,
     *,
     resolution_note: str = "",
 ) -> None:
@@ -1275,48 +1280,27 @@ async def _send_stage_prompt(
             for value in (resolution_note.strip(), pr_lifecycle.prompt_context(target.run))
             if value
         )
-    if previous.outcome == LoopOutcome.CHANGES_REQUESTED and not any(
-        item.kind == LoopContextKind.PREVIOUS_REPORT for item in stage.context
-    ):
-        corrective = _changes_requested_note(previous)
-        # A retry launches a fresh agent and gets no note from its caller, so
-        # the only corrective input this stage ever had has to outlive the
-        # prompt that carried it. A stage declaring `previous_report` rebuilds
-        # it from the report itself and is deliberately not stored here.
-        stage_row["corrective_note"] = corrective
-        resolution_note = "\n\n".join(
-            value for value in (corrective, resolution_note.strip()) if value
-        )
-    else:
-        stage_row.pop("corrective_note", None)
+    # Only what the stage declares is rendered. A stage that wants the account
+    # of the changes-requested report that sent it here declares that report,
+    # and one that acts on the user's requests declares `feedback`; there is
+    # nothing left to inject on any stage's behalf.
     resolution_note = "\n\n".join(
-        value for value in (_open_feedback_for(stage, target.run), resolution_note.strip()) if value
+        value
+        for value in (_declared_feedback(stage, target.run), resolution_note.strip())
+        if value
     )
     brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
     brief_note, brief_context = briefs.prompt_values(brief, stage.step_id)
-    declared = actions.declared_previous_row(
-        actions.dict_or_empty(target.run.get("loop")), stage
-    )
-    summary, findings, evidence, reported_files = (
+    loop = actions.dict_or_empty(target.run.get("loop"))
+    report_rows = actions.declared_report_rows(loop, stage, previous_stage_id)
+    changed_files = next(
         (
-            actions.str_or_empty(declared.get("summary")),
-            tuple(actions.str_list(declared.get("findings"))),
-            actions.str_or_empty(declared.get("validation_evidence")),
-            actions.changed_file_prompt_lines(declared.get("changed_files")),
-        )
-        if declared is not None
-        else (
-            previous.summary,
-            previous.findings,
-            previous.validation_evidence,
-            actions.changed_file_prompt_lines(previous.changed_files),
-        )
+            lines
+            for _, row in report_rows
+            if (lines := actions.changed_file_prompt_lines(row.get("changed_files")))
+        ),
+        actions.latest_changed_file_prompt_lines(loop),
     )
-    changed_files = reported_files
-    if not changed_files:
-        changed_files = actions.latest_changed_file_prompt_lines(
-            actions.dict_or_empty(target.run.get("loop"))
-        )
     workspace_diff = (
         _loop_runtime.workspace_prompt_context(
             workstore,
@@ -1335,9 +1319,7 @@ async def _send_stage_prompt(
             artifact_title=target.title,
             source_ref=target.source_ref,
             stage=stage,
-            previous_summary=summary,
-            previous_findings=findings,
-            previous_validation_evidence=evidence,
+            reports=build_report_blocks(report_rows),
             previous_changed_files=changed_files,
             workspace_diff=workspace_diff,
             resolution_note=resolution_note,
@@ -1345,7 +1327,7 @@ async def _send_stage_prompt(
             context_warnings=tuple(actions.str_list(stage_row.get("context_warnings"))),
             brief_note=brief_note,
             brief_context=brief_context,
-            waived_findings=_waived_for(stage, target.run),
+            waived_findings=_declared_waived(stage, loop),
         )
     )
     await _loop_runtime.send_loop_prompt(
@@ -1361,44 +1343,23 @@ async def _send_stage_prompt(
     )
 
 
-def _open_feedback_for(stage: LoopStepDefinition, run: dict[str, Any]) -> str:
-    """Return the outstanding requests this stage is meant to act on.
+def _declared_feedback(stage: LoopStepDefinition, run: dict[str, Any]) -> str:
+    """Return the outstanding requests, when the stage declares that input.
 
-    A PR stage publishes; it is not the stage a request is routed to, and its
-    own scope contract forbids implementing one. Handing it the open block made
-    it report changes_requested, which reopened the pass that produced the
-    request -- the run cycled and pushed every pass. What it needs instead is
-    the past-tense account of what this push answers, which
-    ``pr_lifecycle.prompt_context`` already gives it.
-
-    Keyed on the stage kind until stages declare their inputs, at which point a
-    PR stage simply does not declare feedback.
+    A publishing stage does not declare it. Handing one the open block made it
+    report changes_requested, which reopened the pass that produced the request
+    -- the run cycled and pushed every pass.
     """
-    if stage.kind == LoopStepKind.PR:
+    if not any(item.kind == LoopContextKind.FEEDBACK for item in stage.context):
         return ""
     return feedback.context(run)
 
 
-def _waived_for(stage: LoopStepDefinition, run: dict[str, Any]) -> tuple[str, ...]:
-    """Return the findings a reviewer must not raise again.
-
-    Only reviewers are told: an implementation stage has nothing to do with a
-    finding nobody wants acted on. Keyed on the stage kind until stages declare
-    their inputs, at which point this becomes one more declared input.
-    """
-    if stage.kind != LoopStepKind.AGENT_REVIEW:
+def _declared_waived(stage: LoopStepDefinition, loop: dict[str, Any]) -> tuple[str, ...]:
+    """Return the dismissed findings, when the stage declares that input."""
+    if not any(item.kind == LoopContextKind.WAIVED_FINDINGS for item in stage.context):
         return ()
-    return tuple(feedback.dismissed(actions.dict_or_empty(run.get("loop"))))
-
-
-def _changes_requested_note(report: LoopStageReport) -> str:
-    """Return mandatory corrective input for a backward stage transition."""
-    lines = ["Required changes from the prior stage:", f"Summary: {report.summary}"]
-    if report.findings:
-        lines.extend(("Findings:", *(f"- {item}" for item in report.findings)))
-    if report.validation_evidence:
-        lines.extend(("Validation evidence:", report.validation_evidence))
-    return "\n".join(lines)
+    return tuple(feedback.dismissed(loop))
 
 
 def _hold_at_review_gate(
@@ -1566,10 +1527,9 @@ async def _apply_pr_feedback_decision(
     if stage_row is None:
         raise LoopTransitionInvalid(f"loop stage state not found: {stage_id}")
     summary = actions.str_or_empty(decision.get("summary"))
-    # Summary only. Putting the same note in `findings` made
-    # `_changes_requested_note` render it twice — once as `Summary:` and again
-    # as a single `Findings:` bullet — and a finding is meant to be a discrete
-    # review point, not the whole note.
+    # Summary only. Putting the same note in `findings` rendered it twice --
+    # once as `Summary:` and again as a single `Findings:` bullet -- and a
+    # finding is meant to be a discrete review point, not the whole note.
     report = LoopStageReport(
         outcome=LoopOutcome.CHANGES_REQUESTED,
         summary=summary,
@@ -1654,6 +1614,12 @@ async def _apply_review_gate_decision(
             "enforced_findings": sorted(enforced),
             "instruction": actions.str_or_empty(decision.get("instruction")),
         }
+    # The row is the stage's current account and the ledger entry above is the
+    # immutable record of what the reviewer actually said. Only the account
+    # narrows to what the user enforced, because that is what the stage this
+    # sends back to now declares as its report -- and a waived finding must not
+    # travel back as though the user had asked for it.
+    stage_row["findings"] = [finding for index, finding in enumerate(findings) if index in enforced]
     if choice == "send_back" and bool(gate.get("passes_spent")):
         next_limit = actions.int_or_default(gate.get("passes_used"), 0) + 1
         pass_counts = loop.setdefault("review_gate_passes", {})

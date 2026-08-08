@@ -298,7 +298,9 @@ def _save(
     locations: LoopDefinitionLocations,
 ) -> StageDefinitionResponse:
     try:
-        stage = loop_stage_from_snapshot(payload.stage.model_dump(mode="json", exclude_none=True))
+        stage = loop_stage_from_snapshot(
+            payload.stage.model_dump(mode="json", exclude_none=True, by_alias=True)
+        )
         definition = StageDefinition(
             definition_id=payload.id,
             name=payload.name,

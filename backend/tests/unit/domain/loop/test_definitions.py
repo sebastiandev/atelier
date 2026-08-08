@@ -4,9 +4,14 @@ from dataclasses import replace
 
 import pytest
 
-from src.domain.loop.builtins import builtin_loop_definitions
-from src.domain.loop.definitions import prepare_definition
-from src.domain.loop.dtos import LoopContextKind, LoopContextReference
+from src.domain.loop.builtins import builtin_loop_definition, builtin_loop_definitions
+from src.domain.loop.definitions import prepare_definition, validate_definition
+from src.domain.loop.dtos import (
+    LoopContextKind,
+    LoopContextReference,
+    LoopDefinition,
+    LoopReportReference,
+)
 
 
 def test_builtins_are_valid_and_revisioned() -> None:
@@ -98,3 +103,33 @@ def test_slugify_definition_id_matches_the_editor_rule() -> None:
     assert slugify_definition_id("  Spaces --and-- symbols!! ") == "spaces-and-symbols"
     assert slugify_definition_id("Shiphero-code") == "shiphero-code"
     assert slugify_definition_id("!!!") == ""
+
+
+def _reporting_loop(from_stage: str) -> LoopDefinition:
+    base = builtin_loop_definition("atelier-reviewed")
+    assert base is not None
+    stages = tuple(
+        replace(stage, reports=(LoopReportReference(from_stage=from_stage),))
+        if stage.step_id == "implementation"
+        else stage
+        for stage in base.stages
+    )
+    return replace(base, stages=stages)
+
+
+def test_a_report_from_a_stage_that_cannot_run_first_is_rejected() -> None:
+    """An implementation cannot read the review that has not run yet, and a
+    prompt that silently renders nothing is worse than an editing error."""
+    errors = validate_definition(_reporting_loop("code-review"))
+
+    assert any("cannot run first" in error for error in errors)
+
+
+def test_a_report_from_an_unknown_stage_is_rejected() -> None:
+    errors = validate_definition(_reporting_loop("nonexistent"))
+
+    assert any("unknown stage" in error for error in errors)
+
+
+def test_the_symbolic_previous_is_always_valid() -> None:
+    assert validate_definition(_reporting_loop("previous")) == ()

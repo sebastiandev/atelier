@@ -373,7 +373,7 @@ the measurable outcome of this section.
 | Phase | Work | Ships value |
 |---|---|---|
 | **1** ✅ | `Feedback` record + store; migrate the five writers; `answered_by` on gate pass; `waived_findings` incl. `approve_as_is` | Deadlock gone; reviewer stops re-raising dismissed findings |
-| **2** | `inputs` / `reports` / `history` declaration; delete `corrective_note` and the suppression rules; validation | Composable stages; two-report reviewers |
+| **2** ✅ | `inputs` / `reports` / `history` declaration; delete `corrective_note` and the suppression rules; validation | Composable stages; two-report reviewers |
 | **3** | Prompt zones + roll-up | Prompt pollution fixed |
 | **4** | `on_feedback` per stage; `run_stage` dispatch (§6b); loop-editor UI for all of it | Configurable routing; zero kind checks in the orchestrator |
 
@@ -390,6 +390,25 @@ goes with `reports` in phase 2.
 Waiving on approval happens in `lifecycle.accept`, on both the terminal and the
 continuing branch, because the decision is the user's and the run may still
 overwrite `loop["findings"]` with a later stage's report before it ends.
+
+**Phase 2 landed.** `reports` and `history` are declared on the stage;
+`corrective_note`, the substring de-dup, and both `stage.kind` stopgaps are
+deleted. Two additions the draft did not name were needed to finish it:
+
+- **`feedback` is an input kind.** §3a moves everything injected into the
+  declaration, and feedback was the last injected item with a per-kind rule
+  ("skipped for PR stages", §2b). It is now declared like any other input, and
+  a PR stage simply does not declare it — which is what makes §3e's fallback
+  safe without a kind check.
+- **`loop["previous_stage_id"]`.** The symbolic `previous` needs a definite
+  referent on the resume path, which builds its prompt long after the
+  transition and cannot re-derive it from stage order.
+
+Legacy definitions are granted `feedback` at the reader (except PR stages),
+which is exactly the injection rule it replaces, so existing loops behave
+identically. The `context` field is not yet renamed to `inputs`; that is a
+mechanical rename of ~90 call sites, deliberately left as its own change so it
+does not obscure this one.
 
 ## 8. Decisions
 

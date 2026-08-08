@@ -9,6 +9,7 @@ from src.domain.loop.dtos import (
     LoopOutcome,
     LoopPermission,
     LoopPrConfig,
+    LoopReportReference,
     LoopRetryPolicy,
     LoopReviewGate,
     LoopSessionPolicy,
@@ -170,8 +171,8 @@ def _create_pr() -> StageDefinition:
             context=(
                 LoopContextReference(LoopContextKind.WORKSPACE_DIFF, required=True),
                 LoopContextReference(LoopContextKind.CHANGED_FILES, required=True),
-                LoopContextReference(LoopContextKind.PREVIOUS_REPORT, required=True),
             ),
+            reports=(LoopReportReference(),),
             agent=LoopAgentPolicy(
                 session=LoopSessionPolicy.FRESH,
                 permissions=LoopPermission.WRITE,

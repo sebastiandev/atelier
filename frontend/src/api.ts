@@ -516,7 +516,9 @@ export type LoopContextKind =
   | "files"
   | "folder"
   | "note"
-  | "shared_context";
+  | "shared_context"
+  | "waived_findings"
+  | "feedback";
 export type LoopOutcome =
   | "pass"
   | "changes_requested"
@@ -554,6 +556,16 @@ export type LoopContextReference = {
   step: string | null;
   ref: string | null;
 };
+
+/** One earlier stage report a stage declares that it reads. */
+export type LoopReportReference = {
+  /** A stage id, or "previous" for whichever stage reported last. */
+  from: string;
+  required: boolean;
+};
+
+/** How much of the run's own account a stage is given. */
+export type LoopHistoryLevel = "none" | "summaries" | "full";
 
 export type LoopAgentPolicy = {
   session: LoopSessionPolicy;
@@ -635,6 +647,8 @@ export type LoopStepDefinition = {
   kind: LoopStepKind;
   instructions: string;
   context: LoopContextReference[];
+  reports?: LoopReportReference[];
+  history?: LoopHistoryLevel;
   agent: LoopAgentPolicy | null;
   report_contract: string;
   retry: LoopRetryPolicy;
@@ -652,6 +666,8 @@ export type StageOverrides = {
   name?: string | null;
   instructions?: string | null;
   context?: LoopContextReference[] | null;
+  reports?: LoopReportReference[] | null;
+  history?: LoopHistoryLevel | null;
   agent?: LoopAgentPolicy | null;
   report_contract?: string | null;
   retry?: LoopRetryPolicy | null;

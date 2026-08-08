@@ -1068,6 +1068,15 @@ class LoopPrConfigSchema(BaseModel):
     branch_name: str | None = None
 
 
+class LoopReportReferenceSchema(BaseModel):
+    """One earlier stage report a stage declares that it reads."""
+
+    from_stage: str = Field(default="previous", alias="from")
+    required: bool = True
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class StageDefinitionRefSchema(BaseModel):
     definition_id: str = Field(min_length=1)
     revision: str = Field(min_length=1)
@@ -1077,6 +1086,8 @@ class StageOverridesSchema(BaseModel):
     name: str | None = None
     instructions: str | None = None
     context: list[LoopContextReferenceSchema] | None = None
+    reports: list[LoopReportReferenceSchema] | None = None
+    history: Literal["none", "summaries", "full"] | None = None
     agent: LoopAgentPolicySchema | None = None
     report_contract: str | None = None
     retry: LoopRetryPolicySchema | None = None
@@ -1093,6 +1104,14 @@ class LoopStepDefinitionSchema(BaseModel):
     kind: LoopStepKind
     instructions: str = ""
     context: list[LoopContextReferenceSchema] = Field(default_factory=list)
+    # Emitted only when declared, so the wire shape matches the pinned run
+    # snapshot exactly -- the run view compares the two.
+    reports: list[LoopReportReferenceSchema] = Field(
+        default_factory=list, exclude_if=lambda value: not value
+    )
+    history: Literal["none", "summaries", "full"] = Field(
+        default="none", exclude_if=lambda value: value == "none"
+    )
     agent: LoopAgentPolicySchema | None = None
     report_contract: str = "generic"
     retry: LoopRetryPolicySchema = Field(default_factory=LoopRetryPolicySchema)
@@ -1288,6 +1307,7 @@ __all__ = [
     "LoopContextReferenceSchema",
     "LoopDefinitionResponse",
     "LoopPrConfigSchema",
+    "LoopReportReferenceSchema",
     "LoopRetryPolicySchema",
     "LoopStageBriefSchema",
     "LoopStepDefinitionSchema",

@@ -654,7 +654,7 @@ def _to_domain(
         forked_from=payload.forked_from,
         stages=tuple(
             loop_stage_from_snapshot(
-                stage.model_dump(mode="json", exclude_none=True)
+                stage.model_dump(mode="json", exclude_none=True, by_alias=True)
             )
             for stage in payload.stages
         ),

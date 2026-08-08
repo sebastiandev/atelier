@@ -164,6 +164,8 @@ class LoopContextKind(StrEnum):
     FOLDER = "folder"
     NOTE = "note"
     SHARED_CONTEXT = "shared_context"
+    WAIVED_FINDINGS = "waived_findings"
+    FEEDBACK = "feedback"
 
 
 class LoopBriefContextKind(StrEnum):
@@ -266,6 +268,37 @@ class LoopContextReference:
     paths: tuple[str, ...] = ()
     step: str | None = None
     ref: str | None = None
+
+
+PREVIOUS_STAGE = "previous"
+"""``from:`` value meaning whichever stage reported last, whatever it was."""
+
+
+class LoopHistoryLevel(StrEnum):
+    """How much of the run's own account a stage is given.
+
+    An axis of its own, independent of which reports a stage declares: a
+    reviewer may want one report in full and a one-line trace of everything
+    else, and today it can have neither.
+    """
+
+    NONE = "none"
+    SUMMARIES = "summaries"
+    FULL = "full"
+
+
+@dataclass(frozen=True)
+class LoopReportReference:
+    """One stage report a stage declares that it reads.
+
+    ``from_stage`` is a stage id or :data:`PREVIOUS_STAGE`. Declaring several
+    is the point: a reviewer that has to judge whether a correction answered
+    the original finding needs both accounts, and the single
+    ``previous_report`` context could only ever carry one.
+    """
+
+    from_stage: str = PREVIOUS_STAGE
+    required: bool = True
 
 
 @dataclass(frozen=True)
@@ -404,6 +437,8 @@ class LoopStepDefinition:
     kind: LoopStepKind
     instructions: str = ""
     context: tuple[LoopContextReference, ...] = ()
+    reports: tuple[LoopReportReference, ...] = ()
+    history: LoopHistoryLevel = LoopHistoryLevel.NONE
     agent: LoopAgentPolicy | None = None
     report_contract: str = "generic"
     retry: LoopRetryPolicy = field(default_factory=LoopRetryPolicy)

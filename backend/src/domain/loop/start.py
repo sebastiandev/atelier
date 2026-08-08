@@ -42,7 +42,12 @@ from src.domain.loop.ports import (
     LoopDefinitionRepository,
     LoopRunRepository,
 )
-from src.domain.loop.prompts import ReviewStagePrompt, TaskStagePrompt, build_stage_prompt
+from src.domain.loop.prompts import (
+    ReviewStagePrompt,
+    StageReportBlock,
+    TaskStagePrompt,
+    build_stage_prompt,
+)
 from src.domain.loop.snapshots import definition_from_snapshot
 from src.domain.loop.store import (
     DEFAULT_TARGET_ID,
@@ -295,10 +300,21 @@ async def start(
                     artifact_title=spec.goal,
                     source_ref=str(root),
                     stage=entry,
-                    previous_summary=(
-                        actions.str_or_empty(source.state.get("summary")) if source else ""
+                    # A follow-up run's entry stage has no earlier stage of its
+                    # own to read, so the source run's account is labelled as
+                    # what it is -- and only when the stage asked for a report.
+                    reports=(
+                        (
+                            StageReportBlock(
+                                stage_id="source",
+                                stage_name="The run this one continues",
+                                summary=actions.str_or_empty(source.state.get("summary")),
+                                findings=tuple(actions.str_list(source_loop.get("findings"))),
+                            ),
+                        )
+                        if source is not None and entry.reports
+                        else ()
                     ),
-                    previous_findings=tuple(actions.str_list(source_loop.get("findings"))),
                     previous_changed_files=changed_files,
                     workspace_diff=workspace_diff,
                     resolved_context=resolution.entries,

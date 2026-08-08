@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 from src.domain.agents.effort import allowed_efforts
 from src.domain.agents.specs import SPECS
 from src.domain.loop.dtos import (
+    PREVIOUS_STAGE,
     LoopAgentPolicy,
     LoopContextKind,
     LoopDefinition,
@@ -102,6 +103,7 @@ def validate_definition(definition: LoopDefinition) -> tuple[str, ...]:
         errors.append("Stage ids must be unique.")
     for stage in definition.stages:
         errors.extend(_validate_stage(stage, known))
+        errors.extend(_validate_reports(stage, definition.stages))
 
     reachable = _reachable_stage_ids(definition.stages)
     for stage_id in ids:
@@ -153,6 +155,35 @@ def repository_copy(
         forked_from=source.definition_id,
         errors=(),
     )
+
+
+def _validate_reports(
+    stage: LoopStepDefinition,
+    stages: tuple[LoopStepDefinition, ...],
+) -> list[str]:
+    """Reject reports that name a stage that cannot have reported first.
+
+    A stage can only read an account that exists by the time it runs, so the
+    named stage must appear before it in the loop's order. Catching it here
+    turns a prompt that silently renders nothing into an editing error.
+    """
+    errors: list[str] = []
+    label = f"Stage {stage.step_id!r}"
+    order = [item.step_id for item in stages]
+    position = order.index(stage.step_id) if stage.step_id in order else -1
+    seen: set[str] = set()
+    for reference in stage.reports:
+        source = reference.from_stage
+        if source in seen:
+            errors.append(f"{label} declares the report from {source!r} twice.")
+        seen.add(source)
+        if source == PREVIOUS_STAGE:
+            continue
+        if source not in order:
+            errors.append(f"{label} reads a report from unknown stage {source!r}.")
+        elif order.index(source) >= position >= 0:
+            errors.append(f"{label} reads a report from {source!r}, which cannot run first.")
+    return errors
 
 
 def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:

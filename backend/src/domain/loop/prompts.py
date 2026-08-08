@@ -5,8 +5,25 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from functools import singledispatch
+from typing import Any
 
 from src.domain.loop.dtos import LoopContextKind, LoopStepDefinition, LoopStepKind
+
+
+@dataclass(frozen=True)
+class StageReportBlock:
+    """One earlier stage's account, labelled with whose it is.
+
+    A stage may be given several. Without the label an agent reading two
+    reports cannot tell which stage said what, which is worse than one report.
+    """
+
+    stage_id: str
+    stage_name: str = ""
+    pass_number: int = 0
+    summary: str = ""
+    findings: tuple[str, ...] = ()
+    validation_evidence: str = ""
 
 
 @dataclass(frozen=True)
@@ -19,9 +36,7 @@ class StagePromptInput:
     artifact_title: str
     source_ref: str
     stage: LoopStepDefinition
-    previous_summary: str = ""
-    previous_findings: tuple[str, ...] = ()
-    previous_validation_evidence: str = ""
+    reports: tuple[StageReportBlock, ...] = ()
     previous_changed_files: tuple[str, ...] = ()
     workspace_diff: str = ""
     resolution_note: str = ""
@@ -95,26 +110,7 @@ def _pr_prompt(value: PrStagePrompt) -> str:
 
 def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
     context_kinds = {item.kind for item in value.stage.context}
-    previous = ""
-    if LoopContextKind.PREVIOUS_REPORT in context_kinds:
-        findings = "\n".join(f"- {item}" for item in value.previous_findings)
-        previous = (
-            "\n\nPrevious stage report:\n"
-            + (f"Summary: {value.previous_summary}\n" if value.previous_summary else "")
-            + (f"Findings:\n{findings}\n" if findings else "")
-            + (
-                f"Validation evidence:\n{value.previous_validation_evidence}\n"
-                if value.previous_validation_evidence
-                else ""
-            )
-            + (
-                "No previous report was available.\n"
-                if not value.previous_summary
-                and not findings
-                and not value.previous_validation_evidence
-                else ""
-            )
-        )
+    previous = "".join(_report_block(report) for report in value.reports)
     changed_files = ""
     if LoopContextKind.CHANGED_FILES in context_kinds:
         rows = "\n".join(f"- {item}" for item in value.previous_changed_files)
@@ -172,6 +168,56 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         "separate paragraphs, which render as written -- the JSON itself still "
         "has to be one line."
     )
+
+
+def build_report_blocks(rows: list[tuple[str, dict[str, Any]]]) -> tuple[StageReportBlock, ...]:
+    """Turn resolved stage rows into the labelled blocks a prompt renders.
+
+    Preconditions: ``rows`` are ``(stage_id, row)`` pairs as resolved from a
+    stage's declaration, already de-duplicated and in declaration order.
+    Postconditions: one block per row, carrying whose account it is so an agent
+    reading two of them can tell them apart.
+    """
+    return tuple(
+        StageReportBlock(
+            stage_id=stage_id,
+            stage_name=str(row.get("name") or "") or stage_id,
+            # The pass belongs to the report, not to the stage: a stage that
+            # ran in three passes has one row and three reports.
+            pass_number=_latest_pass(row),
+            summary=str(row.get("summary") or ""),
+            findings=tuple(item for item in row.get("findings", []) if isinstance(item, str))
+            if isinstance(row.get("findings"), list)
+            else (),
+            validation_evidence=str(row.get("validation_evidence") or ""),
+        )
+        for stage_id, row in rows
+    )
+
+
+def _latest_pass(row: dict[str, Any]) -> int:
+    """Return the pass its newest report was written in, or 0 if it has none."""
+    reports = row.get("reports")
+    latest = reports[-1] if isinstance(reports, list) and reports else None
+    number = latest.get("pass_number") if isinstance(latest, dict) else None
+    return number if isinstance(number, int) and not isinstance(number, bool) else 0
+
+
+def _report_block(report: StageReportBlock) -> str:
+    """Render one declared report under a heading naming whose account it is."""
+    label = report.stage_name or report.stage_id
+    heading = f"Report -- {label}" + (f" (pass {report.pass_number})" if report.pass_number else "")
+    findings = "\n".join(f"- {item}" for item in report.findings)
+    body = (
+        (f"Summary: {report.summary}\n" if report.summary else "")
+        + (f"Findings:\n{findings}\n" if findings else "")
+        + (
+            f"Validation evidence:\n{report.validation_evidence}\n"
+            if report.validation_evidence
+            else ""
+        )
+    )
+    return f"\n\n{heading}:\n" + (body or "This stage has not reported yet.\n")
 
 
 def _context_index(value: StagePromptInput) -> str:

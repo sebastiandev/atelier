@@ -25,7 +25,9 @@ from src.domain.loop.models import LoopRunTarget
 from src.domain.loop.prompts import (
     PrStagePrompt,
     ReviewStagePrompt,
+    StageReportBlock,
     TaskStagePrompt,
+    build_report_blocks,
     build_stage_prompt,
 )
 from src.domain.loop.snapshots import definition_from_snapshot
@@ -421,8 +423,20 @@ async def request_changes(
                     artifact_title=target.title,
                     source_ref=target.source_ref,
                     stage=stage,
-                    previous_summary=actions.str_or_empty(run.get("summary")),
-                    previous_findings=tuple(actions.str_list(loop.get("findings"))),
+                    # The result being sent back, when the stage asked for a
+                    # report at all. The request itself travels as the note.
+                    reports=(
+                        (
+                            StageReportBlock(
+                                stage_id="result",
+                                stage_name="The result you asked to change",
+                                summary=actions.str_or_empty(run.get("summary")),
+                                findings=tuple(actions.str_list(loop.get("findings"))),
+                            ),
+                        )
+                        if stage.reports
+                        else ()
+                    ),
                     previous_changed_files=actions.latest_changed_file_prompt_lines(loop),
                     workspace_diff=(
                         runtime.workspace_prompt_context(
@@ -636,31 +650,28 @@ def _resume_prompt(
         if stage.kind == LoopStepKind.PR
         else TaskStagePrompt
     )
-    # Only the monitor's forward advance is handed a corrective note; a retry
-    # arrives carrying just its own boilerplate, so rebuild the note from the
-    # stage's stored copy rather than restarting the agent with nothing to act
-    # on. Skipped when the caller already supplied it, so it renders once.
-    corrective = actions.str_or_empty(stage_row.get("corrective_note"))
-    if corrective and corrective in resolution_note:
-        corrective = ""
     resolution = "\n\n".join(
         value
         for value in (
-            # A PR stage publishes rather than acts on requests; retrying it
-            # with the open block is what made it cycle. See `_open_feedback_for`.
-            # Its own input is the setup and the past-tense push summary, the
-            # same bundle the monitor gives it on a forward advance.
+            # A PR stage publishes rather than acts on requests, so it does not
+            # declare feedback; what it needs is its setup and the past-tense
+            # push summary, the same bundle the monitor gives it going forward.
             pr_lifecycle.prompt_context(target.run)
             if stage.kind == LoopStepKind.PR
-            else feedback.context(target.run),
-            corrective,
+            else (
+                feedback.context(target.run)
+                if any(item.kind == LoopContextKind.FEEDBACK for item in stage.context)
+                else ""
+            ),
             resolution_note.strip(),
         )
         if value
     )
     brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
     brief_note, brief_context = briefs.prompt_values(brief, stage.step_id)
-    previous_row = actions.declared_previous_row(loop, stage) or stage_row
+    report_rows = actions.declared_report_rows(
+        loop, stage, actions.str_or_empty(loop.get("previous_stage_id"))
+    )
     return build_stage_prompt(
         prompt_type(
             run_id=target.run_id,
@@ -669,14 +680,14 @@ def _resume_prompt(
             artifact_title=target.title,
             source_ref=target.source_ref,
             stage=stage,
-            previous_summary=actions.str_or_empty(previous_row.get("summary")),
-            previous_findings=tuple(actions.str_list(previous_row.get("findings"))),
-            previous_validation_evidence=actions.str_or_empty(
-                previous_row.get("validation_evidence")
-            ),
-            previous_changed_files=(
-                actions.changed_file_prompt_lines(previous_row.get("changed_files"))
-                or actions.latest_changed_file_prompt_lines(loop)
+            reports=build_report_blocks(report_rows),
+            previous_changed_files=next(
+                (
+                    lines
+                    for _, row in report_rows
+                    if (lines := actions.changed_file_prompt_lines(row.get("changed_files")))
+                ),
+                actions.latest_changed_file_prompt_lines(loop),
             ),
             workspace_diff=workspace_diff,
             resolution_note=resolution,
@@ -686,7 +697,9 @@ def _resume_prompt(
             brief_context=brief_context,
             waived_findings=(
                 tuple(feedback.dismissed(loop))
-                if stage.kind == LoopStepKind.AGENT_REVIEW
+                if any(
+                    item.kind == LoopContextKind.WAIVED_FINDINGS for item in stage.context
+                )
                 else ()
             ),
         )

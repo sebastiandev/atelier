@@ -90,10 +90,8 @@ def test_create_pr_stage_config_is_additive_and_legacy_inline_loops_still_load(
         "base_branch": "master",
         "branch_name": None,
     }
-    assert any(
-        item["kind"] == "previous_report" and item["required"]
-        for item in body["stage"]["context"]
-    )
+    # The report a stage reads is its own declaration now, not a context kind.
+    assert body["stage"]["reports"] == [{"from": "previous", "required": True}]
 
     legacy = app_client.get("/api/loops/atelier-fast")
     assert legacy.status_code == 200, legacy.text

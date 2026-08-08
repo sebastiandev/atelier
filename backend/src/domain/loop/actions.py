@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from src.domain.loop.dtos import (
+    PREVIOUS_STAGE,
     LoopChangedFile,
     LoopDefinition,
     LoopRunStatus,
@@ -136,26 +137,34 @@ def stage_row(loop: dict[str, Any], step_id: str) -> dict[str, Any] | None:
     )
 
 
-def declared_previous_row(loop: dict[str, Any], stage: Any) -> dict[str, Any] | None:
-    """Return the stage row a stage's ``previous_report`` context names.
+def declared_report_rows(
+    loop: dict[str, Any], stage: Any, last_reported_id: str = ""
+) -> list[tuple[str, dict[str, Any]]]:
+    """Resolve the stage rows a stage declares that it reads, in order.
 
-    A stage may declare which earlier stage it reads a report from, so a
-    trailing corrective stage does not mask the substantive one. Both the
-    forward-advance and resume prompt builders resolve it through here.
+    A stage may name several: a reviewer judging whether a correction answered
+    the original finding needs both accounts, and the single ``previous_report``
+    context could only ever carry one.
 
-    Preconditions: ``stage`` is a stage definition with a ``context`` sequence.
-    Postconditions: ``None`` when the stage declares no explicit step or the
-    named step has no row yet, leaving the caller's own fallback in force.
+    Preconditions: ``stage`` is a stage definition with a ``reports`` sequence;
+    ``last_reported_id`` is the stage that reported into this one, used to
+    resolve the symbolic ``previous``.
+    Postconditions: one ``(stage_id, row)`` pair per resolvable declaration,
+    de-duplicated by stage id so a ``previous`` that resolves to a stage also
+    named explicitly renders once. Declarations naming a stage with no row yet
+    are skipped, which is how an optional report reads as absent.
     """
-    return next(
-        (
-            row
-            for reference in stage.context
-            if reference.kind.value == "previous_report" and reference.step
-            if (row := stage_row(loop, reference.step)) is not None
-        ),
-        None,
-    )
+    resolved: dict[str, dict[str, Any]] = {}
+    for reference in getattr(stage, "reports", ()):
+        step_id = reference.from_stage
+        if step_id == PREVIOUS_STAGE:
+            step_id = last_reported_id
+        if not step_id or step_id in resolved:
+            continue
+        row = stage_row(loop, step_id)
+        if row is not None:
+            resolved[step_id] = row
+    return list(resolved.items())
 
 
 def start_next_pass(loop: dict[str, Any]) -> int:
@@ -417,6 +426,7 @@ __all__ = [
     "claim_connection_recovery",
     "claim_stale_permission_recovery",
     "command_matches_approved_prefix",
+    "declared_report_rows",
     "dict_or_empty",
     "initialized_loop_snapshot",
     "int_or_default",

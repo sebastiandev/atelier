@@ -7,25 +7,28 @@ from src.domain.loop import runtime
 from src.domain.loop.dtos import (
     LoopContextKind,
     LoopContextReference,
+    LoopReportReference,
     LoopStepDefinition,
     LoopStepKind,
 )
 from src.domain.loop.prompts import (
     ReviewStagePrompt,
+    StageReportBlock,
     TaskStagePrompt,
     build_stage_prompt,
 )
 from src.domain.worktrees import WorktreeState
 
 
-def _stage(*kinds: LoopContextKind) -> LoopStepDefinition:
-    """Return a review stage with the selected context contract."""
+def _stage(*kinds: LoopContextKind, reports: tuple[str, ...] = ()) -> LoopStepDefinition:
+    """Return a review stage with the selected input and report contract."""
     return LoopStepDefinition(
         step_id="review",
         name="Review",
         kind=LoopStepKind.AGENT_REVIEW,
         instructions="Review the implementation.",
         context=tuple(LoopContextReference(kind) for kind in kinds),
+        reports=tuple(LoopReportReference(from_stage=item) for item in reports),
     )
 
 
@@ -39,9 +42,18 @@ def _prompt(stage: LoopStepDefinition) -> str:
             artifact_title="Goal",
             source_ref="Goal",
             stage=stage,
-            previous_summary="Implemented the transfer.",
-            previous_findings=("One finding.",),
-            previous_validation_evidence="42 tests passed.",
+            reports=(
+                StageReportBlock(
+                    stage_id="implementation",
+                    stage_name="Implementation",
+                    pass_number=4,
+                    summary="Implemented the transfer.",
+                    findings=("One finding.",),
+                    validation_evidence="42 tests passed.",
+                ),
+            )
+            if stage.reports
+            else (),
             previous_changed_files=("src/app.py (+4/-1)",),
             workspace_diff="Git: feature/test @ abc123\nStatus:\n M src/app.py",
             resolved_context=(
@@ -55,9 +67,9 @@ def _prompt(stage: LoopStepDefinition) -> str:
 def test_prompt_injects_only_configured_dynamic_context() -> None:
     prompt = _prompt(
         _stage(
-            LoopContextKind.PREVIOUS_REPORT,
             LoopContextKind.CHANGED_FILES,
             LoopContextKind.WORKSPACE_DIFF,
+            reports=("implementation",),
         )
     )
 
@@ -124,17 +136,23 @@ FEEDBACK_NOTE = "\n".join(
 )
 
 
-def _task_stage(*kinds: LoopContextKind) -> LoopStepDefinition:
+def _task_stage(*kinds: LoopContextKind, reports: tuple[str, ...] = ()) -> LoopStepDefinition:
     return LoopStepDefinition(
         step_id="implementation",
         name="Implementation",
         kind=LoopStepKind.AGENT_TASK,
         instructions="Implement the target.",
         context=tuple(LoopContextReference(kind) for kind in kinds),
+        reports=tuple(LoopReportReference(from_stage=item) for item in reports),
     )
 
 
-def _task_prompt(stage: LoopStepDefinition, *, resolution_note: str = "") -> str:
+def _task_prompt(
+    stage: LoopStepDefinition,
+    *,
+    resolution_note: str = "",
+    reports: tuple[StageReportBlock, ...] = (),
+) -> str:
     return build_stage_prompt(
         TaskStagePrompt(
             run_id="run-1",
@@ -143,25 +161,18 @@ def _task_prompt(stage: LoopStepDefinition, *, resolution_note: str = "") -> str
             artifact_title="Goal",
             source_ref="Goal",
             stage=stage,
-            previous_summary=FEEDBACK_NOTE,
+            reports=reports,
             resolution_note=resolution_note,
         )
     )
 
 
-def test_feedback_appears_once_when_the_stage_declares_previous_report() -> None:
-    """The previous block carries it, so the monitor adds no note."""
-    prompt = _task_prompt(_task_stage(LoopContextKind.PREVIOUS_REPORT))
-
-    assert prompt.count("Address this pull-request feedback") == 1
-
-
-def test_feedback_appears_once_when_the_stage_declares_no_context() -> None:
-    """`_changes_requested_note` is the only carrier — the shape your
-    implementation stage has, with `context: []`."""
+def test_a_declared_report_carries_its_content_once() -> None:
+    """One renderer, one copy. The old model had a declared `previous_report`
+    and an injected corrective note able to carry the same text."""
     prompt = _task_prompt(
-        _task_stage(),
-        resolution_note=f"Required changes from the prior stage:\nSummary: {FEEDBACK_NOTE}",
+        _task_stage(reports=("review",)),
+        reports=(StageReportBlock(stage_id="review", summary=FEEDBACK_NOTE),),
     )
 
     assert prompt.count("Address this pull-request feedback") == 1
@@ -174,3 +185,58 @@ def test_a_resolution_note_is_still_rendered_for_other_flows() -> None:
 
     assert "User resolution:" in prompt
     assert "Rebase onto master first." in prompt
+
+
+def test_two_reports_render_as_separate_labelled_blocks() -> None:
+    """A reviewer judging whether a correction answered the original finding
+    needs both accounts, and has to be able to tell whose is whose."""
+    prompt = _task_prompt(
+        _task_stage(reports=("implementation", "lint")),
+        reports=(
+            StageReportBlock(
+                stage_id="implementation",
+                stage_name="Implementation",
+                pass_number=4,
+                summary="Restored the order validation.",
+            ),
+            StageReportBlock(
+                stage_id="lint",
+                stage_name="Lint",
+                pass_number=4,
+                summary="Fixed the imports.",
+            ),
+        ),
+    )
+
+    assert "Report -- Implementation (pass 4):" in prompt
+    assert "Report -- Lint (pass 4):" in prompt
+    assert prompt.index("Implementation (pass 4)") < prompt.index("Lint (pass 4)")
+
+
+def test_a_declared_report_from_a_stage_that_has_not_run_says_so() -> None:
+    prompt = _task_prompt(
+        _task_stage(reports=("lint",)),
+        reports=(StageReportBlock(stage_id="lint", stage_name="Lint"),),
+    )
+
+    assert "This stage has not reported yet." in prompt
+
+
+def test_dismissed_findings_render_only_when_declared() -> None:
+    declared = build_stage_prompt(
+        TaskStagePrompt(
+            run_id="run-1",
+            work_slug="WRK-001",
+            artifact_id="objective",
+            artifact_title="Goal",
+            source_ref="Goal",
+            stage=_task_stage(LoopContextKind.WAIVED_FINDINGS),
+            waived_findings=("Timeline parity is untested.",),
+        )
+    )
+
+    assert "Already dismissed by the user" in declared
+    assert "Timeline parity is untested." in declared
+    # Undeclared input is not rendered: the caller decides by declaration, and
+    # the renderer has nothing to suppress.
+    assert "Already dismissed" not in _task_prompt(_task_stage())
