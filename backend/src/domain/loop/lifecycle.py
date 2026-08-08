@@ -8,7 +8,7 @@ from src.domain.agents.launch import AgentLaunchRequest, launch_agent
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.artifacts.models import PrArtifact
 from src.domain.connections import ConnectionStore
-from src.domain.loop import actions, briefs, pass_feedback, pr_lifecycle, runtime
+from src.domain.loop import actions, briefs, feedback, pr_lifecycle, runtime
 from src.domain.loop.agent_policy import apply_retry_overrides
 from src.domain.loop.dtos import (
     LoopContextKind,
@@ -226,6 +226,18 @@ async def resume(
         except runtime.AgentNotFound as exc:
             raise LoopAgentNotFound(str(exc)) from exc
 
+    # A retry note or a blocker answer is addressed to this one attempt: it
+    # travelled with the prompt above, so it is kept for the run's history
+    # rather than re-rendered, and it ends when the stage next reports.
+    feedback.record(
+        loop,
+        source="retry",
+        note=resolution_note,
+        pass_number=max(1, actions.int_or_default(loop.get("pass_number"), 1)),
+        answered_by=current_stage_id,
+        scope=feedback.SCOPE_ATTEMPT,
+        target="retry",
+    )
     current_stage_row["status"] = LoopStepStatus.RUNNING.value
     if not check_retry:
         current_stage_row["attempt"] = (
@@ -434,7 +446,16 @@ async def request_changes(
         )
     except runtime.AgentNotFound as exc:
         raise LoopAgentNotFound(str(exc)) from exc
-    pass_feedback.record(loop, note=note, pass_number=actions.start_next_pass(loop))
+    # The approval stage that asked is the one that discharges the request: it
+    # passes when the user next approves, and until then every stage of the new
+    # pass -- including the review that verifies the answer -- reads it.
+    feedback.record(
+        loop,
+        source="approval",
+        note=note,
+        pass_number=actions.start_next_pass(loop),
+        answered_by=approval_id,
+    )
     approval_row["status"] = LoopStepStatus.CHANGES_REQUESTED.value
     stage_row["status"] = LoopStepStatus.RUNNING.value
     stage_row["attempt"] = actions.int_or_default(stage_row.get("attempt"), 1) + 1
@@ -482,6 +503,13 @@ def accept(target: LoopRunTarget) -> bool:
         if configured is not None and configured.kind == LoopStepKind.USER_APPROVAL
         else None
     )
+    # Approving lets through whatever findings were still standing, so they are
+    # recorded here -- at the moment the user decides -- rather than wherever
+    # the run happens to reach its terminal state. A run that continues into a
+    # PR stage overwrites `loop["findings"]` with that stage's own report
+    # before it finishes, so waiting until then both waives findings the user
+    # never saw and loses the ones they actually approved.
+    feedback.waive(loop, actions.str_list(loop.get("findings")))
     if destination and destination != "complete":
         run["status"] = LoopRunStatus.RUNNING.value
         run["completed_at"] = None
@@ -489,6 +517,8 @@ def accept(target: LoopRunTarget) -> bool:
         loop["status_reason"] = "Approval recorded; starting the next stage."
         loop["approval_decision"] = {"summary": "Approved by user."}
         run["loop"] = loop
+        # The approval's own requests are settled when the monitor routes this
+        # decision as a passing report; the run is not over, so nothing else is.
         return False
 
     now = actions.now_iso()
@@ -496,8 +526,9 @@ def accept(target: LoopRunTarget) -> bool:
     run["completed_at"] = now
     loop["status"] = LoopStatus.ACCEPTED.value
     loop["status_reason"] = "The result was approved."
-    # Approving is the answer to any outstanding request for changes.
-    pass_feedback.clear(loop)
+    # Accepting answers every outstanding request, whichever stage would have
+    # verified it: the user has said the result is good as it stands.
+    feedback.answer_all(loop)
     run["loop"] = loop
     return True
 
@@ -605,7 +636,6 @@ def _resume_prompt(
         if stage.kind == LoopStepKind.PR
         else TaskStagePrompt
     )
-    feedback_context = pr_lifecycle.pending_feedback_context(target.run)
     # Only the monitor's forward advance is handed a corrective note; a retry
     # arrives carrying just its own boilerplate, so rebuild the note from the
     # stage's stored copy rather than restarting the agent with nothing to act
@@ -616,8 +646,13 @@ def _resume_prompt(
     resolution = "\n\n".join(
         value
         for value in (
-            pass_feedback.context(target.run),
-            feedback_context,
+            # A PR stage publishes rather than acts on requests; retrying it
+            # with the open block is what made it cycle. See `_open_feedback_for`.
+            # Its own input is the setup and the past-tense push summary, the
+            # same bundle the monitor gives it on a forward advance.
+            pr_lifecycle.prompt_context(target.run)
+            if stage.kind == LoopStepKind.PR
+            else feedback.context(target.run),
             corrective,
             resolution_note.strip(),
         )
@@ -649,6 +684,11 @@ def _resume_prompt(
             context_warnings=tuple(actions.str_list(stage_row.get("context_warnings"))),
             brief_note=brief_note,
             brief_context=brief_context,
+            waived_findings=(
+                tuple(feedback.dismissed(loop))
+                if stage.kind == LoopStepKind.AGENT_REVIEW
+                else ()
+            ),
         )
     )
 

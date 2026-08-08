@@ -178,11 +178,26 @@ One store, one renderer, one routing rule. The five existing shapes collapse:
 | Approval request-changes | `open` | `restart` | that approval stage |
 | Review gate send-back | `open` | `restart` | that review stage |
 | PR feedback | `open` | `restart` | the code review stage |
-| Retry note | `attempt` | `retry` | — (ends with the attempt) |
+| Retry note | `attempt` | `retry` | the stage it was sent to |
 | `corrective_note` | *deleted* — it is `reports` | | |
 
 `target` defaults by stage kind (review/approval → `restart`, check → `retry`)
 and is overridable per stage via `on_feedback`.
+
+Two details this table originally got wrong, corrected against the Phase 1
+implementation:
+
+- **A retry note does carry `answered_by`.** The draft left it blank. It has to
+  name the stage the note was sent to, because that is what `close_attempt`
+  keys on to end the record when the attempt reports.
+- **PR feedback falls back to the PR stage when the loop has no review.** The
+  table assumes a code review exists. `atelier-fast` has none, and an
+  unanswerable record would be worse, so `_verifying_stage_id` falls back.
+  **This is load-bearing for Phase 4**: the fallback only avoids the §1
+  cycling defect because a PR stage is currently denied open feedback by
+  `monitor._open_feedback_for`. Removing that `stage.kind` stopgap without
+  giving the PR stage a declaration that withholds feedback re-creates the
+  deadlock this spec exists to close.
 
 ### 3f. Answering
 
@@ -357,12 +372,24 @@ the measurable outcome of this section.
 
 | Phase | Work | Ships value |
 |---|---|---|
-| **1** | `Feedback` record + store; migrate the five writers; `answered_by` on gate pass; `waived_findings` incl. `approve_as_is` | Deadlock gone; reviewer stops re-raising dismissed findings |
+| **1** ✅ | `Feedback` record + store; migrate the five writers; `answered_by` on gate pass; `waived_findings` incl. `approve_as_is` | Deadlock gone; reviewer stops re-raising dismissed findings |
 | **2** | `inputs` / `reports` / `history` declaration; delete `corrective_note` and the suppression rules; validation | Composable stages; two-report reviewers |
 | **3** | Prompt zones + roll-up | Prompt pollution fixed |
 | **4** | `on_feedback` per stage; `run_stage` dispatch (§6b); loop-editor UI for all of it | Configurable routing; zero kind checks in the orchestrator |
 
 Phase 1 is where the defects live. Phases 2–3 are what stop them recurring.
+
+**Phase 1 landed** in `domain/loop/feedback.py` (`pass_feedback.py` and
+`pending_pr_feedback` deleted). Two rules are keyed on `stage.kind` as a
+deliberate stopgap and become declarations in phase 2: a PR stage receives no
+open feedback (`monitor._open_feedback_for`), and only a review stage is shown
+the dismissed findings (`monitor._waived_for`). See the §3e note on why the
+first of those cannot simply be deleted. `corrective_note` is untouched; it
+goes with `reports` in phase 2.
+
+Waiving on approval happens in `lifecycle.accept`, on both the terminal and the
+continuing branch, because the decision is the user's and the run may still
+overwrite `loop["findings"]` with a later stage's report before it ends.
 
 ## 8. Decisions
 

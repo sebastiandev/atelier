@@ -1302,6 +1302,60 @@ def test_human_review_gate_approve_as_is_completes_review(
         "enforced_findings": [],
         "instruction": "",
     }
+    # Approving as-is dismisses every reported finding, not only the ones a
+    # partial send-back left out, so a later reviewer is told not to raise it.
+    assert awaiting["waived_findings_count"] == 1
+    # The approval surface gets the findings themselves, not just a count, so
+    # the user is reminded what they already let stand before approving again.
+    assert awaiting["waived_findings"] == ["This is acceptable for this release."]
+
+
+def test_accepting_a_run_dismisses_the_findings_it_let_stand(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Accepting is the user saying the result is good as it stands, so the
+    findings still open when they accept are dismissed like `approve_as_is`
+    dismisses them -- a later run is told not to raise them again."""
+    started = _start_run(app_client, tmp_path)
+    _append_stage_report(
+        app_client,
+        _first_agent_slug(started),
+        "pass",
+        ["The TODO in the launch path stays for now."],
+    )
+    _wait_for_status(app_client, "awaiting_approval")
+
+    accepted = app_client.post("/api/works/WRK-001/runs/run-001/accept")
+
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["waived_findings_count"] == 1
+
+
+def test_a_reviewer_is_told_which_findings_the_user_already_dismissed(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """A finding the user waived at the gate must not come back: the next
+    review reads it as dismissed rather than rediscovering it."""
+    _, implementing = _send_back_from_a_human_review_gate(app_client, tmp_path)
+    implementation = next(
+        stage for stage in implementing["stages"] if stage["id"] == "implementation"
+    )
+    _append_stage_report(app_client, implementation["agent_slug"], "pass", [])
+    reviewing = _wait_for_stage(app_client, "code-review")
+    review = next(stage for stage in reviewing["stages"] if stage["id"] == "code-review")
+
+    prompt = [
+        event["text"]
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", review["agent_slug"], 0
+        )
+        if event.get("type") == "user_input"
+    ][-1]
+
+    assert "Already dismissed by the user" in prompt
+    assert "Rename the fixture." in prompt
 
 
 def test_a_create_pr_send_back_fails_the_run_instead_of_reopening_it(
@@ -1698,3 +1752,23 @@ def test_selected_pr_feedback_still_starts_an_implementation_pass(
     assert "Drop the SELECT FOR UPDATE." in prompt
     assert "Use the lock helper." in prompt
     assert "Praise: nice work on the race." not in prompt
+
+    # The pass that answers the feedback reaches Create PR again. The stage
+    # publishes; it must be told what this push answers, not ordered to act on
+    # the comment itself. Ordering it made it report changes_requested, which
+    # reopened the very pass that produced the request, and the run cycled.
+    _append_stage_report(app_client, implementation["agent_slug"], "pass", [])
+    _wait_for_status(app_client, "awaiting_approval")
+    assert app_client.post("/api/works/WRK-001/runs/run-001/accept").status_code == 200
+    publishing = _wait_for_stage(app_client, "create-pr")
+    publisher = next(stage for stage in publishing["stages"] if stage["id"] == "create-pr")
+    pr_prompt = [
+        event["text"]
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", publisher["agent_slug"], 0
+        )
+        if event.get("type") == "user_input"
+    ][-1]
+    assert "Addressed in this push:" in pr_prompt
+    assert "Drop the SELECT FOR UPDATE." in pr_prompt
+    assert "Address this pull-request feedback in the current worktree" not in pr_prompt

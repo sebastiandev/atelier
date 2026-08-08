@@ -14542,6 +14542,18 @@ select:disabled {
 .run-review-gate > header > strong { color: var(--fg); font-size: 13px; }
 .run-review-gate > header > small { color: var(--fg-4); font: 10px var(--font-mono); }
 .run-review-gate > header > em:last-child { margin-left: auto; font-style: normal; }
+.run-dismissed-findings {
+  display: grid;
+  gap: 7px;
+  padding: 10px 13px;
+  border-radius: var(--radius-card);
+  background: var(--bg-2);
+}
+.run-dismissed-findings > header { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 8px; }
+.run-dismissed-findings > header > strong { color: var(--fg); font-size: 13px; }
+.run-dismissed-findings > header > small { margin-left: auto; color: var(--fg-4); font: 10px var(--font-mono); }
+.run-dismissed-findings > ul { display: grid; gap: 4px; margin: 0; padding-left: 16px; }
+.run-dismissed-findings > ul > li { color: var(--fg-3); font-size: 12px; line-height: 1.45; }
 .run-review-findings { display: grid; gap: 5px; }
 .run-review-findings > label {
   display: grid;

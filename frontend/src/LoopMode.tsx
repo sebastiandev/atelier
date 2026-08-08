@@ -704,6 +704,7 @@ function workLoopRunData(run: WorkLoopRun): RunSurfaceData {
     brief: run.brief ?? null,
     reviewGate: run.review_gate ?? null,
     waivedFindingsCount: run.waived_findings_count ?? 0,
+    waivedFindings: run.waived_findings ?? [],
     runKind: run.run_kind ?? "initial",
     seedLabel: run.seed_label ?? "",
   };

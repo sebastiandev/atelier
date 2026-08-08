@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.domain.artifacts.models import PrArtifact
-from src.domain.loop import actions, pr_lifecycle
+from src.domain.loop import actions, feedback, pr_lifecycle
 from src.domain.loop.dtos import LoopPrConfig, LoopStepDefinition, LoopStepKind
 from src.domain.loop.models import LoopRunTarget
 from src.domain.models import Agent, AgentStatus
@@ -133,47 +133,14 @@ def test_feedback_opens_a_new_pass_with_selected_comment_context() -> None:
     )
 
     assert loop["pass_number"] == 2
-    assert loop["pending_pr_feedback"]["comments"][0]["comment_id"] == "comment-1"
-    assert loop["pending_pr_feedback"]["reason"] == "from PR #12 feedback"
-    assert loop["pending_pr_feedback"]["started_at"]
+    entry = feedback.records(loop)[0]
+    assert entry["source"] == "pr_comment"
+    assert entry["state"] == "open"
+    assert entry["items"][0]["ref"] == "comment-1"
+    assert entry["reason"] == "from PR #12 feedback"
+    assert entry["created_at"]
     assert "Handle the empty case" in loop["pr_feedback_decision"]["summary"]
     assert target.run["status"] == "running"
-
-
-def test_pending_feedback_context_restores_current_pass_input() -> None:
-    target = _accepted_target()
-    loop = target.run["loop"]
-    loop["pass_number"] = 6
-    loop["pending_pr_feedback"] = {
-        "pass_number": 6,
-        "comments": [
-            {
-                "author": "reviewer",
-                "location": "src/app.py:4",
-                "body": "Reduce the number of queries.",
-                "instruction": "Keep the public API unchanged.",
-            }
-        ],
-        "instruction": "Add focused validation.",
-    }
-
-    context = pr_lifecycle.pending_feedback_context(target.run)
-
-    assert "Reduce the number of queries." in context
-    assert "Keep the public API unchanged." in context
-    assert "Add focused validation." in context
-
-
-def test_pending_feedback_context_ignores_another_pass() -> None:
-    target = _accepted_target()
-    loop = target.run["loop"]
-    loop["pass_number"] = 6
-    loop["pending_pr_feedback"] = {
-        "pass_number": 5,
-        "comments": [{"body": "Stale feedback."}],
-    }
-
-    assert pr_lifecycle.pending_feedback_context(target.run) == ""
 
 
 @pytest.mark.parametrize("comment_id", ["root", "reply"])
@@ -264,8 +231,8 @@ def test_feedback_keeps_thread_context_when_latest_reply_is_external() -> None:
         "",
     )
 
-    selected = loop["pending_pr_feedback"]["comments"][0]
-    assert selected["comment_id"] == "reviewer-reply"
+    selected = feedback.records(loop)[0]["items"][0]
+    assert selected["ref"] == "reviewer-reply"
     assert selected["body"] == "Please handle this case."
     assert [row["author"] for row in selected["thread"]] == [
         "reviewer",
@@ -305,8 +272,8 @@ def test_pr_completion_seals_feedback_pass_timing_and_reason() -> None:
         (pr_lifecycle.PrFeedbackItem("comment-1", "Add a regression test."),),
         "Address the latest review feedback.",
     )
-    pending = loop["pending_pr_feedback"]
-    pending["started_at"] = "2026-07-20T10:00:00+00:00"
+    feedback.records(loop)[0]  # one record carries this pass
+    loop["feedback"][0]["created_at"] = "2026-07-20T10:00:00+00:00"
     loop["pass_number"] += 1  # Code review requested another implementation pass.
     stage_row = loop["stages"][-1]
     stage_row["addressed_comments"] = [{"comment_id": "old-comment"}]
@@ -393,9 +360,46 @@ def test_failed_pr_stage_can_return_to_implementation_with_an_instruction() -> N
         "Fix the commit hook before creating the pull request.",
     )
 
-    assert loop["pending_pr_feedback"]["reason"] == "after Create PR failure"
+    assert feedback.records(loop)[-1]["reason"] == "after Create PR failure"
+    assert feedback.records(loop)[-1]["source"] == "pr_general"
     assert loop["pr_feedback_decision"]["stage_id"] == "create-pr"
     assert target.run["status"] == "running"
+
+
+def test_a_create_pr_that_fails_a_feedback_pass_can_still_be_recovered() -> None:
+    """Recovery must survive the failure it exists for. A request is only
+    marked pushed by a successful push, so gating recovery on unpushed requests
+    made the one thing that failed the only thing that could clear it."""
+    target = _accepted_target()
+    pr_lifecycle.add_one_off_stage(target, pr_lifecycle.PrSetup(name="feat: complete the goal"))
+    loop = target.run["loop"]
+    loop.pop("approval_decision")
+    feedback.record(loop, source="pr_comment", note="Drop the lock.", pass_number=2)
+    target.run["status"] = "blocked"
+    loop["status"] = "failed"
+    loop["stages"][-1]["status"] = "failed"
+
+    pr_lifecycle.prepare_feedback(target, (), "Fix the commit hook first.")
+
+    assert feedback.records(loop)[-1]["note"] == "Fix the commit hook first."
+    assert target.run["status"] == "running"
+
+
+def test_losing_the_pull_request_closes_out_the_requests_that_quoted_it() -> None:
+    """Records stay as history, but one still waiting for a push must not be
+    carried into a different pull request's push summary."""
+    loop: dict[str, object] = {"pass_number": 3, "pr": {"url": _PR_URL}, "pr_comments": []}
+    feedback.record(
+        loop,
+        source="pr_comment",
+        pass_number=3,
+        items=({"ref": "comment-1", "body": "Drop the lock."},),
+    )
+
+    pr_lifecycle.clear_for_new_pr(loop)
+
+    assert feedback.records(loop)[0]["pushed_in_pass"] == 3
+    assert "Drop the lock." not in pr_lifecycle.prompt_context({"loop": loop})
 
 
 def test_existing_pr_rejects_a_different_reported_reference() -> None:
@@ -476,7 +480,7 @@ def test_initial_pr_completion_requires_a_url_or_stage_artifact() -> None:
 @pytest.mark.parametrize(
     ("run_status", "loop_status", "stage_status", "pending"),
     [
-        ("accepted", "accepted", "passed", True),
+        ("accepted", "accepted", "passed", True),  # a pass is already scheduled
         ("running", "running", "passed", False),
         ("accepted", "accepted", "running", False),
     ],
@@ -498,7 +502,7 @@ def test_feedback_rejects_an_existing_or_unsettled_pass(
     loop["stages"][-1]["status"] = stage_status
     loop["pr"] = {"url": "https://github.com/acme/repo/pull/12"}
     if pending:
-        loop["pending_pr_feedback"] = {"pass_number": 2}
+        loop["pr_feedback_decision"] = {"stage_id": "create-pr", "summary": "Already asked."}
 
     with pytest.raises(pr_lifecycle.PrStageInvalid):
         pr_lifecycle.prepare_feedback(target, (), "Address the review feedback.")
@@ -596,7 +600,7 @@ def test_follow_up_run_inherits_only_stable_existing_pr_state() -> None:
         "pr": {"url": "https://github.com/acme/repo/pull/12", "number": 12},
         "pr_config": {"name": "Existing PR", "branch_name": "feat/existing"},
         "pr_comments": [{"id": "comment-1", "addressed_in_pass": None}],
-        "pending_pr_feedback": {"pass_number": 3},
+        "feedback": [{"id": "fb-1", "source": "pr_general", "note": "old"}],
         "pr_feedback_decision": {"stage_id": "create-pr"},
         "passes": [{"number": 1}],
     }
@@ -615,7 +619,7 @@ def test_follow_up_run_inherits_only_stable_existing_pr_state() -> None:
         "branch_name": "feat/existing",
     }
     assert loop["pr_comments"] == [{"id": "comment-1", "addressed_in_pass": None}]
-    assert "pending_pr_feedback" not in loop
+    assert "feedback" not in loop
     assert "pr_feedback_decision" not in loop
     assert "passes" not in loop
 
@@ -629,18 +633,21 @@ def test_re_running_create_pr_still_carries_its_update_instructions() -> None:
     loop = target.run["loop"]
     loop["pr"] = {"url": "https://github.com/o/r/pull/12", "number": 12}
     loop["pr_config"] = {"name": "Migrate movement", "base_branch": "master"}
-    loop["pending_pr_feedback"] = {
-        "pass_number": actions.int_or_default(loop.get("pass_number"), 1),
-        "comments": [
+    feedback.record(
+        loop,
+        source="pr_comment",
+        pass_number=actions.int_or_default(loop.get("pass_number"), 1),
+        items=(
             {
+                "ref": "comment-1",
                 "author": "reviewer",
                 "location": "src/app.py:4",
                 "body": "Reduce the number of queries.",
                 "instruction": "Keep the public API unchanged.",
-            }
-        ],
-        "instruction": "Add focused validation.",
-    }
+            },
+        ),
+        note="Add focused validation.",
+    )
 
     context = pr_lifecycle.prompt_context(target.run)
 
@@ -719,7 +726,6 @@ def test_clearing_for_a_new_pull_request_keeps_the_reusable_setup() -> None:
     loop = {
         "pr": {"url": _PR_URL, "status": "closed"},
         "pr_comments": [{"comment_id": "1"}],
-        "pending_pr_feedback": {"pass_number": 3},
         "pr_config": {"base": "master", "status": "open"},
     }
 

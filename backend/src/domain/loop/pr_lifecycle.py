@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from src.domain.agents.specs import SPECS
 from src.domain.artifacts.models import PrArtifact
 from src.domain.artifacts.pr_status import parse_pr_url
-from src.domain.loop import actions
+from src.domain.loop import actions, feedback
 from src.domain.loop.agent_policy import sanitize_agent_policy
 from src.domain.loop.dtos import (
     LoopAgentPolicy,
@@ -25,6 +25,10 @@ from src.domain.workstore.ports import WorkStore
 
 if TYPE_CHECKING:
     from src.domain.loop.dtos import LoopStepDefinition
+
+
+PR_SOURCES = frozenset({"pr_comment", "pr_general"})
+"""The feedback sources a pull-request pass is started from."""
 
 
 CREATE_PR_STAGE_INSTRUCTIONS = (
@@ -285,9 +289,12 @@ def prepare_feedback(
     loop = actions.dict_or_empty(run.get("loop"))
     pr = actions.dict_or_empty(loop.get("pr"))
     pr_stage = _latest_pr_stage(loop)
-    if isinstance(loop.get("pending_pr_feedback"), dict) or isinstance(
-        loop.get("pr_feedback_decision"), dict
-    ):
+    # A stored decision is a pass this run has scheduled but not yet entered.
+    # The state checks below are what stop a *running* pass from being asked
+    # for a second one; an unpushed request is not that signal, because the
+    # push it was waiting for may have failed or its pull request may have been
+    # closed, and either way the user still needs a way forward.
+    if isinstance(loop.get("pr_feedback_decision"), dict):
         raise PrStageInvalid("a pull-request feedback pass is already in progress")
     failed_pr = (
         actions.run_status(run) == LoopRunStatus.BLOCKED
@@ -329,7 +336,7 @@ def prepare_feedback(
         root = thread[0]
         selected.append(
             {
-                "comment_id": item.comment_id,
+                "ref": item.comment_id,
                 "author": actions.str_or_empty(root.get("author")),
                 "location": actions.str_or_empty(root.get("location")),
                 "body": actions.str_or_empty(root.get("body")),
@@ -346,7 +353,6 @@ def prepare_feedback(
             }
         )
     pass_number = actions.start_next_pass(loop)
-    started_at = actions.now_iso()
     pr_number = pr.get("number")
     ref = parse_pr_url(actions.str_or_empty(pr.get("url")))
     number = (
@@ -357,18 +363,22 @@ def prepare_feedback(
         else 0
     )
     reason = "after Create PR failure" if failed_pr else f"from PR #{number} feedback"
-    bundle = {
-        "pass_number": pass_number,
-        "comments": selected,
-        "instruction": instruction.strip(),
-        "started_at": started_at,
-        "reason": reason,
-    }
     _reset_pass_occurrences(loop)
-    loop["pending_pr_feedback"] = bundle
+    # The review that will inspect the answer is what discharges this request,
+    # not the PR stage: making the push itself the answer deadlocked the run,
+    # because the PR stage could not pass while its own feedback was open.
+    entry = feedback.record(
+        loop,
+        source="pr_comment" if selected else "pr_general",
+        note=instruction,
+        items=tuple(selected),
+        pass_number=pass_number,
+        answered_by=_verifying_stage_id(loop, pr_stage),
+        reason=reason,
+    )
     loop["pr_feedback_decision"] = {
         "stage_id": actions.str_or_empty(pr_stage.get("id")),
-        "summary": _feedback_note(selected, instruction),
+        "summary": feedback.render(entry) if entry is not None else "",
     }
     loop["status"] = LoopStatus.NEEDS_AGENT.value
     loop["status_reason"] = f"Starting implementation pass {pass_number} from PR feedback."
@@ -419,42 +429,42 @@ def capture_completion(
     }
     pass_number = max(1, actions.int_or_default(loop.get("pass_number"), 1))
     stage_row["push_at"] = now
-    pending = actions.dict_or_empty(loop.get("pending_pr_feedback"))
-    pending_for_completion = bool(pending)
-    addressed = pending.get("comments") if pending_for_completion else []
-    addressed_rows = (
-        [dict(item) for item in addressed if isinstance(item, dict)]
-        if isinstance(addressed, list)
-        else []
-    )
+    # Everything asked since the last push, whether or not the review has
+    # already answered it: pushing is not what answers PR feedback, and a
+    # send-back between the request and the push moves the pass counter on.
+    carried = _unpushed_feedback(loop)
+    addressed_rows = [
+        {
+            "comment_id": actions.str_or_empty(item.get("ref")),
+            "author": actions.str_or_empty(item.get("author")),
+            "location": actions.str_or_empty(item.get("location")),
+            "body": actions.str_or_empty(item.get("body")),
+            "instruction": actions.str_or_empty(item.get("instruction")),
+            "thread": item.get("thread", []),
+        }
+        for entry in carried
+        for item in entry["items"]
+    ]
     stage_row["addressed_comments"] = addressed_rows
-    stage_row["feedback_instruction"] = (
-        actions.str_or_empty(pending.get("instruction")) if pending_for_completion else ""
+    stage_row["feedback_instruction"] = "\n\n".join(
+        entry["note"] for entry in carried if entry["note"]
     )
     if addressed_rows:
-        addressed_ids = {actions.str_or_empty(item.get("comment_id")) for item in addressed_rows}
+        addressed_ids = {item["comment_id"] for item in addressed_rows}
         comments = loop.get("pr_comments")
         if isinstance(comments, list):
             for comment in comments:
                 if isinstance(comment, dict) and comment.get("id") in addressed_ids:
                     comment["addressed_in_pass"] = pass_number
-    if pending_for_completion:
-        loop.pop("pending_pr_feedback", None)
+    for entry in carried:
+        feedback.update(loop, entry["id"], pushed_in_pass=pass_number)
     loop["pr"] = pr
     started_at = (
-        (
-            actions.str_or_empty(pending.get("started_at"))
-            if pending_for_completion
-            else ""
-        )
+        (carried[0]["created_at"] if carried else "")
         or actions.str_or_empty(target.run.get("started_at"))
         or now
     )
-    reason = (
-        actions.str_or_empty(pending.get("reason"))
-        if pending_for_completion
-        else ""
-    ) or "initial"
+    reason = (carried[0]["reason"] if carried else "") or "initial"
     passes = loop.setdefault("passes", [])
     if isinstance(passes, list):
         sealed = {
@@ -487,7 +497,6 @@ def prompt_context(run: dict[str, Any]) -> str:
     loop = actions.dict_or_empty(run.get("loop"))
     config = actions.dict_or_empty(loop.get("pr_config"))
     pr = actions.dict_or_empty(loop.get("pr"))
-    pending = actions.dict_or_empty(loop.get("pending_pr_feedback"))
     lines = [
         "PR setup:",
         f"- title: {actions.str_or_empty(config.get('name'))}",
@@ -522,41 +531,24 @@ def prompt_context(run: dict[str, Any]) -> str:
                 "Update this PR by committing and pushing; do not create another PR.",
             )
         )
-    comments = pending.get("comments")
-    if isinstance(comments, list) and comments:
+    # What this push answers, in the past tense: the PR body and the replies to
+    # each comment are written from it. The live instruction reaches the stage
+    # through the shared feedback renderer, so it is not repeated here.
+    carried = _unpushed_feedback(loop)
+    comments = [item for entry in carried for item in entry["items"]]
+    if comments:
         lines.append("Addressed in this push:")
         for comment in comments:
-            if not isinstance(comment, dict):
-                continue
+            instruction = actions.str_or_empty(comment.get("instruction"))
             lines.append(
                 "- "
                 + actions.str_or_empty(comment.get("body"))
-                + (
-                    f" User instruction: {actions.str_or_empty(comment.get('instruction'))}"
-                    if actions.str_or_empty(comment.get("instruction"))
-                    else ""
-                )
+                + (f" User instruction: {instruction}" if instruction else "")
             )
-    instruction = actions.str_or_empty(pending.get("instruction"))
-    if instruction:
-        lines.append(f"User instruction: {instruction}")
+    for entry in carried:
+        if entry["note"]:
+            lines.append(f"User instruction: {entry['note']}")
     return "\n".join(lines)
-
-
-def pending_feedback_context(run: dict[str, Any]) -> str:
-    """Return durable PR feedback for the run's current implementation pass."""
-    loop = actions.dict_or_empty(run.get("loop"))
-    pending = actions.dict_or_empty(loop.get("pending_pr_feedback"))
-    if pending.get("pass_number") != actions.int_or_default(loop.get("pass_number"), 1):
-        return ""
-    comments = pending.get("comments")
-    selected = (
-        [dict(item) for item in comments if isinstance(item, dict)]
-        if isinstance(comments, list)
-        else []
-    )
-    instruction = actions.str_or_empty(pending.get("instruction"))
-    return _feedback_note(selected, instruction) if selected or instruction else ""
 
 
 def _validate_setup(setup: PrSetup) -> None:
@@ -652,28 +644,32 @@ def _latest_pr_stage(loop: dict[str, Any]) -> dict[str, Any]:
     return stage
 
 
-def _feedback_note(selected: list[dict[str, Any]], instruction: str) -> str:
-    lines = ["Address this pull-request feedback in the current worktree:"]
-    for item in selected:
-        author = actions.str_or_empty(item.get("author")) or "reviewer"
-        location = actions.str_or_empty(item.get("location"))
-        body = actions.str_or_empty(item.get("body"))
-        note = actions.str_or_empty(item.get("instruction"))
-        lines.append(f"- {author}{f' at {location}' if location else ''}: {body}")
-        thread = item.get("thread")
-        if isinstance(thread, list) and len(thread) > 1:
-            lines.append("  Thread context:")
-            for reply in thread[1:]:
-                if not isinstance(reply, dict):
-                    continue
-                reply_author = actions.str_or_empty(reply.get("author")) or "reviewer"
-                reply_body = actions.str_or_empty(reply.get("body"))
-                lines.append(f"  - {reply_author}: {reply_body}")
-        if note:
-            lines.append(f"  User instruction: {note}")
-    if instruction.strip():
-        lines.append(f"- User instruction: {instruction.strip()}")
-    return "\n".join(lines)
+def _unpushed_feedback(loop: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the pull-request requests no push has carried yet, oldest first."""
+    return [
+        entry
+        for entry in feedback.from_sources(loop, PR_SOURCES)
+        if entry.get("pushed_in_pass") is None
+    ]
+
+
+def _verifying_stage_id(loop: dict[str, Any], pr_stage: dict[str, Any]) -> str:
+    """Return the stage whose pass discharges pull-request feedback.
+
+    The code review is what inspects the answer, so it is what answers the
+    request. A loop without one falls back to its PR stage, which at least
+    keeps the record bound to a stage that has to pass before the run ends.
+    """
+    rows = loop.get("stages")
+    review = next(
+        (
+            row
+            for row in reversed(rows if isinstance(rows, list) else [])
+            if isinstance(row, dict) and row.get("kind") == "agent_review"
+        ),
+        None,
+    )
+    return actions.str_or_empty((review or pr_stage).get("id"))
 
 
 def _comment_thread(comments: list[object], selected: dict[str, Any]) -> list[dict[str, Any]]:
@@ -802,7 +798,6 @@ __all__ = [
     "add_one_off_stage",
     "capture_completion",
     "inherit_existing_pr",
-    "pending_feedback_context",
     "prepare_feedback",
     "prompt_context",
     "snapshot_stage_config",
@@ -862,8 +857,17 @@ def clear_for_new_pr(loop: dict[str, Any]) -> None:
     pull request wants the same base branch, title template, and reviewers.
 
     Preconditions: ``loop`` is a mutable loop-run snapshot. Postconditions: no
-    PR, no PR comments, and no pending feedback that referred to them.
+    PR and no PR comments. Feedback records survive as the run's account of
+    what was asked, but any still waiting for a push is closed out: the pull
+    request it quoted is gone, so no later push can carry it. Leaving them open
+    would put comments from a deleted pull request into the next one's push
+    summary and seal that pass with the old request's timing and reason.
     """
+    for entry in _unpushed_feedback(loop):
+        feedback.update(
+            loop,
+            entry["id"],
+            pushed_in_pass=max(1, actions.int_or_default(loop.get("pass_number"), 1)),
+        )
     loop.pop("pr", None)
     loop.pop("pr_comments", None)
-    loop.pop("pending_pr_feedback", None)

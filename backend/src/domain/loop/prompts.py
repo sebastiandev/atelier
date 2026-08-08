@@ -29,6 +29,7 @@ class StagePromptInput:
     context_warnings: tuple[str, ...] = ()
     brief_note: str = ""
     brief_context: tuple[str, ...] = ()
+    waived_findings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,12 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         if value.resolution_note.strip()
         else ""
     )
+    waived = (
+        "\n\nAlready dismissed by the user -- do not raise again:\n"
+        + "\n".join(f"- {item}" for item in value.waived_findings)
+        if value.waived_findings
+        else ""
+    )
     changes_guidance = (
         "Never use `changes_requested`: publishing is the last decision, and review "
         "findings you cannot act on are not yours to reopen. If you cannot publish, "
@@ -150,7 +157,7 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         f"Stage instructions:\n{value.stage.instructions.strip()}"
         f"{_brief(value)}"
         f"{_context_index(value)}"
-        f"{previous}{changed_files}{workspace}{resolution}\n\n"
+        f"{previous}{changed_files}{workspace}{waived}{resolution}\n\n"
         "When this stage reaches a stopping point, respond with exactly one "
         "single-line JSON report and no Markdown fence:\n"
         f"{_report_example()}\n\n"

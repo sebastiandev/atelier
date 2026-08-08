@@ -167,6 +167,7 @@ from src.domain.commands.works import (
 from src.domain.commands.works.list_artifacts import ArtifactView
 from src.domain.connections import ConnectionStore
 from src.domain.loop import actions as loop_actions
+from src.domain.loop import feedback as loop_feedback
 from src.domain.loop import followups, lifecycle, pr_lifecycle, pr_review
 from src.domain.loop.briefs import brief_snapshot, optional_brief_from_snapshot
 from src.domain.loop.dtos import (
@@ -3410,6 +3411,7 @@ def _to_plan_run(run: PlanArtifactRun) -> PlanArtifactRunResponse:
         ],
         loop_review_gate=run.loop_review_gate,
         waived_findings_count=run.waived_findings_count,
+        waived_findings=list(run.waived_findings),
         loop_pass_number=run.loop_pass_number,
         loop_passes=run.loop_passes,
         pr=run.pr,
@@ -3507,11 +3509,8 @@ def _to_work_loop_run(record: LoopRunRecord) -> WorkLoopRunResponse:
         review_gate=(
             dict(loop["review_gate"]) if isinstance(loop.get("review_gate"), dict) else None
         ),
-        waived_findings_count=len(
-            [item for item in loop.get("waived_findings", []) if isinstance(item, str)]
-            if isinstance(loop.get("waived_findings"), list)
-            else []
-        ),
+        waived_findings_count=len(loop_feedback.dismissed(loop)),
+        waived_findings=loop_feedback.dismissed(loop),
         pass_number=max(1, loop_actions.int_or_default(loop.get("pass_number"), 1)),
         passes=[dict(item) for item in loop.get("passes", []) if isinstance(item, dict)]
         if isinstance(loop.get("passes"), list)

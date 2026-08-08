@@ -843,6 +843,8 @@ export type PlanArtifactRun = {
   brief?: LoopBrief | null;
   loop_review_gate?: LoopReviewGateState | null;
   waived_findings_count?: number;
+  /** Findings the user chose not to act on, run-wide. */
+  waived_findings?: string[];
   loop_pass_number?: number;
   loop_passes?: Array<Record<string, unknown>>;
   pr?: PrLifecycle | null;
@@ -882,6 +884,8 @@ export type WorkLoopRun = {
   seed_label?: string;
   review_gate?: LoopReviewGateState | null;
   waived_findings_count?: number;
+  /** Findings the user chose not to act on, run-wide. */
+  waived_findings?: string[];
   pass_number?: number;
   passes?: Array<Record<string, unknown>>;
   pr?: PrLifecycle | null;

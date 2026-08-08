@@ -95,6 +95,7 @@ export type RunSurfaceData = {
   seedLabel: string;
   reviewGate: LoopReviewGateState | null;
   waivedFindingsCount: number;
+  waivedFindings: string[];
 };
 
 type RunStageOccurrence = PlanLoopStageRun & {
@@ -542,6 +543,7 @@ function RunSurfaceContent({
           </div>
         </div>
 
+        <DismissedFindings data={data} />
         <RunActions
           agentStage={agentStage}
           busy={busy}
@@ -1382,6 +1384,26 @@ function FollowUpChooser({
   );
 }
 
+/** Remind the user what they already let stand before they approve again. */
+function DismissedFindings({ data }: { data: RunSurfaceData }) {
+  const pending = ["completed", "awaiting_approval"].includes(data.status) && !data.accepted;
+  if (!pending || data.waivedFindings.length === 0) return null;
+  return (
+    <section className="run-dismissed-findings">
+      <header>
+        <strong>Already dismissed on this run</strong>
+        <span className="tag">{data.waivedFindings.length}</span>
+        <small>reviewers are told not to raise these again</small>
+      </header>
+      <ul>
+        {data.waivedFindings.map((finding, index) => (
+          <li key={`${finding}-${index}`}>{finding}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function RunActions({
   agentStage,
   busy,
@@ -1544,6 +1566,7 @@ export function planningRunData(artifact: PlanArtifact, run: PlanArtifactRun): R
     seedLabel: "",
     reviewGate: run.loop_review_gate ?? null,
     waivedFindingsCount: run.waived_findings_count ?? 0,
+    waivedFindings: run.waived_findings ?? [],
   };
 }
 

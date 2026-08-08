@@ -64,6 +64,18 @@ def test_accept_continues_when_approval_has_a_next_stage() -> None:
     assert target.run["loop"]["approval_decision"] == {"summary": "Approved by user."}
 
 
+def test_approving_dismisses_the_findings_it_let_stand_even_when_the_run_continues() -> None:
+    """The user's decision is what waives, so it is recorded where they make
+    it. A run that continues into a later stage overwrites `findings` with that
+    stage's own report before it ends, which both waived findings nobody saw
+    and lost the ones the user actually approved."""
+    target = _target("publish")
+    target.run["loop"]["findings"] = ["The TODO in the launch path stays for now."]
+
+    assert lifecycle.accept(target) is False
+    assert target.run["loop"]["waived_findings"] == ["The TODO in the launch path stays for now."]
+
+
 def test_accept_finishes_legacy_terminal_approval() -> None:
     target = _target("complete")
 
@@ -86,7 +98,7 @@ def test_cancel_marks_active_run_and_remaining_stages_cancelled() -> None:
     assert {stage["status"] for stage in target.run["loop"]["stages"]} == {"cancelled"}
 
 
-def test_retry_reseeds_pending_pr_feedback(monkeypatch: Any) -> None:
+def test_retry_reseeds_open_pr_feedback(monkeypatch: Any) -> None:
     target = _target("publish")
     target.run["status"] = "blocked"
     loop = target.run["loop"]
@@ -95,17 +107,23 @@ def test_retry_reseeds_pending_pr_feedback(monkeypatch: Any) -> None:
             "status": "failed",
             "current_stage_id": "publish",
             "pass_number": 6,
-            "pending_pr_feedback": {
-                "pass_number": 6,
-                "comments": [
-                    {
-                        "author": "reviewer",
-                        "body": "Reduce the number of queries.",
-                        "instruction": "Keep the public API unchanged.",
-                    }
-                ],
-                "instruction": "Add focused validation.",
-            },
+            "feedback": [
+                {
+                    "id": "fb-1",
+                    "source": "pr_comment",
+                    "pass_number": 6,
+                    "state": "open",
+                    "items": [
+                        {
+                            "ref": "comment-1",
+                            "author": "reviewer",
+                            "body": "Reduce the number of queries.",
+                            "instruction": "Keep the public API unchanged.",
+                        }
+                    ],
+                    "note": "Add focused validation.",
+                }
+            ],
         }
     )
     stage_row = loop["stages"][1]

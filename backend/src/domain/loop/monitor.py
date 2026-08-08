@@ -15,7 +15,7 @@ from src.domain.agents.turn_monitor import observe_turn
 from src.domain.artifacts.models import PrArtifact
 from src.domain.artifacts.pr_status import is_terminal_pr_status
 from src.domain.connections import ConnectionStore
-from src.domain.loop import actions, briefs, pass_feedback, pr_lifecycle
+from src.domain.loop import actions, briefs, feedback, pr_lifecycle
 from src.domain.loop import runtime as _loop_runtime
 from src.domain.loop.agent_policy import resolve_stage_agent_config
 from src.domain.loop.dtos import (
@@ -753,6 +753,7 @@ async def _apply_stage_report(
                 str(exc),
             )
     _record_stage_report(loop, stage_row, report, report_seq)
+    feedback.close_attempt(loop, current_id)
     loop["last_checked_seq"] = report_seq
     loop["findings"] = list(report.findings)
     _copy_report_to_run(run, report)
@@ -822,6 +823,13 @@ async def _advance_after_stage_report(
         and _hold_at_review_gate(store, target, run, loop, definition, stage_row, report)
     ):
         return target
+
+    # A request is answered when the stage that would verify it passes -- not
+    # when the run is accepted. Anything else deadlocks: PR feedback used to
+    # clear only once the PR stage passed, and the PR stage would not pass
+    # while the feedback was open.
+    if report.outcome == LoopOutcome.PASS:
+        feedback.answer(loop, current_id)
 
     destination = transition_destination(definition, current_id, report.outcome)
     stage_row["status"] = (
@@ -1282,14 +1290,7 @@ async def _send_stage_prompt(
     else:
         stage_row.pop("corrective_note", None)
     resolution_note = "\n\n".join(
-        value
-        for value in (
-            pass_feedback.context(target.run),
-            # A PR stage already carries the same bundle through `prompt_context`.
-            "" if stage.kind.value == "pr" else pr_lifecycle.pending_feedback_context(target.run),
-            resolution_note.strip(),
-        )
-        if value
+        value for value in (_open_feedback_for(stage, target.run), resolution_note.strip()) if value
     )
     brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
     brief_note, brief_context = briefs.prompt_values(brief, stage.step_id)
@@ -1344,6 +1345,7 @@ async def _send_stage_prompt(
             context_warnings=tuple(actions.str_list(stage_row.get("context_warnings"))),
             brief_note=brief_note,
             brief_context=brief_context,
+            waived_findings=_waived_for(stage, target.run),
         )
     )
     await _loop_runtime.send_loop_prompt(
@@ -1357,6 +1359,36 @@ async def _send_stage_prompt(
         agent_slug=agent_slug,
         prompt=prompt,
     )
+
+
+def _open_feedback_for(stage: LoopStepDefinition, run: dict[str, Any]) -> str:
+    """Return the outstanding requests this stage is meant to act on.
+
+    A PR stage publishes; it is not the stage a request is routed to, and its
+    own scope contract forbids implementing one. Handing it the open block made
+    it report changes_requested, which reopened the pass that produced the
+    request -- the run cycled and pushed every pass. What it needs instead is
+    the past-tense account of what this push answers, which
+    ``pr_lifecycle.prompt_context`` already gives it.
+
+    Keyed on the stage kind until stages declare their inputs, at which point a
+    PR stage simply does not declare feedback.
+    """
+    if stage.kind == LoopStepKind.PR:
+        return ""
+    return feedback.context(run)
+
+
+def _waived_for(stage: LoopStepDefinition, run: dict[str, Any]) -> tuple[str, ...]:
+    """Return the findings a reviewer must not raise again.
+
+    Only reviewers are told: an implementation stage has nothing to do with a
+    finding nobody wants acted on. Keyed on the stage kind until stages declare
+    their inputs, at which point this becomes one more declared input.
+    """
+    if stage.kind != LoopStepKind.AGENT_REVIEW:
+        return ()
+    return tuple(feedback.dismissed(actions.dict_or_empty(run.get("loop"))))
 
 
 def _changes_requested_note(report: LoopStageReport) -> str:
@@ -1566,10 +1598,9 @@ async def _apply_pr_feedback_decision(
         bypass_review_gate=True,
         agent_reported=False,
         pass_already_started=True,
-        # No resolution note: `_send_stage_prompt` now renders the durable
-        # bundle through `pending_feedback_context` for every stage in the
-        # pass, so passing it here would only add a second copy of a block
-        # that grows with each selected comment.
+        # No resolution note: `_send_stage_prompt` renders the open feedback
+        # record for every stage in the pass, so passing it here would only add
+        # a second copy of a block that grows with each selected comment.
     )
 
 
@@ -1610,10 +1641,12 @@ async def _apply_review_gate_decision(
     choice = actions.str_or_empty(decision.get("decision"))
     if choice == "approve_as_is":
         enforced.clear()
-    waived = [finding for index, finding in enumerate(findings) if index not in enforced]
-    stored_waived = loop.setdefault("waived_findings", [])
-    if isinstance(stored_waived, list):
-        stored_waived.extend(waived)
+    # Approving as-is dismisses everything the review reported, not only the
+    # findings a partial send-back left out: the user has seen all of them and
+    # chosen to let them stand, so a later reviewer is told not to raise any.
+    feedback.waive(
+        loop, [finding for index, finding in enumerate(findings) if index not in enforced]
+    )
     reports = stage_row.get("reports")
     if isinstance(reports, list) and reports and isinstance(reports[-1], dict):
         reports[-1]["review_decision"] = {
@@ -1635,13 +1668,16 @@ async def _apply_review_gate_decision(
     # A send-back note is a request for changes like any other: it has to
     # outlive the one prompt that carried it, or a retry of the stage it was
     # sent to relaunches the agent with the findings but not the reason. Stored
-    # rather than passed so `pass_feedback` renders it exactly once.
+    # rather than passed so the shared renderer renders it exactly once, and
+    # answered by this review -- the stage that will verify the answer.
     durable_instruction = bool(instruction) and choice == "send_back"
     if durable_instruction:
-        pass_feedback.record(
+        feedback.record(
             loop,
+            source="review",
             note=instruction,
             pass_number=max(1, actions.int_or_default(loop.get("pass_number"), 1)),
+            answered_by=stage_id,
         )
     report = LoopStageReport(
         outcome=(LoopOutcome.PASS if choice == "approve_as_is" else LoopOutcome.CHANGES_REQUESTED),
@@ -1781,6 +1817,11 @@ def _complete_pr(run: dict[str, Any], loop: dict[str, Any], current_id: str) -> 
     loop["status"] = LoopStatus.ACCEPTED.value
     loop["status_reason"] = "Pull request updated; the loop pass is complete."
     loop["current_stage_id"] = current_id
+    # Reaching an accepted run answers whatever was still outstanding, the same
+    # way an explicit approval does. Nothing is waived here: `loop["findings"]`
+    # now holds this PR stage's own report, which no user ever passed judgement
+    # on. What the user let stand was recorded when they approved.
+    feedback.answer_all(loop)
     run["loop"] = loop
 
 

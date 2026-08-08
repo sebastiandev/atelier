@@ -658,6 +658,7 @@ def _runs(
                     else None
                 ),
                 waived_findings_count=len(_str_list(loop.get("waived_findings"))),
+                waived_findings=_str_list(loop.get("waived_findings")),
                 loop_pass_number=max(1, _int_or_default(loop.get("pass_number"), 1)),
                 loop_passes=[
                     dict(row)

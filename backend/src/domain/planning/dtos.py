@@ -190,6 +190,7 @@ class PlanArtifactRun:
     loop_stages: list[PlanLoopStageRun] = field(default_factory=list)
     loop_review_gate: dict[str, Any] | None = None
     waived_findings_count: int = 0
+    waived_findings: list[str] = field(default_factory=list)
     loop_pass_number: int = 1
     loop_passes: list[dict[str, Any]] = field(default_factory=list)
     pr: dict[str, Any] | None = None

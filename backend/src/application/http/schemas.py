@@ -765,6 +765,7 @@ class PlanArtifactRunResponse(BaseModel):
     loop_stages: list[PlanLoopStageRunResponse] = Field(default_factory=list)
     loop_review_gate: dict[str, Any] | None = None
     waived_findings_count: int = 0
+    waived_findings: list[str] = Field(default_factory=list)
     loop_pass_number: int = 1
     loop_passes: list[dict[str, Any]] = Field(default_factory=list)
     pr: dict[str, Any] | None = None
@@ -994,6 +995,7 @@ class WorkLoopRunResponse(BaseModel):
     brief: LoopBriefSchema | None = None
     review_gate: dict[str, Any] | None = None
     waived_findings_count: int = 0
+    waived_findings: list[str] = Field(default_factory=list)
     pass_number: int = 1
     passes: list[dict[str, Any]] = Field(default_factory=list)
     pr: dict[str, Any] | None = None
