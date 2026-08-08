@@ -1343,6 +1343,35 @@ async def _send_stage_prompt(
     )
 
 
+def _narrow_to_enforced(
+    loop: dict[str, Any],
+    stage_row: dict[str, Any],
+    findings: list[str],
+    enforced: set[int],
+) -> None:
+    """Reduce the run's live account of a review to the enforced findings.
+
+    ``findings`` and ``finding_details`` are written in parallel and read in
+    parallel -- the run view counts one and renders the other, and the gate's
+    stored indexes point into both -- so narrowing one without the other makes
+    them disagree. ``loop["findings"]`` is narrowed for the same reason: the
+    approval paths build their report from it, and would otherwise hand back
+    the very findings the user just waived.
+
+    Preconditions: ``enforced`` holds valid indexes into ``findings``.
+    Postconditions: every live copy carries the same enforced subset; the
+    stage's report ledger is untouched and keeps what the reviewer said.
+    """
+    kept = sorted(enforced)
+    stage_row["findings"] = [findings[index] for index in kept]
+    details = stage_row.get("finding_details")
+    if isinstance(details, list):
+        stage_row["finding_details"] = [
+            details[index] for index in kept if 0 <= index < len(details)
+        ]
+    loop["findings"] = list(stage_row["findings"])
+
+
 def _declared_feedback(stage: LoopStepDefinition, run: dict[str, Any]) -> str:
     """Return the outstanding requests, when the stage declares that input.
 
@@ -1614,12 +1643,14 @@ async def _apply_review_gate_decision(
             "enforced_findings": sorted(enforced),
             "instruction": actions.str_or_empty(decision.get("instruction")),
         }
-    # The row is the stage's current account and the ledger entry above is the
-    # immutable record of what the reviewer actually said. Only the account
-    # narrows to what the user enforced, because that is what the stage this
-    # sends back to now declares as its report -- and a waived finding must not
-    # travel back as though the user had asked for it.
-    stage_row["findings"] = [finding for index, finding in enumerate(findings) if index in enforced]
+    # Only on a send-back, and only to what the user enforced: that is what the
+    # stage this returns to reads as its report, and a waived finding must not
+    # travel back as though the user had asked for it. The ledger entry above
+    # keeps the full record either way. Approving as-is narrows nothing --
+    # erasing the account would leave the run view showing a review that found
+    # nothing, when what happened is that the user let its findings stand.
+    if choice == "send_back":
+        _narrow_to_enforced(loop, stage_row, findings, enforced)
     if choice == "send_back" and bool(gate.get("passes_spent")):
         next_limit = actions.int_or_default(gate.get("passes_used"), 0) + 1
         pass_counts = loop.setdefault("review_gate_passes", {})

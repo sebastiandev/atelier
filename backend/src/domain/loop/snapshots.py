@@ -28,6 +28,13 @@ from src.domain.loop.dtos import (
     StageOverrides,
 )
 
+_DECLARED_MARKER = "reports"
+"""The key whose presence means "this stage declares its own inputs".
+
+Always written, so a stage with no reports is still distinguishable from one
+written before inputs were declared at all.
+"""
+
 _REPORT_SCHEMA = LoopReportSchema(
     schema_id="multi-stage-loop-report",
     fields=(LoopReportField("summary", "Summary", allow_explicit_none=False),),
@@ -134,12 +141,13 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
         "check_adapter": stage.check_adapter,
         "check_command": list(stage.check_command),
     }
-    # Emitted only when declared, so a definition that never asked for either
-    # serialises exactly as it did before they existed.
-    if stage.reports:
-        value["reports"] = [
-            {"from": item.from_stage, "required": item.required} for item in stage.reports
-        ]
+    # Always emitted, empty or not: its presence is what tells the reader this
+    # stage states its own inputs. Keying that on a field the writer omits when
+    # empty made the two indistinguishable, so a stage that deliberately
+    # declared no feedback was handed it back on the next read.
+    value[_DECLARED_MARKER] = [
+        {"from": item.from_stage, "required": item.required} for item in stage.reports
+    ]
     if stage.history != LoopHistoryLevel.NONE:
         value["history"] = stage.history.value
     if stage.note_required is not None:
@@ -177,9 +185,9 @@ def _stage_from_snapshot(value: object) -> LoopStepDefinition:
         name=_string(value, "name"),
         kind=LoopStepKind(_string(value, "kind")),
         instructions=_optional_string(value.get("instructions")),
-        context=_inputs_from_snapshot(value, context),
-        reports=_reports_from_snapshot(value.get("reports"), context),
-        history=_history_from_snapshot(value.get("history")),
+        context=inputs_from_raw(value, context),
+        reports=reports_from_raw(value.get("reports"), context),
+        history=history_from_raw(value.get("history")),
         agent=_agent_from_snapshot(value.get("agent")),
         report_contract=_optional_string(value.get("report_contract")) or "generic",
         retry=LoopRetryPolicy(
@@ -266,36 +274,52 @@ def loop_pr_config_from_snapshot(value: object) -> LoopPrConfig | None:
     )
 
 
-def _inputs_from_snapshot(
+def inputs_from_raw(
     stage: dict[str, Any],
     context: list[Any],
 ) -> tuple[LoopContextReference, ...]:
     """Read a stage's declared inputs, converting the old shape when needed.
 
-    Two conversions. ``previous_report`` is not an input any more, so it drops
-    out here and comes back through :func:`_reports_from_snapshot`. And
-    feedback used to be injected into every stage except a PR stage rather than
-    declared, so a definition written before this existed is granted it on the
-    same terms -- otherwise every loop a user already has would silently stop
-    telling its stages what was asked of them.
+    ``previous_report`` is not an input any more, so it drops out here and
+    comes back through :func:`reports_from_raw`. Two inputs used to be injected
+    by stage kind rather than declared -- feedback into everything except a PR
+    stage, and dismissed findings into every review -- so a stage written
+    before inputs were declared is granted them on exactly those terms.
+    Without that, every loop a user already has would silently stop telling
+    its stages what was asked of them and start re-raising findings the user
+    had dismissed.
 
     Preconditions: ``stage`` is the raw stage snapshot; ``context`` is its raw
-    context list. Postconditions: the declared inputs, with at most one
-    ``feedback`` entry.
+    context list. Postconditions: the declared inputs, each kind at most once.
     """
     inputs = tuple(
         item
         for item in (_context_from_snapshot(row) for row in context)
         if item.kind != LoopContextKind.PREVIOUS_REPORT
     )
-    declares_feedback = any(item.kind == LoopContextKind.FEEDBACK for item in inputs)
-    written_before_inputs_existed = "reports" not in stage and not declares_feedback
-    if written_before_inputs_existed and _optional_string(stage.get("kind")) != LoopStepKind.PR:
-        return (*inputs, LoopContextReference(LoopContextKind.FEEDBACK))
-    return inputs
+    if _DECLARED_MARKER in stage:
+        return inputs
+    kind = _optional_string(stage.get("kind"))
+    granted = [
+        *(
+            (LoopContextKind.FEEDBACK,)
+            if kind != LoopStepKind.PR.value
+            else ()
+        ),
+        *(
+            (LoopContextKind.WAIVED_FINDINGS,)
+            if kind == LoopStepKind.AGENT_REVIEW.value
+            else ()
+        ),
+    ]
+    declared = {item.kind for item in inputs}
+    return (
+        *inputs,
+        *(LoopContextReference(item) for item in granted if item not in declared),
+    )
 
 
-def _reports_from_snapshot(value: object, context: list[Any]) -> tuple[LoopReportReference, ...]:
+def reports_from_raw(value: object, context: list[Any]) -> tuple[LoopReportReference, ...]:
     """Read a stage's declared reports, converting the old shape when absent.
 
     This is the seam. A definition written before reports existed declared at
@@ -312,7 +336,14 @@ def _reports_from_snapshot(value: object, context: list[Any]) -> tuple[LoopRepor
     if isinstance(value, list):
         return tuple(
             LoopReportReference(
-                from_stage=_optional_string(item.get("from")) or PREVIOUS_STAGE,
+                # Both spellings: the wire schema aliases the field to `from`,
+                # and a dump that forgets `by_alias` would otherwise degrade
+                # every declaration to "whichever stage ran last" in silence.
+                from_stage=(
+                    _optional_string(item.get("from"))
+                    or _optional_string(item.get("from_stage"))
+                    or PREVIOUS_STAGE
+                ),
                 required=bool(item.get("required", True)),
             )
             for item in value
@@ -329,7 +360,7 @@ def _reports_from_snapshot(value: object, context: list[Any]) -> tuple[LoopRepor
     )
 
 
-def _history_from_snapshot(value: object) -> LoopHistoryLevel:
+def history_from_raw(value: object) -> LoopHistoryLevel:
     """Read a stage's history level, defaulting to the old behaviour of none."""
     try:
         return LoopHistoryLevel(_optional_string(value))
@@ -407,6 +438,12 @@ def _overrides_snapshot(overrides: StageOverrides) -> dict[str, Any]:
         item = getattr(overrides, key)
         if item is not None:
             value[key] = item
+    if overrides.reports is not None:
+        value["reports"] = [
+            {"from": item.from_stage, "required": item.required} for item in overrides.reports
+        ]
+    if overrides.history is not None:
+        value["history"] = overrides.history.value
     if overrides.context is not None:
         value["context"] = [
             {
@@ -445,6 +482,15 @@ def _overrides_snapshot(overrides: StageOverrides) -> dict[str, Any]:
     return value
 
 
+def _declares_legacy_report(context: object) -> bool:
+    """Whether a raw context list carries an old-shape report declaration."""
+    return isinstance(context, list) and any(
+        isinstance(item, dict)
+        and _optional_string(item.get("kind")) == LoopContextKind.PREVIOUS_REPORT.value
+        for item in context
+    )
+
+
 def _overrides_from_snapshot(value: object) -> StageOverrides | None:
     if value is None:
         return None
@@ -458,9 +504,25 @@ def _overrides_from_snapshot(value: object) -> StageOverrides | None:
         instructions=(
             value.get("instructions") if isinstance(value.get("instructions"), str) else None
         ),
+        # Through the same seam as a stage body: an override written before
+        # inputs were declared carries a `previous_report` entry that nothing
+        # renders any more, and replaces the base's inputs wholesale -- so
+        # without converting it here a linked stage loses both its report and
+        # the inputs its base was granted.
         context=(
-            tuple(_context_from_snapshot(item) for item in raw_context)
-            if isinstance(raw_context, list)
+            inputs_from_raw(value, raw_context) if isinstance(raw_context, list) else None
+        ),
+        reports=(
+            reports_from_raw(
+                value.get("reports"), raw_context if isinstance(raw_context, list) else []
+            )
+            if isinstance(value.get("reports"), list)
+            or _declares_legacy_report(raw_context)
+            else None
+        ),
+        history=(
+            history_from_raw(value.get("history"))
+            if isinstance(value.get("history"), str)
             else None
         ),
         agent=_agent_from_snapshot(value.get("agent")),
@@ -515,10 +577,13 @@ def _integer(value: object, default: int) -> int:
 __all__ = [
     "definition_from_snapshot",
     "definition_snapshot",
+    "history_from_raw",
+    "inputs_from_raw",
     "loop_pr_config_from_snapshot",
     "loop_pr_config_snapshot",
     "loop_stage_from_snapshot",
     "loop_stage_snapshot",
+    "reports_from_raw",
     "stage_overrides_from_snapshot",
     "stage_overrides_snapshot",
 ]

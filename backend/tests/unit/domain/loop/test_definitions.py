@@ -117,12 +117,11 @@ def _reporting_loop(from_stage: str) -> LoopDefinition:
     return replace(base, stages=stages)
 
 
-def test_a_report_from_a_stage_that_cannot_run_first_is_rejected() -> None:
-    """An implementation cannot read the review that has not run yet, and a
-    prompt that silently renders nothing is worse than an editing error."""
-    errors = validate_definition(_reporting_loop("code-review"))
-
-    assert any("cannot run first" in error for error in errors)
+def test_reading_the_review_that_sends_work_back_is_valid() -> None:
+    """A loop is cyclic. By the time the implementation runs again the review
+    really has reported, and naming it is the whole point of declaring a report
+    rather than taking whichever stage ran last."""
+    assert validate_definition(_reporting_loop("code-review")) == ()
 
 
 def test_a_report_from_an_unknown_stage_is_rejected() -> None:

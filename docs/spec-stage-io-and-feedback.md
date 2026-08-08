@@ -404,9 +404,20 @@ deleted. Two additions the draft did not name were needed to finish it:
   referent on the resume path, which builds its prompt long after the
   transition and cannot re-derive it from stage order.
 
-Legacy definitions are granted `feedback` at the reader (except PR stages),
-which is exactly the injection rule it replaces, so existing loops behave
-identically. The `context` field is not yet renamed to `inputs`; that is a
+Legacy definitions are granted `feedback` at the reader (except PR stages) and
+`waived_findings` when they are reviews, which is exactly the pair of injection
+rules they replace, so existing loops behave identically.
+
+§5a says the reader boundary is one place. It is three — the run snapshot, the
+on-disk YAML loop repository, and stage-link overrides — and they share the
+conversion rather than each knowing two shapes. The YAML repository was missed
+first time round and silently dropped the reports of every loop a user had
+forked or written. A stage's `reports` key is therefore always written, even
+when empty: its presence is what marks the stage as stating its own inputs.
+
+§3b's "cannot run first" rule is reachability, not list order. A loop is cyclic,
+so the implementation reading the review that sent it back is both legal and the
+main reason to name a stage instead of using `previous`. The `context` field is not yet renamed to `inputs`; that is a
 mechanical rename of ~90 call sites, deliberately left as its own change so it
 does not obscure this one.
 

@@ -290,6 +290,8 @@ def overrides_from_drift(
             effective.instructions if effective.instructions != base.instructions else None
         ),
         context=effective.context if effective.context != base.context else None,
+        reports=effective.reports if effective.reports != base.reports else None,
+        history=effective.history if effective.history != base.history else None,
         agent=effective.agent if effective.agent != base.agent else None,
         report_contract=(
             effective.report_contract
@@ -313,6 +315,8 @@ def overrides_from_drift(
         overrides.name,
         overrides.instructions,
         overrides.context,
+        overrides.reports,
+        overrides.history,
         overrides.agent,
         overrides.report_contract,
         overrides.retry,

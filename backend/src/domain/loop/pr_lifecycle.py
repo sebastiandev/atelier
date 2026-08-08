@@ -15,6 +15,7 @@ from src.domain.artifacts.pr_status import parse_pr_url
 from src.domain.loop import actions, feedback
 from src.domain.loop.agent_policy import sanitize_agent_policy
 from src.domain.loop.dtos import (
+    PREVIOUS_STAGE,
     LoopAgentPolicy,
     LoopRunStatus,
     LoopStatus,
@@ -218,8 +219,11 @@ def add_one_off_stage(target: LoopRunTarget, setup: PrSetup) -> None:
             "context": [
                 {"kind": "workspace_diff", "required": True, "paths": []},
                 {"kind": "changed_files", "required": True, "paths": []},
-                {"kind": "previous_report", "required": True, "paths": []},
             ],
+            # Declared in the current shape. Emitting the old one worked only
+            # because the compatibility reader converts it, which is not
+            # something a domain writer should be relying on.
+            "reports": [{"from": PREVIOUS_STAGE, "required": True}],
             "agent": agent,
             "report_contract": "implementation",
             "retry": {"max_attempts": 2, "timeout_minutes": 20},

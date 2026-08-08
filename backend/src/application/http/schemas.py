@@ -1104,11 +1104,9 @@ class LoopStepDefinitionSchema(BaseModel):
     kind: LoopStepKind
     instructions: str = ""
     context: list[LoopContextReferenceSchema] = Field(default_factory=list)
-    # Emitted only when declared, so the wire shape matches the pinned run
-    # snapshot exactly -- the run view compares the two.
-    reports: list[LoopReportReferenceSchema] = Field(
-        default_factory=list, exclude_if=lambda value: not value
-    )
+    # Always emitted, matching the snapshot: its presence is what marks a stage
+    # as stating its own inputs, and the run view compares the two shapes.
+    reports: list[LoopReportReferenceSchema] = Field(default_factory=list)
     history: Literal["none", "summaries", "full"] = Field(
         default="none", exclude_if=lambda value: value == "none"
     )

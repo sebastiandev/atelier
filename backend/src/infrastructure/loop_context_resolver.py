@@ -15,7 +15,15 @@ _DYNAMIC = {
     LoopContextKind.WORKSPACE_DIFF,
     LoopContextKind.CHANGED_FILES,
     LoopContextKind.PREVIOUS_REPORT,
+    LoopContextKind.WAIVED_FINDINGS,
+    LoopContextKind.FEEDBACK,
 }
+"""Kinds the run supplies when the prompt is built, not the filesystem.
+
+Absent from here, a kind resolves to nothing and is reported as an optional
+miss, so every stage declaring it carries a permanent "optional missing" line
+into its prompt and the run view.
+"""
 
 
 class FilesystemLoopContextResolver:

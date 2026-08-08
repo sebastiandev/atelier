@@ -155,16 +155,42 @@ def declared_report_rows(
     are skipped, which is how an optional report reads as absent.
     """
     resolved: dict[str, dict[str, Any]] = {}
+    fallback = last_reported_id or _latest_reporting_stage(loop, stage)
     for reference in getattr(stage, "reports", ()):
         step_id = reference.from_stage
         if step_id == PREVIOUS_STAGE:
-            step_id = last_reported_id
+            step_id = fallback
         if not step_id or step_id in resolved:
             continue
         row = stage_row(loop, step_id)
         if row is not None:
             resolved[step_id] = row
     return list(resolved.items())
+
+
+def _latest_reporting_stage(loop: dict[str, Any], stage: Any) -> str:
+    """Return the stage that reported most recently, other than this one.
+
+    Only used when the run has no recorded referent for ``previous`` -- a run
+    pinned before the run started recording one, or a transition that moved the
+    current stage without going through a stage report. Falling back to the
+    newest report keeps such a run readable instead of rendering no account at
+    all, which is what the old single-report path always managed to do.
+    """
+    rows = loop.get("stages")
+    current = getattr(stage, "step_id", "")
+    latest_seq = -1
+    latest_id = ""
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or row.get("id") == current:
+            continue
+        reports = row.get("reports")
+        newest = reports[-1] if isinstance(reports, list) and reports else None
+        seq = int_or_default(newest.get("seq"), 0) if isinstance(newest, dict) else -1
+        if seq > latest_seq:
+            latest_seq = seq
+            latest_id = str_or_empty(row.get("id"))
+    return latest_id
 
 
 def start_next_pass(loop: dict[str, Any]) -> int:

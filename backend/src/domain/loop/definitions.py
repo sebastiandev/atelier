@@ -161,11 +161,14 @@ def _validate_reports(
     stage: LoopStepDefinition,
     stages: tuple[LoopStepDefinition, ...],
 ) -> list[str]:
-    """Reject reports that name a stage that cannot have reported first.
+    """Reject reports that name a stage that can never have reported first.
 
-    A stage can only read an account that exists by the time it runs, so the
-    named stage must appear before it in the loop's order. Catching it here
-    turns a prompt that silently renders nothing into an editing error.
+    Order alone does not decide this, because a loop is cyclic: a review sends
+    work back to the implementation, so by the time that implementation runs
+    again the review really has reported, and reading it is exactly the point
+    of naming a stage rather than taking whichever ran last. The rule is
+    reachability -- the named stage must be able to run before this one, either
+    earlier in the order or by some transition leading back here.
     """
     errors: list[str] = []
     label = f"Stage {stage.step_id!r}"
@@ -181,9 +184,33 @@ def _validate_reports(
             continue
         if source not in order:
             errors.append(f"{label} reads a report from unknown stage {source!r}.")
-        elif order.index(source) >= position >= 0:
+        elif order.index(source) > position >= 0 and not _leads_back_to(
+            source, stage.step_id, stages
+        ):
             errors.append(f"{label} reads a report from {source!r}, which cannot run first.")
     return errors
+
+
+def _leads_back_to(
+    source: str,
+    destination: str,
+    stages: tuple[LoopStepDefinition, ...],
+) -> bool:
+    """Whether any transition path runs ``source`` before ``destination``."""
+    by_id = {item.step_id: item for item in stages}
+    seen: set[str] = set()
+    frontier = [source]
+    while frontier:
+        current = frontier.pop()
+        if current == destination:
+            return True
+        if current in seen or current not in by_id:
+            continue
+        seen.add(current)
+        frontier.extend(
+            value for value in by_id[current].transitions.values() if isinstance(value, str)
+        )
+    return False
 
 
 def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:

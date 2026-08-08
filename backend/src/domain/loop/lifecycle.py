@@ -475,6 +475,9 @@ async def request_changes(
     stage_row["attempt"] = actions.int_or_default(stage_row.get("attempt"), 1) + 1
     stage_row.pop("repair_attempt", None)
     loop["current_stage_id"] = destination
+    # The approval is what this stage is answering, so a later retry resolves
+    # `previous` to it rather than to whatever transition last ran.
+    loop["previous_stage_id"] = approval_id
     if stage.agent is not None and stage.agent.permissions != LoopPermission.READ:
         loop["source_agent_slug"] = agent_slug
     loop["status"] = LoopStatus.RUNNING.value

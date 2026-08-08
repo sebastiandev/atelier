@@ -16,7 +16,12 @@ from src.domain.loop.dtos import (
     StageDefinitionRef,
     StageOverrides,
 )
-from src.domain.loop.snapshots import loop_stage_from_snapshot, loop_stage_snapshot
+from src.domain.loop.snapshots import (
+    loop_stage_from_snapshot,
+    loop_stage_snapshot,
+    stage_overrides_from_snapshot,
+    stage_overrides_snapshot,
+)
 from src.domain.loop.stage_builtins import builtin_stage_definition
 from src.domain.loop.stages import (
     StageDefinitionInvalid,
@@ -121,7 +126,14 @@ def test_a_legacy_previous_report_context_reads_as_a_declared_report() -> None:
     )
 
     assert stage.reports == (LoopReportReference(from_stage="implementation"),)
-    assert [item.kind.value for item in stage.context] == ["workspace_diff", "feedback"]
+    # Feedback and dismissed findings used to be injected by stage kind. A
+    # review written before inputs were declared is granted both, or it would
+    # start re-raising findings the user had already waived.
+    assert [item.kind.value for item in stage.context] == [
+        "workspace_diff",
+        "feedback",
+        "waived_findings",
+    ]
 
 
 def test_a_legacy_previous_report_without_a_step_reads_as_previous() -> None:
@@ -176,3 +188,74 @@ def test_declarations_round_trip_through_a_snapshot() -> None:
     assert restored.reports == stage.reports
     assert restored.history == LoopHistoryLevel.SUMMARIES
     assert restored.context == stage.context
+
+
+def test_a_stage_that_declares_no_feedback_keeps_declaring_none() -> None:
+    """The declaration has to survive its own serializer. Keying "written
+    before inputs existed" on a field the writer omitted when empty made a
+    modern stage indistinguishable from a legacy one, so feedback came back."""
+    stage = LoopStepDefinition(
+        step_id="publish",
+        name="Publish",
+        kind=LoopStepKind.AGENT_TASK,
+        instructions="Publish it.",
+    )
+
+    once = loop_stage_from_snapshot(loop_stage_snapshot(stage))
+    twice = loop_stage_from_snapshot(loop_stage_snapshot(once))
+
+    assert once.context == ()
+    assert twice.context == ()
+
+
+def test_a_legacy_review_still_gets_the_findings_the_user_dismissed() -> None:
+    """Dismissed findings used to reach every review by stage kind. Without
+    the same grant, every loop a user already has starts re-raising them."""
+    stage = loop_stage_from_snapshot(
+        {
+            "id": "code-review",
+            "name": "Code review",
+            "kind": "agent_review",
+            "context": [{"kind": "workspace_diff", "required": True}],
+            "transitions": {},
+        }
+    )
+
+    assert [item.kind.value for item in stage.context] == [
+        "workspace_diff",
+        "feedback",
+        "waived_findings",
+    ]
+
+
+def test_overrides_carry_reports_and_history() -> None:
+    overrides = StageOverrides(
+        reports=(LoopReportReference(from_stage="implementation"),),
+        history=LoopHistoryLevel.SUMMARIES,
+    )
+
+    restored = stage_overrides_from_snapshot(stage_overrides_snapshot(overrides))
+
+    assert restored is not None
+    assert restored.reports == overrides.reports
+    assert restored.history == LoopHistoryLevel.SUMMARIES
+
+
+def test_a_legacy_override_context_is_normalised_like_a_stage_body() -> None:
+    """An override replaces the base's inputs wholesale, so an unconverted one
+    loses both the report it declared and the inputs the base was granted."""
+    restored = stage_overrides_from_snapshot(
+        {
+            "context": [
+                {"kind": "workspace_diff", "required": True},
+                {"kind": "previous_report", "required": True, "step": "implementation"},
+            ]
+        }
+    )
+
+    assert restored is not None
+    assert restored.reports == (LoopReportReference(from_stage="implementation"),)
+    assert [item.kind.value for item in (restored.context or ())] == [
+        "workspace_diff",
+        "feedback",
+    ]

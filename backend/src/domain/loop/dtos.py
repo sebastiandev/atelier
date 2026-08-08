@@ -382,6 +382,8 @@ class StageOverrides:
     name: str | None = None
     instructions: str | None = None
     context: tuple[LoopContextReference, ...] | None = None
+    reports: tuple[LoopReportReference, ...] | None = None
+    history: LoopHistoryLevel | None = None
     agent: LoopAgentPolicy | None = None
     report_contract: str | None = None
     retry: LoopRetryPolicy | None = None

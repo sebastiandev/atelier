@@ -21,6 +21,7 @@ from src.domain.loop.dtos import (
     LoopContextReference,
     LoopDefinition,
     LoopDefinitionScope,
+    LoopHistoryLevel,
     LoopOutcome,
     LoopPermission,
     LoopReportField,
@@ -35,8 +36,11 @@ from src.domain.loop.dtos import (
     StageDefinitionRef,
 )
 from src.domain.loop.snapshots import (
+    history_from_raw,
+    inputs_from_raw,
     loop_pr_config_from_snapshot,
     loop_pr_config_snapshot,
+    reports_from_raw,
     stage_overrides_from_snapshot,
     stage_overrides_snapshot,
 )
@@ -254,7 +258,11 @@ def _stage_from_data(
         name=_required_str(value, "name"),
         kind=kind,
         instructions=instructions,
-        context=tuple(_context_from_data(item) for item in context_raw),
+        # Through the shared seam, so a loop stored on disk before inputs were
+        # declared reads exactly as a pinned run snapshot of the same age does.
+        context=inputs_from_raw(value, context_raw),
+        reports=reports_from_raw(value.get("reports"), context_raw),
+        history=history_from_raw(value.get("history")),
         agent=_agent_from_data(agent_raw, kind),
         report_contract=_optional_str(value.get("report_contract")) or "generic",
         retry=_retry_from_data(retry_raw),
@@ -396,7 +404,20 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
     if stage.pr_config is not None:
         data["pr_config"] = loop_pr_config_snapshot(stage.pr_config)
     if stage.context:
-        data["context"] = [_context_to_data(item) for item in stage.context]
+        data["context"] = [
+            _context_to_data(item)
+            for item in stage.context
+            if item.kind != LoopContextKind.PREVIOUS_REPORT
+        ]
+    # Always written, empty or not: its presence marks the stage as stating its
+    # own inputs, which is what stops the reader granting it the old injected
+    # ones back. Dropping it here silently erased the reports of every loop a
+    # user had forked or written themselves.
+    data["reports"] = [
+        {"from": item.from_stage, "required": item.required} for item in stage.reports
+    ]
+    if stage.history != LoopHistoryLevel.NONE:
+        data["history"] = stage.history.value
     if stage.agent is not None:
         data["agent"] = {
             "session": stage.agent.session.value,

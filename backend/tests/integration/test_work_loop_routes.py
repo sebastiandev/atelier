@@ -1772,3 +1772,20 @@ def test_selected_pr_feedback_still_starts_an_implementation_pass(
     assert "Addressed in this push:" in pr_prompt
     assert "Drop the SELECT FOR UPDATE." in pr_prompt
     assert "Address this pull-request feedback in the current worktree" not in pr_prompt
+
+
+def test_approving_a_gate_as_is_keeps_the_reviewer_findings_visible(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Narrowing the run's account to the enforced findings is right when work
+    is sent back. On approve-as-is nothing is being corrected, and emptying it
+    left the run view showing a review that had found nothing."""
+    _, implementing = _send_back_from_a_human_review_gate(app_client, tmp_path)
+    review = next(stage for stage in implementing["stages"] if stage["id"] == "code-review")
+
+    # The send-back narrowed the live account to the one enforced finding while
+    # the occurrence ledger kept both.
+    assert review["findings"] == ["Fix the race."]
+    assert review["reports"][0]["findings"] == ["Fix the race.", "Rename the fixture."]
+    assert len(review["finding_details"]) == len(review["findings"])
