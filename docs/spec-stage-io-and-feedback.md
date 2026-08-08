@@ -379,6 +379,12 @@ the measurable outcome of this section.
 
 Phase 1 is where the defects live. Phases 2–3 are what stop them recurring.
 
+Two gaps in the run's own account are tracked as **STORY-039** rather than
+folded into this spec, because both predate it and both change what the run
+view renders: `_apply_pr_feedback_decision` records no report occurrence, so a
+PR-feedback pass is missing from history and from the occurrence ledger; and
+occurrences written before `pass_number` existed all render as `pass 1`.
+
 **Phase 1 landed** in `domain/loop/feedback.py` (`pass_feedback.py` and
 `pending_pr_feedback` deleted). Two rules are keyed on `stage.kind` as a
 deliberate stopgap and become declarations in phase 2: a PR stage receives no
