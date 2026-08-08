@@ -101,7 +101,10 @@ def _stage_events(
                 {
                     "kind": "stage",
                     "name": name,
-                    "pass_number": max(1, actions.int_or_default(report.get("pass_number"), 1)),
+                    # Zero means "written before the run recorded passes", not
+                    # pass one. Defaulting to 1 told an agent a fourth attempt
+                    # was the first and grouped unrelated passes together.
+                    "pass_number": max(0, actions.int_or_default(report.get("pass_number"), 0)),
                     # `seq` counts one agent's transcript, so it cannot order
                     # two stages against each other; the timestamp can.
                     "at": actions.str_or_empty(report.get("recorded_at")),
@@ -152,11 +155,17 @@ def _feedback_events(loop: dict[str, Any]) -> list[dict[str, Any]]:
 def _render(event: dict[str, Any], level: LoopHistoryLevel) -> str:
     """Render one event at the requested level."""
     if event["kind"] == "feedback":
-        return f"pass {event['pass_number']} -- you asked: {event['note']}  (answered)"
-    head = f"pass {event['pass_number']} -- {event['name']}: "
+        return f"{_when(event)} -- you asked: {event['note']}  (answered)"
+    head = f"{_when(event)} -- {event['name']}: "
     if level == LoopHistoryLevel.FULL:
         return head + _full_body(event)
     return head + _summary_body(event)
+
+
+def _when(event: dict[str, Any]) -> str:
+    """Return how an event is dated, without inventing a pass it may not have."""
+    number = event["pass_number"]
+    return f"pass {number}" if number else "earlier"
 
 
 def _summary_body(event: dict[str, Any]) -> str:
@@ -201,7 +210,8 @@ def _rolled_up(events: list[dict[str, Any]]) -> tuple[str, ...]:
             entry = f"{event['name']}: {_outcome_gist(event)}"
         by_pass.setdefault(event["pass_number"], []).append(entry)
     return tuple(
-        f"pass {number} -- " + "; ".join(entries) for number, entries in sorted(by_pass.items())
+        f"{'pass ' + str(number) if number else 'earlier'} -- " + "; ".join(entries)
+        for number, entries in sorted(by_pass.items())
     )
 
 

@@ -342,3 +342,40 @@ def test_full_history_says_what_the_outcome_was() -> None:
     )
 
     assert "changes requested" in "\n".join(history.lines(loop, LoopHistoryLevel.FULL))
+
+
+def test_an_occurrence_without_a_pass_does_not_claim_one() -> None:
+    """Occurrences written before the run recorded passes used to render as
+    `pass 1`, telling an agent a fourth attempt was the first."""
+    loop = {
+        "pass_number": 1,
+        "stages": [
+            {
+                "id": "impl",
+                "name": "Impl",
+                "reports": [{"outcome": "pass", "summary": "Did it.", "recorded_at": "2026-01-01"}],
+            }
+        ],
+    }
+
+    assert history.lines(loop, LoopHistoryLevel.SUMMARIES) == ("earlier -- Impl: Did it.",)
+
+
+def test_undated_occurrences_are_not_grouped_with_the_first_pass() -> None:
+    loop = {
+        "pass_number": 2,
+        "stages": [
+            {
+                "id": "impl",
+                "name": "Impl",
+                "reports": [
+                    {"outcome": "pass", "summary": "Undated."},
+                    {"pass_number": 1, "outcome": "pass", "summary": "First pass."},
+                ],
+            }
+        ],
+    }
+
+    lines = history.lines(loop, LoopHistoryLevel.SUMMARIES)
+
+    assert lines == ("earlier -- Impl: Undated.", "pass 1 -- Impl: First pass.")

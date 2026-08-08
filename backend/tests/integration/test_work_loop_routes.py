@@ -1750,6 +1750,18 @@ def test_selected_pr_feedback_still_starts_an_implementation_pass(
     assert "The reviewer wants the lock removed." in prompt
     # The selected comment, its per-comment instruction, and nothing else.
     assert "Drop the SELECT FOR UPDATE." in prompt
+    # The decision that opened this pass is in the PR stage's ledger, so the
+    # run's account does not skip the event that caused the pass. It pushed
+    # nothing, so it claims no push and no addressed comments.
+    pr_reports = next(
+        stage for stage in implementing["stages"] if stage["id"] == "create-pr"
+    )["reports"]
+    assert pr_reports[-1]["outcome"] == "changes_requested"
+    assert "Drop the SELECT FOR UPDATE." in pr_reports[-1]["summary"]
+    assert pr_reports[-1]["push_at"] is None
+    assert pr_reports[-1]["addressed_comments"] == []
+    assert pr_reports[-2]["outcome"] == "pass"
+    assert pr_reports[-2]["push_at"] is not None
     assert "Use the lock helper." in prompt
     assert "Praise: nice work on the race." not in prompt
 

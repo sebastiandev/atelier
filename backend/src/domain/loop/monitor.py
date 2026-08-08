@@ -1566,6 +1566,24 @@ async def _apply_pr_feedback_decision(
         outcome=LoopOutcome.CHANGES_REQUESTED,
         summary=summary,
     )
+    # Recorded like the approval and review-gate decisions are. Routing it
+    # without recording left the pass that the user's feedback opened with no
+    # occurrence at all: absent from the stage's ledger, absent from the run
+    # view, and absent from the history every later stage reads -- so the run's
+    # account skipped the event that caused the pass.
+    _record_stage_report(
+        loop,
+        stage_row,
+        report,
+        actions.int_or_default(loop.get("last_checked_seq"), 0),
+    )
+    # This occurrence is a routing decision, not a push. `_record_stage_report`
+    # snapshots the row's push fields onto every occurrence, and the row still
+    # carries the last successful push -- which the run view would render as
+    # though this decision had pushed and answered those comments. The row
+    # keeps them: `prepare_feedback` reads `push_at` to tell which comments are
+    # newer than the last push.
+    _disown_push(stage_row)
     # The user chose to send this PR feedback back for implementation, so the
     # stage's return edge is being used the way it was built to be used.
     return await _advance_after_stage_report(
@@ -1777,6 +1795,21 @@ def _record_stage_report(
     stage_row["finding_details"] = value["finding_details"]
     stage_row["criteria_coverage"] = value["criteria_coverage"]
     stage_row["changed_files"] = value["changed_files"]
+
+
+def _disown_push(stage_row: dict[str, Any]) -> None:
+    """Clear the push fields from the occurrence just recorded on a stage.
+
+    Preconditions: the newest occurrence in ``stage_row["reports"]`` did not
+    push. Postconditions: it claims no push time and no addressed comments;
+    the stage row and every earlier occurrence are untouched.
+    """
+    reports = stage_row.get("reports")
+    latest = reports[-1] if isinstance(reports, list) and reports else None
+    if isinstance(latest, dict):
+        latest["push_at"] = None
+        latest["addressed_comments"] = []
+        latest["feedback_instruction"] = ""
 
 
 def _copy_report_to_run(run: dict[str, Any], report: LoopStageReport) -> None:
