@@ -1395,29 +1395,80 @@ const FEEDBACK_SOURCE_LABELS: Record<string, string> = {
   retry: "you, on retry",
 };
 
-/** Every request for changes on the run: what is still in force, and what was settled. */
+/** Collapse a request down to one readable line.
+ *
+ *  A PR comment arrives as raw GitHub Markdown: a `<!-- pr-commenter -->`
+ *  provenance marker, headings, and link targets that can run to hundreds of
+ *  characters of query string. None of it identifies the request at a glance,
+ *  so it is stripped here and the full text stays on the row's `title`.
+ */
+function feedbackSummary(record: LoopFeedbackRecord): string {
+  const fromItems = record.items
+    .map((item) => {
+      const body = cleanFeedbackText(stringValue(item.body));
+      const where = stringValue(item.location);
+      const who = stringValue(item.author);
+      const prefix = [who, where].filter(Boolean).join(" at ");
+      return prefix && body ? `${prefix}: ${body}` : body || prefix;
+    })
+    .filter(Boolean);
+  return cleanFeedbackText(record.note) || fromItems.join(" · ");
+}
+
+function cleanFeedbackText(value: string): string {
+  return value
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/(^|\s)#{1,6}\s+/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** What the run is still being asked to change. Answered requests are history,
+ *  so they sit behind a disclosure rather than competing with the open ones. */
 function RunFeedback({ data }: { data: RunSurfaceData }) {
+  const [showAnswered, setShowAnswered] = useState(false);
   // Attempt-scoped records ended with the attempt that carried them; they were
   // never a standing instruction, so listing them alongside the run's open
   // requests would overstate what is outstanding.
   const records = data.feedback.filter((record) => record.scope !== "attempt");
-  if (records.length === 0) return null;
   const open = records.filter((record) => record.state !== "answered");
   const answered = records.filter((record) => record.state === "answered");
+  // Nothing outstanding is the normal, healthy state of a run: a panel headed
+  // "Requested changes" permanently showing settled history reads as a problem
+  // that is not there.
+  if (open.length === 0 && !showAnswered) {
+    if (answered.length === 0) return null;
+    return (
+      <section className="run-feedback settled">
+        <header>
+          <strong>Requested changes</strong>
+          <small>all {answered.length} answered</small>
+          <button className="btn ghost xs" onClick={() => setShowAnswered(true)}>Show</button>
+        </header>
+      </section>
+    );
+  }
   return (
     <section className="run-feedback">
       <header>
         <strong>Requested changes</strong>
-        <span className="tag">{open.length} open</span>
-        {answered.length > 0 && <small>{answered.length} answered</small>}
+        {open.length > 0 && <span className="tag warn">{open.length} open</span>}
+        {answered.length > 0 && (
+          <button className="btn ghost xs" onClick={() => setShowAnswered(!showAnswered)}>
+            {showAnswered ? "Hide" : `${answered.length} answered`}
+          </button>
+        )}
       </header>
       <ul>
         {[...open].reverse().map((record) => (
           <RunFeedbackRow key={record.id} record={record} />
         ))}
-        {[...answered].reverse().map((record) => (
-          <RunFeedbackRow key={record.id} record={record} />
-        ))}
+        {showAnswered &&
+          [...answered].reverse().map((record) => (
+            <RunFeedbackRow key={record.id} record={record} />
+          ))}
       </ul>
     </section>
   );
@@ -1426,13 +1477,11 @@ function RunFeedback({ data }: { data: RunSurfaceData }) {
 function RunFeedbackRow({ record }: { record: LoopFeedbackRecord }) {
   const answered = record.state === "answered";
   const source = FEEDBACK_SOURCE_LABELS[record.source] ?? record.source;
-  const body =
-    record.note ||
-    record.items.map((item) => stringValue(item.body)).filter(Boolean).join(" · ");
+  const summary = feedbackSummary(record);
   return (
     <li className={answered ? "answered" : ""}>
       <span className={`tag ${answered ? "" : "warn"}`}>{answered ? "answered" : "open"}</span>
-      <span className="body">{body || "(no text)"}</span>
+      <span className="body" title={record.note || undefined}>{summary || "(no text)"}</span>
       <em>
         pass {record.pass_number} · from {source}
         {answered && record.answered_by ? ` · answered by ${record.answered_by}` : ""}

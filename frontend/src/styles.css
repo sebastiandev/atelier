@@ -14568,7 +14568,20 @@ select:disabled {
   background: var(--bg-3);
 }
 .run-feedback > ul > li.answered { opacity: 0.62; }
-.run-feedback > ul > li > .body { color: var(--fg-2); font-size: 12px; line-height: 1.45; }
+.run-feedback.settled > header > small { margin-left: 0; }
+.run-feedback.settled > header > .btn { margin-left: auto; }
+.run-feedback > header > .btn { margin-left: auto; }
+.run-feedback > ul > li > .body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--fg-2);
+  font-size: 12px;
+  line-height: 1.45;
+  /* A PR comment can carry an unbroken query string longer than the panel. */
+  overflow-wrap: anywhere;
+}
 .run-feedback > ul > li > em {
   grid-column: 2;
   color: var(--fg-4);
