@@ -21,13 +21,13 @@ from src.domain.agents.launch import InvalidProviderConfig
 from src.domain.agents.specs import SPECS, EnumOption
 from src.domain.loop.definitions import validate_agent_policy
 from src.domain.loop.dtos import (
-    AgentStage,
     LoopAgentPolicy,
     LoopBriefAgent,
     LoopDefinition,
     LoopPermission,
     LoopSessionPolicy,
 )
+from src.domain.loop.stage_access import stage_agent_policy
 from src.domain.models import Provider
 
 StageAgentConfig = tuple[Provider, str, dict[str, object]]
@@ -359,17 +359,18 @@ def validate_stage_agent_policies(
         model = source_model
         options = source_options
         next_launched = launched
+        policy = stage_agent_policy(stage)
         reused = (
-            isinstance(stage, AgentStage)
-            and stage.agent.session == LoopSessionPolicy.REUSE
+            policy is not None
+            and policy.session == LoopSessionPolicy.REUSE
             and stage_id in launched
         )
         if reused:
             provider, model, options = launched[stage_id]
-        elif isinstance(stage, AgentStage):
+        elif policy is not None:
             try:
                 provider, model, options = resolve_stage_agent_config(
-                    stage.agent,
+                    policy,
                     parent_provider=source_provider,
                     parent_model=source_model,
                     parent_options=source_options,
@@ -378,7 +379,7 @@ def validate_stage_agent_policies(
                 SPECS[provider].build(common, model, options)
             except (KeyError, ValueError) as exc:
                 raise InvalidProviderConfig(f"{stage.name}: {exc}") from exc
-            if stage.agent.session == LoopSessionPolicy.REUSE:
+            if policy.session == LoopSessionPolicy.REUSE:
                 next_launched = {
                     **launched,
                     stage_id: (provider, model, options),

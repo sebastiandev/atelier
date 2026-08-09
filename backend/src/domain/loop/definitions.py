@@ -270,9 +270,38 @@ def _pr_shape_errors(stage: PrStage, label: str) -> list[str]:
 @stage_shape_errors.register
 def _check_shape_errors(stage: CheckStage, label: str) -> list[str]:
     errors = _retry_errors(stage, label)
+    if stage.check_adapter != "command":
+        # "command" is the only adapter that exists. An unknown one would be
+        # accepted here and then fail at run time with nothing to point at.
+        errors.append(f"{label} has an unknown check adapter.")
     if not stage.check_command:
         errors.append(f"{label} needs a check command.")
     return errors
+
+
+def _inert_override_errors(stage: LoopStepDefinition, label: str) -> list[str]:
+    """Report overrides the linked stage's kind cannot carry.
+
+    A loop may override a field the stage it links to does not own -- a
+    ``pr_config`` over a deterministic check. ``resolve_stage_link`` drops it,
+    because applying it would be a ``TypeError``. The value is *kept* in the
+    stored overrides and round-trips intact, so nothing is lost; it simply
+    never does anything. Saying so is better than a setting that looks live in
+    the editor and silently is not.
+    """
+    overrides = stage.overrides
+    if overrides is None:
+        return []
+    inert = sorted(
+        name
+        for name, value in asdict(overrides).items()
+        if value is not None and not hasattr(stage, name)
+    )
+    if not inert:
+        return []
+    return [
+        f"{label} overrides {', '.join(inert)}, which a {stage.kind.value} stage has no use for."
+    ]
 
 
 def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
@@ -283,6 +312,7 @@ def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
     if not stage.name.strip():
         errors.append(f"{label} needs a name.")
     errors.extend(stage_shape_errors(stage, label))
+    errors.extend(_inert_override_errors(stage, label))
     if isinstance(stage, ReviewStage) and stage.review_gate is not None:
         # A flow rule, not a shape one: a gate needs somewhere to send the work
         # back to, and only the loop's transitions know whether it has one.

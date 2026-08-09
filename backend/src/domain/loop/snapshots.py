@@ -6,7 +6,6 @@ from typing import Any
 
 from src.domain.loop.dtos import (
     PREVIOUS_STAGE,
-    AgentStage,
     ApprovalStage,
     CheckStage,
     LoopAgentPolicy,
@@ -32,6 +31,14 @@ from src.domain.loop.dtos import (
     StageDefinitionRef,
     StageOverrides,
     TaskStage,
+)
+from src.domain.loop.stage_access import (
+    stage_agent_policy,
+    stage_check_adapter,
+    stage_check_command,
+    stage_instructions,
+    stage_note_required,
+    stage_review_gate,
 )
 
 _DECLARED_MARKER = "reports"
@@ -114,17 +121,24 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
             for outcome, destination in stage.transitions.items()
         },
     }
-    value["instructions"] = stage.instructions if isinstance(stage, AgentStage) else ""
-    value["agent"] = _agent_snapshot(stage.agent) if isinstance(stage, AgentStage) else None
-    value["check_adapter"] = stage.check_adapter if isinstance(stage, CheckStage) else None
-    value["check_command"] = list(stage.check_command) if isinstance(stage, CheckStage) else []
-    if isinstance(stage, AgentStage) and stage.note_required is not None:
-        value["note_required"] = stage.note_required
-    if isinstance(stage, ReviewStage) and stage.review_gate is not None:
+    # These four keys are written for every kind, present-but-empty when the
+    # stage cannot carry them. A pinned run snapshot is read back by older
+    # builds that expect the flat shape, so omitting a key is not the same as
+    # writing its empty value.
+    policy = stage_agent_policy(stage)
+    value["instructions"] = stage_instructions(stage)
+    value["agent"] = _agent_snapshot(policy) if policy is not None else None
+    value["check_adapter"] = stage_check_adapter(stage)
+    value["check_command"] = list(stage_check_command(stage))
+    note_required = stage_note_required(stage)
+    if note_required is not None:
+        value["note_required"] = note_required
+    gate = stage_review_gate(stage)
+    if gate is not None:
         value["review_gate"] = {
-            "mode": stage.review_gate.mode.value,
-            "max_passes": stage.review_gate.max_passes,
-            "locked": stage.review_gate.locked,
+            "mode": gate.mode.value,
+            "max_passes": gate.max_passes,
+            "locked": gate.locked,
         }
     if isinstance(stage, PrStage):
         value["pr_config"] = loop_pr_config_snapshot(stage.pr_config)

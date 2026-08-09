@@ -458,6 +458,15 @@ class LoopStepDefinition:
     overrides: StageOverrides | None = None
 
     @property
+    def retries_without_agent(self) -> bool:
+        """Whether a retry re-runs the stage itself rather than an agent.
+
+        Only a deterministic check does: it re-executes its command, so a
+        retry has no transcript to replace and needs no agent to exist.
+        """
+        return False
+
+    @property
     def retriable(self) -> bool:
         """Whether relaunching this stage means anything.
 
@@ -488,8 +497,19 @@ class AgentStage(LoopStepDefinition):
     instructions: str = ""
     agent: LoopAgentPolicy = field(default_factory=LoopAgentPolicy)
     note_required: bool | None = None
-    persona: Persona = "developer"
-    """Who the agent is told it is. The kind used to stand in for this."""
+
+    @property
+    def persona(self) -> Persona:
+        """Who the agent is told it is.
+
+        A property, not a field: it is decided by the kind of stage and was
+        never configurable -- before stages were types this read
+        ``"architect" if kind is AGENT_REVIEW else "developer"`` at both launch
+        sites. As a field it would serialize into the revision hash and be
+        silently dropped by every codec, which reads as a setting that does not
+        stick.
+        """
+        return "developer"
 
 
 
@@ -516,8 +536,11 @@ class ReviewStage(AgentStage):
     """A read-only agent stage that judges the work and may send it back."""
 
     kind: LoopStepKind = LoopStepKind.AGENT_REVIEW
-    persona: Persona = "architect"
     review_gate: LoopReviewGate | None = None
+
+    @property
+    def persona(self) -> Persona:
+        return "architect"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -539,6 +562,10 @@ class CheckStage(LoopStepDefinition):
     @property
     def retriable(self) -> bool:
         """A check re-runs its command; there is no agent to replace."""
+        return True
+
+    @property
+    def retries_without_agent(self) -> bool:
         return True
 
 

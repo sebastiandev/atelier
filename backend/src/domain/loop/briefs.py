@@ -16,8 +16,8 @@ from src.domain.loop.dtos import (
     LoopStageBrief,
     LoopStepDefinition,
     LoopStepKind,
-    ReviewStage,
 )
+from src.domain.loop.stage_access import stage_note_required, stage_review_gate
 
 
 class LoopBriefInvalid(ValueError):
@@ -53,15 +53,17 @@ def validate_brief(definition: LoopDefinition, brief: LoopBrief) -> None:
                 f"loop brief command prefix is invalid: {item.stage_id}"
             )
         if item.review_gate is not None:
-            if not isinstance(stage, ReviewStage) or stage.review_gate is None:
+            if stage_review_gate(stage) is None:
                 raise LoopBriefInvalid(f"loop brief stage has no review gate: {item.stage_id}")
-            if stage.review_gate.locked and item.review_gate != stage.review_gate.mode:
+            gate = stage_review_gate(stage)
+            assert gate is not None
+            if gate.locked and item.review_gate != gate.mode:
                 raise LoopBriefInvalid(f"loop review gate is locked: {item.stage_id}")
         supplied[item.stage_id] = item
     missing = [
         stage.name
         for stage in definition.stages
-        if isinstance(stage, AgentStage) and stage.note_required is True
+        if stage_note_required(stage) is True
         and not supplied.get(stage.step_id, LoopStageBrief(stage.step_id)).note.strip()
     ]
     if missing:
@@ -84,8 +86,7 @@ def with_legacy_required_defaults(
     additions = tuple(
         LoopStageBrief(stage_id=stage.step_id, note=brief.goal)
         for stage in definition.stages
-        if isinstance(stage, AgentStage)
-        and stage.note_required is True
+        if stage_note_required(stage) is True
         and stage.step_id not in supplied
     )
     return LoopBrief(goal=brief.goal, stages=(*brief.stages, *additions))
@@ -111,7 +112,7 @@ def resolved_review_gate(
     Postconditions: locked definition values win; otherwise a supplied mode
     overrides only the mode and the source identifies what the run used.
     """
-    gate = stage.review_gate if isinstance(stage, ReviewStage) else None
+    gate = stage_review_gate(stage)
     if gate is None:
         return None, "template"
     item = stage_brief(brief, stage.step_id)

@@ -11,9 +11,7 @@ from src.domain.connections import ConnectionStore
 from src.domain.loop import actions, briefs, feedback, history, pr_lifecycle, runtime
 from src.domain.loop.agent_policy import apply_retry_overrides
 from src.domain.loop.dtos import (
-    AgentStage,
     ApprovalStage,
-    CheckStage,
     LoopContextKind,
     LoopFailureKind,
     LoopOutcome,
@@ -33,6 +31,7 @@ from src.domain.loop.prompts import (
     prompt_for,
 )
 from src.domain.loop.snapshots import definition_from_snapshot
+from src.domain.loop.stage_access import stage_agent_policy
 from src.domain.loop.transitions import stage_by_id
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.workstore.ports import WorkStore
@@ -156,8 +155,7 @@ async def resume(
     )
     if retry_failed and not stage.retriable:
         raise LoopRunNotResumable(f"loop stage cannot be retried: {current_stage_id}")
-    # A check retries by re-running its command, with no agent to replace.
-    check_retry = retry_failed and isinstance(stage, CheckStage)
+    check_retry = retry_failed and stage.retries_without_agent
     agent_slug = actions.str_or_empty(current_stage_row.get("agent_slug"))
     if not check_retry and workstore.get_work_slug_for_agent(agent_slug) != target.work_slug:
         raise LoopAgentNotFound(f"agent not found on work: {agent_slug}")
@@ -212,9 +210,7 @@ async def resume(
                             work_slug=target.work_slug,
                             agent_slug=agent_slug,
                         )
-                        if any(
-                            item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs
-                        )
+                        if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs)
                         else ""
                     ),
                 ),
@@ -368,11 +364,7 @@ async def request_changes(
     approval_id = actions.str_or_empty(loop.get("current_stage_id"))
     approval = stage_by_id(definition, approval_id)
     destination = approval.transitions.get(LoopOutcome.CHANGES_REQUESTED) or next(
-        (
-            stage.step_id
-            for stage in definition.stages
-            if stage.supplies_source_agent
-        ),
+        (stage.step_id for stage in definition.stages if stage.supplies_source_agent),
         None,
     )
     if not destination:
@@ -437,19 +429,17 @@ async def request_changes(
                             work_slug=target.work_slug,
                             agent_slug=agent_slug,
                         )
-                        if any(
-                            item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs
-                        )
+                        if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs)
                         else ""
                     ),
                     resolution_note=note,
                     resolved_context=tuple(actions.str_list(stage_row.get("resolved_context"))),
                     context_warnings=(
-                *actions.str_list(stage_row.get("context_warnings")),
-                *actions.unresolved_report_warnings(
-                    loop, stage, actions.str_or_empty(loop.get("previous_stage_id"))
-                ),
-            ),
+                        *actions.str_list(stage_row.get("context_warnings")),
+                        *actions.unresolved_report_warnings(
+                            loop, stage, actions.str_or_empty(loop.get("previous_stage_id"))
+                        ),
+                    ),
                     brief_note=brief_note,
                     brief_context=brief_context,
                 )
@@ -475,7 +465,8 @@ async def request_changes(
     # The approval is what this stage is answering, so a later retry resolves
     # `previous` to it rather than to whatever transition last ran.
     loop["previous_stage_id"] = approval_id
-    if isinstance(stage, AgentStage) and stage.agent.permissions != LoopPermission.READ:
+    policy = stage_agent_policy(stage)
+    if policy is not None and policy.permissions != LoopPermission.READ:
         loop["source_agent_slug"] = agent_slug
     loop["status"] = LoopStatus.RUNNING.value
     loop["status_reason"] = f"{stage.name} resumed with requested changes."
@@ -629,9 +620,7 @@ def stop_stage(target: LoopRunTarget) -> None:
 
 def _retry_note(resolution_note: str) -> str:
     """Lead a retry's resolution with the pick-up-existing-work hint."""
-    return "\n\n".join(
-        value for value in (RETRY_RESOLUTION_NOTE, resolution_note.strip()) if value
-    )
+    return "\n\n".join(value for value in (RETRY_RESOLUTION_NOTE, resolution_note.strip()) if value)
 
 
 def _declared_waived(stage: LoopStepDefinition, loop: dict[str, Any]) -> tuple[str, ...]:
@@ -682,9 +671,7 @@ def _resume_prompt(
             source_ref=target.source_ref,
             stage=stage,
             reports=build_report_blocks(report_rows),
-            history=history.lines(
-                loop, stage.history, frozenset(step for step, _ in report_rows)
-            ),
+            history=history.lines(loop, stage.history, frozenset(step for step, _ in report_rows)),
             previous_changed_files=next(
                 (
                     lines

@@ -16,7 +16,6 @@ from src.domain.loop.definitions import (
     prepare_definition,
 )
 from src.domain.loop.dtos import (
-    AgentStage,
     ApprovalStage,
     CheckStage,
     LoopAgentPolicy,
@@ -52,6 +51,14 @@ from src.domain.loop.snapshots import (
     require_declared_sections,
     stage_overrides_from_snapshot,
     stage_overrides_snapshot,
+)
+from src.domain.loop.stage_access import (
+    stage_agent_policy,
+    stage_check_adapter,
+    stage_check_command,
+    stage_instructions,
+    stage_note_required,
+    stage_review_gate,
 )
 from src.domain.loop.stage_builtins import builtin_stage_definition
 from src.domain.loop.stages import StageDefinitionNotFound, resolve_stage_link
@@ -417,16 +424,18 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
         if transitions:
             referenced["transitions"] = transitions
         return referenced
-    if isinstance(stage, AgentStage):
-        if stage.instructions.strip():
-            data["instructions"] = stage.instructions.rstrip() + "\n"
-        if stage.note_required is not None:
-            data["note_required"] = stage.note_required
-    if isinstance(stage, ReviewStage) and stage.review_gate is not None:
+    instructions = stage_instructions(stage)
+    if instructions.strip():
+        data["instructions"] = instructions.rstrip() + "\n"
+    note_required = stage_note_required(stage)
+    if note_required is not None:
+        data["note_required"] = note_required
+    gate = stage_review_gate(stage)
+    if gate is not None:
         data["review_gate"] = {
-            "mode": stage.review_gate.mode.value,
-            "max_passes": stage.review_gate.max_passes,
-            "locked": stage.review_gate.locked,
+            "mode": gate.mode.value,
+            "max_passes": gate.max_passes,
+            "locked": gate.locked,
         }
     if isinstance(stage, PrStage):
         data["pr_config"] = loop_pr_config_snapshot(stage.pr_config)
@@ -445,19 +454,20 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
     ]
     if stage.history != LoopHistoryLevel.NONE:
         data["history"] = stage.history.value
-    if isinstance(stage, AgentStage):
+    policy = stage_agent_policy(stage)
+    if policy is not None:
         data["agent"] = {
-            "session": stage.agent.session.value,
+            "session": policy.session.value,
             "permissions": (
-                stage.agent.permissions.value if stage.agent.permissions is not None else "inherit"
+                policy.permissions.value if policy.permissions is not None else "inherit"
             ),
-            **({"provider": stage.agent.provider} if stage.agent.provider else {}),
-            **({"model": stage.agent.model} if stage.agent.model else {}),
-            **({"effort": stage.agent.effort} if stage.agent.effort else {}),
-            **({"fast": stage.agent.fast} if stage.agent.fast is not None else {}),
+            **({"provider": policy.provider} if policy.provider else {}),
+            **({"model": policy.model} if policy.model else {}),
+            **({"effort": policy.effort} if policy.effort else {}),
+            **({"fast": policy.fast} if policy.fast is not None else {}),
             **(
-                {"approved_command_prefixes": list(stage.agent.approved_command_prefixes)}
-                if stage.agent.approved_command_prefixes is not None
+                {"approved_command_prefixes": list(policy.approved_command_prefixes)}
+                if policy.approved_command_prefixes is not None
                 else {}
             ),
         }
@@ -471,10 +481,11 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
             for outcome, destination in stage.transitions.items()
             if destination is not None
         }
-    if isinstance(stage, CheckStage):
+    adapter = stage_check_adapter(stage)
+    if adapter is not None:
         data["check"] = {
-            "adapter": stage.check_adapter,
-            "command": list(stage.check_command),
+            "adapter": adapter,
+            "command": list(stage_check_command(stage)),
         }
     return data
 

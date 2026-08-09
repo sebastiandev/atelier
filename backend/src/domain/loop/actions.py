@@ -9,14 +9,15 @@ from typing import Any
 
 from src.domain.loop.dtos import (
     PREVIOUS_STAGE,
-    AgentStage,
     LoopChangedFile,
     LoopDefinition,
     LoopRunStatus,
     LoopStatus,
+    LoopStepDefinition,
     LoopStepStatus,
 )
 from src.domain.loop.snapshots import definition_snapshot
+from src.domain.loop.stage_access import stage_agent_policy
 
 _VENV_ACTIVATION = re.compile(
     r"^\s*(?:source|\.)\s+['\"]?[^;&|\n]*\.venv/bin/activate['\"]?\s*(?:&&|\n)\s*"
@@ -102,12 +103,8 @@ def initialized_loop_snapshot(
                     if index == entry_index and entry_is_agent
                     else None
                 ),
-                "permissions": (
-                    stage.agent.permissions.value
-                    if isinstance(stage, AgentStage) and stage.agent.permissions is not None
-                    else None
-                ),
-                "session": stage.agent.session.value if isinstance(stage, AgentStage) else None,
+                "permissions": _permissions_value(stage),
+                "session": _session_value(stage),
                 "summary": "",
                 "findings": [],
             }
@@ -473,6 +470,21 @@ def int_or_default(value: object, default: int) -> int:
 def str_list(value: object) -> list[str]:
     """Return only string members from a persisted list."""
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
+
+def _permissions_value(stage: LoopStepDefinition) -> str | None:
+    """The stage's declared permission, or ``None`` when it launches no agent."""
+    policy = stage_agent_policy(stage)
+    if policy is None or policy.permissions is None:
+        return None
+    return policy.permissions.value
+
+
+def _session_value(stage: LoopStepDefinition) -> str | None:
+    """The stage's session policy, or ``None`` when it launches no agent."""
+    policy = stage_agent_policy(stage)
+    return policy.session.value if policy is not None else None
 
 
 __all__ = [

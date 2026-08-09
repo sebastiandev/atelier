@@ -20,7 +20,6 @@ from enum import StrEnum
 from typing import Any
 
 from src.domain.loop.dtos import (
-    AgentStage,
     LoopDefinition,
     LoopOutcome,
     LoopPermission,
@@ -34,6 +33,7 @@ from src.domain.loop.snapshots import (
     loop_stage_from_snapshot,
     loop_stage_snapshot,
 )
+from src.domain.loop.stage_access import stage_agent_policy
 
 TRANSPORT_SCHEMA_VERSION = 1
 
@@ -338,14 +338,16 @@ def _differing(effective: LoopStepDefinition, base: LoopStepDefinition, field: s
 
 def stage_command_prefixes(stage: LoopStepDefinition) -> tuple[str, ...]:
     """Return the auto-allowed shell command prefixes carried by a stage."""
-    if not isinstance(stage, AgentStage) or stage.agent.approved_command_prefixes is None:
+    policy = stage_agent_policy(stage)
+    if policy is None or policy.approved_command_prefixes is None:
         return ()
-    return tuple(stage.agent.approved_command_prefixes)
+    return tuple(policy.approved_command_prefixes)
 
 
 def stage_grants_write(stage: LoopStepDefinition) -> bool:
     """Return whether a stage grants filesystem write permission."""
-    return isinstance(stage, AgentStage) and stage.agent.permissions == LoopPermission.WRITE
+    policy = stage_agent_policy(stage)
+    return policy is not None and policy.permissions == LoopPermission.WRITE
 
 
 def reconstituted_stage_definition(

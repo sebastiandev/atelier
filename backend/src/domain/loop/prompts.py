@@ -8,12 +8,12 @@ from functools import singledispatch
 from typing import Any
 
 from src.domain.loop.dtos import (
-    AgentStage,
     LoopContextKind,
     LoopStepDefinition,
     PrStage,
     ReviewStage,
 )
+from src.domain.loop.stage_access import stage_instructions
 
 
 @dataclass(frozen=True)
@@ -244,7 +244,7 @@ def _latest_pass(row: dict[str, Any]) -> int:
 
 def _instructions(stage: LoopStepDefinition) -> str:
     """Return a stage's own instructions; only an agent stage has any."""
-    return stage.instructions.strip() if isinstance(stage, AgentStage) else ""
+    return stage_instructions(stage).strip()
 
 
 def _open_requests(value: StagePromptInput) -> str:
