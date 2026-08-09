@@ -8,21 +8,21 @@ from src.domain.commands.planning.start_run import (
 )
 from src.domain.loop.definitions import LoopDefinitionInvalid
 from src.domain.loop.dtos import (
+    ApprovalStage,
     LoopAgentPolicy,
     LoopBrief,
     LoopBriefAgent,
     LoopPermission,
     LoopStageBrief,
     LoopStepDefinition,
-    LoopStepKind,
+    TaskStage,
 )
 
 
-def _entry(agent: LoopAgentPolicy | None) -> LoopStepDefinition:
-    return LoopStepDefinition(
+def _entry(agent: LoopAgentPolicy) -> LoopStepDefinition:
+    return TaskStage(
         step_id="implementation",
         name="Implementation",
-        kind=LoopStepKind.AGENT_TASK,
         agent=agent,
     )
 
@@ -101,6 +101,11 @@ def test_no_provider_anywhere_is_an_error_rather_than_a_guess() -> None:
         _entry_agent_config(_entry(LoopAgentPolicy()), _brief(LoopBriefAgent()))
 
 
-def test_an_entry_stage_without_an_agent_policy_is_an_error() -> None:
+def test_an_entry_stage_that_runs_no_agent_is_an_error() -> None:
+    """A stage with no agent policy is no longer constructable -- the field
+    lives on the stages that have one. What survives is the rule that a
+    planning run must start with a stage that actually launches something."""
+    approval = ApprovalStage(step_id="approval", name="Approve")
+
     with pytest.raises(LoopDefinitionInvalid):
-        _entry_agent_config(_entry(None), _brief(LoopBriefAgent(provider="amp")))
+        _entry_agent_config(approval, _brief(LoopBriefAgent(provider="amp")))

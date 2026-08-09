@@ -33,6 +33,7 @@ from src.domain.loop.definitions import (
     LoopDefinitionNotFound,
 )
 from src.domain.loop.dtos import (
+    AgentStage,
     LoopBrief,
     LoopContextKind,
     LoopContextResolution,
@@ -163,6 +164,11 @@ async def execute(
         brief = briefs.with_legacy_required_defaults(definition, brief)
     briefs.validate_brief(definition, brief)
     entry = followups.resolve_entry(definition, req.entry_stage_id)
+    # A planning run always starts by launching an agent, so the entry has to
+    # be one. `_entry_agent_config` enforced this already; saying it here is
+    # what lets the launch below take an agent stage rather than re-check.
+    if not isinstance(entry, AgentStage):
+        raise LoopDefinitionInvalid("The first loop stage needs an agent policy.")
     entry_provider, entry_model, entry_options = _entry_agent_config(entry, brief)
     session = planning_sessions.get_by_work_slug(req.work_slug)
     if session is None:
@@ -346,7 +352,7 @@ async def _launch_initial_agent(
     *,
     agent_config: StageAgentConfig,
     workspace_root: Path,
-    entry: LoopStepDefinition,
+    entry: AgentStage,
 ) -> str:
     """Launch the entry stage with the config the run resolved for it.
 
@@ -367,7 +373,7 @@ async def _launch_initial_agent(
         AgentLaunchRequest(
             work_slug=req.work_slug,
             name=f"{stage.name} · {req.artifact_id}",
-            persona=("architect" if stage.kind == LoopStepKind.AGENT_REVIEW else "developer"),
+            persona=stage.persona,
             role=stage.instructions,
             provider=provider,
             model=model,
@@ -449,7 +455,7 @@ def _entry_agent_config(
     Postconditions: returns a complete provider/model/options triple built
     only from the brief and the stage policy, or raises.
     """
-    if entry.agent is None:
+    if not isinstance(entry, AgentStage):
         raise LoopDefinitionInvalid("The first loop stage needs an agent policy.")
     stage_brief = briefs.stage_brief(brief, entry.step_id)
     override = stage_brief.agent if stage_brief is not None else None

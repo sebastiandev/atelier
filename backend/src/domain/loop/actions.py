@@ -9,6 +9,7 @@ from typing import Any
 
 from src.domain.loop.dtos import (
     PREVIOUS_STAGE,
+    AgentStage,
     LoopChangedFile,
     LoopDefinition,
     LoopRunStatus,
@@ -103,10 +104,10 @@ def initialized_loop_snapshot(
                 ),
                 "permissions": (
                     stage.agent.permissions.value
-                    if stage.agent and stage.agent.permissions is not None
+                    if isinstance(stage, AgentStage) and stage.agent.permissions is not None
                     else None
                 ),
-                "session": stage.agent.session.value if stage.agent else None,
+                "session": stage.agent.session.value if isinstance(stage, AgentStage) else None,
                 "summary": "",
                 "findings": [],
             }

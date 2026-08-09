@@ -9,7 +9,8 @@ from src.domain.loop.dtos import (
     LoopContextReference,
     LoopReportReference,
     LoopStepDefinition,
-    LoopStepKind,
+    ReviewStage,
+    TaskStage,
 )
 from src.domain.loop.prompts import (
     ReviewStagePrompt,
@@ -22,10 +23,9 @@ from src.domain.worktrees import WorktreeState
 
 def _stage(*kinds: LoopContextKind, reports: tuple[str, ...] = ()) -> LoopStepDefinition:
     """Return a review stage with the selected input and report contract."""
-    return LoopStepDefinition(
+    return ReviewStage(
         step_id="review",
         name="Review",
-        kind=LoopStepKind.AGENT_REVIEW,
         instructions="Review the implementation.",
         inputs=tuple(LoopContextReference(kind) for kind in kinds),
         reports=tuple(LoopReportReference(from_stage=item) for item in reports),
@@ -137,10 +137,9 @@ FEEDBACK_NOTE = "\n".join(
 
 
 def _task_stage(*kinds: LoopContextKind, reports: tuple[str, ...] = ()) -> LoopStepDefinition:
-    return LoopStepDefinition(
+    return TaskStage(
         step_id="implementation",
         name="Implementation",
-        kind=LoopStepKind.AGENT_TASK,
         instructions="Implement the target.",
         inputs=tuple(LoopContextReference(kind) for kind in kinds),
         reports=tuple(LoopReportReference(from_stage=item) for item in reports),

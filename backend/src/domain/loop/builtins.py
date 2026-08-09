@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from src.domain.loop.definitions import prepare_definition
 from src.domain.loop.dtos import (
+    ApprovalStage,
     LoopAgentPolicy,
     LoopContextKind,
     LoopContextReference,
@@ -19,7 +20,8 @@ from src.domain.loop.dtos import (
     LoopReviewGate,
     LoopSessionPolicy,
     LoopStepDefinition,
-    LoopStepKind,
+    ReviewStage,
+    TaskStage,
 )
 
 _GENERIC_REPORT = LoopReportSchema(
@@ -155,10 +157,9 @@ def _definition(
 
 
 def _implementation(pass_to: str) -> LoopStepDefinition:
-    return LoopStepDefinition(
+    return TaskStage(
         step_id="implementation",
         name="Implementation",
-        kind=LoopStepKind.AGENT_TASK,
         instructions=_IMPLEMENTATION,
         inputs=(
             LoopContextReference(LoopContextKind.TARGET, required=True),
@@ -221,10 +222,9 @@ def _review(
     *,
     policy_paths: tuple[str, ...] = ("docs/adr/*.md", "docs/architecture.md"),
 ) -> LoopStepDefinition:
-    return LoopStepDefinition(
+    return ReviewStage(
         step_id=step_id,
         name=name,
-        kind=LoopStepKind.AGENT_REVIEW,
         instructions=instructions,
         inputs=(
             LoopContextReference(LoopContextKind.TARGET, required=True),
@@ -263,10 +263,9 @@ def _review(
 
 
 def _approval() -> LoopStepDefinition:
-    return LoopStepDefinition(
+    return ApprovalStage(
         step_id="approval",
         name="Approve result",
-        kind=LoopStepKind.USER_APPROVAL,
         retry=LoopRetryPolicy(max_attempts=1, timeout_minutes=1),
         transitions={LoopOutcome.CHANGES_REQUESTED: "implementation"},
     )

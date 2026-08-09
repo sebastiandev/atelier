@@ -19,18 +19,21 @@ from src.domain.loop import actions, briefs, feedback, history, pr_lifecycle
 from src.domain.loop import runtime as _loop_runtime
 from src.domain.loop.agent_policy import resolve_stage_agent_config
 from src.domain.loop.dtos import (
+    AgentStage,
+    ApprovalStage,
+    CheckStage,
     LoopCheckRequest,
     LoopCheckResult,
     LoopContextKind,
     LoopFailureKind,
     LoopOutcome,
-    LoopPermission,
     LoopReviewGateMode,
     LoopRunStatus,
     LoopStageReport,
     LoopStatus,
     LoopStepKind,
     LoopStepStatus,
+    PrStage,
 )
 from src.domain.loop.models import LoopRunTarget
 from src.domain.loop.ports import (
@@ -276,7 +279,7 @@ async def _execute_claimed(
             continue
         current_id = actions.str_or_empty(loop.get("current_stage_id"))
         current_stage = stage_by_id(definition, current_id)
-        if current_stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
+        if isinstance(current_stage, CheckStage):
             current_row = _stage_row(loop, current_id)
             if current_row is None:
                 raise LoopTransitionInvalid(f"loop stage state not found: {current_id}")
@@ -724,7 +727,7 @@ async def _apply_stage_report(
             problem,
         )
     assert report is not None
-    if stage.kind.value == "pr" and report.outcome == LoopOutcome.PASS:
+    if isinstance(stage, PrStage) and report.outcome == LoopOutcome.PASS:
         try:
             pr_lifecycle.capture_completion(
                 workstore,
@@ -847,7 +850,7 @@ async def _advance_after_stage_report(
         _write_run(store, target)
         return target
     if destination == "complete":
-        if stage_by_id(definition, current_id).kind.value == "pr":
+        if isinstance(stage_by_id(definition, current_id), PrStage):
             _complete_pr(run, loop, current_id)
         else:
             _await_approval(run, loop, current_id=None)
@@ -861,7 +864,7 @@ async def _advance_after_stage_report(
     stage_ids = [stage.step_id for stage in definition.stages]
     if not pass_already_started and stage_ids.index(destination) <= stage_ids.index(current_id):
         actions.start_next_pass(loop)
-    if next_stage.kind == LoopStepKind.USER_APPROVAL:
+    if isinstance(next_stage, ApprovalStage):
         next_row["status"] = LoopStepStatus.PENDING.value
         approval_pass = next_stage.transitions.get(LoopOutcome.PASS)
         _await_approval(
@@ -872,7 +875,7 @@ async def _advance_after_stage_report(
         )
         _write_run(store, target)
         return target
-    if next_stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
+    if isinstance(next_stage, CheckStage):
         return await _run_check_stage(
             workstore,
             store,
@@ -893,6 +896,8 @@ async def _advance_after_stage_report(
             next_row,
         )
 
+    if not isinstance(next_stage, AgentStage):
+        raise LoopTransitionInvalid(f"loop stage cannot run an agent: {next_stage.step_id}")
     next_agent = await _launch_or_resume_stage_agent(
         workstore,
         supervisor,
@@ -931,11 +936,7 @@ async def _advance_after_stage_report(
     next_row.pop("repair_attempt", None)
     next_row["agent_slug"] = next_agent
     _record_owned_agent(loop, next_agent)
-    if (
-        next_stage.kind == LoopStepKind.AGENT_TASK
-        and next_stage.agent is not None
-        and next_stage.agent.permissions != LoopPermission.READ
-    ):
+    if next_stage.supplies_source_agent:
         loop["source_agent_slug"] = next_agent
     loop["current_stage_id"] = next_stage.step_id
     # What `previous` resolves to. A retry builds its prompt long after this
@@ -968,7 +969,7 @@ async def _run_check_stage(
     run: dict[str, Any],
     loop: dict[str, Any],
     definition: LoopDefinition,
-    stage: LoopStepDefinition,
+    stage: CheckStage,
     stage_row: dict[str, Any],
 ) -> LoopRunTarget:
     """Run one configured check and immediately advance from its result."""
@@ -1043,7 +1044,7 @@ async def _run_check_stage(
 
 
 def _check_report(
-    stage: LoopStepDefinition,
+    stage: CheckStage,
     result: LoopCheckResult,
 ) -> LoopStageReport:
     """Convert one process result into the common loop report contract."""
@@ -1165,12 +1166,10 @@ async def _launch_or_resume_stage_agent(
     req: MonitorLoopRunRequest,
     target: LoopRunTarget,
     definition: LoopDefinition,
-    stage: LoopStepDefinition,
+    stage: AgentStage,
     stage_row: dict[str, Any],
     loop: dict[str, Any],
 ) -> str:
-    if stage.agent is None:
-        raise LoopTransitionInvalid(f"agent policy missing for stage: {stage.step_id}")
     existing = actions.str_or_none(stage_row.get("agent_slug"))
     if stage.agent.session.value == "reuse" and existing:
         return existing
@@ -1204,7 +1203,7 @@ async def _launch_or_resume_stage_agent(
         AgentLaunchRequest(
             work_slug=req.work_slug,
             name=f"{stage.name} · {target.target_id}",
-            persona="architect" if stage.kind == LoopStepKind.AGENT_REVIEW else "developer",
+            persona=stage.persona,
             role=stage.instructions,
             provider=provider,
             model=model,
@@ -1235,11 +1234,7 @@ def _write_stage_agent_slug(definition: LoopDefinition, loop: dict[str, Any]) ->
     if source:
         return source
     for stage in reversed(definition.stages):
-        if (
-            stage.kind != LoopStepKind.AGENT_TASK
-            or stage.agent is None
-            or stage.agent.permissions == LoopPermission.READ
-        ):
+        if not stage.supplies_source_agent:
             continue
         row = _stage_row(loop, stage.step_id)
         slug = actions.str_or_none(row.get("agent_slug")) if row else None
@@ -1265,7 +1260,7 @@ async def _send_stage_prompt(
     resolution_note: str = "",
 ) -> None:
     prompt_type = prompt_type_for(stage)
-    if stage.kind.value == "pr":
+    if isinstance(stage, PrStage):
         pr_lifecycle.snapshot_stage_config(target, stage)
         resolution_note = "\n\n".join(
             value
@@ -2022,7 +2017,7 @@ def _without_a_pr_send_back(
     Postconditions: unchanged unless a PR stage requested changes, which becomes
     a failure naming the reason.
     """
-    if stage.kind != LoopStepKind.PR or report.outcome != LoopOutcome.CHANGES_REQUESTED:
+    if not isinstance(stage, PrStage) or report.outcome != LoopOutcome.CHANGES_REQUESTED:
         return report
     return replace(
         report,

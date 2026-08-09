@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.domain.loop.dtos import (
+    AgentStage,
     LoopBrief,
     LoopBriefAgent,
     LoopBriefContext,
@@ -15,6 +16,7 @@ from src.domain.loop.dtos import (
     LoopStageBrief,
     LoopStepDefinition,
     LoopStepKind,
+    ReviewStage,
 )
 
 
@@ -51,7 +53,7 @@ def validate_brief(definition: LoopDefinition, brief: LoopBrief) -> None:
                 f"loop brief command prefix is invalid: {item.stage_id}"
             )
         if item.review_gate is not None:
-            if stage.kind != LoopStepKind.AGENT_REVIEW or stage.review_gate is None:
+            if not isinstance(stage, ReviewStage) or stage.review_gate is None:
                 raise LoopBriefInvalid(f"loop brief stage has no review gate: {item.stage_id}")
             if stage.review_gate.locked and item.review_gate != stage.review_gate.mode:
                 raise LoopBriefInvalid(f"loop review gate is locked: {item.stage_id}")
@@ -59,7 +61,7 @@ def validate_brief(definition: LoopDefinition, brief: LoopBrief) -> None:
     missing = [
         stage.name
         for stage in definition.stages
-        if stage.note_required is True
+        if isinstance(stage, AgentStage) and stage.note_required is True
         and not supplied.get(stage.step_id, LoopStageBrief(stage.step_id)).note.strip()
     ]
     if missing:
@@ -82,7 +84,9 @@ def with_legacy_required_defaults(
     additions = tuple(
         LoopStageBrief(stage_id=stage.step_id, note=brief.goal)
         for stage in definition.stages
-        if stage.note_required is True and stage.step_id not in supplied
+        if isinstance(stage, AgentStage)
+        and stage.note_required is True
+        and stage.step_id not in supplied
     )
     return LoopBrief(goal=brief.goal, stages=(*brief.stages, *additions))
 
@@ -107,7 +111,7 @@ def resolved_review_gate(
     Postconditions: locked definition values win; otherwise a supplied mode
     overrides only the mode and the source identifies what the run used.
     """
-    gate = stage.review_gate
+    gate = stage.review_gate if isinstance(stage, ReviewStage) else None
     if gate is None:
         return None, "template"
     item = stage_brief(brief, stage.step_id)
@@ -131,8 +135,8 @@ def resolved_approved_command_prefixes(
     Postconditions: the first agent stage supplies the inherited default while
     explicit template or Work values replace it without mutating snapshots.
     """
-    first = next((item for item in definition.stages if item.agent is not None), None)
-    if first is None or first.agent is None:
+    first = next((item for item in definition.stages if isinstance(item, AgentStage)), None)
+    if first is None:
         return ()
     first_brief = stage_brief(brief, first.step_id)
     base = (
@@ -141,7 +145,7 @@ def resolved_approved_command_prefixes(
         and first_brief.approved_command_prefixes is not None
         else first.agent.approved_command_prefixes or ()
     )
-    if stage.step_id == first.step_id or stage.agent is None:
+    if stage.step_id == first.step_id or not isinstance(stage, AgentStage):
         return base
     stage_input = stage_brief(brief, stage.step_id)
     if stage_input is not None and stage_input.approved_command_prefixes is not None:

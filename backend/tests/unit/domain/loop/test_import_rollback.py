@@ -9,16 +9,17 @@ import pytest
 
 from src.domain.commands.loops import import_definition
 from src.domain.loop.dtos import (
+    ApprovalStage,
+    CheckStage,
     LoopAgentPolicy,
     LoopDefinition,
     LoopOutcome,
     LoopPermission,
     LoopReportField,
     LoopReportSchema,
-    LoopStepDefinition,
-    LoopStepKind,
     StageDefinition,
     StageDefinitionRef,
+    TaskStage,
 )
 from src.domain.loop.stages import StageDefinitionInvalid
 from src.domain.loop.transport import export_loop
@@ -101,36 +102,32 @@ class _FakeLocations:
 
 
 def _two_linked_stage_document() -> dict[str, object]:
-    impl = LoopStepDefinition(
+    impl = TaskStage(
         step_id="impl",
         name="Impl",
-        kind=LoopStepKind.AGENT_TASK,
         instructions="Do the work.",
         agent=LoopAgentPolicy(permissions=LoopPermission.READ),
         transitions={LoopOutcome.PASS: "check-one"},
     )
-    check_one = LoopStepDefinition(
+    check_one = CheckStage(
         step_id="check-one",
         name="Check one",
-        kind=LoopStepKind.DETERMINISTIC_CHECK,
         check_adapter="command",
         check_command=("a",),
         transitions={LoopOutcome.PASS: "check-two"},
         stage_ref=StageDefinitionRef("check-one", "r1"),
     )
-    check_two = LoopStepDefinition(
+    check_two = CheckStage(
         step_id="check-two",
         name="Check two",
-        kind=LoopStepKind.DETERMINISTIC_CHECK,
         check_adapter="command",
         check_command=("b",),
         transitions={LoopOutcome.PASS: "approval"},
         stage_ref=StageDefinitionRef("check-two", "r2"),
     )
-    approval = LoopStepDefinition(
+    approval = ApprovalStage(
         step_id="approval",
         name="Approve",
-        kind=LoopStepKind.USER_APPROVAL,
         transitions={LoopOutcome.PASS: "complete"},
     )
     loop = LoopDefinition(

@@ -20,6 +20,7 @@ from src.domain.loop.dtos import (
     LoopRunStatus,
     LoopStatus,
     LoopStepStatus,
+    PrStage,
 )
 from src.domain.loop.models import LoopRunTarget
 from src.domain.workstore.ports import WorkStore
@@ -93,7 +94,7 @@ def snapshot_stage_config(
     not already own authoritative one-off setup.
     """
     loop = actions.dict_or_empty(target.run.get("loop"))
-    if isinstance(loop.get("pr_config"), dict) or stage.pr_config is None:
+    if isinstance(loop.get("pr_config"), dict) or not isinstance(stage, PrStage):
         return
     brief = actions.dict_or_empty(target.run.get("brief"))
     goal = actions.str_or_empty(brief.get("goal")) or target.title

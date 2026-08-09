@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Any
 
 from src.domain.loop.dtos import (
+    AgentStage,
     LoopDefinition,
     LoopOutcome,
     LoopPermission,
@@ -290,30 +291,22 @@ def overrides_from_drift(
     """
     overrides = StageOverrides(
         name=effective.name if effective.name != base.name else None,
-        instructions=(
-            effective.instructions if effective.instructions != base.instructions else None
-        ),
+        instructions=_differing(effective, base, "instructions"),
         inputs=effective.inputs if effective.inputs != base.inputs else None,
         reports=effective.reports if effective.reports != base.reports else None,
         history=effective.history if effective.history != base.history else None,
-        agent=effective.agent if effective.agent != base.agent else None,
+        agent=_differing(effective, base, "agent"),
         report_contract=(
             effective.report_contract
             if effective.report_contract != base.report_contract
             else None
         ),
         retry=effective.retry if effective.retry != base.retry else None,
-        check_adapter=(
-            effective.check_adapter if effective.check_adapter != base.check_adapter else None
-        ),
-        check_command=(
-            effective.check_command if effective.check_command != base.check_command else None
-        ),
-        note_required=(
-            effective.note_required if effective.note_required != base.note_required else None
-        ),
-        review_gate=effective.review_gate if effective.review_gate != base.review_gate else None,
-        pr_config=effective.pr_config if effective.pr_config != base.pr_config else None,
+        check_adapter=_differing(effective, base, "check_adapter"),
+        check_command=_differing(effective, base, "check_command"),
+        note_required=_differing(effective, base, "note_required"),
+        review_gate=_differing(effective, base, "review_gate"),
+        pr_config=_differing(effective, base, "pr_config"),
     )
     changed = (
         overrides.name,
@@ -333,16 +326,26 @@ def overrides_from_drift(
     return overrides if any(value is not None for value in changed) else None
 
 
+def _differing(effective: LoopStepDefinition, base: LoopStepDefinition, field: str) -> Any:
+    """Return an override's value when the two stages disagree on one field.
+
+    Kind-specific fields exist on one type and not another, so a stage that
+    cannot carry the field simply has nothing to differ about.
+    """
+    value = getattr(effective, field, None)
+    return value if value != getattr(base, field, None) else None
+
+
 def stage_command_prefixes(stage: LoopStepDefinition) -> tuple[str, ...]:
     """Return the auto-allowed shell command prefixes carried by a stage."""
-    if stage.agent is None or stage.agent.approved_command_prefixes is None:
+    if not isinstance(stage, AgentStage) or stage.agent.approved_command_prefixes is None:
         return ()
     return tuple(stage.agent.approved_command_prefixes)
 
 
 def stage_grants_write(stage: LoopStepDefinition) -> bool:
     """Return whether a stage grants filesystem write permission."""
-    return stage.agent is not None and stage.agent.permissions == LoopPermission.WRITE
+    return isinstance(stage, AgentStage) and stage.agent.permissions == LoopPermission.WRITE
 
 
 def reconstituted_stage_definition(

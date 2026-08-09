@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from src.domain.loop.dtos import (
+    CheckStage,
     LoopAgentPolicy,
     LoopDefinition,
     LoopDefinitionScope,
@@ -15,10 +16,10 @@ from src.domain.loop.dtos import (
     LoopReportField,
     LoopReportSchema,
     LoopStepDefinition,
-    LoopStepKind,
     StageDefinition,
     StageDefinitionRef,
     StageOverrides,
+    TaskStage,
 )
 from src.domain.loop.transport import (
     StageImportStatus,
@@ -41,10 +42,9 @@ _REPORT = LoopReportSchema(
 
 
 def _inline_task() -> LoopStepDefinition:
-    return LoopStepDefinition(
+    return TaskStage(
         step_id="implementation",
         name="Implementation",
-        kind=LoopStepKind.AGENT_TASK,
         instructions="Do the work.",
         agent=LoopAgentPolicy(
             permissions=LoopPermission.WRITE,
@@ -55,10 +55,9 @@ def _inline_task() -> LoopStepDefinition:
 
 
 def _linked_check() -> LoopStepDefinition:
-    return LoopStepDefinition(
+    return CheckStage(
         step_id="checks",
         name="Checks",
-        kind=LoopStepKind.DETERMINISTIC_CHECK,
         check_adapter="command",
         check_command=("pytest",),
         transitions={LoopOutcome.PASS: "approval"},
@@ -74,10 +73,9 @@ def _check_source(revision: str = "abc123") -> StageDefinition:
         scope=LoopDefinitionScope.LIBRARY,  # type: ignore[arg-type]
         revision=revision,
         outcomes=(LoopOutcome.PASS, LoopOutcome.FAILED),
-        stage=LoopStepDefinition(
+        stage=CheckStage(
             step_id="checks",
             name="Checks",
-            kind=LoopStepKind.DETERMINISTIC_CHECK,
             check_adapter="command",
             check_command=("pytest",),
         ),
@@ -194,10 +192,9 @@ def test_linked_stage_overrides_are_recovered_by_drift() -> None:
     """A linked stage renamed/re-instructed by the loop exports its effective
     body; import recovers the loop-local overrides by diffing it vs the base,
     so a same-rev link is not reverted to base content."""
-    base = LoopStepDefinition(
+    base = TaskStage(
         step_id="implement",
         name="Implement",
-        kind=LoopStepKind.AGENT_TASK,
         instructions="Generic implementation.",
         agent=LoopAgentPolicy(permissions=LoopPermission.WRITE),
     )
@@ -209,10 +206,9 @@ def test_linked_stage_overrides_are_recovered_by_drift() -> None:
         outcomes=(LoopOutcome.PASS, LoopOutcome.FAILED),
         stage=base,
     )
-    linked = LoopStepDefinition(
+    linked = TaskStage(
         step_id="implement",
         name="Apply lint & typing fixes",
-        kind=LoopStepKind.AGENT_TASK,
         instructions="Fix only the reported lints.",
         agent=LoopAgentPolicy(permissions=LoopPermission.WRITE),
         transitions={LoopOutcome.PASS: "approval"},
@@ -248,10 +244,9 @@ def test_linked_stage_overrides_are_recovered_by_drift() -> None:
 
 
 def test_no_drift_when_effective_equals_base() -> None:
-    base = LoopStepDefinition(
+    base = CheckStage(
         step_id="checks",
         name="Checks",
-        kind=LoopStepKind.DETERMINISTIC_CHECK,
         check_adapter="command",
         check_command=("pytest",),
     )

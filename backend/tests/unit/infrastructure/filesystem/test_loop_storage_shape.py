@@ -11,8 +11,7 @@ from src.domain.loop.dtos import (
     LoopDefinitionScope,
     LoopPermission,
     LoopSessionPolicy,
-    LoopStepDefinition,
-    LoopStepKind,
+    TaskStage,
 )
 from src.infrastructure.filesystem.loop_definitions import FsLoopDefinitionRepository
 
@@ -26,10 +25,9 @@ def _loop() -> LoopDefinition:
         description="d",
         scope=LoopDefinitionScope.LIBRARY,
         stages=(
-            LoopStepDefinition(
+            TaskStage(
                 step_id="implementation",
                 name="Implementation",
-                kind=LoopStepKind.AGENT_TASK,
                 instructions="Implement it.\nCarefully.",
                 agent=LoopAgentPolicy(
                     session=LoopSessionPolicy.FRESH, permissions=LoopPermission.WRITE

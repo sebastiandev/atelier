@@ -11,10 +11,10 @@ from src.domain.loop.dtos import (
     LoopOutcome,
     LoopPrConfig,
     LoopReportReference,
-    LoopStepDefinition,
-    LoopStepKind,
+    ReviewStage,
     StageDefinitionRef,
     StageOverrides,
+    TaskStage,
 )
 from src.domain.loop.snapshots import (
     loop_stage_from_document,
@@ -171,10 +171,9 @@ def test_a_stage_written_with_declarations_is_taken_at_its_word() -> None:
 
 
 def test_declarations_round_trip_through_a_snapshot() -> None:
-    stage = LoopStepDefinition(
+    stage = ReviewStage(
         step_id="review",
         name="Review",
-        kind=LoopStepKind.AGENT_REVIEW,
         instructions="Review it.",
         inputs=(LoopContextReference(LoopContextKind.WAIVED_FINDINGS),),
         reports=(
@@ -195,10 +194,9 @@ def test_a_stage_that_declares_no_feedback_keeps_declaring_none() -> None:
     """The declaration has to survive its own serializer. Keying "written
     before inputs existed" on a field the writer omitted when empty made a
     modern stage indistinguishable from a legacy one, so feedback came back."""
-    stage = LoopStepDefinition(
+    stage = TaskStage(
         step_id="publish",
         name="Publish",
-        kind=LoopStepKind.AGENT_TASK,
         instructions="Publish it.",
     )
 

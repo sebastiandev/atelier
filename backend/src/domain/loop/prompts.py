@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import singledispatch
 from typing import Any
 
-from src.domain.loop.dtos import LoopContextKind, LoopStepDefinition
+from src.domain.loop.dtos import AgentStage, LoopContextKind, LoopStepDefinition
 
 
 @dataclass(frozen=True)
@@ -185,7 +185,7 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         # own instructions.
         f"{already_happened}"
         f"{waived}"
-        f"\n\n## Your task now\n{value.stage.instructions.strip()}"
+        f"\n\n## Your task now\n{_instructions(value.stage)}"
         f"{_brief(value)}"
         f"{_context_index(value)}"
         f"{_open_requests(value)}\n\n"
@@ -236,6 +236,11 @@ def _latest_pass(row: dict[str, Any]) -> int:
     latest = reports[-1] if isinstance(reports, list) and reports else None
     number = latest.get("pass_number") if isinstance(latest, dict) else None
     return number if isinstance(number, int) and not isinstance(number, bool) else 0
+
+
+def _instructions(stage: LoopStepDefinition) -> str:
+    """Return a stage's own instructions; only an agent stage has any."""
+    return stage.instructions.strip() if isinstance(stage, AgentStage) else ""
 
 
 def _open_requests(value: StagePromptInput) -> str:

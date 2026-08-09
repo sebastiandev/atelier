@@ -16,6 +16,9 @@ from src.domain.loop.definitions import (
     prepare_definition,
 )
 from src.domain.loop.dtos import (
+    AgentStage,
+    ApprovalStage,
+    CheckStage,
     LoopAgentPolicy,
     LoopContextKind,
     LoopContextReference,
@@ -24,6 +27,7 @@ from src.domain.loop.dtos import (
     LoopHistoryLevel,
     LoopOutcome,
     LoopPermission,
+    LoopPrConfig,
     LoopReportField,
     LoopReportSchema,
     LoopRetryPolicy,
@@ -32,8 +36,11 @@ from src.domain.loop.dtos import (
     LoopSessionPolicy,
     LoopStepDefinition,
     LoopStepKind,
+    PrStage,
+    ReviewStage,
     StageDefinition,
     StageDefinitionRef,
+    TaskStage,
 )
 from src.domain.loop.snapshots import (
     history_or_raise,
@@ -255,33 +262,52 @@ def _stage_from_data(
     retry_raw = value.get("retry", {})
     transitions_raw = value.get("transitions", {})
     check_raw = value.get("check", {})
-    return LoopStepDefinition(
-        step_id=step_id,
-        name=_required_str(value, "name"),
-        kind=kind,
-        instructions=instructions,
+    shared: dict[str, Any] = {
+        "step_id": step_id,
+        "name": _required_str(value, "name"),
+        "kind": kind,
         # Through the shared seam, so a loop stored on disk before inputs were
         # declared reads exactly as a pinned run snapshot of the same age does.
-        inputs=inputs_from_raw(value, context_raw),
-        reports=reports_from_raw(value.get("reports"), context_raw),
-        history=history_or_raise(value.get("history")),
-        agent=_agent_from_data(agent_raw, kind),
-        report_contract=report_contract_from_raw(value.get("report_contract"), kind),
-        retry=_retry_from_data(retry_raw),
-        transitions=_transitions_from_data(transitions_raw),
-        check_adapter=(
-            _optional_str(check_raw.get("adapter")) if isinstance(check_raw, dict) else None
+        "inputs": inputs_from_raw(value, context_raw),
+        "reports": reports_from_raw(value.get("reports"), context_raw),
+        "history": history_or_raise(value.get("history")),
+        "report_contract": report_contract_from_raw(value.get("report_contract"), kind),
+        "retry": _retry_from_data(retry_raw),
+        "transitions": _transitions_from_data(transitions_raw),
+    }
+    if kind is LoopStepKind.USER_APPROVAL:
+        return ApprovalStage(**shared)
+    if kind is LoopStepKind.DETERMINISTIC_CHECK:
+        return CheckStage(
+            **shared,
+            check_adapter=(
+                _optional_str(check_raw.get("adapter")) if isinstance(check_raw, dict) else ""
+            )
+            or "command",
+            check_command=(
+                tuple(_str_list(check_raw.get("command", [])))
+                if isinstance(check_raw, dict)
+                else ()
+            ),
         )
-        or None,
-        check_command=(
-            tuple(_str_list(check_raw.get("command", []))) if isinstance(check_raw, dict) else ()
-        ),
-        note_required=(
+    agent_fields: dict[str, Any] = {
+        "instructions": instructions,
+        "agent": _agent_from_data(agent_raw, kind) or LoopAgentPolicy(),
+        "note_required": (
             value.get("note_required") if isinstance(value.get("note_required"), bool) else None
         ),
-        review_gate=_review_gate_from_data(value.get("review_gate")),
-        pr_config=loop_pr_config_from_snapshot(value.get("pr_config")),
-    )
+    }
+    if kind is LoopStepKind.PR:
+        return PrStage(
+            **shared,
+            **agent_fields,
+            pr_config=loop_pr_config_from_snapshot(value.get("pr_config")) or LoopPrConfig(),
+        )
+    if kind is LoopStepKind.AGENT_REVIEW:
+        return ReviewStage(
+            **shared, **agent_fields, review_gate=_review_gate_from_data(value.get("review_gate"))
+        )
+    return TaskStage(**shared, **agent_fields)
 
 
 def _context_from_data(value: object) -> LoopContextReference:
@@ -389,21 +415,18 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
         if transitions:
             referenced["transitions"] = transitions
         return referenced
-    if (
-        stage.instructions.strip()
-        and stage.kind
-        in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW, LoopStepKind.PR}
-    ):
-        data["instructions"] = stage.instructions.rstrip() + "\n"
-    if stage.note_required is not None:
-        data["note_required"] = stage.note_required
-    if stage.review_gate is not None:
+    if isinstance(stage, AgentStage):
+        if stage.instructions.strip():
+            data["instructions"] = stage.instructions.rstrip() + "\n"
+        if stage.note_required is not None:
+            data["note_required"] = stage.note_required
+    if isinstance(stage, ReviewStage) and stage.review_gate is not None:
         data["review_gate"] = {
             "mode": stage.review_gate.mode.value,
             "max_passes": stage.review_gate.max_passes,
             "locked": stage.review_gate.locked,
         }
-    if stage.pr_config is not None:
+    if isinstance(stage, PrStage):
         data["pr_config"] = loop_pr_config_snapshot(stage.pr_config)
     if stage.inputs:
         data["inputs"] = [
@@ -420,7 +443,7 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
     ]
     if stage.history != LoopHistoryLevel.NONE:
         data["history"] = stage.history.value
-    if stage.agent is not None:
+    if isinstance(stage, AgentStage):
         data["agent"] = {
             "session": stage.agent.session.value,
             "permissions": (
@@ -447,7 +470,7 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
             for outcome, destination in stage.transitions.items()
             if destination is not None
         }
-    if stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
+    if isinstance(stage, CheckStage):
         data["check"] = {
             "adapter": stage.check_adapter,
             "command": list(stage.check_command),

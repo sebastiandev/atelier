@@ -7,7 +7,10 @@ import pytest
 
 from src.domain.artifacts.models import PrArtifact
 from src.domain.loop import actions, feedback, pr_lifecycle
-from src.domain.loop.dtos import LoopPrConfig, LoopStepDefinition, LoopStepKind
+from src.domain.loop.dtos import (
+    LoopPrConfig,
+    PrStage,
+)
 from src.domain.loop.models import LoopRunTarget
 from src.domain.models import Agent, AgentStatus
 
@@ -556,10 +559,9 @@ def test_pr_prompt_context_blocks_detached_head_without_a_branch_name() -> None:
 def test_reusable_pr_stage_snapshots_resolved_runtime_setup() -> None:
     target = _accepted_target()
     target.run["brief"] = {"goal": "Handle empty transfers"}
-    stage = LoopStepDefinition(
+    stage = PrStage(
         step_id="create-pr",
         name="Create PR",
-        kind=LoopStepKind.PR,
         pr_config=LoopPrConfig(
             name_template="{work-id}: {goal}",
             base_branch="main",
@@ -583,10 +585,9 @@ def test_reusable_pr_stage_snapshots_resolved_runtime_setup() -> None:
 def test_reusable_pr_stage_keeps_one_off_runtime_setup() -> None:
     target = _accepted_target()
     target.run["loop"]["pr_config"] = {"name": "User-selected title"}
-    stage = LoopStepDefinition(
+    stage = PrStage(
         step_id="create-pr",
         name="Create PR",
-        kind=LoopStepKind.PR,
         pr_config=LoopPrConfig(name_template="{goal}"),
     )
 

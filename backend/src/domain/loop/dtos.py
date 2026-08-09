@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from src.domain.models import Persona
+
 
 class LoopStatus(StrEnum):
     PENDING = "pending"
@@ -430,28 +432,119 @@ class LoopRetryPolicy:
     timeout_minutes: int = 20
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class LoopStepDefinition:
-    """One ordered stage in a reusable loop definition."""
+    """One ordered stage in a reusable loop definition.
+
+    What every stage has, whatever it does. A field that only means something
+    for one kind of stage lives on that kind, so a loop cannot declare a review
+    gate on an approval or a pull-request config on a check -- those were
+    validation rules, and a rule you cannot express is better than one you have
+    to check.
+
+    ``kind`` stays a field rather than becoming a property: it is what the
+    on-disk and wire shapes carry, and it is what the readers dispatch on to
+    build the right type back.
+    """
 
     step_id: str
     name: str
     kind: LoopStepKind
-    instructions: str = ""
     inputs: tuple[LoopContextReference, ...] = ()
     reports: tuple[LoopReportReference, ...] = ()
     history: LoopHistoryLevel = LoopHistoryLevel.NONE
-    agent: LoopAgentPolicy | None = None
     report_contract: str = "generic"
     retry: LoopRetryPolicy = field(default_factory=LoopRetryPolicy)
     transitions: dict[LoopOutcome, str | None] = field(default_factory=dict)
-    check_adapter: str | None = None
-    check_command: tuple[str, ...] = ()
-    note_required: bool | None = None
-    review_gate: LoopReviewGate | None = None
-    pr_config: LoopPrConfig | None = None
     stage_ref: StageDefinitionRef | None = None
     overrides: StageOverrides | None = None
+
+    @property
+    def supplies_source_agent(self) -> bool:
+        """Whether this stage's agent becomes the one later stages inherit.
+
+        Names what four separate ``kind == AGENT_TASK and agent is not None
+        and permissions != READ`` chains were asking. Only an implementation
+        task qualifies: a review reads, and a publishing stage inherits rather
+        than defines the run's provider and workspace.
+        """
+        return False
+
+    @property
+    def retriable(self) -> bool:
+        """Whether relaunching this stage means anything.
+
+        An approval has no agent to relaunch and no command to re-run: it is
+        parked waiting for a person, so retrying it is not disabled, it is
+        meaningless.
+        """
+        return False
+
+
+@dataclass(frozen=True, kw_only=True)
+class AgentStage(LoopStepDefinition):
+    """A stage an agent runs, under instructions, and reports back from."""
+
+    instructions: str = ""
+    agent: LoopAgentPolicy = field(default_factory=LoopAgentPolicy)
+    note_required: bool | None = None
+    persona: Persona = "developer"
+    """Who the agent is told it is. The kind used to stand in for this."""
+
+    @property
+    def retriable(self) -> bool:
+        """An agent stage relaunches with a fresh transcript."""
+        return True
+
+
+@dataclass(frozen=True, kw_only=True)
+class TaskStage(AgentStage):
+    """An agent stage that implements the target."""
+
+    kind: LoopStepKind = LoopStepKind.AGENT_TASK
+
+    @property
+    def supplies_source_agent(self) -> bool:
+        """A writing implementation defines the workspace others inherit."""
+        return self.agent.permissions != LoopPermission.READ
+
+
+@dataclass(frozen=True, kw_only=True)
+class ReviewStage(AgentStage):
+    """A read-only agent stage that judges the work and may send it back."""
+
+    kind: LoopStepKind = LoopStepKind.AGENT_REVIEW
+    persona: Persona = "architect"
+    review_gate: LoopReviewGate | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class PrStage(AgentStage):
+    """An agent stage that publishes the work as a pull request."""
+
+    kind: LoopStepKind = LoopStepKind.PR
+    pr_config: LoopPrConfig = field(default_factory=LoopPrConfig)
+
+
+@dataclass(frozen=True, kw_only=True)
+class CheckStage(LoopStepDefinition):
+    """A stage that runs a command and reports from its exit code."""
+
+    kind: LoopStepKind = LoopStepKind.DETERMINISTIC_CHECK
+    check_adapter: str = "command"
+    check_command: tuple[str, ...] = ()
+
+    @property
+    def retriable(self) -> bool:
+        """A check re-runs its command; there is no agent to replace."""
+        return True
+
+
+@dataclass(frozen=True, kw_only=True)
+class ApprovalStage(LoopStepDefinition):
+    """A stage that parks the run until a person decides."""
+
+    kind: LoopStepKind = LoopStepKind.USER_APPROVAL
 
 
 @dataclass(frozen=True)

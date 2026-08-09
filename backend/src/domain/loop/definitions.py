@@ -12,6 +12,8 @@ from src.domain.agents.effort import allowed_efforts
 from src.domain.agents.specs import SPECS
 from src.domain.loop.dtos import (
     PREVIOUS_STAGE,
+    AgentStage,
+    CheckStage,
     LoopAgentPolicy,
     LoopContextKind,
     LoopDefinition,
@@ -20,6 +22,8 @@ from src.domain.loop.dtos import (
     LoopPrConfig,
     LoopStepDefinition,
     LoopStepKind,
+    PrStage,
+    ReviewStage,
 )
 
 _ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -220,41 +224,21 @@ def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
         errors.append(f"{label} has an invalid id.")
     if not stage.name.strip():
         errors.append(f"{label} needs a name.")
-    if stage.kind in {
-        LoopStepKind.AGENT_TASK,
-        LoopStepKind.AGENT_REVIEW,
-        LoopStepKind.PR,
-    }:
+    if isinstance(stage, AgentStage):
         if not stage.instructions.strip():
             errors.append(f"{label} needs Markdown instructions.")
-        if stage.agent is None:
-            errors.append(f"{label} needs an agent policy.")
-        else:
-            errors.extend(validate_agent_policy(label, stage.agent))
-    if stage.kind == LoopStepKind.PR:
-        if stage.pr_config is None:
-            errors.append(f"{label} needs Create PR configuration.")
-        else:
-            errors.extend(validate_pr_config(label, stage.pr_config))
-    elif stage.pr_config is not None:
-        errors.append(f"{label} cannot declare Create PR configuration.")
-    if (
-        stage.kind not in {LoopStepKind.AGENT_TASK, LoopStepKind.AGENT_REVIEW, LoopStepKind.PR}
-        and stage.note_required is not None
-    ):
-        errors.append(f"{label} cannot declare a brief note slot.")
-    if stage.review_gate is not None:
-        if stage.kind != LoopStepKind.AGENT_REVIEW:
-            errors.append(f"{label} cannot declare a review gate.")
-        elif not stage.transitions.get(LoopOutcome.CHANGES_REQUESTED):
+        errors.extend(validate_agent_policy(label, stage.agent))
+    if isinstance(stage, PrStage):
+        errors.extend(validate_pr_config(label, stage.pr_config))
+    if isinstance(stage, ReviewStage) and stage.review_gate is not None:
+        # Still a rule: a gate needs somewhere to send the work back to, and
+        # only the loop's transitions know whether it has one.
+        if not stage.transitions.get(LoopOutcome.CHANGES_REQUESTED):
             errors.append(f"{label} review gate needs a changes-requested destination.")
         if stage.review_gate.max_passes < 1:
             errors.append(f"{label} review gate max passes must be at least one.")
-    if stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
-        if stage.check_adapter != "command":
-            errors.append(f"{label} needs the supported 'command' check adapter.")
-        if not stage.check_command:
-            errors.append(f"{label} needs a check command.")
+    if isinstance(stage, CheckStage) and not stage.check_command:
+        errors.append(f"{label} needs a check command.")
     if stage.retry.max_attempts < 1:
         errors.append(f"{label} retry limit must be at least one.")
     if stage.retry.timeout_minutes < 1:

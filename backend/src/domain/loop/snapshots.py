@@ -6,6 +6,9 @@ from typing import Any
 
 from src.domain.loop.dtos import (
     PREVIOUS_STAGE,
+    AgentStage,
+    ApprovalStage,
+    CheckStage,
     LoopAgentPolicy,
     LoopContextKind,
     LoopContextReference,
@@ -24,8 +27,11 @@ from src.domain.loop.dtos import (
     LoopSessionPolicy,
     LoopStepDefinition,
     LoopStepKind,
+    PrStage,
+    ReviewStage,
     StageDefinitionRef,
     StageOverrides,
+    TaskStage,
 )
 
 _DECLARED_MARKER = "reports"
@@ -85,7 +91,6 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
         "id": stage.step_id,
         "name": stage.name,
         "kind": stage.kind.value,
-        "instructions": stage.instructions,
         "inputs": [
             {
                 "kind": item.kind.value,
@@ -100,35 +105,6 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
             # the same declaration in two shapes again.
             if item.kind != LoopContextKind.PREVIOUS_REPORT
         ],
-        "agent": (
-            {
-                "session": stage.agent.session.value,
-                "permissions": (
-                    stage.agent.permissions.value
-                    if stage.agent.permissions is not None
-                    else None
-                ),
-                "provider": stage.agent.provider,
-                "model": stage.agent.model,
-                "effort": stage.agent.effort,
-                **(
-                    {"fast": stage.agent.fast}
-                    if stage.agent.fast is not None
-                    else {}
-                ),
-                **(
-                    {
-                        "approved_command_prefixes": list(
-                            stage.agent.approved_command_prefixes
-                        )
-                    }
-                    if stage.agent.approved_command_prefixes is not None
-                    else {}
-                ),
-            }
-            if stage.agent is not None
-            else None
-        ),
         "report_contract": stage.report_contract,
         "retry": {
             "max_attempts": stage.retry.max_attempts,
@@ -138,9 +114,21 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
             outcome.value: destination
             for outcome, destination in stage.transitions.items()
         },
-        "check_adapter": stage.check_adapter,
-        "check_command": list(stage.check_command),
     }
+    value["instructions"] = stage.instructions if isinstance(stage, AgentStage) else ""
+    value["agent"] = _agent_snapshot(stage.agent) if isinstance(stage, AgentStage) else None
+    value["check_adapter"] = stage.check_adapter if isinstance(stage, CheckStage) else None
+    value["check_command"] = list(stage.check_command) if isinstance(stage, CheckStage) else []
+    if isinstance(stage, AgentStage) and stage.note_required is not None:
+        value["note_required"] = stage.note_required
+    if isinstance(stage, ReviewStage) and stage.review_gate is not None:
+        value["review_gate"] = {
+            "mode": stage.review_gate.mode.value,
+            "max_passes": stage.review_gate.max_passes,
+            "locked": stage.review_gate.locked,
+        }
+    if isinstance(stage, PrStage):
+        value["pr_config"] = loop_pr_config_snapshot(stage.pr_config)
     # Always emitted, empty or not: its presence is what tells the reader this
     # stage states its own inputs. Keying that on a field the writer omits when
     # empty made the two indistinguishable, so a stage that deliberately
@@ -150,16 +138,6 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
     ]
     if stage.history != LoopHistoryLevel.NONE:
         value["history"] = stage.history.value
-    if stage.note_required is not None:
-        value["note_required"] = stage.note_required
-    if stage.review_gate is not None:
-        value["review_gate"] = {
-            "mode": stage.review_gate.mode.value,
-            "max_passes": stage.review_gate.max_passes,
-            "locked": stage.review_gate.locked,
-        }
-    if stage.pr_config is not None:
-        value["pr_config"] = loop_pr_config_snapshot(stage.pr_config)
     if stage.stage_ref is not None:
         value["stage_ref"] = {
             "definition_id": stage.stage_ref.definition_id,
@@ -170,56 +148,89 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
     return value
 
 
+def _agent_snapshot(agent: LoopAgentPolicy) -> dict[str, Any]:
+    """Serialize one agent policy, omitting what was never set."""
+    return {
+        "session": agent.session.value,
+        "permissions": agent.permissions.value if agent.permissions is not None else None,
+        "provider": agent.provider,
+        "model": agent.model,
+        "effort": agent.effort,
+        **({"fast": agent.fast} if agent.fast is not None else {}),
+        **(
+            {"approved_command_prefixes": list(agent.approved_command_prefixes)}
+            if agent.approved_command_prefixes is not None
+            else {}
+        ),
+    }
+
+
 def _stage_from_snapshot(value: object) -> LoopStepDefinition:
+    """Build the stage type ``kind`` names, with only the fields it can carry.
+
+    The one place a stored kind becomes a Python type. Everything downstream
+    asks the type what it can do instead of asking what kind it is.
+    """
     if not isinstance(value, dict):
         raise ValueError("loop stage snapshot must be a mapping")
     context = raw_inputs(value)
     transitions = value.get("transitions", {})
     retry = value.get("retry", {})
     if not isinstance(context, list) or not isinstance(transitions, dict):
-        raise ValueError("loop stage snapshot has invalid context or transitions")
+        raise ValueError("loop stage snapshot has invalid inputs or transitions")
     if not isinstance(retry, dict):
         raise ValueError("loop stage snapshot has invalid retry policy")
-    return LoopStepDefinition(
-        step_id=_string(value, "id"),
-        name=_string(value, "name"),
-        kind=LoopStepKind(_string(value, "kind")),
-        instructions=_optional_string(value.get("instructions")),
-        inputs=inputs_from_raw(value, context),
-        reports=reports_from_raw(value.get("reports"), context),
-        history=history_from_raw(value.get("history")),
-        agent=_agent_from_snapshot(value.get("agent")),
-        report_contract=report_contract_from_raw(
-            value.get("report_contract"), LoopStepKind(_string(value, "kind"))
-        ),
-        retry=LoopRetryPolicy(
+    kind = LoopStepKind(_string(value, "kind"))
+    shared: dict[str, Any] = {
+        "step_id": _string(value, "id"),
+        "name": _string(value, "name"),
+        "kind": kind,
+        "inputs": inputs_from_raw(value, context),
+        "reports": reports_from_raw(value.get("reports"), context),
+        "history": history_from_raw(value.get("history")),
+        "report_contract": report_contract_from_raw(value.get("report_contract"), kind),
+        "retry": LoopRetryPolicy(
             max_attempts=_integer(retry.get("max_attempts"), 2),
             timeout_minutes=_integer(retry.get("timeout_minutes"), 20),
         ),
-        transitions={
-            LoopOutcome(str(outcome)): (
-                destination if isinstance(destination, str) else None
-            )
+        "transitions": {
+            LoopOutcome(str(outcome)): (destination if isinstance(destination, str) else None)
             for outcome, destination in transitions.items()
         },
-        check_adapter=_optional_string(value.get("check_adapter")) or None,
-        check_command=tuple(
-            item
-            for item in value.get("check_command", [])
-            if isinstance(item, str)
+        "stage_ref": _stage_ref_from_snapshot(value.get("stage_ref")),
+        "overrides": _overrides_from_snapshot(value.get("overrides")),
+    }
+    if kind is LoopStepKind.USER_APPROVAL:
+        return ApprovalStage(**shared)
+    if kind is LoopStepKind.DETERMINISTIC_CHECK:
+        raw_command = value.get("check_command")
+        return CheckStage(
+            **shared,
+            check_adapter=_optional_string(value.get("check_adapter")) or "command",
+            check_command=tuple(item for item in raw_command if isinstance(item, str))
+            if isinstance(raw_command, list)
+            else (),
         )
-        if isinstance(value.get("check_command", []), list)
-        else (),
-        note_required=(
-            value.get("note_required")
-            if isinstance(value.get("note_required"), bool)
-            else None
+    agent_fields: dict[str, Any] = {
+        "instructions": _optional_string(value.get("instructions")),
+        "agent": _agent_from_snapshot(value.get("agent")) or LoopAgentPolicy(),
+        "note_required": (
+            value.get("note_required") if isinstance(value.get("note_required"), bool) else None
         ),
-        review_gate=_review_gate_from_snapshot(value.get("review_gate")),
-        pr_config=loop_pr_config_from_snapshot(value.get("pr_config")),
-        stage_ref=_stage_ref_from_snapshot(value.get("stage_ref")),
-        overrides=_overrides_from_snapshot(value.get("overrides")),
-    )
+    }
+    if kind is LoopStepKind.PR:
+        return PrStage(
+            **shared,
+            **agent_fields,
+            pr_config=loop_pr_config_from_snapshot(value.get("pr_config")) or LoopPrConfig(),
+        )
+    if kind is LoopStepKind.AGENT_REVIEW:
+        return ReviewStage(
+            **shared,
+            **agent_fields,
+            review_gate=_review_gate_from_snapshot(value.get("review_gate")),
+        )
+    return TaskStage(**shared, **agent_fields)
 
 
 def loop_stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
@@ -522,14 +533,7 @@ def _overrides_snapshot(overrides: StageOverrides) -> dict[str, Any]:
             for item in overrides.inputs
         ]
     if overrides.agent is not None:
-        value["agent"] = _stage_snapshot(
-            LoopStepDefinition(
-                step_id="placeholder",
-                name="Placeholder",
-                kind=LoopStepKind.AGENT_TASK,
-                agent=overrides.agent,
-            )
-        )["agent"]
+        value["agent"] = _agent_snapshot(overrides.agent)
     if overrides.retry is not None:
         value["retry"] = {
             "max_attempts": overrides.retry.max_attempts,

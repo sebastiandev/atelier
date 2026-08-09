@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from src.domain.loop.dtos import (
+    ApprovalStage,
+    CheckStage,
     LoopAgentPolicy,
     LoopContextKind,
     LoopContextReference,
@@ -14,9 +16,11 @@ from src.domain.loop.dtos import (
     LoopReviewGate,
     LoopSessionPolicy,
     LoopStepDefinition,
-    LoopStepKind,
+    PrStage,
+    ReviewStage,
     StageDefinition,
     StageDefinitionScope,
+    TaskStage,
 )
 from src.domain.loop.pr_lifecycle import CREATE_PR_STAGE_INSTRUCTIONS
 from src.domain.loop.stages import prepare_stage_definition
@@ -77,10 +81,9 @@ def _implement() -> StageDefinition:
         "implement",
         "Implement",
         "Implement the goal in the shared Work workspace.",
-        LoopStepDefinition(
+        TaskStage(
             step_id="implement",
             name="Implement",
-            kind=LoopStepKind.AGENT_TASK,
             instructions=(
                 "Implement the target end to end. Follow repository guidance, "
                 "update tests, and report changed files and validation evidence."
@@ -102,10 +105,9 @@ def _validate() -> StageDefinition:
         "validate",
         "Validate",
         "Run the repository test command as a deterministic check.",
-        LoopStepDefinition(
+        CheckStage(
             step_id="validate",
             name="Validate",
-            kind=LoopStepKind.DETERMINISTIC_CHECK,
             check_adapter="command",
             check_command=("pytest",),
             retry=LoopRetryPolicy(max_attempts=1, timeout_minutes=20),
@@ -119,10 +121,9 @@ def _review(definition_id: str, name: str, instructions: str) -> StageDefinition
         definition_id,
         name,
         instructions,
-        LoopStepDefinition(
+        ReviewStage(
             step_id=definition_id,
             name=name,
-            kind=LoopStepKind.AGENT_REVIEW,
             instructions=instructions,
             inputs=(
                 LoopContextReference(LoopContextKind.TARGET, required=True),
@@ -148,10 +149,9 @@ def _approve() -> StageDefinition:
         "approve",
         "Approve",
         "Hold the result for an explicit human decision.",
-        LoopStepDefinition(
+        ApprovalStage(
             step_id="approve",
             name="Approve",
-            kind=LoopStepKind.USER_APPROVAL,
             retry=LoopRetryPolicy(max_attempts=1, timeout_minutes=1),
         ),
         (LoopOutcome.PASS, LoopOutcome.CHANGES_REQUESTED),
@@ -163,10 +163,9 @@ def _create_pr() -> StageDefinition:
         "create-pr",
         "Create PR",
         "Commit, push, and create or update the Work pull request.",
-        LoopStepDefinition(
+        PrStage(
             step_id="create-pr",
             name="Create PR",
-            kind=LoopStepKind.PR,
             instructions=CREATE_PR_STAGE_INSTRUCTIONS,
             inputs=(
                 LoopContextReference(LoopContextKind.WORKSPACE_DIFF, required=True),

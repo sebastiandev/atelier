@@ -21,12 +21,12 @@ from src.domain.agents.launch import InvalidProviderConfig
 from src.domain.agents.specs import SPECS, EnumOption
 from src.domain.loop.definitions import validate_agent_policy
 from src.domain.loop.dtos import (
+    AgentStage,
     LoopAgentPolicy,
     LoopBriefAgent,
     LoopDefinition,
     LoopPermission,
     LoopSessionPolicy,
-    LoopStepKind,
 )
 from src.domain.models import Provider
 
@@ -360,13 +360,13 @@ def validate_stage_agent_policies(
         options = source_options
         next_launched = launched
         reused = (
-            stage.agent is not None
+            isinstance(stage, AgentStage)
             and stage.agent.session == LoopSessionPolicy.REUSE
             and stage_id in launched
         )
         if reused:
             provider, model, options = launched[stage_id]
-        elif stage.agent is not None:
+        elif isinstance(stage, AgentStage):
             try:
                 provider, model, options = resolve_stage_agent_config(
                     stage.agent,
@@ -383,11 +383,7 @@ def validate_stage_agent_policies(
                     **launched,
                     stage_id: (provider, model, options),
                 }
-        if not initial and (
-            stage.kind != LoopStepKind.AGENT_TASK
-            or stage.agent is None
-            or stage.agent.permissions == LoopPermission.READ
-        ):
+        if not initial and not stage.supplies_source_agent:
             provider = source_provider
             model = source_model
             options = source_options

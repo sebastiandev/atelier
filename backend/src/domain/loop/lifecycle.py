@@ -14,7 +14,6 @@ from src.domain.loop.dtos import (
     LoopContextKind,
     LoopFailureKind,
     LoopOutcome,
-    LoopPermission,
     LoopRunStatus,
     LoopStatus,
     LoopStepDefinition,
@@ -340,11 +339,7 @@ async def _launch_retry_agent(
     owned = loop.setdefault("owned_agent_slugs", [])
     if isinstance(owned, list) and launched.slug not in owned:
         owned.append(launched.slug)
-    if (
-        stage.kind == LoopStepKind.AGENT_TASK
-        and stage.agent is not None
-        and stage.agent.permissions != LoopPermission.READ
-    ):
+    if stage.supplies_source_agent:
         loop["source_agent_slug"] = launched.slug
     return launched.slug
 
@@ -380,9 +375,7 @@ async def request_changes(
         (
             stage.step_id
             for stage in definition.stages
-            if stage.kind == LoopStepKind.AGENT_TASK
-            and stage.agent is not None
-            and stage.agent.permissions != LoopPermission.READ
+            if stage.supplies_source_agent
         ),
         None,
     )
@@ -486,7 +479,7 @@ async def request_changes(
     # The approval is what this stage is answering, so a later retry resolves
     # `previous` to it rather than to whatever transition last ran.
     loop["previous_stage_id"] = approval_id
-    if stage.agent is not None and stage.agent.permissions != LoopPermission.READ:
+    if stage.supplies_source_agent:
         loop["source_agent_slug"] = agent_slug
     loop["status"] = LoopStatus.RUNNING.value
     loop["status_reason"] = f"{stage.name} resumed with requested changes."

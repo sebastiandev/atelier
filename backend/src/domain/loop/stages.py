@@ -9,8 +9,11 @@ from dataclasses import asdict, replace
 
 from src.domain.loop.definitions import validate_agent_policy, validate_pr_config
 from src.domain.loop.dtos import (
+    AgentStage,
+    CheckStage,
     LoopStepDefinition,
     LoopStepKind,
+    PrStage,
     StageDefinition,
     StageDefinitionRef,
     StageDefinitionScope,
@@ -78,24 +81,14 @@ def validate_stage_definition(definition: StageDefinition) -> tuple[str, ...]:
         errors.append("At least one outcome is required.")
     if len(set(definition.outcomes)) != len(definition.outcomes):
         errors.append("Stage outcomes must be unique.")
-    if stage.kind in _AGENT_KINDS:
+    if isinstance(stage, AgentStage):
         if not stage.instructions.strip():
             errors.append("Agent stages need Markdown instructions.")
-        if stage.agent is None:
-            errors.append("Agent stages need an agent policy.")
-        else:
-            errors.extend(validate_agent_policy("Stage", stage.agent))
-    if stage.kind == LoopStepKind.DETERMINISTIC_CHECK:
-        if stage.check_adapter != "command" or not stage.check_command:
-            errors.append("Deterministic checks need a command adapter and command.")
-    if stage.kind == LoopStepKind.PR:
-        config = stage.pr_config
-        if config is None:
-            errors.append("Create PR stages need PR configuration.")
-        else:
-            errors.extend(validate_pr_config("Stage", config))
-    elif stage.pr_config is not None:
-        errors.append("Only Create PR stages can declare PR configuration.")
+        errors.extend(validate_agent_policy("Stage", stage.agent))
+    if isinstance(stage, CheckStage) and not stage.check_command:
+        errors.append("Deterministic checks need a command.")
+    if isinstance(stage, PrStage):
+        errors.extend(validate_pr_config("Stage", stage.pr_config))
     if stage.retry.max_attempts < 1 or stage.retry.timeout_minutes < 1:
         errors.append("Retry attempts and timeout must be positive.")
     return tuple(dict.fromkeys(errors))

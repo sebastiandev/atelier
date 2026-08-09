@@ -22,6 +22,7 @@ from src.domain.loop.agent_policy import (
 from src.domain.loop.catalog import LoopDefinitionRoots, locate_definition
 from src.domain.loop.definitions import LoopDefinitionConflict, LoopDefinitionInvalid
 from src.domain.loop.dtos import (
+    AgentStage,
     LoopBrief,
     LoopContextKind,
     LoopContextResolution,
@@ -219,7 +220,7 @@ async def start(
     run_agent_slug = source_agent_slug
     cursor = 0
     if followups.entry_needs_agent(entry):
-        if entry.agent is None:
+        if not isinstance(entry, AgentStage):
             raise LoopDefinitionInvalid(f"Agent policy missing for stage: {entry.step_id}")
         stage_brief = briefs.stage_brief(brief, entry.step_id)
         provider, model, options = resolve_stage_agent_config(
@@ -240,7 +241,7 @@ async def start(
             AgentLaunchRequest(
                 work_slug=spec.work_slug,
                 name=f"{entry.name} · objective",
-                persona=("architect" if entry.kind == LoopStepKind.AGENT_REVIEW else "developer"),
+                persona=entry.persona,
                 role=entry.instructions,
                 provider=provider,
                 model=model,
