@@ -14546,18 +14546,24 @@ select:disabled {
 .run-review-gate > header > strong { color: var(--fg); font-size: 13px; }
 .run-review-gate > header > small { color: var(--fg-4); font: 10px var(--font-mono); }
 .run-review-gate > header > em:last-child { margin-left: auto; font-style: normal; }
-.run-feedback {
-  display: grid;
-  gap: 7px;
-  padding: 10px 13px;
-  border-radius: var(--radius-card);
-  background: var(--bg-2);
+.run-requested-changes > .report-lbl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
 }
-.run-feedback > header { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 8px; }
-.run-feedback > header > strong { color: var(--fg); font-size: 13px; }
-.run-feedback > header > small { margin-left: auto; color: var(--fg-4); font: 10px var(--font-mono); }
-.run-feedback > ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.run-feedback > ul > li {
+.run-requested-changes > .report-lbl > em {
+  margin-left: auto;
+  color: var(--fg-4);
+  font: 10px var(--font-mono);
+  font-style: normal;
+}
+.run-requested-changes > ul { display: grid; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
+.run-requested-changes > ul > li {
   display: grid;
   min-width: 0;
   grid-template-columns: 64px minmax(0, 1fr);
@@ -14567,14 +14573,11 @@ select:disabled {
   border-radius: var(--radius-ctl);
   background: var(--bg-3);
 }
-.run-feedback > ul > li.answered { opacity: 0.62; }
-.run-feedback.settled > header > small { margin-left: 0; }
-.run-feedback.settled > header > .btn { margin-left: auto; }
-.run-feedback > header > .btn { margin-left: auto; }
-.run-feedback > ul > li > .body {
+.run-requested-changes > ul > li.answered { opacity: 0.62; }
+.run-requested-changes > ul > li > .body {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   overflow: hidden;
   color: var(--fg-2);
   font-size: 12px;
@@ -14582,7 +14585,7 @@ select:disabled {
   /* A PR comment can carry an unbroken query string longer than the panel. */
   overflow-wrap: anywhere;
 }
-.run-feedback > ul > li > em {
+.run-requested-changes > ul > li > em {
   grid-column: 2;
   color: var(--fg-4);
   font: 10px var(--font-mono);

@@ -486,6 +486,7 @@ function RunSurfaceContent({
                     agent={outputAgent}
                     busy={busy}
                     definition={data.definition}
+                    feedback={data.feedback}
                     events={selectedOccurrence.occurrenceId === currentOccurrence?.occurrenceId ? events : []}
                     pr={data.pr}
                     prComments={data.prComments}
@@ -506,6 +507,7 @@ function RunSurfaceContent({
               />
             ) : selectedOccurrence ? (
               <StageOutput
+                feedback={data.feedback}
                 agent={outputAgent}
                 busy={busy}
                 definition={data.definition}
@@ -545,7 +547,6 @@ function RunSurfaceContent({
           </div>
         </div>
 
-        <RunFeedback data={data} />
         <DismissedFindings data={data} />
         <RunActions
           agentStage={agentStage}
@@ -1069,6 +1070,7 @@ function StageOutput({
   busy,
   definition,
   events,
+  feedback,
   onConfig,
   onRefreshPr,
   onSendPrFeedback,
@@ -1081,6 +1083,7 @@ function StageOutput({
   busy: boolean;
   definition: LoopDefinitionSnapshot | null;
   events: AgentEvent[];
+  feedback: LoopFeedbackRecord[];
   onConfig: () => void;
   onRefreshPr?: (force?: boolean) => Promise<void>;
   onSendPrFeedback?: RunSurfaceProps["onSendPrFeedback"];
@@ -1122,7 +1125,7 @@ function StageOutput({
       {updatingPr && <div className="run-stage-pr-mode">Reuses this run's saved PR setup and branch. No new pull request is created.</div>}
       {stage.status === "changes_requested" && returnTarget && <div className="run-stage-return"><ReturnIcon size={11} /> loop returns to {returnTarget} · pass {stage.passNumber + 1}</div>}
       {running && stage.agent_slug && <RunLiveActivity events={events} />}
-      {!running && stage.summary && <StageReport stage={stage} />}
+      {!running && stage.summary && <StageReport stage={stage} feedback={feedback} />}
       {stage.kind === "pr" && pr && (
         <PrLifecyclePanel
           addressedComments={stage.addressed_comments}
@@ -1344,7 +1347,7 @@ function ResultView({
         </div>
         {onCreatePr && <button className="btn primary" disabled={busy} onClick={onCreatePr}><span aria-hidden>⇱</span> Create PR</button>}
       </div>
-      {stage ? <StageReport stage={stage} /> : (
+      {stage ? <StageReport stage={stage} feedback={data.feedback} /> : (
         <>
           <section><header><strong>Changed files</strong><span>{data.changedFiles.length}</span></header>{data.changedFiles.map((file) => <div className="file-row" key={file.path}><span className="fname">{file.path}</span><span className="fstat"><span className="add">+{file.additions}</span><span className="del">-{file.deletions}</span></span></div>)}{data.changedFiles.length === 0 && <p className="dim">No changed files reported.</p>}</section>
           <section><header><strong>Validation evidence</strong></header>{data.evidence.map((item) => <span className="run-evidence" key={item}><CheckIcon size={9} /> {item}</span>)}{data.evidence.length === 0 && <p className="dim">No validation evidence reported.</p>}</section>
@@ -1425,52 +1428,63 @@ function cleanFeedbackText(value: string): string {
     .trim();
 }
 
-/** What the run is still being asked to change. Answered requests are history,
- *  so they sit behind a disclosure rather than competing with the open ones. */
-function RunFeedback({ data }: { data: RunSurfaceData }) {
-  const [showAnswered, setShowAnswered] = useState(false);
-  // Attempt-scoped records ended with the attempt that carried them; they were
-  // never a standing instruction, so listing them alongside the run's open
-  // requests would overstate what is outstanding.
-  const records = data.feedback.filter((record) => record.scope !== "attempt");
-  const open = records.filter((record) => record.state !== "answered");
-  const answered = records.filter((record) => record.state === "answered");
-  // Nothing outstanding is the normal, healthy state of a run: a panel headed
-  // "Requested changes" permanently showing settled history reads as a problem
-  // that is not there.
-  if (open.length === 0 && !showAnswered) {
-    if (answered.length === 0) return null;
-    return (
-      <section className="run-feedback settled">
-        <header>
-          <strong>Requested changes</strong>
-          <small>all {answered.length} answered</small>
-          <button className="btn ghost xs" onClick={() => setShowAnswered(true)}>Show</button>
-        </header>
-      </section>
-    );
-  }
+/** The requests one implementation pass was working from.
+ *
+ *  Shown on the implementation stage and nowhere else: this is the pairing that
+ *  matters -- what was asked for, immediately above what the pass reported
+ *  doing about it. Every other stage would be repeating run-level state under a
+ *  heading it does not own; the user can come back here if they want it.
+ */
+function requestsForPass(
+  feedback: LoopFeedbackRecord[],
+  stage: RunStageOccurrence,
+): LoopFeedbackRecord[] {
+  return feedback.filter((record) => {
+    // Opened against this pass or an earlier one that nothing has settled yet.
+    if (record.pass_number > stage.passNumber) return false;
+    // An attempt-scoped note (a retry instruction) travelled with one attempt
+    // only, so it belongs to the pass that carried it and no later one.
+    if (record.scope === "attempt" && record.pass_number !== stage.passNumber) return false;
+    // A request answered before this occurrence reported was already settled
+    // when the pass began, so it is not something this pass was asked to do.
+    if (record.state === "answered" && record.answered_at && stage.recordedAt) {
+      return record.answered_at >= stage.recordedAt;
+    }
+    return true;
+  });
+}
+
+function RequestedChanges({
+  feedback,
+  stage,
+}: {
+  feedback: LoopFeedbackRecord[];
+  stage: RunStageOccurrence;
+}) {
+  const [open, setOpen] = useState(false);
+  const records = requestsForPass(feedback, stage);
+  if (records.length === 0) return null;
   return (
-    <section className="run-feedback">
-      <header>
-        <strong>Requested changes</strong>
-        {open.length > 0 && <span className="tag warn">{open.length} open</span>}
-        {answered.length > 0 && (
-          <button className="btn ghost xs" onClick={() => setShowAnswered(!showAnswered)}>
-            {showAnswered ? "Hide" : `${answered.length} answered`}
-          </button>
-        )}
-      </header>
-      <ul>
-        {[...open].reverse().map((record) => (
-          <RunFeedbackRow key={record.id} record={record} />
-        ))}
-        {showAnswered &&
-          [...answered].reverse().map((record) => (
+    <div className="report-sec run-requested-changes">
+      <button
+        type="button"
+        className="report-lbl"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <ReturnIcon size={11} />
+        Requested changes
+        <span>{records.length}</span>
+        <em>{open ? "hide" : "show"}</em>
+      </button>
+      {open && (
+        <ul>
+          {[...records].reverse().map((record) => (
             <RunFeedbackRow key={record.id} record={record} />
           ))}
-      </ul>
-    </section>
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -1569,7 +1583,7 @@ function RunActions({
   );
 }
 
-function StageReport({ stage }: { stage: RunStageOccurrence }) {
+function StageReport({ stage, feedback }: { stage: RunStageOccurrence; feedback: LoopFeedbackRecord[] }) {
   const findings = stage.finding_details.length > 0
     ? stage.finding_details
     : stage.findings.map((text) => ({ text, severity: "medium" as const, location: "" }));
@@ -1578,6 +1592,7 @@ function StageReport({ stage }: { stage: RunStageOccurrence }) {
   )) ?? [];
   return (
     <div className="report doc">
+      {stage.kind === "agent_task" && <RequestedChanges feedback={feedback} stage={stage} />}
       <ReportSection label={stage.kind === "agent_review" ? "Verdict & summary" : "Summary"} icon={<DocIcon size={11} />}><div className="report-summary">{stage.summary}</div></ReportSection>
       {stage.criteria_coverage.length > 0 && <ReportSection label="Acceptance criteria" icon={<CheckIcon size={11} />} count={stage.criteria_coverage.length}>{stage.criteria_coverage.map((criterion, index) => <div className={`crit ${criterion.met ? "met" : "unmet"}`} key={`${criterion.text}-${index}`}><span className="cbox" role="img" aria-label={criterion.met ? "Met" : "Not met"}>{criterion.met ? <CheckIcon size={12} /> : <span aria-hidden>×</span>}</span><span><span className="ctext">{criterion.text}</span>{criterion.note && <span className="cnote">{criterion.note}</span>}</span></div>)}</ReportSection>}
       {stage.findings.length > 0 && <ReportSection label="Findings" icon={<EyeIcon size={11} />} count={stage.findings.length}>{findings.map((finding, index) => <div className="finding" key={`${finding.text}-${index}`}><span className={`sev ${finding.severity}`}>{finding.severity}</span><span className="fbody"><span className="ftext">{finding.text}</span>{finding.location && <span className="floc">{finding.location}</span>}</span></div>)}</ReportSection>}
