@@ -237,7 +237,6 @@ async def resume(
         pass_number=max(1, actions.int_or_default(loop.get("pass_number"), 1)),
         answered_by=current_stage_id,
         scope=feedback.SCOPE_ATTEMPT,
-        target="retry",
     )
     current_stage_row["status"] = LoopStepStatus.RUNNING.value
     if not check_retry:

@@ -12,9 +12,6 @@ The shapes collapse into this record. What differs between them is data:
 
 ``scope``
     ``open`` outlives the attempt that carried it; ``attempt`` ends with it.
-``target``
-    ``restart`` sends the run back to its write stage; ``retry`` relaunches the
-    stage that received it.
 ``answered_by``
     the stage whose pass discharges the request. Clearing is that stage's
     explicit transition, not a side effect of one stage returning one outcome,
@@ -59,7 +56,6 @@ def record(
     items: tuple[dict[str, Any], ...] = (),
     answered_by: str = "",
     scope: str = SCOPE_OPEN,
-    target: str = "restart",
     reason: str = "",
 ) -> dict[str, Any] | None:
     """Open one feedback record against ``pass_number`` and return it.
@@ -107,7 +103,6 @@ def record(
         "items": rows,
         "note": text,
         "scope": scope,
-        "target": target,
         "answered_by": answered_by,
         "state": OPEN,
         "reason": reason,
@@ -258,7 +253,6 @@ def records(loop: dict[str, Any]) -> list[dict[str, Any]]:
                 else [],
                 "note": actions.str_or_empty(item.get("note")).strip(),
                 "scope": actions.str_or_empty(item.get("scope")) or SCOPE_OPEN,
-                "target": actions.str_or_empty(item.get("target")) or "restart",
                 "answered_by": actions.str_or_empty(item.get("answered_by")),
                 "state": ANSWERED
                 if actions.str_or_empty(item.get("state")) == ANSWERED

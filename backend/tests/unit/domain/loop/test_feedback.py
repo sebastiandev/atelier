@@ -136,7 +136,6 @@ def test_an_attempt_scoped_request_ends_with_the_attempt() -> None:
         pass_number=2,
         answered_by="implement",
         scope=feedback.SCOPE_ATTEMPT,
-        target="retry",
     )
 
     feedback.close_attempt(loop, "implement")

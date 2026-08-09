@@ -166,23 +166,33 @@ Feedback:
   items:        [{ ref, author, location, body, instruction }]
   note:         str
   scope:        attempt | open
-  target:       restart | retry
   answered_by:  <stage id>            # the gate that closes it
   state:        open | answered
 ```
 
 One store, one renderer, one routing rule. The five existing shapes collapse:
 
-| Old | `scope` | `target` | `answered_by` |
-|---|---|---|---|
-| Approval request-changes | `open` | `restart` | that approval stage |
-| Review gate send-back | `open` | `restart` | that review stage |
-| PR feedback | `open` | `restart` | the code review stage |
-| Retry note | `attempt` | `retry` | the stage it was sent to |
-| `corrective_note` | *deleted* — it is `reports` | | |
+| Old | `scope` | `answered_by` |
+|---|---|---|
+| Approval request-changes | `open` | that approval stage |
+| Review gate send-back | `open` | that review stage |
+| PR feedback | `open` | the code review stage |
+| Retry note | `attempt` | the stage it was sent to |
+| `corrective_note` | *deleted* — it is `reports` | |
 
-`target` defaults by stage kind (review/approval → `restart`, check → `retry`)
-and is overridable per stage via `on_feedback`.
+**`target` and `on_feedback` are dropped.** The draft gave a record a `target`
+of `restart` or `retry`, overridable per stage. Routing is already a stage's
+`transitions`, which map each outcome to a destination and are edited per loop,
+so `restart` said nothing new and could contradict them.
+
+`retry` did name one thing transitions cannot: another *attempt* at the same
+stage, in the same pass, carrying the request. A self-transition looks similar
+but advances the pass counter, which labels history, groups the roll-up, scopes
+records and spends the review gate's budget. That behaviour exists and is
+reachable -- it is **Retry stage**, which relaunches with a note and optional
+model/effort overrides. Declaring it as a stage's automatic answer to
+`changes_requested` would re-run a stage against unchanged inputs, so it had no
+safe use. Phase 4 is `run_stage` dispatch and the editor, not `on_feedback`.
 
 Two details this table originally got wrong, corrected against the Phase 1
 implementation:
@@ -252,7 +262,7 @@ Rules:
 
 | File | Change |
 |---|---|
-| `loop/dtos.py` | `Feedback` DTO; `reports`/`history`/`inputs` on `LoopStepDefinition`; `waived_findings` kind; `on_feedback` |
+| `loop/dtos.py` | `Feedback` DTO; `reports`/`history`/`inputs` on `LoopStepDefinition`; `waived_findings` kind |
 | `loop/feedback.py` *(new)* | Record store: `open`, `answer`, `context`, `dismissed` — replaces `pass_feedback.py` |
 | `loop/pass_feedback.py` | Deleted, callers migrated |
 | `loop/prompts.py` | Zone restructure; multi-report rendering; waived section; history roll-up |
@@ -278,7 +288,7 @@ Rules:
 
 | File | Change |
 |---|---|
-| `LoopUI.tsx` | **Loop editor**: inputs/reports/history editors per stage; `on_feedback`; the context editor becomes the inputs editor |
+| `LoopUI.tsx` | **Loop editor**: inputs/reports/history editors per stage; the context editor becomes the inputs editor |
 | `LoopRunView.tsx` | Feedback panels read one record type; open vs answered; waived-findings view |
 | `LoopRunInspector.tsx` | Show a stage's declared inputs and resolved reports |
 | `LoopBriefSetup.tsx` | Per-stage brief unchanged, but validation follows the new required/optional |
@@ -307,7 +317,7 @@ readers are the only places that know two shapes exist. Each applies defaults:
 | `context: [previous_report]` (no step) | `reports: [{from: previous, required}]` |
 | `context: [other kinds]` | `inputs: [same kinds]` |
 | no `history` | `history: none` — matches today, where no history is rendered |
-| no `on_feedback` | default by kind (review/approval → `restart`, check → `retry`) |
+
 | no `waived_findings` input | absent — opt in explicitly |
 
 A loop that never declared `previous_report` gets `reports: []`, which is what
@@ -342,7 +352,7 @@ three groups.
 | `prompts.py:137` | report contract per kind | `stage.report_contract`, which already exists as a field |
 | `monitor.py:1196`, `start.py:238` | `persona = architect if review else developer` | `stage.persona` |
 | `monitor.py:1258-1263`, `lifecycle.py:603-605`, `start.py:264` | prompt type + PR bundle per kind | `inputs` / `report_contract` |
-| `monitor.py:1071-1082`, `lifecycle.py:332,371` | changes-requested handling per kind | `on_feedback` |
+| `monitor.py:1071-1082`, `lifecycle.py:332,371` | changes-requested handling per kind | `transitions` |
 | `_without_a_pr_send_back` | PR may not send back | declared outcomes |
 
 ### 6b. Kept, but as dispatch — genuinely different execution
@@ -375,7 +385,7 @@ the measurable outcome of this section.
 | **1** ✅ | `Feedback` record + store; migrate the five writers; `answered_by` on gate pass; `waived_findings` incl. `approve_as_is` | Deadlock gone; reviewer stops re-raising dismissed findings |
 | **2** ✅ | `inputs` / `reports` / `history` declaration; delete `corrective_note` and the suppression rules; validation | Composable stages; two-report reviewers |
 | **3** ✅ | Prompt zones + roll-up | Prompt pollution fixed |
-| **4** | `on_feedback` per stage; `run_stage` dispatch (§6b); loop-editor UI for all of it | Configurable routing; zero kind checks in the orchestrator |
+| **4** | `run_stage` dispatch (§6b); loop-editor UI for the declarations | Zero kind checks in the orchestrator |
 
 Phase 1 is where the defects live. Phases 2–3 are what stop them recurring.
 
