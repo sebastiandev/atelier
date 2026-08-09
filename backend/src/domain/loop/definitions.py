@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from dataclasses import asdict, replace
+from functools import singledispatch
 from pathlib import PurePosixPath
 
 from src.domain.agents.effort import allowed_efforts
@@ -217,32 +218,76 @@ def _leads_back_to(
     return False
 
 
-def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
+@singledispatch
+def stage_shape_errors(stage: LoopStepDefinition, label: str) -> list[str]:
+    """Return the errors a stage can detect on its own, without loop context.
+
+    Preconditions: ``stage`` is a parsed stage of any kind; ``label`` names it
+    for the user. Postconditions: every message is safe to show, and none of
+    them depend on transitions, sibling stages, or run state -- those are flow
+    rules and belong to the loop validator.
+
+    Dispatches on the stage type. Both the loop validator and the standalone
+    stage validator ask this, so a shape rule is written once.
+    """
+    return _retry_errors(stage, label)
+
+
+def _retry_errors(stage: LoopStepDefinition, label: str) -> list[str]:
+    """Retry bounds, which every kind of stage carries."""
     errors: list[str] = []
-    label = f"Stage {stage.step_id!r}"
-    if not _ID.fullmatch(stage.step_id):
-        errors.append(f"{label} has an invalid id.")
-    if not stage.name.strip():
-        errors.append(f"{label} needs a name.")
-    if isinstance(stage, AgentStage):
-        if not stage.instructions.strip():
-            errors.append(f"{label} needs Markdown instructions.")
-        errors.extend(validate_agent_policy(label, stage.agent))
-    if isinstance(stage, PrStage):
-        errors.extend(validate_pr_config(label, stage.pr_config))
-    if isinstance(stage, ReviewStage) and stage.review_gate is not None:
-        # Still a rule: a gate needs somewhere to send the work back to, and
-        # only the loop's transitions know whether it has one.
-        if not stage.transitions.get(LoopOutcome.CHANGES_REQUESTED):
-            errors.append(f"{label} review gate needs a changes-requested destination.")
-        if stage.review_gate.max_passes < 1:
-            errors.append(f"{label} review gate max passes must be at least one.")
-    if isinstance(stage, CheckStage) and not stage.check_command:
-        errors.append(f"{label} needs a check command.")
     if stage.retry.max_attempts < 1:
         errors.append(f"{label} retry limit must be at least one.")
     if stage.retry.timeout_minutes < 1:
         errors.append(f"{label} timeout must be at least one minute.")
+    return errors
+
+
+@stage_shape_errors.register
+def _agent_shape_errors(stage: AgentStage, label: str) -> list[str]:
+    errors = _retry_errors(stage, label)
+    if not stage.instructions.strip():
+        errors.append(f"{label} needs Markdown instructions.")
+    errors.extend(validate_agent_policy(label, stage.agent))
+    return errors
+
+
+@stage_shape_errors.register
+def _review_shape_errors(stage: ReviewStage, label: str) -> list[str]:
+    errors = _agent_shape_errors(stage, label)
+    if stage.review_gate is not None and stage.review_gate.max_passes < 1:
+        errors.append(f"{label} review gate max passes must be at least one.")
+    return errors
+
+
+@stage_shape_errors.register
+def _pr_shape_errors(stage: PrStage, label: str) -> list[str]:
+    errors = _agent_shape_errors(stage, label)
+    errors.extend(validate_pr_config(label, stage.pr_config))
+    return errors
+
+
+@stage_shape_errors.register
+def _check_shape_errors(stage: CheckStage, label: str) -> list[str]:
+    errors = _retry_errors(stage, label)
+    if not stage.check_command:
+        errors.append(f"{label} needs a check command.")
+    return errors
+
+
+def _validate_stage(stage: LoopStepDefinition, known: set[str]) -> list[str]:
+    label = f"Stage {stage.step_id!r}"
+    errors: list[str] = []
+    if not _ID.fullmatch(stage.step_id):
+        errors.append(f"{label} has an invalid id.")
+    if not stage.name.strip():
+        errors.append(f"{label} needs a name.")
+    errors.extend(stage_shape_errors(stage, label))
+    if isinstance(stage, ReviewStage) and stage.review_gate is not None:
+        # A flow rule, not a shape one: a gate needs somewhere to send the work
+        # back to, and only the loop's transitions know whether it has one.
+        if not stage.transitions.get(LoopOutcome.CHANGES_REQUESTED):
+            errors.append(f"{label} review gate needs a changes-requested destination.")
 
     for context in stage.inputs:
         if context.kind == LoopContextKind.PREVIOUS_REPORT:

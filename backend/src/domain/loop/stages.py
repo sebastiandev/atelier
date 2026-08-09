@@ -7,13 +7,9 @@ import json
 import re
 from dataclasses import asdict, replace
 
-from src.domain.loop.definitions import validate_agent_policy, validate_pr_config
+from src.domain.loop.definitions import stage_shape_errors
 from src.domain.loop.dtos import (
-    AgentStage,
-    CheckStage,
     LoopStepDefinition,
-    LoopStepKind,
-    PrStage,
     StageDefinition,
     StageDefinitionRef,
     StageDefinitionScope,
@@ -21,11 +17,6 @@ from src.domain.loop.dtos import (
 )
 
 _ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-_AGENT_KINDS = {
-    LoopStepKind.AGENT_TASK,
-    LoopStepKind.AGENT_REVIEW,
-    LoopStepKind.PR,
-}
 
 
 class StageDefinitionNotFound(ValueError):
@@ -81,16 +72,7 @@ def validate_stage_definition(definition: StageDefinition) -> tuple[str, ...]:
         errors.append("At least one outcome is required.")
     if len(set(definition.outcomes)) != len(definition.outcomes):
         errors.append("Stage outcomes must be unique.")
-    if isinstance(stage, AgentStage):
-        if not stage.instructions.strip():
-            errors.append("Agent stages need Markdown instructions.")
-        errors.extend(validate_agent_policy("Stage", stage.agent))
-    if isinstance(stage, CheckStage) and not stage.check_command:
-        errors.append("Deterministic checks need a command.")
-    if isinstance(stage, PrStage):
-        errors.extend(validate_pr_config("Stage", stage.pr_config))
-    if stage.retry.max_attempts < 1 or stage.retry.timeout_minutes < 1:
-        errors.append("Retry attempts and timeout must be positive.")
+    errors.extend(stage_shape_errors(stage, "Stage"))
     return tuple(dict.fromkeys(errors))
 
 
