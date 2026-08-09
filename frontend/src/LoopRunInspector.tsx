@@ -182,6 +182,9 @@ export function LoopRunInspector({
           <InspectorField label={`Inputs · ${(selectedDefinition?.inputs.length ?? 0) + (selectedBrief?.context.length ?? 0)} refs`}>
             <ContextRows definition={selectedDefinition} run={selectedRunStage} workContext={selectedBrief?.context ?? []} />
           </InspectorField>
+          <InspectorField label={`Reports · ${selectedDefinition?.reports?.length ?? 0} declared`}>
+            <ReportRows definition={selectedDefinition} stages={stages} />
+          </InspectorField>
           {selectedDefinition?.kind === "deterministic_check" && (
             <InspectorField label="Check">
               <div className="run-loop-inspector-lines">
@@ -225,6 +228,49 @@ export function LoopRunInspector({
 
 function InspectorField({ label, children }: { label: string; children: React.ReactNode }) {
   return <section className="run-loop-inspector-field"><header>{label}</header>{children}</section>;
+}
+
+function ReportRows({
+  definition,
+  stages,
+}: {
+  definition: LoopStepDefinition | null | undefined;
+  stages: PlanLoopStageRun[];
+}) {
+  const declared = definition?.reports ?? [];
+  const history = definition?.history ?? "none";
+  if (declared.length === 0 && history === "none") {
+    return <span className="dim">No reports or run history declared.</span>;
+  }
+  // A report resolves when the named stage has actually reported on this run.
+  // `previous` names whichever stage reported last, so it resolves as soon as
+  // anything has.
+  const reported = new Set(
+    stages.filter((stage) => (stage.reports ?? []).length > 0).map((stage) => stage.id),
+  );
+  const anyReported = reported.size > 0;
+  return (
+    <div className="run-loop-inspector-context">
+      {declared.map((report, index) => {
+        const resolved = report.from === "previous" ? anyReported : reported.has(report.from);
+        return (
+          <span className={!resolved && report.required ? "warn" : ""} key={`${report.from}-${index}`}>
+            <span>{report.from}</span>
+            <em>
+              {report.required ? "required" : "optional"}
+              {resolved ? " · resolved" : " · not reported yet"}
+            </em>
+          </span>
+        );
+      })}
+      {history !== "none" && (
+        <span>
+          <span>run history</span>
+          <em>{history}</em>
+        </span>
+      )}
+    </div>
+  );
 }
 
 function ContextRows({

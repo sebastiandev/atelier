@@ -859,10 +859,28 @@ export type PlanArtifactRun = {
   waived_findings_count?: number;
   /** Findings the user chose not to act on, run-wide. */
   waived_findings?: string[];
+  /** Every request for changes on this run, open and answered, oldest first. */
+  feedback?: LoopFeedbackRecord[];
   loop_pass_number?: number;
   loop_passes?: Array<Record<string, unknown>>;
   pr?: PrLifecycle | null;
   pr_comments?: PrComment[];
+};
+
+/** One durable request for changes on a run, from any source.
+ *  `open` is still in force; `answered` is history. */
+export type LoopFeedbackRecord = {
+  id: string;
+  created_at: string;
+  answered_at: string;
+  pass_number: number;
+  source: "approval" | "review" | "pr_comment" | "pr_general" | "retry" | string;
+  note: string;
+  scope: "open" | "attempt" | string;
+  state: "open" | "answered" | string;
+  answered_by: string;
+  reason: string;
+  items: Array<Record<string, unknown>>;
 };
 
 export type WorkLoopRun = {
@@ -900,6 +918,8 @@ export type WorkLoopRun = {
   waived_findings_count?: number;
   /** Findings the user chose not to act on, run-wide. */
   waived_findings?: string[];
+  /** Every request for changes on this run, open and answered, oldest first. */
+  feedback?: LoopFeedbackRecord[];
   pass_number?: number;
   passes?: Array<Record<string, unknown>>;
   pr?: PrLifecycle | null;

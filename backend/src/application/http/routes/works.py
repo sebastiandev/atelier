@@ -32,6 +32,7 @@ from src.application.http.schemas import (
     HandoffSummary,
     LinkPlanArtifactTrackingRequest,
     LoopBriefSchema,
+    LoopFeedbackRecordSchema,
     MoveWorkRequest,
     NewHandoffRequest,
     NewWorkRequest,
@@ -3412,6 +3413,7 @@ def _to_plan_run(run: PlanArtifactRun) -> PlanArtifactRunResponse:
         loop_review_gate=run.loop_review_gate,
         waived_findings_count=run.waived_findings_count,
         waived_findings=list(run.waived_findings),
+        feedback=[LoopFeedbackRecordSchema(**record) for record in run.feedback],
         loop_pass_number=run.loop_pass_number,
         loop_passes=run.loop_passes,
         pr=run.pr,
@@ -3511,6 +3513,7 @@ def _to_work_loop_run(record: LoopRunRecord) -> WorkLoopRunResponse:
         ),
         waived_findings_count=len(loop_feedback.dismissed(loop)),
         waived_findings=loop_feedback.dismissed(loop),
+        feedback=[LoopFeedbackRecordSchema(**record) for record in loop_feedback.records(loop)],
         pass_number=max(1, loop_actions.int_or_default(loop.get("pass_number"), 1)),
         passes=[dict(item) for item in loop.get("passes", []) if isinstance(item, dict)]
         if isinstance(loop.get("passes"), list)

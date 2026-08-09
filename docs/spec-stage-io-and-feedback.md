@@ -349,7 +349,7 @@ three groups.
 
 | Site | Today | Replaced by |
 |---|---|---|
-| `prompts.py:137` | report contract per kind | `stage.report_contract`, which already exists as a field |
+| `prompts.py:137` | report contract per kind | ~~`stage.report_contract`~~ → the stage type, via `prompts.prompt_for` |
 | `monitor.py:1196`, `start.py:238` | `persona = architect if review else developer` | `stage.persona` |
 | `monitor.py:1258-1263`, `lifecycle.py:603-605`, `start.py:264` | prompt type + PR bundle per kind | `inputs` / `report_contract` |
 | `monitor.py:1071-1082`, `lifecycle.py:332,371` | changes-requested handling per kind | `transitions` |
@@ -385,7 +385,7 @@ the measurable outcome of this section.
 | **1** ✅ | `Feedback` record + store; migrate the five writers; `answered_by` on gate pass; `waived_findings` incl. `approve_as_is` | Deadlock gone; reviewer stops re-raising dismissed findings |
 | **2** ✅ | `inputs` / `reports` / `history` declaration; delete `corrective_note` and the suppression rules; validation | Composable stages; two-report reviewers |
 | **3** ✅ | Prompt zones + roll-up | Prompt pollution fixed |
-| **4** | `run_stage` dispatch (§6b); loop-editor UI for the declarations | Zero kind checks in the orchestrator |
+| **4** ✅ | `run_stage` dispatch (§6b); loop-editor UI for the declarations | Zero kind checks in the orchestrator |
 
 Phase 1 is where the defects live. Phases 2–3 are what stop them recurring.
 
@@ -433,9 +433,31 @@ when empty: its presence is what marks the stage as stating its own inputs.
 
 §3b's "cannot run first" rule is reachability, not list order. A loop is cyclic,
 so the implementation reading the review that sent it back is both legal and the
-main reason to name a stage instead of using `previous`. The `context` field is not yet renamed to `inputs`; that is a
-mechanical rename of ~90 call sites, deliberately left as its own change so it
-does not obscure this one.
+main reason to name a stage instead of using `previous`.
+
+**Phase 4 landed.** `monitor.py` and `lifecycle.py` contain zero `stage.kind`
+checks, which is §6b's measurable outcome. Three things differ from the draft:
+
+- **`report_contract` was deleted, not used.** §6a named it as the replacement
+  for the per-kind prompt branch, but it was never independent of the kind: a
+  review always had the review contract, a PR stage the PR one, everything else
+  generic. It was a second, hand-maintained copy of what the stage type already
+  says. `prompts.prompt_for` is a `singledispatch` over the type instead. Old
+  `loop.yaml` files that still store the key read fine; it is ignored.
+- **`persona` is a property, not a field.** §6a listed `stage.persona` as the
+  replacement for `architect if review else developer`. As a dataclass field it
+  fed the revision hash and no codec wrote it, so it read as a setting that does
+  not stick. It was never configurable, and it says so now.
+- **`run_stage` was not built.** §6b prescribed
+  `run_stage(AgentStage | CheckStage | ApprovalStage | PrStage, ...)`. Four of
+  the five listed sites became properties on the stage class or a dispatched
+  function, which is what got the count to zero. The fifth — the
+  enter-next-stage chain in `monitor.py` — is `async` and threads seventeen
+  arguments; dispatching it would mean inventing a context object to carry them,
+  and three cases in a row read better. Deliberate, not missed.
+
+The `context` field was renamed to `inputs` in its own change; both keys are
+accepted on read, only `inputs` is written.
 
 ## 8. Decisions
 

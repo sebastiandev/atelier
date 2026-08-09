@@ -703,6 +703,7 @@ function workLoopRunData(run: WorkLoopRun): RunSurfaceData {
     workspacePath: run.workspace_path,
     brief: run.brief ?? null,
     reviewGate: run.review_gate ?? null,
+    feedback: run.feedback ?? [],
     waivedFindingsCount: run.waived_findings_count ?? 0,
     waivedFindings: run.waived_findings ?? [],
     runKind: run.run_kind ?? "initial",

@@ -681,6 +681,28 @@ class LoopReviewDecisionResponse(BaseModel):
     instruction: str = ""
 
 
+class LoopFeedbackRecordSchema(BaseModel):
+    """One durable request for changes on a run, and whether it was answered.
+
+    The single record every source writes -- a user approval, a review, a PR
+    comment, a retry note. ``state`` is what a reader acts on: ``open`` is
+    still in force, ``answered`` is history. Every field has a default so a
+    run written before a given key existed still deserializes.
+    """
+
+    id: str = ""
+    created_at: str = ""
+    answered_at: str = ""
+    pass_number: int = 0
+    source: str = ""
+    note: str = ""
+    scope: str = "open"
+    state: str = "open"
+    answered_by: str = ""
+    reason: str = ""
+    items: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class PlanLoopStageReportResponse(BaseModel):
     outcome: LoopOutcome
     pass_number: int = 1
@@ -766,6 +788,7 @@ class PlanArtifactRunResponse(BaseModel):
     loop_review_gate: dict[str, Any] | None = None
     waived_findings_count: int = 0
     waived_findings: list[str] = Field(default_factory=list)
+    feedback: list[LoopFeedbackRecordSchema] = Field(default_factory=list)
     loop_pass_number: int = 1
     loop_passes: list[dict[str, Any]] = Field(default_factory=list)
     pr: dict[str, Any] | None = None
@@ -996,6 +1019,7 @@ class WorkLoopRunResponse(BaseModel):
     review_gate: dict[str, Any] | None = None
     waived_findings_count: int = 0
     waived_findings: list[str] = Field(default_factory=list)
+    feedback: list[LoopFeedbackRecordSchema] = Field(default_factory=list)
     pass_number: int = 1
     passes: list[dict[str, Any]] = Field(default_factory=list)
     pr: dict[str, Any] | None = None

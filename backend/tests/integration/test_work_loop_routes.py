@@ -1318,6 +1318,28 @@ def test_human_review_gate_approve_as_is_completes_review(
     assert awaiting["waived_findings"] == ["This is acceptable for this release."]
 
 
+def test_the_run_surface_carries_every_feedback_record_and_its_state(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """The run view shows what was asked for and whether it still stands, so
+    the records reach the wire with their state rather than only the count."""
+    started = _start_run(app_client, tmp_path)
+    _append_stage_report(app_client, _first_agent_slug(started), "pass", [])
+    _wait_for_status(app_client, "awaiting_approval")
+
+    returned = app_client.post(
+        "/api/works/WRK-001/runs/run-001/request-changes",
+        json={"note": "Drop the SELECT FOR UPDATE."},
+    )
+
+    assert returned.status_code == 200, returned.text
+    records = returned.json()["feedback"]
+    assert [(item["source"], item["note"], item["state"]) for item in records] == [
+        ("approval", "Drop the SELECT FOR UPDATE.", "open")
+    ]
+
+
 def test_accepting_a_run_dismisses_the_findings_it_let_stand(
     app_client: TestClient,
     tmp_path: Path,

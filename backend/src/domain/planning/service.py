@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
+from src.domain.loop import feedback as loop_feedback
 from src.domain.loop.briefs import optional_brief_from_snapshot
 from src.domain.loop.dtos import (
     LoopChangedFile,
@@ -659,6 +660,7 @@ def _runs(
                 ),
                 waived_findings_count=len(_str_list(loop.get("waived_findings"))),
                 waived_findings=_str_list(loop.get("waived_findings")),
+                feedback=loop_feedback.records(loop),
                 loop_pass_number=max(1, _int_or_default(loop.get("pass_number"), 1)),
                 loop_passes=[
                     dict(row)

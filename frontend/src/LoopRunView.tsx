@@ -20,6 +20,7 @@ import {
   createChat,
   listAgents,
   openAgentInConsole,
+  LoopFeedbackRecord,
 } from "./api";
 import { ChatTile } from "./Chat";
 import { CreatePrDialog } from "./CreatePrDialog";
@@ -96,6 +97,7 @@ export type RunSurfaceData = {
   reviewGate: LoopReviewGateState | null;
   waivedFindingsCount: number;
   waivedFindings: string[];
+  feedback: LoopFeedbackRecord[];
 };
 
 type RunStageOccurrence = PlanLoopStageRun & {
@@ -543,6 +545,7 @@ function RunSurfaceContent({
           </div>
         </div>
 
+        <RunFeedback data={data} />
         <DismissedFindings data={data} />
         <RunActions
           agentStage={agentStage}
@@ -1384,6 +1387,60 @@ function FollowUpChooser({
   );
 }
 
+const FEEDBACK_SOURCE_LABELS: Record<string, string> = {
+  approval: "you, at approval",
+  review: "the review stage",
+  pr_comment: "a PR comment",
+  pr_general: "PR feedback",
+  retry: "you, on retry",
+};
+
+/** Every request for changes on the run: what is still in force, and what was settled. */
+function RunFeedback({ data }: { data: RunSurfaceData }) {
+  // Attempt-scoped records ended with the attempt that carried them; they were
+  // never a standing instruction, so listing them alongside the run's open
+  // requests would overstate what is outstanding.
+  const records = data.feedback.filter((record) => record.scope !== "attempt");
+  if (records.length === 0) return null;
+  const open = records.filter((record) => record.state !== "answered");
+  const answered = records.filter((record) => record.state === "answered");
+  return (
+    <section className="run-feedback">
+      <header>
+        <strong>Requested changes</strong>
+        <span className="tag">{open.length} open</span>
+        {answered.length > 0 && <small>{answered.length} answered</small>}
+      </header>
+      <ul>
+        {[...open].reverse().map((record) => (
+          <RunFeedbackRow key={record.id} record={record} />
+        ))}
+        {[...answered].reverse().map((record) => (
+          <RunFeedbackRow key={record.id} record={record} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function RunFeedbackRow({ record }: { record: LoopFeedbackRecord }) {
+  const answered = record.state === "answered";
+  const source = FEEDBACK_SOURCE_LABELS[record.source] ?? record.source;
+  const body =
+    record.note ||
+    record.items.map((item) => stringValue(item.body)).filter(Boolean).join(" · ");
+  return (
+    <li className={answered ? "answered" : ""}>
+      <span className={`tag ${answered ? "" : "warn"}`}>{answered ? "answered" : "open"}</span>
+      <span className="body">{body || "(no text)"}</span>
+      <em>
+        pass {record.pass_number} · from {source}
+        {answered && record.answered_by ? ` · answered by ${record.answered_by}` : ""}
+      </em>
+    </li>
+  );
+}
+
 /** Remind the user what they already let stand before they approve again. */
 function DismissedFindings({ data }: { data: RunSurfaceData }) {
   const pending = ["completed", "awaiting_approval"].includes(data.status) && !data.accepted;
@@ -1565,6 +1622,7 @@ export function planningRunData(artifact: PlanArtifact, run: PlanArtifactRun): R
     runKind: "initial",
     seedLabel: "",
     reviewGate: run.loop_review_gate ?? null,
+    feedback: run.feedback ?? [],
     waivedFindingsCount: run.waived_findings_count ?? 0,
     waivedFindings: run.waived_findings ?? [],
   };
