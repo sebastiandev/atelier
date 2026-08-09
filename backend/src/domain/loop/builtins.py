@@ -164,6 +164,10 @@ def _implementation(pass_to: str) -> LoopStepDefinition:
             LoopContextReference(LoopContextKind.TARGET, required=True),
             LoopContextReference(LoopContextKind.PLAN_INDEX),
             LoopContextReference(LoopContextKind.FEEDBACK),
+            # Not to stop it raising them -- an implementer reports no findings
+            # -- but to stop it fixing something the user deliberately let
+            # stand and putting unwanted changes in the diff.
+            LoopContextReference(LoopContextKind.WAIVED_FINDINGS),
         ),
         # The stage a review sends back to has to be shown what it was sent
         # back for. This used to arrive as an injected corrective note; it is

@@ -155,7 +155,7 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
     happened = f"{history}{previous}{changed_files}{workspace}"
     already_happened = f"\n## What has already happened{happened}" if happened else ""
     waived = (
-        "\n\n## Already dismissed by the user -- do not raise again\n"
+        "\n\n## Already dismissed by the user -- leave these alone\n"
         + "\n".join(f"- {item}" for item in value.waived_findings)
         if value.waived_findings
         else ""

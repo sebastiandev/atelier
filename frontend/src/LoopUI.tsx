@@ -3,6 +3,8 @@ import { type CSSProperties, type ChangeEvent, useEffect, useRef, useState } fro
 import {
   type LoopContextKind,
   type LoopContextReference,
+  LoopHistoryLevel,
+  LoopReportReference,
   type LoopDefinition,
   type LoopImportPreview,
   type LoopOutcome,
@@ -94,7 +96,8 @@ const CONTEXT_KINDS: Array<{
   { kind: "artifact_dependencies", label: "Dependencies", hint: "Accepted dependency summaries" },
   { kind: "workspace_diff", label: "Workspace diff", hint: "Current run-workspace diff" },
   { kind: "changed_files", label: "Changed files", hint: "Current changed-file references" },
-  { kind: "previous_report", label: "Previous report", hint: "Structured output from a stage" },
+  { kind: "feedback", label: "Feedback", hint: "The user's outstanding requests" },
+  { kind: "waived_findings", label: "Dismissed findings", hint: "Findings the user let stand" },
   { kind: "files", label: "Files / globs", hint: "Repository-relative paths" },
   { kind: "folder", label: "Folder", hint: "Repository-relative folder" },
   { kind: "note", label: "Note", hint: "Inline context included in every run" },
@@ -748,6 +751,69 @@ function EditableRuntimeInputs({ stage, onPatch }: {
   </section>;
 }
 
+const HISTORY_LEVELS: Array<{ value: LoopHistoryLevel; label: string; hint: string }> = [
+  { value: "none", label: "None", hint: "the stage sees only what it declares" },
+  { value: "summaries", label: "Summaries", hint: "one line per stage per pass" },
+  { value: "full", label: "Full", hint: "every report of every pass" },
+];
+
+/** Which earlier reports a stage reads, and how much of the run it is told. */
+function StageReportsPanel({ stage, stages, onPatch }: {
+  stage: LoopStepDefinition;
+  stages: LoopStepDefinition[];
+  onPatch: (patch: Partial<LoopStepDefinition>) => void;
+}) {
+  const reports = stage.reports ?? [];
+  const others = stages.filter((row) => row.id !== stage.id);
+  const history = stage.history ?? "none";
+  function patch(index: number, next: LoopReportReference) {
+    onPatch({ reports: reports.map((item, at) => (at === index ? next : item)) });
+  }
+  return (
+    <>
+      <InspectorField label="Reports" hint="an earlier stage's account, labelled">
+        <div className="loop-context-list">
+          {reports.map((item, index) => (
+            <div className="loop-context-row" key={`${item.from}:${index}`}>
+              <span className="loop-context-icon"><ReturnIcon size={13} /></span>
+              <select className="loop-report-from" value={item.from} onChange={(event) => patch(index, { ...item, from: event.target.value })}>
+                <option value="previous">whichever ran last</option>
+                {others.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+              </select>
+              <button
+                type="button"
+                className={item.required ? "required active" : "required"}
+                onClick={() => patch(index, { ...item, required: !item.required })}
+              >{item.required ? "required" : "optional"}</button>
+              <button
+                className="btn ghost icon sm"
+                onClick={() => onPatch({ reports: reports.filter((_, at) => at !== index) })}
+                aria-label="Remove report"
+              >×</button>
+            </div>
+          ))}
+          {reports.length === 0 && <div className="loop-inspector-note">No reports declared yet.</div>}
+        </div>
+        <div className="loop-add-context">
+          <button onClick={() => onPatch({ reports: [...reports, { from: "previous", required: true }] })}>+ Report</button>
+        </div>
+      </InspectorField>
+      <InspectorField label="Run history" hint="what happened before this pass">
+        <select
+          className="loop-history-select"
+          value={history}
+          onChange={(event) => onPatch({ history: event.target.value as LoopHistoryLevel })}
+        >
+          {HISTORY_LEVELS.map((level) => <option key={level.value} value={level.value}>{level.label} — {level.hint}</option>)}
+        </select>
+        <div className="loop-inspector-note">
+          A stage is rebuilt from its declaration every pass, so without a report or history it cannot tell a first attempt from a fourth.
+        </div>
+      </InspectorField>
+    </>
+  );
+}
+
 function StageContextSections({ stage, stages, rootPath, editableInputs, showBundled, onRootPath, onPatch }: {
   stage: LoopStepDefinition;
   stages: LoopStepDefinition[];
@@ -769,23 +835,24 @@ function StageContextSections({ stage, stages, rootPath, editableInputs, showBun
         <div className="stage-runtime-list">
           {runtimeInputs.map((item, index) => {
             const meta = CONTEXT_KINDS.find((kind) => kind.kind === item.kind);
-            const prReport = stage.kind === "pr" && item.kind === "previous_report";
-            return <div className="stage-runtime-row" key={`${item.kind}:${index}`}><span className="stage-runtime-glyph">⇣</span><strong>{prReport ? "run report" : (meta?.label ?? item.kind).toLowerCase()}</strong><span>{item.required ? "required" : "optional"}{prReport ? " · feeds the automatic description" : ""}</span><em className="tag info">injected</em></div>;
+            return <div className="stage-runtime-row" key={`${item.kind}:${index}`}><span className="stage-runtime-glyph">⇣</span><strong>{(meta?.label ?? item.kind).toLowerCase()}</strong><span>{item.required ? "required" : "optional"}</span><em className="tag info">injected</em></div>;
           })}
           {runtimeInputs.length === 0 && <div className="stage-editor-empty">No run-time inputs declared.</div>}
         </div>
         <small className="stage-editor-footnote">Bound automatically when a loop links this stage. Adjust them per loop in the loop editor.</small>
       </section>
     )}
+    {editableInputs && stage.kind !== "user_approval" && stage.kind !== "deterministic_check" && (
+      <StageReportsPanel stage={stage} stages={stages} onPatch={onPatch} />
+    )}
     {showBundled && <ContextSubsetPanel
       stage={stage}
-      stages={stages}
       rootPath={rootPath}
       kinds={BUNDLED_CONTEXT_KINDS}
-      label="Bundled context"
+      label="Bundled inputs"
       hint="travels with the stage into every loop"
-      addLabel="Add bundled context"
-      footnote="Bundled references travel with the stage; injected run-time inputs remain loop-owned."
+      addLabel="Add bundled input"
+      footnote="Bundled inputs travel with the stage; run-time inputs remain loop-owned."
       compact
       onRootPath={onRootPath}
       onPatch={onPatch}
@@ -793,9 +860,8 @@ function StageContextSections({ stage, stages, rootPath, editableInputs, showBun
   </>;
 }
 
-function ContextSubsetPanel({ stage, stages, rootPath, kinds, label, hint, addLabel, footnote, compact = false, subsetFirst = false, onRootPath, onPatch }: {
+function ContextSubsetPanel({ stage, rootPath, kinds, label, hint, addLabel, footnote, compact = false, subsetFirst = false, onRootPath, onPatch }: {
   stage: LoopStepDefinition;
-  stages: LoopStepDefinition[];
   rootPath: string | null;
   kinds: typeof CONTEXT_KINDS;
   label: string;
@@ -811,7 +877,6 @@ function ContextSubsetPanel({ stage, stages, rootPath, kinds, label, hint, addLa
   const subset = stage.inputs.filter((item) => allowed.has(item.kind));
   return <ContextPanel
     stage={{ ...stage, inputs: subset }}
-    stages={stages}
     rootPath={rootPath}
     kinds={kinds}
     label={label}
@@ -1273,7 +1338,7 @@ function LoopEditorScreen({
         <main className="loop-timeline themed-scrollbar">
           <div className="loop-contract-note">
             <LockIcon size={12} />
-            <span>The immutable execution, reporting, and safety contract is appended by Atelier. You author <b>instructions</b> and <b>context</b>, never provider prompts.</span>
+            <span>The immutable execution, reporting, and safety contract is appended by Atelier. You author <b>instructions</b> and <b>inputs</b>, never provider prompts.</span>
           </div>
           <div className="loop-identity-fields">
             <label className="loop-name-field">
@@ -1416,7 +1481,7 @@ function StageTimelineCard({
           <span className="loop-stage-card-meta">
             {stage.agent && <><i>{stage.agent.permissions ?? "inherit"}</i><i>{stage.agent.session} session</i></>}
             {stage.note_required != null && <i>brief {stage.note_required ? "required" : "optional"}</i>}
-            {stage.inputs.length > 0 && <i>{stage.inputs.length} context</i>}
+            {stage.inputs.length > 0 && <i>{stage.inputs.length} input{stage.inputs.length === 1 ? "" : "s"}</i>}
             {stage.kind === "user_approval" && <i>waits for you</i>}
           </span>
           <span className="loop-stage-card-actions" onClick={(event) => event.stopPropagation()}>
@@ -1469,12 +1534,12 @@ function StageInspector({
   const approval = stage.kind === "user_approval";
   const check = stage.kind === "deterministic_check";
   const tabs: Array<{ id: InspectorTab; label: string }> = approval
-    ? [{ id: "instructions", label: "Decision" }, { id: "context", label: "Context" }]
+    ? [{ id: "instructions", label: "Decision" }, { id: "context", label: "Inputs" }]
     : check
-      ? [{ id: "instructions", label: "Check" }, { id: "context", label: "Context" }, { id: "outcome", label: "Outcome" }]
+      ? [{ id: "instructions", label: "Check" }, { id: "context", label: "Inputs" }, { id: "outcome", label: "Outcome" }]
     : [
         { id: "instructions", label: "Instructions" },
-        { id: "context", label: "Context" },
+        { id: "context", label: "Inputs" },
         { id: "agent", label: "Agent" },
         { id: "outcome", label: "Outcome" },
       ];
@@ -1498,7 +1563,12 @@ function StageInspector({
         {stage.stage_ref && <div className="stage-linked-banner"><span><CopyIcon size={12} /><strong>Linked · {stage.stage_ref.definition_id}</strong><em>{source?.scope === "builtin" ? "built-in" : "library"}</em></span><small>rev {stage.stage_ref.revision} · edits below are loop-local overrides</small><div>{onOpenSource && <button onClick={onOpenSource}>Open stage</button>}{onDetach && <button onClick={onDetach}>Detach</button>}</div></div>}
         {!stage.stage_ref && onSaveToLibrary && <div className="stage-linked-banner local"><span><strong>Local to this loop</strong><em>unsaved</em></span><small>Save it once to reuse it in other loops.</small><div><button onClick={onSaveToLibrary}>Save to library</button></div></div>}
         {tab === "instructions" && <InstructionsPanel stage={stage} preview={preview} onPreview={onPreview} onPatch={onPatch} />}
-        {tab === "context" && <ContextPanel stage={stage} stages={stages} rootPath={rootPath} onRootPath={onRootPath} onPatch={onPatch} />}
+        {tab === "context" && <>
+          <ContextPanel stage={stage} rootPath={rootPath} onRootPath={onRootPath} onPatch={onPatch} />
+          {stage.kind !== "user_approval" && stage.kind !== "deterministic_check" && (
+            <StageReportsPanel stage={stage} stages={stages} onPatch={onPatch} />
+          )}
+        </>}
         {tab === "agent" && <AgentPanel stage={stage} stages={stages} onPatch={onPatch} />}
         {tab === "outcome" && <OutcomePanel stage={stage} stages={stages} onPatch={onPatch} />}
         {!approval && (
@@ -1565,9 +1635,8 @@ function InstructionsPanel({ stage, preview, onPreview, onPatch }: { stage: Loop
   );
 }
 
-function ContextPanel({ stage, stages, rootPath, kinds = CONTEXT_KINDS, label = "Context references", hint = "references, not copies", addLabel = "Add context", footnote, compact = false, showSafetyNote = true, onRootPath, onPatch }: {
+function ContextPanel({ stage, rootPath, kinds = CONTEXT_KINDS, label = "Inputs", hint = "references, not copies", addLabel = "Add input", footnote, compact = false, showSafetyNote = true, onRootPath, onPatch }: {
   stage: LoopStepDefinition;
-  stages: LoopStepDefinition[];
   rootPath?: string | null;
   kinds?: typeof CONTEXT_KINDS;
   label?: string;
@@ -1630,7 +1699,6 @@ function ContextPanel({ stage, stages, rootPath, kinds = CONTEXT_KINDS, label = 
                       </button>
                     </div>
                   )}
-                  {item.kind === "previous_report" && <select value={item.step ?? ""} onChange={(event) => patch(index, { ...item, step: event.target.value || null })}><option value="">Choose stage…</option>{stages.filter((row) => row.id !== stage.id).map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}</select>}
                   {(item.kind === "note" || item.kind === "shared_context") && <input value={item.ref ?? ""} onChange={(event) => patch(index, { ...item, ref: event.target.value || null })} placeholder={item.kind === "note" ? "Context note" : "Shared context reference"} />}
                 </span>
                 <button className={"loop-required-toggle" + (item.required ? " active" : "")} onClick={() => patch(index, { ...item, required: !item.required })}>{item.required ? "required" : "optional"}</button>
@@ -1638,7 +1706,7 @@ function ContextPanel({ stage, stages, rootPath, kinds = CONTEXT_KINDS, label = 
               </div>
             );
           })}
-          {inputs.length === 0 && !compact && <div className="loop-inspector-note">No context references yet.</div>}
+          {inputs.length === 0 && !compact && <div className="loop-inspector-note">No inputs declared yet.</div>}
         </div>
         {compact && <div className="loop-add-context stage-context-add">{kinds.filter((item) => item.kind !== "shared_context").map((item) => <button key={item.kind} onClick={() => add(item.kind)}>{item.kind === "files" ? "@" : item.kind === "folder" ? <FolderIcon size={10} /> : <EditIcon size={10} />} {item.kind === "files" ? "File" : item.label}</button>)}</div>}
       </InspectorField>
@@ -1648,7 +1716,7 @@ function ContextPanel({ stage, stages, rootPath, kinds = CONTEXT_KINDS, label = 
       {pickerError && <div className="loop-inspector-note"><AlertIcon size={13} /> {pickerError}</div>}
       {rootPath && <div className="loop-inspector-note"><FolderIcon size={13} /> Paths are relative to <code>{rootPath}</code>.</div>}
       {footnote && !compact && <small className="stage-editor-footnote">{footnote}</small>}
-      {showSafetyNote && <div className="loop-inspector-note"><LockIcon size={13} /> Required context blocks the stage when unresolved. Paths cannot escape the working root.</div>}
+      {showSafetyNote && <div className="loop-inspector-note"><LockIcon size={13} /> A required input blocks the stage when unresolved. Paths cannot escape the working root.</div>}
       {choosingRoot && (
         <FolderPickerDialog
           mode="folder"
@@ -2020,11 +2088,18 @@ function stageFromPreset(preset: StagePreset, existing: LoopStepDefinition[]): L
     inputs: approval ? [] : pr ? [
       { kind: "workspace_diff", required: true, paths: [], step: null, ref: null },
       { kind: "changed_files", required: true, paths: [], step: null, ref: null },
-      { kind: "previous_report", required: true, paths: [], step: null, ref: null },
     ] : review ? [
       { kind: "target", required: true, paths: [], step: null, ref: null },
       { kind: "workspace_diff", required: true, paths: [], step: null, ref: null },
-    ] : [{ kind: "target", required: true, paths: [], step: null, ref: null }],
+      { kind: "waived_findings", required: false, paths: [], step: null, ref: null },
+      { kind: "feedback", required: false, paths: [], step: null, ref: null },
+    ] : [
+      { kind: "target", required: true, paths: [], step: null, ref: null },
+      { kind: "feedback", required: false, paths: [], step: null, ref: null },
+      { kind: "waived_findings", required: false, paths: [], step: null, ref: null },
+    ],
+    reports: approval || check ? [] : [{ from: "previous", required: true }],
+    history: approval || check ? "none" : "summaries",
     agent: approval || check ? null : { session: "fresh", permissions: review ? "read" : pr ? "write" : null, provider: null, model: null, effort: null, fast: null, approved_command_prefixes: pr ? ["git add", "git commit"] : null },
     report_contract: review ? "review" : check ? "check" : pr ? "pr" : "implementation",
     retry: { max_attempts: check ? 1 : 2, timeout_minutes: check ? 10 : 20 },
@@ -2211,7 +2286,7 @@ function contextIcon(kind: LoopContextKind) {
   if (kind === "workspace_diff" || kind === "artifact_dependencies") return <BranchIcon size={13} />;
   if (kind === "folder") return <FolderIcon size={13} />;
   if (kind === "note") return <EditIcon size={13} />;
-  if (kind === "previous_report") return <ReturnIcon size={13} />;
+  if (kind === "feedback") return <ReturnIcon size={13} />;
   if (kind === "target" || kind === "plan_index" || kind === "files" || kind === "changed_files") return <DocIcon size={13} />;
   return <SlidersIcon size={13} />;
 }

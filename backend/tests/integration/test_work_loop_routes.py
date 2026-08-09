@@ -1197,9 +1197,17 @@ def test_human_review_gate_pauses_and_sends_only_enforced_findings(
         )
         if event.get("type") == "user_input"
     ]
-    assert "Fix the race." in inputs[-1]
-    assert "Rename the fixture." not in inputs[-1]
-    assert "Use the shared lock helper." in inputs[-1]
+    # The contract is that a waived finding never reads as work to do -- not
+    # that it is absent. The implementation declares the dismissed list so it
+    # does not go and fix something the user deliberately let stand, so the
+    # finding appears there and nowhere above it.
+    prompt = inputs[-1]
+    dismissed_at = prompt.index("Already dismissed by the user")
+    actionable, dismissed = prompt[:dismissed_at], prompt[dismissed_at:]
+    assert "Fix the race." in actionable
+    assert "Rename the fixture." not in actionable
+    assert "Rename the fixture." in dismissed
+    assert "Use the shared lock helper." in prompt
 
 
 def test_send_back_note_survives_stopping_and_retrying_the_stage(

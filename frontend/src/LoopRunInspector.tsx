@@ -179,7 +179,7 @@ export function LoopRunInspector({
             </p>
             {selectedBrief?.note && <p className="run-loop-inspector-copy brief"><em className="tag info">brief</em>{selectedBrief.note}</p>}
           </InspectorField>
-          <InspectorField label={`Context · ${(selectedDefinition?.inputs.length ?? 0) + (selectedBrief?.context.length ?? 0)} refs`}>
+          <InspectorField label={`Inputs · ${(selectedDefinition?.inputs.length ?? 0) + (selectedBrief?.context.length ?? 0)} refs`}>
             <ContextRows definition={selectedDefinition} run={selectedRunStage} workContext={selectedBrief?.context ?? []} />
           </InspectorField>
           {selectedDefinition?.kind === "deterministic_check" && (
@@ -237,7 +237,7 @@ function ContextRows({
   workContext: NonNullable<LoopBrief["stages"][number]>["context"];
 }) {
   if ((!definition || definition.inputs.length === 0) && workContext.length === 0) {
-    return <span className="dim">No stage context configured.</span>;
+    return <span className="dim">No stage inputs declared.</span>;
   }
   return (
     <div className="run-loop-inspector-context">

@@ -12726,6 +12726,10 @@ a.pm-track-row:hover strong {
   border-radius: var(--radius-ctl);
   background: var(--bg-1);
 }
+.loop-report-from { min-width: 0; align-self: center; padding: 4px 5px; font-size: 10.5px; }
+.loop-context-row > .required { align-self: center; padding: 0; border: 0; background: transparent; color: var(--fg-4); font: 10px var(--font-mono); cursor: pointer; }
+.loop-context-row > .required.active { color: var(--accent); }
+.loop-history-select { width: 100%; padding: 5px 7px; font-size: 11px; }
 .stage-runtime-glyph { color: var(--info); font: 12px var(--font-mono); }
 .stage-runtime-row > strong { color: var(--fg-2); font: 400 11px var(--font-mono); }
 .stage-runtime-row > span:not(.stage-runtime-glyph) { overflow: hidden; color: var(--fg-4); font: 10px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
