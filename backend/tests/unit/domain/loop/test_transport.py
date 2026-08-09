@@ -275,7 +275,13 @@ def test_parse_rejects_bad_linked_from() -> None:
         "kind": "loop",
         "name": "Broken",
         "stages": [
-            {"id": "s", "name": "S", "kind": "agent_task", "linked_from": "no-at-sign"}
+            {
+                "id": "s",
+                "name": "S",
+                "kind": "agent_task",
+                "agent": {"session": "fresh", "permissions": "write"},
+                "linked_from": "no-at-sign",
+            }
         ],
     }
     with pytest.raises(TransportInvalid):

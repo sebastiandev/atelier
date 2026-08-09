@@ -301,6 +301,7 @@ def test_a_readable_history_level_is_taken_as_written() -> None:
             "id": "review",
             "name": "Review",
             "kind": "agent_review",
+            "agent": {"session": "fresh", "permissions": "read"},
             "context": [],
             "reports": [],
             "history": "full",

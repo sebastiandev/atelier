@@ -226,7 +226,13 @@ def _parse_stage(value: object) -> ImportedStage:
         for key, item in value.items()
         if key not in {"linked_from", "outcomes", "description", "forked_from"}
     }
-    stage = loop_stage_from_document(body)
+    try:
+        stage = loop_stage_from_document(body)
+    except ValueError as exc:
+        # The reader speaks `ValueError`; this layer's callers catch
+        # `TransportInvalid`, and an untranslated one leaves the import route
+        # with a 500 where it should answer 422 and say what is wrong.
+        raise TransportInvalid(f"stage {_optional_str(value.get('id')) or '?'}: {exc}") from exc
     linked_raw = value.get("linked_from")
     if linked_raw is None:
         return ImportedStage(stage=stage)

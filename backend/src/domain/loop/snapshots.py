@@ -408,8 +408,39 @@ def loop_stage_from_document(value: object) -> LoopStepDefinition:
     Postconditions: as :func:`loop_stage_from_snapshot`, or ``ValueError``
     naming what could not be read.
     """
-    history_or_raise((value if isinstance(value, dict) else {}).get("history"))
+    raw = value if isinstance(value, dict) else {}
+    history_or_raise(raw.get("history"))
+    require_declared_sections(raw)
     return loop_stage_from_snapshot(value)
+
+
+def require_declared_sections(stage: dict[str, Any]) -> None:
+    """Refuse a stage that omits the section its kind cannot work without.
+
+    Moving these fields onto the types that own them deleted three rules
+    outright -- a check cannot declare a PR config now, because the field is
+    not there to set. It did not delete these two. "A PR stage needs its
+    configuration" and "an agent stage needs an agent policy" were presence
+    checks, and a required field with a default answers them by inventing one,
+    which is worse than the rule they replaced: a `loop.yaml` missing its
+    `pr_config` used to be refused and would otherwise now be published under
+    a default title nobody chose.
+
+    Preconditions: ``stage`` is one raw stage mapping from an editable source.
+    Postconditions: ``ValueError`` naming the missing section, or nothing. The
+    pinned-snapshot reader does not call this -- a run already in flight has to
+    load whatever it was started with.
+    """
+    kind = _optional_string(stage.get("kind"))
+    if kind == LoopStepKind.PR.value and not isinstance(stage.get("pr_config"), dict):
+        raise ValueError("a Create PR stage needs pr_config")
+    agent_kinds = {
+        LoopStepKind.AGENT_TASK.value,
+        LoopStepKind.AGENT_REVIEW.value,
+        LoopStepKind.PR.value,
+    }
+    if kind in agent_kinds and not isinstance(stage.get("agent"), dict):
+        raise ValueError(f"a {kind.replace('_', ' ')} stage needs an agent policy")
 
 
 _CONTRACT_BY_KIND = {
@@ -658,6 +689,7 @@ __all__ = [
     "raw_inputs",
     "report_contract_from_raw",
     "reports_from_raw",
+    "require_declared_sections",
     "stage_overrides_from_snapshot",
     "stage_overrides_snapshot",
 ]

@@ -470,15 +470,6 @@ class LoopStepDefinition:
         """
         return False
 
-    @property
-    def retriable(self) -> bool:
-        """Whether relaunching this stage means anything.
-
-        An approval has no agent to relaunch and no command to re-run: it is
-        parked waiting for a person, so retrying it is not disabled, it is
-        meaningless.
-        """
-        return False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -491,10 +482,6 @@ class AgentStage(LoopStepDefinition):
     persona: Persona = "developer"
     """Who the agent is told it is. The kind used to stand in for this."""
 
-    @property
-    def retriable(self) -> bool:
-        """An agent stage relaunches with a fresh transcript."""
-        return True
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -534,10 +521,6 @@ class CheckStage(LoopStepDefinition):
     check_adapter: str = "command"
     check_command: tuple[str, ...] = ()
 
-    @property
-    def retriable(self) -> bool:
-        """A check re-runs its command; there is no agent to replace."""
-        return True
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -650,6 +633,9 @@ class LoopCheckResult:
 
 
 __all__ = [
+    "AgentStage",
+    "ApprovalStage",
+    "CheckStage",
     "LoopAgentPolicy",
     "LoopBrief",
     "LoopBriefAgent",
@@ -686,8 +672,11 @@ __all__ = [
     "LoopStepKind",
     "LoopStepStatus",
     "LoopTargetKind",
+    "PrStage",
+    "ReviewStage",
     "StageDefinition",
     "StageDefinitionRef",
     "StageDefinitionScope",
     "StageOverrides",
+    "TaskStage",
 ]

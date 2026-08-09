@@ -171,6 +171,11 @@ def resolve_stage_link(
             "pr_config",
         )
         if (value := getattr(overrides, field)) is not None
+        # An override may name a field the linked stage's kind does not own --
+        # a `pr_config` over a check, say. That used to be a validation
+        # message; applying it now would be a TypeError out of `replace`, so it
+        # is dropped, which is what the old rule effectively did.
+        and hasattr(base, field)
     }
     return replace(
         base,

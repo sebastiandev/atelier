@@ -50,6 +50,7 @@ from src.domain.loop.snapshots import (
     raw_inputs,
     report_contract_from_raw,
     reports_from_raw,
+    require_declared_sections,
     stage_overrides_from_snapshot,
     stage_overrides_snapshot,
 )
@@ -262,6 +263,9 @@ def _stage_from_data(
     retry_raw = value.get("retry", {})
     transitions_raw = value.get("transitions", {})
     check_raw = value.get("check", {})
+    # A `loop.yaml` is editable, so it gets the strict reading: a missing
+    # section is refused rather than silently defaulted.
+    require_declared_sections(value)
     shared: dict[str, Any] = {
         "step_id": step_id,
         "name": _required_str(value, "name"),
