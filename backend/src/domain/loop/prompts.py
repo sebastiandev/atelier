@@ -7,7 +7,13 @@ from dataclasses import dataclass
 from functools import singledispatch
 from typing import Any
 
-from src.domain.loop.dtos import AgentStage, LoopContextKind, LoopStepDefinition
+from src.domain.loop.dtos import (
+    AgentStage,
+    LoopContextKind,
+    LoopStepDefinition,
+    PrStage,
+    ReviewStage,
+)
 
 
 @dataclass(frozen=True)
@@ -63,15 +69,6 @@ class PrStagePrompt(StagePromptInput):
     """Prompt input for narrow write-capable pull-request preparation."""
 
 
-PROMPT_BY_CONTRACT: dict[str, type[StagePromptInput]] = {}
-"""Which prompt a stage gets, keyed on the contract it declares.
-
-Populated by the registrations below. Callers select through this rather than
-branching on the stage kind: what posture an agent needs and what its report
-must contain is a property of the contract, and the contract is declared.
-"""
-
-
 @singledispatch
 def build_stage_prompt(value: StagePromptInput) -> str:
     """Render the provider prompt for a typed stage input."""
@@ -118,19 +115,26 @@ def _pr_prompt(value: PrStagePrompt) -> str:
     )
 
 
-PROMPT_BY_CONTRACT.update(
-    {
-        "implementation": TaskStagePrompt,
-        "review": ReviewStagePrompt,
-        "pr": PrStagePrompt,
-        "generic": TaskStagePrompt,
-    }
-)
+@singledispatch
+def prompt_for(stage: LoopStepDefinition) -> type[StagePromptInput]:
+    """Return the prompt a stage gets.
+
+    Dispatches on what the stage *is*. It used to read a `report_contract`
+    field, which only ever held the value its kind implied and had to be
+    back-filled from that kind on read -- the type was the declaration all
+    along.
+    """
+    return TaskStagePrompt
 
 
-def prompt_type_for(stage: LoopStepDefinition) -> type[StagePromptInput]:
-    """Return the prompt a stage's declared report contract asks for."""
-    return PROMPT_BY_CONTRACT.get(stage.report_contract, TaskStagePrompt)
+@prompt_for.register
+def _review_prompt_type(stage: ReviewStage) -> type[StagePromptInput]:
+    return ReviewStagePrompt
+
+
+@prompt_for.register
+def _pr_prompt_type(stage: PrStage) -> type[StagePromptInput]:
+    return PrStagePrompt
 
 
 def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
@@ -164,7 +168,7 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         "Never use `changes_requested`: publishing is the last decision, and review "
         "findings you cannot act on are not yours to reopen. If you cannot publish, "
         "use `failed`, or `blocked_user` when only the user can unblock it."
-        if value.stage.report_contract == "pr"
+        if isinstance(value.stage, PrStage)
         else "Use `changes_requested` only from a review stage."
     )
     return (
@@ -357,13 +361,12 @@ def stage_inactivity_recovery_prompt(
 
 
 __all__ = [
-    "PROMPT_BY_CONTRACT",
     "PrStagePrompt",
     "ReviewStagePrompt",
     "StagePromptInput",
     "TaskStagePrompt",
     "build_stage_prompt",
-    "prompt_type_for",
+    "prompt_for",
     "stage_inactivity_recovery_prompt",
     "stage_report_repair_prompt",
 ]

@@ -162,7 +162,6 @@ def resolve_stage_link(
             "reports",
             "history",
             "agent",
-            "report_contract",
             "retry",
             "check_adapter",
             "check_command",

@@ -302,11 +302,6 @@ def overrides_from_drift(
         reports=effective.reports if effective.reports != base.reports else None,
         history=effective.history if effective.history != base.history else None,
         agent=_differing(effective, base, "agent"),
-        report_contract=(
-            effective.report_contract
-            if effective.report_contract != base.report_contract
-            else None
-        ),
         retry=effective.retry if effective.retry != base.retry else None,
         check_adapter=_differing(effective, base, "check_adapter"),
         check_command=_differing(effective, base, "check_command"),
@@ -321,7 +316,6 @@ def overrides_from_drift(
         overrides.reports,
         overrides.history,
         overrides.agent,
-        overrides.report_contract,
         overrides.retry,
         overrides.check_adapter,
         overrides.check_command,

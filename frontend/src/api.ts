@@ -650,7 +650,6 @@ export type LoopStepDefinition = {
   reports?: LoopReportReference[];
   history?: LoopHistoryLevel;
   agent: LoopAgentPolicy | null;
-  report_contract: string;
   retry: LoopRetryPolicy;
   transitions: Partial<Record<LoopOutcome, string | null>>;
   check_adapter: string | null;
@@ -669,7 +668,6 @@ export type StageOverrides = {
   reports?: LoopReportReference[] | null;
   history?: LoopHistoryLevel | null;
   agent?: LoopAgentPolicy | null;
-  report_contract?: string | null;
   retry?: LoopRetryPolicy | null;
   check_adapter?: string | null;
   check_command?: string[] | null;

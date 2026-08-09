@@ -1095,7 +1095,6 @@ class StageOverridesSchema(BaseModel):
     reports: list[LoopReportReferenceSchema] | None = None
     history: Literal["none", "summaries", "full"] | None = None
     agent: LoopAgentPolicySchema | None = None
-    report_contract: str | None = None
     retry: LoopRetryPolicySchema | None = None
     check_adapter: str | None = None
     check_command: list[str] | None = None
@@ -1125,7 +1124,6 @@ class LoopStepDefinitionSchema(BaseModel):
         default="none", exclude_if=lambda value: value == "none"
     )
     agent: LoopAgentPolicySchema | None = None
-    report_contract: str = "generic"
     retry: LoopRetryPolicySchema = Field(default_factory=LoopRetryPolicySchema)
     transitions: dict[LoopOutcome, str | None] = Field(default_factory=dict)
     check_adapter: str | None = None

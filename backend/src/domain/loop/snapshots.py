@@ -105,7 +105,6 @@ def _stage_snapshot(stage: LoopStepDefinition) -> dict[str, Any]:
             # the same declaration in two shapes again.
             if item.kind != LoopContextKind.PREVIOUS_REPORT
         ],
-        "report_contract": stage.report_contract,
         "retry": {
             "max_attempts": stage.retry.max_attempts,
             "timeout_minutes": stage.retry.timeout_minutes,
@@ -188,7 +187,6 @@ def _stage_from_snapshot(value: object) -> LoopStepDefinition:
         "inputs": inputs_from_raw(value, context),
         "reports": reports_from_raw(value.get("reports"), context),
         "history": history_from_raw(value.get("history")),
-        "report_contract": report_contract_from_raw(value.get("report_contract"), kind),
         "retry": LoopRetryPolicy(
             max_attempts=_integer(retry.get("max_attempts"), 2),
             timeout_minutes=_integer(retry.get("timeout_minutes"), 20),
@@ -443,27 +441,6 @@ def require_declared_sections(stage: dict[str, Any]) -> None:
         raise ValueError(f"a {kind.replace('_', ' ')} stage needs an agent policy")
 
 
-_CONTRACT_BY_KIND = {
-    LoopStepKind.AGENT_TASK: "implementation",
-    LoopStepKind.AGENT_REVIEW: "review",
-    LoopStepKind.PR: "pr",
-}
-
-
-def report_contract_from_raw(value: object, kind: LoopStepKind) -> str:
-    """Return the stage's report contract, defaulting from what it is.
-
-    The contract was always implied by the stage kind -- the prompt builder
-    picked its posture and its report rules by branching on it. Supplying the
-    implied value here makes the field say what the branch used to, so nothing
-    downstream has to ask what kind of stage it is.
-    """
-    return (
-        _optional_string(value)
-        or _CONTRACT_BY_KIND.get(kind, "generic")
-    )
-
-
 def history_or_raise(value: object) -> LoopHistoryLevel:
     """Return a stage's history level, refusing a value that is not one.
 
@@ -542,7 +519,7 @@ def _stage_ref_from_snapshot(value: object) -> StageDefinitionRef | None:
 
 def _overrides_snapshot(overrides: StageOverrides) -> dict[str, Any]:
     value: dict[str, Any] = {}
-    for key in ("name", "instructions", "report_contract", "check_adapter", "note_required"):
+    for key in ("name", "instructions", "check_adapter", "note_required"):
         item = getattr(overrides, key)
         if item is not None:
             value[key] = item
@@ -627,11 +604,6 @@ def _overrides_from_snapshot(value: object) -> StageOverrides | None:
             else None
         ),
         agent=_agent_from_snapshot(value.get("agent")),
-        report_contract=(
-            value.get("report_contract")
-            if isinstance(value.get("report_contract"), str)
-            else None
-        ),
         retry=(
             LoopRetryPolicy(
                 max_attempts=_integer(raw_retry.get("max_attempts"), 2),
@@ -687,7 +659,6 @@ __all__ = [
     "loop_stage_from_snapshot",
     "loop_stage_snapshot",
     "raw_inputs",
-    "report_contract_from_raw",
     "reports_from_raw",
     "require_declared_sections",
     "stage_overrides_from_snapshot",

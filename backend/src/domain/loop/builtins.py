@@ -181,7 +181,6 @@ def _implementation(pass_to: str) -> LoopStepDefinition:
             session=LoopSessionPolicy.FRESH,
             permissions=LoopPermission.WRITE,
         ),
-        report_contract="implementation",
         note_required=False,
         retry=LoopRetryPolicy(max_attempts=3, timeout_minutes=45),
         transitions={
@@ -246,7 +245,6 @@ def _review(
             # covers any `rg ...`. Nothing here can write.
             approved_command_prefixes=REVIEW_COMMAND_PREFIXES,
         ),
-        report_contract="review",
         review_gate=LoopReviewGate(),
         # The reviewer already gets the goal, the target and the workspace
         # diff, so it has what it needs without a note. A definition author can

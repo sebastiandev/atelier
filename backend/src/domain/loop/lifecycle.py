@@ -12,6 +12,8 @@ from src.domain.loop import actions, briefs, feedback, history, pr_lifecycle, ru
 from src.domain.loop.agent_policy import apply_retry_overrides
 from src.domain.loop.dtos import (
     AgentStage,
+    ApprovalStage,
+    CheckStage,
     LoopContextKind,
     LoopFailureKind,
     LoopOutcome,
@@ -19,8 +21,8 @@ from src.domain.loop.dtos import (
     LoopRunStatus,
     LoopStatus,
     LoopStepDefinition,
-    LoopStepKind,
     LoopStepStatus,
+    PrStage,
 )
 from src.domain.loop.models import LoopRunTarget
 from src.domain.loop.prompts import (
@@ -28,7 +30,7 @@ from src.domain.loop.prompts import (
     TaskStagePrompt,
     build_report_blocks,
     build_stage_prompt,
-    prompt_type_for,
+    prompt_for,
 )
 from src.domain.loop.snapshots import definition_from_snapshot
 from src.domain.loop.transitions import stage_by_id
@@ -152,18 +154,10 @@ async def resume(
         definition_from_snapshot(loop.get("definition_snapshot")),
         current_stage_id,
     )
-    if (
-        retry_failed
-        and stage.kind
-        not in {
-            LoopStepKind.AGENT_TASK,
-            LoopStepKind.AGENT_REVIEW,
-            LoopStepKind.DETERMINISTIC_CHECK,
-        }
-        and stage.kind.value != "pr"
-    ):
+    if retry_failed and not stage.retriable:
         raise LoopRunNotResumable(f"loop stage cannot be retried: {current_stage_id}")
-    check_retry = retry_failed and stage.kind == LoopStepKind.DETERMINISTIC_CHECK
+    # A check retries by re-running its command, with no agent to replace.
+    check_retry = retry_failed and isinstance(stage, CheckStage)
     agent_slug = actions.str_or_empty(current_stage_row.get("agent_slug"))
     if not check_retry and workstore.get_work_slug_for_agent(agent_slug) != target.work_slug:
         raise LoopAgentNotFound(f"agent not found on work: {agent_slug}")
@@ -520,7 +514,7 @@ def accept(target: LoopRunTarget) -> bool:
     )
     destination = (
         configured.transitions.get(LoopOutcome.PASS)
-        if configured is not None and configured.kind == LoopStepKind.USER_APPROVAL
+        if isinstance(configured, ApprovalStage)
         else None
     )
     # Approving lets through whatever findings were still standing, so they are
@@ -656,7 +650,7 @@ def _resume_prompt(
     workspace_diff: str,
 ) -> str:
     """Build the typed continuation prompt for one paused stage."""
-    prompt_type = prompt_type_for(stage)
+    prompt_type = prompt_for(stage)
     resolution = "\n\n".join(
         value
         for value in (
@@ -664,7 +658,7 @@ def _resume_prompt(
             # declare feedback; what it needs is its setup and the past-tense
             # push summary, the same bundle the monitor gives it going forward.
             pr_lifecycle.prompt_context(target.run)
-            if stage.kind == LoopStepKind.PR
+            if isinstance(stage, PrStage)
             else (
                 feedback.context(target.run)
                 if any(item.kind == LoopContextKind.FEEDBACK for item in stage.inputs)

@@ -387,7 +387,6 @@ class StageOverrides:
     reports: tuple[LoopReportReference, ...] | None = None
     history: LoopHistoryLevel | None = None
     agent: LoopAgentPolicy | None = None
-    report_contract: str | None = None
     retry: LoopRetryPolicy | None = None
     check_adapter: str | None = None
     check_command: tuple[str, ...] | None = None
@@ -453,11 +452,21 @@ class LoopStepDefinition:
     inputs: tuple[LoopContextReference, ...] = ()
     reports: tuple[LoopReportReference, ...] = ()
     history: LoopHistoryLevel = LoopHistoryLevel.NONE
-    report_contract: str = "generic"
     retry: LoopRetryPolicy = field(default_factory=LoopRetryPolicy)
     transitions: dict[LoopOutcome, str | None] = field(default_factory=dict)
     stage_ref: StageDefinitionRef | None = None
     overrides: StageOverrides | None = None
+
+    @property
+    def retriable(self) -> bool:
+        """Whether relaunching this stage means anything.
+
+        An approval has no agent to relaunch and no command to re-run: it is
+        parked waiting for a person, so retrying it is not disabled, it is
+        meaningless. A stage this build cannot identify answers no, which
+        refuses the retry rather than attempting one blind.
+        """
+        return False
 
     @property
     def supplies_source_agent(self) -> bool:
@@ -482,6 +491,12 @@ class AgentStage(LoopStepDefinition):
     persona: Persona = "developer"
     """Who the agent is told it is. The kind used to stand in for this."""
 
+
+
+    @property
+    def retriable(self) -> bool:
+        """An agent stage relaunches with a fresh transcript."""
+        return True
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -520,6 +535,11 @@ class CheckStage(LoopStepDefinition):
     kind: LoopStepKind = LoopStepKind.DETERMINISTIC_CHECK
     check_adapter: str = "command"
     check_command: tuple[str, ...] = ()
+
+    @property
+    def retriable(self) -> bool:
+        """A check re-runs its command; there is no agent to replace."""
+        return True
 
 
 

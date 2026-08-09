@@ -48,7 +48,6 @@ from src.domain.loop.snapshots import (
     loop_pr_config_from_snapshot,
     loop_pr_config_snapshot,
     raw_inputs,
-    report_contract_from_raw,
     reports_from_raw,
     require_declared_sections,
     stage_overrides_from_snapshot,
@@ -275,7 +274,6 @@ def _stage_from_data(
         "inputs": inputs_from_raw(value, context_raw),
         "reports": reports_from_raw(value.get("reports"), context_raw),
         "history": history_or_raise(value.get("history")),
-        "report_contract": report_contract_from_raw(value.get("report_contract"), kind),
         "retry": _retry_from_data(retry_raw),
         "transitions": _transitions_from_data(transitions_raw),
     }
@@ -463,7 +461,6 @@ def _stage_to_data(stage: LoopStepDefinition) -> dict[str, Any]:
                 else {}
             ),
         }
-    data["report_contract"] = stage.report_contract
     data["retry"] = {
         "max_attempts": stage.retry.max_attempts,
         "timeout_minutes": stage.retry.timeout_minutes,

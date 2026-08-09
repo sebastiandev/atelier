@@ -6,6 +6,7 @@ import asyncio
 import shlex
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from functools import singledispatch
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -31,9 +32,10 @@ from src.domain.loop.dtos import (
     LoopRunStatus,
     LoopStageReport,
     LoopStatus,
-    LoopStepKind,
     LoopStepStatus,
     PrStage,
+    ReviewStage,
+    TaskStage,
 )
 from src.domain.loop.models import LoopRunTarget
 from src.domain.loop.ports import (
@@ -44,7 +46,7 @@ from src.domain.loop.ports import (
 from src.domain.loop.prompts import (
     build_report_blocks,
     build_stage_prompt,
-    prompt_type_for,
+    prompt_for,
     stage_inactivity_recovery_prompt,
     stage_report_repair_prompt,
 )
@@ -1075,27 +1077,54 @@ def _check_report(
     )
 
 
+@singledispatch
+def _report_shape_problem(stage: LoopStepDefinition, report: LoopStageReport) -> str:
+    """Return why a report does not fit the shape its stage owes, or "".
+
+    Dispatches on the stage type. These were four `stage.kind` branches keyed
+    through a `report_contract` field that never held anything but the value
+    its kind implied.
+    """
+    return ""
+
+
+@_report_shape_problem.register
+def _task_report_problem(stage: TaskStage, report: LoopStageReport) -> str:
+    if report.outcome == LoopOutcome.CHANGES_REQUESTED:
+        return "Implementation stages cannot request changes from themselves."
+    return _needs_evidence_on_pass(report)
+
+
+@_report_shape_problem.register
+def _review_report_problem(stage: ReviewStage, report: LoopStageReport) -> str:
+    if report.outcome == LoopOutcome.CHANGES_REQUESTED and not report.findings:
+        return "A changes-requested review needs actionable findings."
+    return ""
+
+
+@_report_shape_problem.register
+def _pr_report_problem(stage: PrStage, report: LoopStageReport) -> str:
+    if report.outcome == LoopOutcome.CHANGES_REQUESTED:
+        if not report.findings:
+            return "Create PR changes_requested needs actionable findings."
+        if not report.validation_evidence.strip():
+            return "Create PR changes_requested needs failing-check evidence."
+    return _needs_evidence_on_pass(report)
+
+
+def _needs_evidence_on_pass(report: LoopStageReport) -> str:
+    """A stage that writes must show what proved the change works."""
+    if report.outcome == LoopOutcome.PASS and not report.validation_evidence.strip():
+        return "A passing implementation report needs validation evidence."
+    return ""
+
+
 def _stage_report_problem(stage: LoopStepDefinition, report: LoopStageReport | None) -> str:
     if report is None:
         return "Missing or invalid atelier_loop_step_report."
     if report.outcome == LoopOutcome.BLOCKED_USER and _explicit_none(report.blocker):
         return "A blocked_user report needs a concrete blocker."
-    if stage.kind == LoopStepKind.AGENT_TASK and report.outcome == LoopOutcome.CHANGES_REQUESTED:
-        return "Implementation stages cannot request changes from themselves."
-    if stage.kind.value == "pr" and report.outcome == LoopOutcome.CHANGES_REQUESTED:
-        if not report.findings:
-            return "Create PR changes_requested needs actionable findings."
-        if not report.validation_evidence.strip():
-            return "Create PR changes_requested needs failing-check evidence."
-    if stage.kind == LoopStepKind.AGENT_TASK or stage.kind.value == "pr":
-        if report.outcome == LoopOutcome.PASS and not report.validation_evidence.strip():
-            return "A passing implementation report needs validation evidence."
-    if (
-        stage.kind == LoopStepKind.AGENT_REVIEW
-        and report.outcome == LoopOutcome.CHANGES_REQUESTED
-        and not report.findings
-    ):
-        return "A changes-requested review needs actionable findings."
+    return _report_shape_problem(stage, report)
     return ""
 
 
@@ -1259,7 +1288,7 @@ async def _send_stage_prompt(
     *,
     resolution_note: str = "",
 ) -> None:
-    prompt_type = prompt_type_for(stage)
+    prompt_type = prompt_for(stage)
     if isinstance(stage, PrStage):
         pr_lifecycle.snapshot_stage_config(target, stage)
         resolution_note = "\n\n".join(

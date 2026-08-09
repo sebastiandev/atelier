@@ -226,7 +226,6 @@ def add_one_off_stage(target: LoopRunTarget, setup: PrSetup) -> None:
             # something a domain writer should be relying on.
             "reports": [{"from": PREVIOUS_STAGE, "required": True}],
             "agent": agent,
-            "report_contract": "implementation",
             "retry": {"max_attempts": 2, "timeout_minutes": 20},
             "transitions": {
                 "pass": "complete",
