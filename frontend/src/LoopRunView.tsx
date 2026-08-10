@@ -1054,8 +1054,6 @@ export function RunRail({
   runs: RunRailRun[];
   selectedRunId: string | null;
 }) {
-  const gateStage = definition?.stages.find((stage) => stage.review_gate && stage.transitions.changes_requested);
-  const gateTarget = definition?.stages.find((stage) => stage.id === gateStage?.transitions.changes_requested);
   return (
     <aside className="loop-mode-rail run-rail">
       {anchor}
@@ -1069,18 +1067,11 @@ export function RunRail({
               <em className={definition.scope}>{definition.scope === "builtin" ? "built-in" : definition.scope}</em>
             </strong>
             <span className="loop-mode-rail-meta">rev {definition.revision} · {definitionMeta}</span>
-            <div className="loop-mode-rail-stages">
-              {definition.stages.map((stage, index) => (
-                <span className="loop-mode-rail-stage-unit" key={stage.id}>
-                  {index > 0 && <span className="loop-mode-rail-stage-arrow">→</span>}
-                  <span className="loop-mode-rail-stage" data-stage-kind={stage.kind}>
-                    <i>{stageIcon(stage, 10)}</i>
-                    <b>{stage.name}</b>
-                  </span>
-                </span>
-              ))}
-            </div>
-            {gateStage?.review_gate && gateTarget && <div className="loop-mode-rail-gate"><ReturnIcon size={10} /> {gateStage.name} → {gateTarget.name}<em>{gateStage.review_gate.mode === "human_check" ? "⚉ human check" : `⟲ auto · max ${gateStage.review_gate.max_passes}`}</em></div>}
+            {/* The stage chain and its return edge used to render here. The
+                run's own spine shows the same topology with live state on it,
+                so in the rail it was a second, static copy competing with the
+                run for the eye. The gate it carried is still shown in setup,
+                the editor, the run strip and the inspector. */}
             <button type="button" className="loop-mode-rail-disclosure" onClick={onViewLoop}>▸ view stages &amp; config</button>
           </div>
         ) : <span className="loop-mode-rail-empty">Pinned loop details are unavailable for this legacy run.</span>}

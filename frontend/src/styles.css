@@ -14568,6 +14568,12 @@ select:disabled {
   cursor: pointer;
   text-align: left;
 }
+/* `.report-lbl > span` pushes the count to the far right, which detaches it
+   from the thing it counts. The show/hide affordance takes that slot instead. */
+.run-requested-changes > .report-lbl > span {
+  margin-left: 0;
+  opacity: 0.65;
+}
 .run-requested-changes > .report-lbl > em {
   margin-left: auto;
   color: var(--fg-4);
@@ -15455,55 +15461,19 @@ select:disabled {
   color: var(--fg-4);
   font: 10px/1.45 var(--font-mono);
 }
-.loop-mode-rail-stages {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 6px;
-}
-.loop-mode-rail-stage-unit,
-.loop-mode-rail-stage {
-  display: inline-flex;
-  align-items: center;
-}
-.loop-mode-rail-stage-unit { gap: 6px; }
-.loop-mode-rail-stage {
-  gap: 5px;
-  color: var(--fg-3);
-  font: 10.5px var(--font-mono);
-}
-.loop-mode-rail-stage > i {
-  display: grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border-radius: var(--radius-tag);
-  background: var(--p-soft);
-  color: var(--p-color);
-  font-style: normal;
-}
-.loop-mode-rail-stage > b { font-weight: 400; }
-.loop-mode-rail-stage-arrow { color: var(--fg-4); font: 10px var(--font-mono); }
-.loop-mode-rail-gate {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  color: var(--fg-4);
-  font: 9.5px var(--font-mono);
-}
-.loop-mode-rail-gate > em { margin-left: auto; padding: 2px 5px; border-radius: var(--radius-tag); background: var(--warn-soft); color: var(--warn); font-style: normal; }
 .loop-mode-rail-disclosure {
   width: fit-content;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--fg-4);
+  color: var(--fg-3);
   cursor: pointer;
   font: 10px/1.45 var(--font-mono);
   text-align: left;
+  transition: color 90ms ease-out;
 }
-.loop-mode-rail-disclosure:hover { color: var(--fg-2); }
+.loop-mode-rail-disclosure:hover,
+.loop-mode-rail-disclosure:focus-visible { color: var(--fg); }
 .loop-mode-rail-row {
   display: grid;
   width: 100%;
