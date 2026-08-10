@@ -1125,7 +1125,6 @@ def _stage_report_problem(stage: LoopStepDefinition, report: LoopStageReport | N
     if report.outcome == LoopOutcome.BLOCKED_USER and _explicit_none(report.blocker):
         return "A blocked_user report needs a concrete blocker."
     return _report_shape_problem(stage, report)
-    return ""
 
 
 async def _repair_stage_report(

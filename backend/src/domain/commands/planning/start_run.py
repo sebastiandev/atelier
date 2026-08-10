@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from src.domain.agents.launch import (
     AgentFolderMissing,
@@ -55,6 +55,7 @@ from src.domain.loop.prompts import (
     TaskStagePrompt,
     build_stage_prompt,
 )
+from src.domain.loop.snapshots import definition_from_snapshot
 from src.domain.models import Provider
 from src.domain.planning import actions
 from src.domain.planning.dtos import PlanArtifactDetail, PlanRunStatus
@@ -115,6 +116,11 @@ class StartArtifactRunRequest:
     run_kind: LoopRunKind = LoopRunKind.INITIAL
     follow_up_note: str = ""
     entry_stage_id: str | None = None
+    # The source run's pinned definition, when this is a follow-up. A follow-up
+    # continues the loop the run actually executed, so it reads the snapshot
+    # rather than whatever the library holds now -- which is also the only way
+    # it survives a change to how revisions are hashed.
+    loop_definition_snapshot: dict[str, Any] | None = None
 
 
 async def execute(
@@ -318,6 +324,9 @@ def _resolve_definition(
 ) -> LoopDefinition:
     """Resolve and revision-check the loop selected for a run."""
     definition_id = req.loop_definition_id
+    pinned = _pinned_definition(req, definition_id)
+    if pinned is not None:
+        return pinned
     if definition_id is None:
         definition = builtin_loop_definition("atelier-fast")
         if definition is None:
@@ -336,6 +345,34 @@ def _resolve_definition(
     if req.loop_revision is not None and req.loop_revision != definition.revision:
         raise LoopDefinitionConflict(f"loop definition changed: {definition.definition_id}")
     return definition
+
+
+def _pinned_definition(
+    req: StartArtifactRunRequest,
+    definition_id: str | None,
+) -> LoopDefinition | None:
+    """Return the source run's own definition when a follow-up pinned one.
+
+    Preconditions: ``req.loop_definition_snapshot`` came from the run being
+    continued. Postconditions: returns that exact definition, or ``None`` when
+    there is nothing pinned or it names a different loop, in which case the
+    caller resolves from the library as before.
+
+    The goal-driven path has always done this (``domain/loop/start.py``); only
+    Planning re-read the library and then demanded the stored revision still
+    match. That made the pin a staleness check rather than a pin, so a follow-up
+    was refused whenever the hash moved underneath it -- including for reasons
+    that have nothing to do with the loop's content, such as a field leaving the
+    hashed payload.
+    """
+    snapshot = req.loop_definition_snapshot
+    if not snapshot or definition_id is None:
+        return None
+    try:
+        definition = definition_from_snapshot(snapshot)
+    except ValueError:
+        return None
+    return definition if definition.definition_id == definition_id else None
 
 
 async def _launch_initial_agent(

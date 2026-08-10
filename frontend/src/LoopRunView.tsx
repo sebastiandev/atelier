@@ -1445,12 +1445,18 @@ function requestsForPass(
     // An attempt-scoped note (a retry instruction) travelled with one attempt
     // only, so it belongs to the pass that carried it and no later one.
     if (record.scope === "attempt" && record.pass_number !== stage.passNumber) return false;
-    // A request answered before this occurrence reported was already settled
-    // when the pass began, so it is not something this pass was asked to do.
-    if (record.state === "answered" && record.answered_at && stage.recordedAt) {
-      return record.answered_at >= stage.recordedAt;
-    }
-    return true;
+    if (record.state !== "answered") return true;
+    // A request answered before this occurrence reported was already settled by
+    // an earlier pass, so it is not something this pass was asked to do. Both
+    // timestamps come from the same `actions.now_iso()`, so comparing the
+    // strings is a chronological comparison.
+    //
+    // With no timestamp to compare, exclude rather than include: occurrences
+    // are synthesised with an empty `recordedAt` for in-flight stages and for
+    // runs stored before the occurrence ledger existed, and showing every
+    // settled request as this pass's work is the worse of the two errors.
+    if (!record.answered_at || !stage.recordedAt) return false;
+    return record.answered_at >= stage.recordedAt;
   });
 }
 
@@ -1492,10 +1498,16 @@ function RunFeedbackRow({ record }: { record: LoopFeedbackRecord }) {
   const answered = record.state === "answered";
   const source = FEEDBACK_SOURCE_LABELS[record.source] ?? record.source;
   const summary = feedbackSummary(record);
+  // The full text, not just the note: a PR comment carries its content in
+  // `items` and has no note at all, which is exactly the row whose summary was
+  // stripped hardest and most needs the original behind it.
+  const full = [record.note, ...record.items.map((item) => stringValue(item.body))]
+    .filter(Boolean)
+    .join("\n\n");
   return (
     <li className={answered ? "answered" : ""}>
       <span className={`tag ${answered ? "" : "warn"}`}>{answered ? "answered" : "open"}</span>
-      <span className="body" title={record.note || undefined}>{summary || "(no text)"}</span>
+      <span className="body" title={full || undefined}>{summary || "(no text)"}</span>
       <em>
         pass {record.pass_number} · from {source}
         {answered && record.answered_by ? ` · answered by ${record.answered_by}` : ""}

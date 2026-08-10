@@ -118,6 +118,8 @@ async def execute(
             # it does not adopt whatever the library has since become.
             loop_definition_id=actions.str_or_empty(loop.get("definition_id")) or None,
             loop_revision=actions.str_or_empty(loop.get("definition_revision")) or None,
+            loop_definition_snapshot=actions.dict_or_empty(loop.get("definition_snapshot"))
+            or None,
             brief=brief,
             run_kind=req.kind,
             follow_up_note=req.note,

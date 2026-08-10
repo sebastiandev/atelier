@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
 from src.application.http.routes.works import get_chat_supervisor
 from src.domain.chatstore.dtos import ChatGrounding, CreateChatRequest
@@ -1832,7 +1834,6 @@ def test_custom_loop_executes_deterministic_check_stage(
             "instructions": "",
             "context": [{"kind": "target", "required": True}],
             "agent": None,
-            "report_contract": "generic",
             "retry": {"max_attempts": 2, "timeout_minutes": 1},
             "transitions": {
                 "pass": "approval",
@@ -3167,6 +3168,46 @@ def _accept_story_run(client: TestClient, agent_slug: str, run_id: str) -> None:
         json={"summary": "Accepted for the follow-up."},
     )
     assert accepted.status_code == 200, accepted.text
+
+
+def test_a_follow_up_continues_a_run_whose_stored_revision_no_longer_matches(
+    app_client: TestClient, test_settings: Settings, isolated_engine: Engine
+) -> None:
+    """A follow-up continues the loop the run actually executed.
+
+    The stored revision is a pin, not a staleness check. It stops matching for
+    reasons that have nothing to do with the loop's content -- a field leaving
+    the hashed payload moves every hash at once -- so an upgrade must not
+    refuse follow-ups on runs nobody touched.
+    """
+    _create_work(app_client)
+    _start_plan(app_client, test_settings.workspace_root / "repo")
+    assert app_client.post("/api/works/WRK-001/plan/approve").status_code == 200
+    agent, run_id = _start_artifact_run(app_client, test_settings)
+    _accept_story_run(app_client, str(agent["slug"]), run_id)
+    with isolated_engine.begin() as connection:
+        rows = connection.execute(text("SELECT id, state FROM loop_runs")).fetchall()
+        restamped = 0
+        for row_id, state in rows:
+            blob = json.loads(state) if isinstance(state, str) else dict(state)
+            loop_state = blob.get("loop")
+            if not isinstance(loop_state, dict) or not loop_state.get("definition_revision"):
+                continue
+            loop_state["definition_revision"] = "0ldrev"
+            connection.execute(
+                text("UPDATE loop_runs SET state = :state, definition_revision = '0ldrev'"
+                     " WHERE id = :id"),
+                {"state": json.dumps(blob), "id": row_id},
+            )
+            restamped += 1
+    assert restamped >= 1, "expected a stored run revision to restamp"
+
+    res = app_client.post(
+        f"/api/works/WRK-001/plan/artifacts/story-001/runs/{run_id}/rerun",
+        json={"kind": "amend", "note": "still fine after the hash moved"},
+    )
+
+    assert res.status_code == 201, res.text
 
 
 def test_story_follow_up_amend_reenters_the_task_stage(

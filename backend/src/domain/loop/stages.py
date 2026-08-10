@@ -153,9 +153,13 @@ def resolve_stage_link(
         )
         if (value := getattr(overrides, field)) is not None
         # An override may name a field the linked stage's kind does not own --
-        # a `pr_config` over a check, say. That used to be a validation
-        # message; applying it now would be a TypeError out of `replace`, so it
-        # is dropped, which is what the old rule effectively did.
+        # a `pr_config` over a check, say. When a stage was a flat record it
+        # was applied and simply never read; now it would be a TypeError out of
+        # `replace`, so it is dropped instead. The value stays in the stored
+        # overrides and round-trips intact, so re-linking to a stage that can
+        # carry it brings it back. Reporting it as a validation error was tried
+        # and reverted: `start.py` refuses to launch an invalid definition, so
+        # an inert setting made a working loop unrunnable.
         and hasattr(base, field)
     }
     return replace(

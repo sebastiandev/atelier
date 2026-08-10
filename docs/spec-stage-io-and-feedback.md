@@ -351,7 +351,7 @@ three groups.
 |---|---|---|
 | `prompts.py:137` | report contract per kind | ~~`stage.report_contract`~~ → the stage type, via `prompts.prompt_for` |
 | `monitor.py:1196`, `start.py:238` | `persona = architect if review else developer` | `stage.persona` |
-| `monitor.py:1258-1263`, `lifecycle.py:603-605`, `start.py:264` | prompt type + PR bundle per kind | `inputs` / `report_contract` |
+| `monitor.py:1258-1263`, `lifecycle.py:603-605`, `start.py:264` | prompt type + PR bundle per kind | `inputs` / the stage type |
 | `monitor.py:1071-1082`, `lifecycle.py:332,371` | changes-requested handling per kind | `transitions` |
 | `_without_a_pr_send_back` | PR may not send back | declared outcomes |
 
@@ -439,22 +439,36 @@ main reason to name a stage instead of using `previous`.
 checks, which is §6b's measurable outcome. Three things differ from the draft:
 
 - **`report_contract` was deleted, not used.** §6a named it as the replacement
-  for the per-kind prompt branch, but it was never independent of the kind: a
-  review always had the review contract, a PR stage the PR one, everything else
-  generic. It was a second, hand-maintained copy of what the stage type already
-  says. `prompts.prompt_for` is a `singledispatch` over the type instead. Old
-  `loop.yaml` files that still store the key read fine; it is ignored.
+  for the per-kind prompt branch. Every stage the editor and the built-ins
+  produced set it from its kind, so it was a second hand-maintained copy of what
+  the stage type already says. `prompts.prompt_for` is a `singledispatch` over
+  the type instead. Old `loop.yaml` files that still store the key read fine.
+  One writer *had* diverged, which an adversarial review caught after the fact:
+  the one-off Create PR stage declared the implementation contract on a `pr`
+  stage and so received the task prompt, which invites `changes_requested` —
+  an outcome `_without_a_pr_send_back` has refused from a PR stage since Create
+  PR became terminal. Deleting the field settles that in the engine's favour and
+  changes that stage's prompt, including for a run resumed mid-flight.
 - **`persona` is a property, not a field.** §6a listed `stage.persona` as the
   replacement for `architect if review else developer`. As a dataclass field it
   fed the revision hash and no codec wrote it, so it read as a setting that does
   not stick. It was never configurable, and it says so now.
 - **`run_stage` was not built.** §6b prescribed
-  `run_stage(AgentStage | CheckStage | ApprovalStage | PrStage, ...)`. Four of
-  the five listed sites became properties on the stage class or a dispatched
-  function, which is what got the count to zero. The fifth — the
-  enter-next-stage chain in `monitor.py` — is `async` and threads seventeen
-  arguments; dispatching it would mean inventing a context object to carry them,
-  and three cases in a row read better. Deliberate, not missed.
+  `run_stage(AgentStage | CheckStage | ApprovalStage | PrStage, ...)` over six
+  listed sites. Three became properties on the stage class or a dispatched
+  function, which is what got the kind count to zero. The other three are the
+  enter-next-stage chain in `monitor.py`, now `isinstance` rather than `kind`:
+  it is `async` and threads seventeen arguments, so dispatching it would mean
+  inventing a context object to carry them, and three cases in a row read
+  better. Deliberate, not missed.
+- **`_without_a_pr_send_back` still exists.** §6a's last row expected declared
+  outcomes to replace it. The declaration landed — the built-in PR stage no
+  longer offers `changes_requested` — but the runtime guard stays, because a
+  loop authored before that rule still wires the transition and its runs must
+  not keep circling. §6a is satisfied in letter, not in spirit.
+- **An override a linked stage's kind cannot carry stays silent.** Reporting it
+  as a validation error was tried and reverted: `start.py` refuses to launch an
+  invalid definition, so an inert setting made a working loop unrunnable.
 
 The `context` field was renamed to `inputs` in its own change; both keys are
 accepted on read, only `inputs` is written.

@@ -149,8 +149,9 @@ def declared_report_rows(
     resolve the symbolic ``previous``.
     Postconditions: one ``(stage_id, row)`` pair per resolvable declaration,
     de-duplicated by stage id so a ``previous`` that resolves to a stage also
-    named explicitly renders once. Declarations naming a stage with no row yet
-    are skipped, which is how an optional report reads as absent.
+    named explicitly renders once. Declarations naming a stage that has not
+    reported are skipped, which is how an optional report reads as absent and
+    how a required one becomes a warning.
     """
     resolved: dict[str, dict[str, Any]] = {}
     fallback = last_reported_id or _latest_reporting_stage(loop, stage)
@@ -161,9 +162,29 @@ def declared_report_rows(
         if not step_id or step_id in resolved:
             continue
         row = stage_row(loop, step_id)
-        if row is not None:
+        if row is not None and _has_reported(row):
             resolved[step_id] = row
     return list(resolved.items())
+
+
+def _has_reported(row: dict[str, Any]) -> bool:
+    """Whether a stage row carries an account, rather than merely existing.
+
+    ``initialized_loop_snapshot`` pre-creates a row for every stage in the
+    definition, so a row's existence says nothing about whether it ran. Reading
+    it as "resolved" handed the agent a labelled block with an empty summary and
+    ``pass 0``, and stopped :func:`unresolved_report_warnings` from ever firing
+    for a required report -- the two things that were supposed to tell it the
+    account was absent.
+
+    The occurrence ledger is the signal, matching
+    :func:`_latest_reporting_stage`. A summary with no ledger covers a run
+    pinned before the ledger existed.
+    """
+    reports = row.get("reports")
+    if isinstance(reports, list) and reports:
+        return True
+    return bool(str_or_empty(row.get("summary")).strip())
 
 
 def unresolved_report_warnings(
