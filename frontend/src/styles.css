@@ -14574,6 +14574,20 @@ select:disabled {
   font: 10px var(--font-mono);
   font-style: normal;
 }
+/* The label inherits `.report-lbl`'s dim `--fg-4`, which reads as static text.
+   Brightening the whole row on hover is what says it is a control. */
+.run-requested-changes > .report-lbl,
+.run-requested-changes > .report-lbl > em {
+  transition: color 90ms ease-out;
+}
+.run-requested-changes > .report-lbl:hover,
+.run-requested-changes > .report-lbl:focus-visible {
+  color: var(--fg-2);
+}
+.run-requested-changes > .report-lbl:hover > em,
+.run-requested-changes > .report-lbl:focus-visible > em {
+  color: var(--fg-3);
+}
 .run-requested-changes > ul { display: grid; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
 .run-requested-changes > ul.dismissed { gap: 4px; padding-left: 16px; list-style: disc; }
 .run-requested-changes > ul.dismissed > li {
