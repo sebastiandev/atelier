@@ -1477,6 +1477,8 @@ function FollowUpChooser({
   );
 }
 
+const FOLD_DISMISSED_ABOVE = 3;
+
 const FEEDBACK_SOURCE_LABELS: Record<string, string> = {
   approval: "you, at approval",
   review: "the review stage",
@@ -1606,19 +1608,34 @@ function RunFeedbackRow({ record }: { record: LoopFeedbackRecord }) {
 /** Remind the user what they already let stand before they approve again. */
 function DismissedFindings({ data }: { data: RunSurfaceData }) {
   const pending = ["completed", "awaiting_approval"].includes(data.status) && !data.accepted;
-  if (!pending || data.waivedFindings.length === 0) return null;
+  const findings = data.waivedFindings;
+  // Enough of them to be worth folding rather than scrolling past. Below that,
+  // showing them costs less space than a control to reveal them, and this panel
+  // exists to be read before approving -- hiding it by default would defeat it.
+  const [open, setOpen] = useState(findings.length <= FOLD_DISMISSED_ABOVE);
+  if (!pending || findings.length === 0) return null;
   return (
     <section className="run-dismissed-findings">
       <header>
-        <strong>Already dismissed on this run</strong>
-        <span className="tag">{data.waivedFindings.length}</span>
+        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <strong>Already dismissed on this run</strong>
+          <span className="tag">{findings.length}</span>
+          <em>{open ? "hide" : "show"}</em>
+        </button>
         <small>reviewers are told not to raise these again</small>
       </header>
-      <ul>
-        {data.waivedFindings.map((finding, index) => (
-          <li key={`${finding}-${index}`}>{finding}</li>
-        ))}
-      </ul>
+      {open && (
+        <ul>
+          {findings.map((finding, index) => (
+            // A finding is a reviewer's prose and can carry Markdown, a code
+            // fence or a link target, exactly like a feedback record; the
+            // unreduced text stays on the row.
+            <li key={`${finding}-${index}`} title={finding}>
+              {cleanFeedbackText(finding) || finding}
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

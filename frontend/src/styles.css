@@ -14611,10 +14611,33 @@ select:disabled {
   background: var(--bg-2);
 }
 .run-dismissed-findings > header { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 8px; }
+.run-dismissed-findings > header > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.run-dismissed-findings > header > button > em {
+  color: var(--fg-4);
+  font: 10px var(--font-mono);
+  font-style: normal;
+}
 .run-dismissed-findings > header > strong { color: var(--fg); font-size: 13px; }
 .run-dismissed-findings > header > small { margin-left: auto; color: var(--fg-4); font: 10px var(--font-mono); }
 .run-dismissed-findings > ul { display: grid; gap: 4px; margin: 0; padding-left: 16px; }
-.run-dismissed-findings > ul > li { color: var(--fg-3); font-size: 12px; line-height: 1.45; }
+.run-dismissed-findings > ul > li {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--fg-3);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
 .run-review-findings { display: grid; gap: 5px; }
 .run-review-findings > label {
   display: grid;
