@@ -80,7 +80,7 @@ async def execute(
         ),
     )
     if pr_gateway is not None:
-        await pr_review.post_addressed_replies(target, pr_gateway)
+        await pr_review.post_addressed_replies(target, pr_gateway, lambda: store.save(target))
         store.save(target)
     return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 

@@ -152,6 +152,149 @@ async def test_refresh_merges_review_and_replies_to_addressed_comment_once() -> 
 
 
 @pytest.mark.anyio
+class _FlakyGateway:
+    """Answer the first comment, then fail -- a rate limit mid-batch."""
+
+    def __init__(self) -> None:
+        self.replies: list[str] = []
+
+    async def reply(self, ref: PrRef, comment: PrComment, body: str) -> PrComment:
+        if self.replies:
+            raise RuntimeError("rate limited")
+        self.replies.append(body)
+        return PrComment(
+            id="reply-1",
+            author="atelier",
+            location=comment.location,
+            body=body,
+            created_at="2026-07-20T12:00:00Z",
+            url="https://github.com/acme/repo/pull/7#reply-1",
+            kind=comment.kind,
+            reply_target_id=comment.reply_target_id,
+            is_viewer=True,
+        )
+
+
+def test_the_reply_says_what_the_pass_changed_rather_than_what_was_asked() -> None:
+    """The reviewer already knows what they asked for; what they cannot see is
+    what was done about it. One sentence, from the report of the stage that did
+    the work."""
+    loop = {
+        "pr": {
+            "head_sha": "a1b2c3d4e5",
+            "head_commit_url": "https://github.com/acme/repo/commit/a1b2c3d",
+        },
+        "stages": [
+            {
+                "id": "implement",
+                "kind": "agent_task",
+                "reports": [
+                    {
+                        "pass_number": 3,
+                        "changes": "Guarded the empty branch. Also tidied the helper.",
+                    }
+                ],
+            }
+        ],
+    }
+
+    body = pr_review._addressed_body(loop, 3, "Add a regression test.")
+
+    assert body == (
+        "Addressed in [`a1b2c3d`](https://github.com/acme/repo/commit/a1b2c3d)."
+        " Guarded the empty branch."
+    )
+
+
+def test_the_reply_falls_back_to_the_instruction_when_the_pass_said_nothing() -> None:
+    loop = {"pr": {"head_sha": "a1b2c3d4e5"}, "stages": []}
+
+    body = pr_review._addressed_body(loop, 3, "Add a regression test.")
+
+    assert body == "Addressed in `a1b2c3d`. Applied instruction: Add a regression test."
+
+
+def test_a_long_report_is_capped_rather_than_pasted_into_the_thread() -> None:
+    loop = {
+        "pr": {"head_sha": "a1b2c3d4e5"},
+        "stages": [
+            {"id": "i", "kind": "agent_task", "reports": [{"pass_number": 1, "changes": "x" * 400}]}
+        ],
+    }
+
+    body = pr_review._addressed_body(loop, 1, "")
+
+    assert body.endswith("\u2026")
+    assert len(body) < 300
+
+
+@pytest.mark.anyio
+async def test_a_reply_that_fails_does_not_unrecord_the_ones_already_posted() -> None:
+    """A reply is public the moment it posts, so the mark that stops it posting
+    again must be durable before anything else can fail. Recording the batch at
+    the end meant one rate-limited reply discarded the marks for every reply
+    already sent, and the next completion answered all of them a second time."""
+    gateway = _FlakyGateway()
+    target = LoopRunTarget(
+        work_slug="WRK-016",
+        run_id="run-6",
+        target_id="story-1",
+        title="Handle transfers",
+        source_ref="story-1.md",
+        run={
+            "loop": {
+                "pr": {"url": "https://github.com/acme/repo/pull/7"},
+                "pr_comments": [
+                    {
+                        "id": "comment-1",
+                        "author": "reviewer",
+                        "location": "src/app.py:1",
+                        "body": "Comment comment-1.",
+                        "created_at": "2026-07-20T10:00:00Z",
+                        "url": "https://github.com/acme/repo/pull/7#comment-1",
+                        "kind": "review",
+                        "reply_target_id": "thread-1",
+                        "addressed_in_pass": 2,
+                    },
+                    {
+                        "id": "comment-2",
+                        "author": "reviewer",
+                        "location": "src/app.py:1",
+                        "body": "Comment comment-2.",
+                        "created_at": "2026-07-20T10:00:00Z",
+                        "url": "https://github.com/acme/repo/pull/7#comment-2",
+                        "kind": "review",
+                        "reply_target_id": "thread-2",
+                        "addressed_in_pass": 2,
+                    },
+                ],
+            }
+        },
+    )
+    saved: list[list[dict[str, object]]] = []
+
+    await pr_review.post_addressed_replies(
+        target,
+        gateway,  # type: ignore[arg-type]
+        lambda: saved.append(
+            [dict(row) for row in target.run["loop"]["pr_comments"]]
+        ),
+    )
+
+    assert gateway.replies, "the first comment should have been answered"
+    # The durable record names comment-1 as answered even though comment-2 blew up.
+    assert saved, "a posted reply must be recorded before the next is attempted"
+    answered = {
+        row["id"] for row in saved[-1] if row.get("reply_posted_at")
+    }
+    assert "comment-1" in answered
+    # And a second run over the same state must not answer it again.
+    gateway_again = _FlakyGateway()
+    await pr_review.post_addressed_replies(target, gateway_again, lambda: None)  # type: ignore[arg-type]
+    assert [body for body in gateway_again.replies if "comment-1" in body] == []
+
+
+@pytest.mark.anyio
 async def test_post_addressed_replies_does_not_wait_for_a_refresh() -> None:
     comment = PrComment(
         id="comment-1",

@@ -301,7 +301,7 @@ async def monitor_run(
         ),
     )
     if pr_gateway is not None:
-        await pr_review.post_addressed_replies(target, pr_gateway)
+        await pr_review.post_addressed_replies(target, pr_gateway, lambda: store.save(target))
         store.save(target)
     return get_run(loop_runs, req)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
@@ -26,6 +27,7 @@ async def refresh(
     gateway: PrLifecycleGateway,
     *,
     force: bool = False,
+    save: Callable[[], None] | None = None,
 ) -> None:
     """Refresh remote PR state and post replies for addressed comments.
 
@@ -72,7 +74,14 @@ async def refresh(
     if fetched.etag:
         pr["etag"] = fetched.etag
 
-    await _post_addressed_replies(gateway, ref, loop, comments)
+    def checkpoint() -> None:
+        loop["pr"] = pr
+        loop["pr_comments"] = comments
+        target.run["loop"] = loop
+        if save is not None:
+            save()
+
+    await _post_addressed_replies(gateway, ref, loop, comments, checkpoint)
     pr["last_synced_at"] = actions.now_iso()
     loop["pr"] = pr
     loop["pr_comments"] = comments
@@ -82,6 +91,7 @@ async def refresh(
 async def post_addressed_replies(
     target: LoopRunTarget,
     gateway: PrLifecycleGateway,
+    save: Callable[[], None] | None = None,
 ) -> None:
     """Reply to newly addressed comments without fetching remote PR state.
 
@@ -95,7 +105,14 @@ async def post_addressed_replies(
     if ref is None:
         return
     comments = _comment_rows(loop.get("pr_comments"))
-    await _post_addressed_replies(gateway, ref, loop, comments)
+
+    def checkpoint() -> None:
+        loop["pr_comments"] = comments
+        target.run["loop"] = loop
+        if save is not None:
+            save()
+
+    await _post_addressed_replies(gateway, ref, loop, comments, checkpoint)
     loop["pr_comments"] = comments
     target.run["loop"] = loop
 
@@ -146,6 +163,10 @@ def _addressed_body(loop: dict[str, Any], pass_number: int, note: str) -> str:
     number: a reviewer can act on a commit link, and "pass 3" means nothing
     outside this tool. Falls back to the pass number when the commit is
     unknown -- an older run, or a PR whose head we could not read.
+
+    One or two lines. A reviewer reading a thread wants to know it was handled
+    and where to look, not to read the run's report; anything longer buries the
+    conversation it is replying to.
     """
     pr = actions.dict_or_empty(loop.get("pr"))
     url = actions.str_or_empty(pr.get("head_commit_url"))
@@ -156,9 +177,54 @@ def _addressed_body(loop: dict[str, Any], pass_number: int, note: str) -> str:
         body = f"Addressed in `{sha[:7]}`."
     else:
         body = f"Addressed in Atelier pass {pass_number}."
-    if note:
+    detail = _addressed_detail(loop, pass_number)
+    if detail:
+        body += f" {detail}"
+    elif note:
+        # The user's instruction, kept labelled: it says what was asked for,
+        # not what was done, and unlabelled it would read as the latter.
         body += f" Applied instruction: {note}"
     return body
+
+
+_DETAIL_LIMIT = 240
+
+
+def _addressed_detail(loop: dict[str, Any], pass_number: int) -> str:
+    """One sentence on what the pass actually changed, if it said.
+
+    Read from the report of the stage that did the work rather than from the
+    instruction it was given: the reviewer already knows what they asked for,
+    and what they cannot see is what was done about it. Falls back to the
+    summary when a report carried no `changes`, and to nothing at all when the
+    pass said neither -- an empty line is better than a fabricated one.
+    """
+    stages = loop.get("stages")
+    if not isinstance(stages, list):
+        return ""
+    for stage in reversed(stages):
+        if not isinstance(stage, dict) or stage.get("kind") != "agent_task":
+            continue
+        for report in reversed(_comment_rows(stage.get("reports"))):
+            if report.get("pass_number") != pass_number:
+                continue
+            text = actions.str_or_empty(report.get("changes")) or actions.str_or_empty(
+                report.get("summary")
+            )
+            return _one_or_two_lines(text)
+    return ""
+
+
+def _one_or_two_lines(text: str) -> str:
+    """Collapse a report field to the first sentence, hard-capped."""
+    collapsed = " ".join(text.split())
+    if not collapsed:
+        return ""
+    head, separator, _ = collapsed.partition(". ")
+    first = head + ("." if separator else "")
+    if len(first) <= _DETAIL_LIMIT:
+        return first
+    return first[: _DETAIL_LIMIT - 1].rstrip() + "\u2026"
 
 
 async def _post_addressed_replies(
@@ -166,7 +232,17 @@ async def _post_addressed_replies(
     ref: PrRef,
     loop: dict[str, Any],
     comments: list[dict[str, Any]],
+    checkpoint: Callable[[], None],
 ) -> None:
+    """Reply at most once per comment, recording each reply before the next.
+
+    A reply is public the moment it posts, so the mark that stops it posting
+    again has to be durable before anything else can fail. Recording the whole
+    batch at the end meant one failed reply -- a rate limit, a dropped
+    connection -- discarded the marks for every reply already posted, and the
+    next completion replied to all of them again. A failure now costs at most
+    the comment it happened on, and the others stay answered exactly once.
+    """
     for row in list(comments):
         pass_number = row.get("addressed_in_pass")
         if not isinstance(pass_number, int) or row.get("reply_posted_at"):
@@ -176,7 +252,12 @@ async def _post_addressed_replies(
             continue
         note = _addressed_instruction(loop, comment.id)
         body = _addressed_body(loop, pass_number, note)
-        reply = await reply_to_pr_comment(gateway, ref, comment, body)
+        try:
+            reply = await reply_to_pr_comment(gateway, ref, comment, body)
+        except Exception:
+            # One unreachable comment must not stop the rest being answered,
+            # and must not roll back the ones already recorded.
+            continue
         if reply is None:
             continue
         posted_at = actions.now_iso()
@@ -196,6 +277,7 @@ async def _post_addressed_replies(
                 "reply_posted_at": posted_at,
             }
         )
+        checkpoint()
 
 
 def _domain_comment(row: dict[str, Any]) -> PrComment | None:
