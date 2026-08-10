@@ -487,6 +487,7 @@ function RunSurfaceContent({
                     busy={busy}
                     definition={data.definition}
                     feedback={data.feedback}
+                    waivedFindings={data.waivedFindings}
                     events={selectedOccurrence.occurrenceId === currentOccurrence?.occurrenceId ? events : []}
                     pr={data.pr}
                     prComments={data.prComments}
@@ -508,6 +509,7 @@ function RunSurfaceContent({
             ) : selectedOccurrence ? (
               <StageOutput
                 feedback={data.feedback}
+                waivedFindings={data.waivedFindings}
                 agent={outputAgent}
                 busy={busy}
                 definition={data.definition}
@@ -547,7 +549,6 @@ function RunSurfaceContent({
           </div>
         </div>
 
-        <DismissedFindings data={data} />
         <RunActions
           agentStage={agentStage}
           busy={busy}
@@ -1158,6 +1159,7 @@ function StageOutput({
   definition,
   events,
   feedback,
+  waivedFindings,
   onConfig,
   onRefreshPr,
   onSendPrFeedback,
@@ -1171,6 +1173,7 @@ function StageOutput({
   definition: LoopDefinitionSnapshot | null;
   events: AgentEvent[];
   feedback: LoopFeedbackRecord[];
+  waivedFindings: string[];
   onConfig: () => void;
   onRefreshPr?: (force?: boolean) => Promise<void>;
   onSendPrFeedback?: RunSurfaceProps["onSendPrFeedback"];
@@ -1212,7 +1215,7 @@ function StageOutput({
       {updatingPr && <div className="run-stage-pr-mode">Reuses this run's saved PR setup and branch. No new pull request is created.</div>}
       {stage.status === "changes_requested" && returnTarget && <div className="run-stage-return"><ReturnIcon size={11} /> loop returns to {returnTarget} · pass {stage.passNumber + 1}</div>}
       {running && stage.agent_slug && <RunLiveActivity events={events} />}
-      {!running && stage.summary && <StageReport stage={stage} feedback={feedback} />}
+      {!running && stage.summary && <StageReport stage={stage} feedback={feedback} waivedFindings={waivedFindings} />}
       {stage.kind === "pr" && pr && (
         <PrLifecyclePanel
           addressedComments={stage.addressed_comments}
@@ -1434,7 +1437,7 @@ function ResultView({
         </div>
         {onCreatePr && <button className="btn primary" disabled={busy} onClick={onCreatePr}><span aria-hidden>⇱</span> Create PR</button>}
       </div>
-      {stage ? <StageReport stage={stage} feedback={data.feedback} /> : (
+      {stage ? <StageReport stage={stage} feedback={data.feedback} waivedFindings={data.waivedFindings} /> : (
         <>
           <section><header><strong>Changed files</strong><span>{data.changedFiles.length}</span></header>{data.changedFiles.map((file) => <div className="file-row" key={file.path}><span className="fname">{file.path}</span><span className="fstat"><span className="add">+{file.additions}</span><span className="del">-{file.deletions}</span></span></div>)}{data.changedFiles.length === 0 && <p className="dim">No changed files reported.</p>}</section>
           <section><header><strong>Validation evidence</strong></header>{data.evidence.map((item) => <span className="run-evidence" key={item}><CheckIcon size={9} /> {item}</span>)}{data.evidence.length === 0 && <p className="dim">No validation evidence reported.</p>}</section>
@@ -1476,8 +1479,6 @@ function FollowUpChooser({
     </section>
   );
 }
-
-const FOLD_DISMISSED_ABOVE = 3;
 
 const FEEDBACK_SOURCE_LABELS: Record<string, string> = {
   approval: "you, at approval",
@@ -1606,37 +1607,42 @@ function RunFeedbackRow({ record }: { record: LoopFeedbackRecord }) {
 }
 
 /** Remind the user what they already let stand before they approve again. */
-function DismissedFindings({ data }: { data: RunSurfaceData }) {
-  const pending = ["completed", "awaiting_approval"].includes(data.status) && !data.accepted;
-  const findings = data.waivedFindings;
-  // Enough of them to be worth folding rather than scrolling past. Below that,
-  // showing them costs less space than a control to reveal them, and this panel
-  // exists to be read before approving -- hiding it by default would defeat it.
-  const [open, setOpen] = useState(findings.length <= FOLD_DISMISSED_ABOVE);
-  if (!pending || findings.length === 0) return null;
+/** What the user already let stand, so a reader knows why it was not acted on.
+ *
+ *  Run-wide rather than per-pass: a dismissal has no timestamp, only the text,
+ *  so it cannot be attributed to the pass that was running when it was made.
+ *  It sits with the requested changes because it answers the same question --
+ *  what this stage was and was not asked to do.
+ */
+function DismissedFindings({ findings }: { findings: string[] }) {
+  const [open, setOpen] = useState(false);
+  if (findings.length === 0) return null;
   return (
-    <section className="run-dismissed-findings">
-      <header>
-        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}>
-          <strong>Already dismissed on this run</strong>
-          <span className="tag">{findings.length}</span>
-          <em>{open ? "hide" : "show"}</em>
-        </button>
-        <small>reviewers are told not to raise these again</small>
-      </header>
+    <div className="report-sec run-requested-changes">
+      <button
+        type="button"
+        className="report-lbl"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <EyeIcon size={11} />
+        Already dismissed on this run
+        <span>{findings.length}</span>
+        <em>{open ? "hide" : "show"}</em>
+      </button>
       {open && (
-        <ul>
+        <ul className="dismissed">
           {findings.map((finding, index) => (
-            // A finding is a reviewer's prose and can carry Markdown, a code
-            // fence or a link target, exactly like a feedback record; the
-            // unreduced text stays on the row.
+            // A finding is a reviewer's prose and can carry a heading, a fenced
+            // block or a link target longer than the panel; the unreduced text
+            // stays on the row. An empty reduction falls back to the original.
             <li key={`${finding}-${index}`} title={finding}>
               {cleanFeedbackText(finding) || finding}
             </li>
           ))}
         </ul>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -1699,7 +1705,15 @@ function RunActions({
   );
 }
 
-function StageReport({ stage, feedback }: { stage: RunStageOccurrence; feedback: LoopFeedbackRecord[] }) {
+function StageReport({
+  stage,
+  feedback,
+  waivedFindings,
+}: {
+  stage: RunStageOccurrence;
+  feedback: LoopFeedbackRecord[];
+  waivedFindings: string[];
+}) {
   const findings = stage.finding_details.length > 0
     ? stage.finding_details
     : stage.findings.map((text) => ({ text, severity: "medium" as const, location: "" }));
@@ -1709,6 +1723,7 @@ function StageReport({ stage, feedback }: { stage: RunStageOccurrence; feedback:
   return (
     <div className="report doc">
       {stage.kind === "agent_task" && <RequestedChanges feedback={feedback} stage={stage} />}
+      {stage.kind === "agent_task" && <DismissedFindings findings={waivedFindings} />}
       <ReportSection label={stage.kind === "agent_review" ? "Verdict & summary" : "Summary"} icon={<DocIcon size={11} />}><div className="report-summary">{stage.summary}</div></ReportSection>
       {stage.criteria_coverage.length > 0 && <ReportSection label="Acceptance criteria" icon={<CheckIcon size={11} />} count={stage.criteria_coverage.length}>{stage.criteria_coverage.map((criterion, index) => <div className={`crit ${criterion.met ? "met" : "unmet"}`} key={`${criterion.text}-${index}`}><span className="cbox" role="img" aria-label={criterion.met ? "Met" : "Not met"}>{criterion.met ? <CheckIcon size={12} /> : <span aria-hidden>×</span>}</span><span><span className="ctext">{criterion.text}</span>{criterion.note && <span className="cnote">{criterion.note}</span>}</span></div>)}</ReportSection>}
       {stage.findings.length > 0 && <ReportSection label="Findings" icon={<EyeIcon size={11} />} count={stage.findings.length}>{findings.map((finding, index) => <div className="finding" key={`${finding.text}-${index}`}><span className={`sev ${finding.severity}`}>{finding.severity}</span><span className="fbody"><span className="ftext">{finding.text}</span>{finding.location && <span className="floc">{finding.location}</span>}</span></div>)}</ReportSection>}
