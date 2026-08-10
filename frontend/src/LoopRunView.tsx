@@ -832,6 +832,55 @@ function ReviewGateDecision({
   );
 }
 
+function EarlierPasses({
+  groups,
+  passes,
+  runStartedAt,
+  selectedOccurrenceId,
+  onShow,
+}: {
+  groups: Array<[number, RunStageOccurrence[]]>;
+  passes?: Array<Record<string, unknown>>;
+  runStartedAt?: string;
+  selectedOccurrenceId?: string | null;
+  onShow: () => void;
+}) {
+  const items = groups.flatMap(([, group]) => group);
+  const selected = items.some((stage) => stage.occurrenceId === selectedOccurrenceId);
+  const reviewReturns = items.filter((stage) => stage.status === "changes_requested").length;
+  const elapsed = groups.reduce<number | null>((total, [passNumber, group]) => {
+    const value = passElapsed(passSummary(passes, passNumber), group, runStartedAt);
+    return value === null ? total : (total ?? 0) + value;
+  }, null);
+  const cost = groups.reduce<number | null>((total, [passNumber]) => {
+    const value = numberValue(passSummary(passes, passNumber)?.cost_usd);
+    return value === null ? total : (total ?? 0) + value;
+  }, null);
+  const first = groups[0]?.[0];
+  const last = groups.at(-1)?.[0];
+  // Hand-expanding a pass in the middle leaves the folded ones with a gap, and
+  // "passes 1-3" would then claim one that is on screen by itself.
+  const contiguous =
+    first !== undefined && last !== undefined && last - first + 1 === groups.length;
+  return (
+    <button
+      type="button"
+      aria-expanded={false}
+      className={`run-pass-collapsed earlier${selected ? " selected" : ""}`}
+      onClick={onShow}
+    >
+      <span>▸ {groups.length} earlier {groups.length === 1 ? "pass" : "passes"}</span>
+      {contiguous && (
+        <strong>{first === last ? `pass ${first}` : `passes ${first}–${last}`}</strong>
+      )}
+      <em>{items.length} stages</em>
+      {reviewReturns > 0 && <em>review ⟲{reviewReturns}</em>}
+      {elapsed !== null && <em>{formatElapsed(elapsed)}</em>}
+      {cost !== null && <em>${cost.toFixed(2)}</em>}
+    </button>
+  );
+}
+
 export function LoopRunStageSpine({
   passes,
   runStartedAt,
@@ -850,6 +899,7 @@ export function LoopRunStageSpine({
   gateLabel?: string | null;
 }) {
   const [expandedPasses, setExpandedPasses] = useState<Set<number>>(() => new Set());
+  const [showEarlier, setShowEarlier] = useState(false);
   const passGroups = [...stages.reduce((groups, stage) => {
     const group = groups.get(stage.passNumber) ?? [];
     group.push(stage);
@@ -889,9 +939,46 @@ export function LoopRunStageSpine({
   }
 
   if (passGroups.length <= 1) return stageStrip(stages, true);
+  // Each earlier pass already hides its stages, but one line per pass still
+  // stacks: a run that has been round the loop six times pushes the pass being
+  // worked on to the bottom of the pane, which on a short screen is the only
+  // part worth seeing. Earlier passes therefore fold into one line together,
+  // and open back into the per-pass lines. A pass the user has expanded by hand
+  // is never folded away underneath them.
+  const foldable = passGroups
+    .map(([passNumber]) => passNumber)
+    .filter((passNumber) => passNumber !== currentPass && !expandedPasses.has(passNumber));
+  // One earlier pass is already one line; folding it would only rename it.
+  const folded = showEarlier || foldable.length < 2 ? [] : foldable;
+  const foldedSet = new Set(folded);
   return (
     <div className="run-pass-stack">
+      {showEarlier && foldable.length > 1 && (
+        <button
+          type="button"
+          className="run-pass-fold"
+          aria-expanded
+          onClick={() => setShowEarlier(false)}
+        >
+          ▾ fold {foldable.length} earlier passes
+        </button>
+      )}
       {passGroups.map(([passNumber, items]) => {
+        if (foldedSet.has(passNumber)) {
+          // One line stands in for the whole run of them, at the position of
+          // the earliest; the rest render nothing.
+          if (passNumber !== folded[0]) return null;
+          return (
+            <EarlierPasses
+              key="earlier"
+              groups={passGroups.filter(([number]) => foldedSet.has(number))}
+              passes={passes}
+              runStartedAt={runStartedAt}
+              selectedOccurrenceId={selectedOccurrenceId}
+              onShow={() => setShowEarlier(true)}
+            />
+          );
+        }
         const selected = items.some((stage) => stage.occurrenceId === selectedOccurrenceId);
         const current = passNumber === currentPass;
         const expanded = current || expandedPasses.has(passNumber);

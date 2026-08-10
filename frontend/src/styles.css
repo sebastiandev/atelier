@@ -13972,6 +13972,18 @@ select:disabled {
 .run-pass.current { box-shadow: inset 2px 0 0 var(--accent); }
 .run-pass.selected:not(.current) { border-color: var(--accent-line); }
 .run-pass-heading,
+.run-pass-collapsed.earlier > strong { color: var(--fg-3); font-weight: 500; }
+.run-pass-fold {
+  justify-self: start;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: none;
+  color: var(--fg-4);
+  font: 10px var(--font-mono);
+  cursor: pointer;
+}
+.run-pass-fold:hover { color: var(--fg-2); background: var(--bg-3); }
 .run-pass-collapsed {
   display: flex;
   align-items: center;
