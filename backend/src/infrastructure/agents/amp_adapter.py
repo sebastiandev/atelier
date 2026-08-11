@@ -635,6 +635,14 @@ class AmpAdapter:
             self._allow_always.add(canon_name)
         return decision
 
+    def is_alive(self) -> bool:
+        """This SDK gives no process handle, so death is not observable here.
+
+        Saying "alive" keeps the supervisor's sweep from evicting it: the
+        pump ending is still the signal that this adapter is finished.
+        """
+        return True
+
     async def close(self) -> None:
         if self._closed:
             return

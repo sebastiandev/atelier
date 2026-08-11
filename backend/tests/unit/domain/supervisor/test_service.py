@@ -1391,3 +1391,131 @@ def test_lazy_register_defers_adapter_start_until_send_input() -> None:
     before, after = _run(run())
     assert before is None
     assert after is not None
+
+
+# ---------------------------------------------------------------------------
+# Liveness sweep: free a slot whose process died without the pump noticing
+# ---------------------------------------------------------------------------
+
+
+class _ProbeAdapter(StubAgentAdapter):
+    """A stub whose liveness the test controls."""
+
+    def __init__(self, *args: Any, alive: bool = True, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.alive = alive
+        self.probes = 0
+
+    def is_alive(self) -> bool:
+        self.probes += 1
+        return self.alive
+
+
+def test_the_sweep_evicts_a_runtime_whose_process_has_gone() -> None:
+    """Normally the pump ending frees the slot. A wrapper that exits without
+    the pump noticing leaves it registered, so `connect` attaches to a corpse
+    instead of rebuilding and the turn hangs until someone hits Reconnect."""
+
+    async def run() -> tuple[list[str], bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = _ProbeAdapter([], keep_alive=True, alive=False)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        # Silence long enough to be worth probing.
+        state = supervisor._states["agt-1"]
+        state.last_event_at -= supervisor_module.RUNTIME_LIVENESS_QUIET_SECONDS + 1
+
+        evicted = await supervisor.sweep_dead_runtimes()
+        return evicted, supervisor.is_registered("agt-1")
+
+    evicted, still_registered = asyncio.run(run())
+
+    assert evicted == ["agt-1"]
+    # The slot is free, so the next connect rebuilds instead of attaching.
+    assert still_registered is False
+
+
+def test_the_sweep_leaves_a_quiet_but_living_runtime_alone() -> None:
+    """A slow turn and a wedged one are indistinguishable from out here, so
+    silence alone must never evict: it would throw away work in flight."""
+
+    async def run() -> tuple[list[str], bool, int]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = _ProbeAdapter([], keep_alive=True, alive=True)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        state = supervisor._states["agt-1"]
+        state.last_event_at -= supervisor_module.RUNTIME_LIVENESS_QUIET_SECONDS + 1
+
+        evicted = await supervisor.sweep_dead_runtimes()
+        registered = supervisor.is_registered("agt-1")
+        await supervisor.shutdown()
+        return evicted, registered, adapter.probes
+
+    evicted, registered, probes = asyncio.run(run())
+
+    assert evicted == []
+    assert registered is True
+    assert probes == 1, "a quiet runtime is probed, not assumed dead"
+
+
+def test_a_recently_active_runtime_is_not_even_probed() -> None:
+    """The quiet period is a filter on cost, not the decision."""
+
+    async def run() -> int:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = _ProbeAdapter([], keep_alive=True, alive=False)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await supervisor.sweep_dead_runtimes()
+        probes = adapter.probes
+        await supervisor.shutdown()
+        return probes
+
+    assert asyncio.run(run()) == 0
+
+
+def test_eviction_cancels_the_pump_still_parked_on_the_dead_adapter() -> None:
+    """The pump has not returned -- that is the failure being repaired -- so
+    it has to be cancelled, or a coroutine stays parked on a dead adapter for
+    the life of the process."""
+
+    async def run() -> tuple[bool, bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        adapter = _ProbeAdapter([], keep_alive=True, alive=False)
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        state = supervisor._states["agt-1"]
+        state.last_event_at -= supervisor_module.RUNTIME_LIVENESS_QUIET_SECONDS + 1
+        task = state.task
+
+        await supervisor.sweep_dead_runtimes()
+        return (task is not None and task.done()), supervisor.is_registered("agt-1")
+
+    pump_done, registered = asyncio.run(run())
+
+    assert pump_done, "the pump task must not outlive the runtime it served"
+    assert registered is False
+
+
+def test_the_sweep_does_not_evict_a_fresh_runtime_that_reused_the_slug() -> None:
+    """Between the snapshot and the teardown a Reconnect can free the slot and
+    a new runtime take it. Tearing that one down would kill a live session."""
+
+    async def run() -> tuple[list[str], bool]:
+        supervisor = AgentSupervisorService(StubTranscriptLog())
+        dead = _ProbeAdapter([], keep_alive=True, alive=False)
+        await _start(supervisor, "WRK-001", "agt-1", dead, _start_context())
+        stale_state = supervisor._states["agt-1"]
+        stale_state.last_event_at -= supervisor_module.RUNTIME_LIVENESS_QUIET_SECONDS + 1
+
+        # The slot turns over before the sweep gets to tear the old one down.
+        await supervisor.stop_agent("agt-1")
+        fresh = _ProbeAdapter([], keep_alive=True, alive=True)
+        await _start(supervisor, "WRK-001", "agt-1", fresh, _start_context())
+
+        evicted = await supervisor._evict_dead_state(stale_state)
+        registered = supervisor.is_registered("agt-1")
+        await supervisor.shutdown()
+        return ([] if not evicted else ["agt-1"]), registered
+
+    evicted, registered = asyncio.run(run())
+
+    assert evicted == []
+    assert registered is True, "the replacement runtime must survive"

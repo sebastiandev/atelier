@@ -58,6 +58,17 @@ class AgentAdapter(Protocol):
     path is uniform.
     """
 
+    def is_alive(self) -> bool:
+        """Whether the underlying runtime can still produce events.
+
+        Answers "is the process gone", not "is it busy". The supervisor
+        evicts a runtime only when this is definitively ``False``, so an
+        adapter that cannot tell must say ``True``: a slow turn and a wedged
+        one look identical from here, and evicting a healthy one destroys
+        work in flight.
+        """
+        return True
+
     async def start(self, context: AgentStartContext) -> None: ...
 
     async def send_input(self, text: str) -> None: ...

@@ -80,6 +80,10 @@ class StubAgentAdapter:
         if self._keep_alive:
             await self._closed_evt.wait()
 
+    def is_alive(self) -> bool:
+        """Scripted, with no process behind it; never evicted as dead."""
+        return True
+
     async def close(self) -> None:
         # Idempotent — safe to call repeatedly.
         self.closed = True

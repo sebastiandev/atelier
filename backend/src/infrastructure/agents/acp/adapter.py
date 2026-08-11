@@ -339,6 +339,22 @@ class AcpAdapter:
                 with suppress(asyncio.CancelledError):
                     await self._pump_task
 
+    def is_alive(self) -> bool:
+        """False once the wrapper process has exited.
+
+        A started adapter with no process, or one whose process has a
+        returncode, can never emit another event -- the supervisor evicts on
+        that so a reconnect rebuilds it. Before ``start`` there is nothing to
+        judge, so it reads as alive.
+        """
+        proc = self._proc
+        if proc is None:
+            # Not started yet, or already torn down by ``close``. Neither is a
+            # hung runtime, and the supervisor drops a closed one by its own
+            # path, so this must not report death here.
+            return True
+        return proc.returncode is None
+
     async def close(self) -> None:
         if self._closed:
             return

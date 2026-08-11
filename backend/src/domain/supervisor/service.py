@@ -90,6 +90,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
@@ -112,6 +113,10 @@ from src.domain.worktrees import WorktreeState
 SetSessionIdFn = Callable[[str, str], None]
 RecordArtifactFn = Callable[[str, str, dict[str, Any]], Artifact]
 DescribeWorktreeStateFn = Callable[[Path], WorktreeState]
+
+RUNTIME_LIVENESS_QUIET_SECONDS = 60.0
+"""Silence before a runtime is worth probing. Not a timeout: the probe, not
+the clock, decides whether anything is evicted."""
 
 _log = logging.getLogger(__name__)
 
@@ -203,6 +208,9 @@ class _AgentState:
     seq: int = 0
     task: asyncio.Task[None] | None = None
     publish_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
+    # Monotonic stamp of the last published event, for the liveness sweep.
+    # Wall-clock would jump under a clock change and evict a healthy runtime.
+    last_event_at: float = dataclasses.field(default_factory=time.monotonic)
     # Atelier is single-user single-browser: at most one WS subscriber per
     # agent. A second subscribe (e.g., reconnect-before-cleanup) replaces
     # the slot and kicks the previous subscription so a stale-but-open WS
@@ -602,6 +610,47 @@ class AgentSupervisorService:
                 await state.task
         await self._close_adapter(state.adapter, agent_slug=agent_slug)
 
+    async def sweep_dead_runtimes(self) -> list[str]:
+        """Evict runtimes whose process is gone, and report which.
+
+        The pump ending is the usual signal that an adapter is finished, and
+        it evicts on its own. A wrapper that exits without the pump noticing
+        leaves the slot registered forever: `connect` sees `is_registered`
+        and attaches to a corpse instead of rebuilding, so the turn hangs
+        until someone presses Reconnect -- which is only `stop_agent`, the
+        one thing that frees the slot.
+
+        Only a definitively dead process is evicted. A slow turn and a wedged
+        one are indistinguishable from out here, and evicting a live one
+        would throw away work in flight, so silence alone is never enough.
+        The quiet period is a filter on cost, not the decision.
+        """
+        now = time.monotonic()
+        async with self._registry_lock:
+            candidates = [
+                state
+                for state in self._states.values()
+                if state.started
+                and now - state.last_event_at >= RUNTIME_LIVENESS_QUIET_SECONDS
+            ]
+        evicted: list[str] = []
+        for state in candidates:
+            try:
+                alive = state.adapter.is_alive()
+            except Exception:  # pragma: no cover - defensive
+                _log.exception("liveness probe failed for %s", state.agent_slug)
+                continue
+            if alive:
+                continue
+            _log.warning(
+                "evicting dead runtime for %s after %.0fs of silence",
+                state.agent_slug,
+                now - state.last_event_at,
+            )
+            if await self._evict_dead_state(state):
+                evicted.append(state.agent_slug)
+        return evicted
+
     async def shutdown(self) -> None:
         async with self._registry_lock:
             slugs = list(self._states.keys())
@@ -762,6 +811,31 @@ class AgentSupervisorService:
             # ``stop_agent`` / ``shutdown`` already cleaned us up.
             await self._evict_after_pump_end(state)
 
+    async def _evict_dead_state(self, state: _AgentState) -> bool:
+        """Tear down a runtime whose process is gone, pump and all.
+
+        Unlike `_evict_after_pump_end`, the pump here has *not* returned --
+        that is the whole failure being repaired -- so the task is cancelled
+        the way `stop_agent` does it. Leaving it would keep a coroutine parked
+        on a dead adapter for the life of the process.
+
+        Identity-checked: between the sweep's snapshot and this call a
+        `stop_agent` may have freed the slot and a fresh runtime taken it, and
+        tearing that one down would kill a healthy session.
+        """
+        async with self._registry_lock:
+            if self._states.get(state.agent_slug) is not state:
+                return False
+            del self._states[state.agent_slug]
+        if state.subscriber is not None:
+            state.subscriber.kicked.set()
+        if state.task is not None:
+            state.task.cancel()
+            with suppress(asyncio.CancelledError):
+                await state.task
+        await self._close_adapter(state.adapter, agent_slug=state.agent_slug)
+        return True
+
     async def _evict_after_pump_end(self, state: _AgentState) -> None:
         async with self._registry_lock:
             current = self._states.get(state.agent_slug)
@@ -853,6 +927,7 @@ class AgentSupervisorService:
         self, state: _AgentState, payload: dict[str, Any]
     ) -> None:
         state.seq += 1
+        state.last_event_at = time.monotonic()
         stamped: dict[str, Any] = {"seq": state.seq, **payload}
         # NDJSON append + fsync is sync; bridge to the asyncio loop.
         await asyncio.to_thread(

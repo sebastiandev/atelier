@@ -45,6 +45,7 @@ from src.infrastructure.agents.compaction_sessions import (
     AdapterCompactionSessionClient,
 )
 from src.infrastructure.agents.factory import ConfiguredAgentAdapterFactory
+from src.infrastructure.agents.liveness_poller import RuntimeLivenessPoller
 from src.infrastructure.artifacts.pr_status_poller import PrStatusPoller
 from src.infrastructure.connections import KeyringSecretStore, fetch_context, verify
 from src.infrastructure.database import (
@@ -364,6 +365,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # statuses against GitHub every 5 minutes. No-op when the user
         # doesn't track any PRs — the cycle's first query short-
         # circuits with an empty list and we never hit the network.
+        # Frees runtime slots whose provider process has exited without the
+        # event pump noticing. Both supervisors: a chat and an agent hang the
+        # same way, and only an explicit Reconnect cleared it before.
+        liveness_poller = RuntimeLivenessPoller((supervisor, chat_supervisor))
+        liveness_poller.start()
+        app.state.liveness_poller = liveness_poller
+
         pr_status_poller = PrStatusPoller(workstore)
         pr_status_poller.start()
         app.state.pr_status_poller = pr_status_poller
@@ -390,6 +398,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     return_exceptions=True,
                 )
             await update_check_poller.stop()
+            await liveness_poller.stop()
             await pr_status_poller.stop()
             await chat_supervisor.shutdown()
             await supervisor.shutdown()
