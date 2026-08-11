@@ -1,12 +1,15 @@
 import {
+  Fragment,
   type CSSProperties,
   type ReactNode,
-  useCallback, useEffect,
+  useCallback,
+  useEffect,
   useMemo,
   useState,
 } from "react";
 
 import {
+  type ProviderField,
   type ChatSummary,
   type LoopStatus,
   type PlanArtifact,
@@ -755,10 +758,41 @@ export function PlanningMode({
   );
 }
 
+function SegmentedOption({
+  icon,
+  option,
+  value,
+  onPick,
+}: {
+  icon: ReactNode;
+  option: { key: string; field: ProviderField };
+  value: string;
+  onPick: (next: string) => void;
+}) {
+  return (
+    <div className="pm-agent-segmented" role="radiogroup" aria-label={option.field.label}>
+      {icon}
+      {option.field.values.map((item) => (
+        <button
+          type="button"
+          key={item}
+          role="radio"
+          aria-checked={item === value}
+          className={item === value ? "selected" : ""}
+          onClick={() => onPick(item)}
+        >
+          {optionLabel(option.field, item)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function PlanningAgentControls({
   value,
   onChange,
   pinned,
+  layout = "inline",
 }: {
   value: PlanningAgentConfig | null;
   /** ``touchedKey`` names the option a person just set. Provider and model
@@ -770,6 +804,11 @@ export function PlanningAgentControls({
    *  when this run overrides nothing, because that is what the backend
    *  resolves to -- the provider's own default would be a fiction. */
   pinned?: { effort?: string | null; fast?: boolean | null; permissions?: string | null };
+  /** `"rows"` labels each control and stacks it -- Agent, Effort,
+   *  Permissions -- as run setup shows them, where these values decide what
+   *  the run costs and what it may touch. The default inline row is right for
+   *  a dialog that is mostly about something else. */
+  layout?: "inline" | "rows";
 }) {
   const { descriptors, loading, error } = useProviderDescriptors();
   const providers = descriptors ?? [];
@@ -871,8 +910,19 @@ export function PlanningAgentControls({
     );
   }
 
+  const row = (label: string, children: ReactNode) =>
+    layout === "rows" ? (
+      <div className="pm-agent-row" key={label}>
+        <span>{label}</span>
+        <div>{children}</div>
+      </div>
+    ) : (
+      <Fragment key={label}>{children}</Fragment>
+    );
+
   return (
-    <div className="pm-agent-controls">
+    <div className={`pm-agent-controls${layout === "rows" ? " rows" : ""}`}>
+      {row("Agent", <>
       <label className="pm-mini-select" title="Provider">
         <SparkIcon size={10} />
         <select
@@ -900,26 +950,6 @@ export function PlanningAgentControls({
         </select>
         <span aria-hidden>▾</span>
       </label>
-      {effortOption && (
-        <label className="pm-mini-select" title={effortOption.field.label}>
-          <BoltIcon size={10} />
-          <select
-            value={
-              currentOptions[effortOption.key]
-              ?? pinned?.effort
-              ?? effortOption.field.default
-            }
-            onChange={(event) => changeOption(effortOption.key, event.target.value)}
-          >
-            {effortOption.field.values.map((item) => (
-              <option key={item} value={item}>
-                {optionLabel(effortOption.field, item)}
-              </option>
-            ))}
-          </select>
-          <span aria-hidden>▾</span>
-        </label>
-      )}
       {fastOption && (
         <label className="pm-fast-toggle" title={fastOption.field.label}>
           <input
@@ -938,7 +968,57 @@ export function PlanningAgentControls({
           Fast
         </label>
       )}
-      {permissionOption && (
+      </>)}
+      {row("Effort", <>
+      {effortOption && (layout === "rows" ? (
+        // Segmented rather than a dropdown: the choices are few, and what
+        // effort costs is the reason to look at this row -- a closed select
+        // hides both the range and where you sit in it. The options are
+        // whatever this provider and model publish, not a fixed three.
+        <SegmentedOption
+          icon={<BoltIcon size={10} />}
+          option={effortOption}
+          value={
+            currentOptions[effortOption.key]
+            ?? pinned?.effort
+            ?? effortOption.field.default
+          }
+          onPick={(next) => changeOption(effortOption.key, next)}
+        />
+      ) : (
+        <label className="pm-mini-select" title={effortOption.field.label}>
+          <BoltIcon size={10} />
+          <select
+            value={
+              currentOptions[effortOption.key]
+              ?? pinned?.effort
+              ?? effortOption.field.default
+            }
+            onChange={(event) => changeOption(effortOption.key, event.target.value)}
+          >
+            {effortOption.field.values.map((item) => (
+              <option key={item} value={item}>
+                {optionLabel(effortOption.field, item)}
+              </option>
+            ))}
+          </select>
+          <span aria-hidden>▾</span>
+        </label>
+      ))}
+      </>)}
+      {row("Permissions", <>
+      {permissionOption && (layout === "rows" ? (
+        <SegmentedOption
+          icon={<EyeIcon size={10} />}
+          option={permissionOption}
+          value={
+            currentOptions[permissionOption.key]
+            ?? pinned?.permissions
+            ?? permissionOption.field.default
+          }
+          onPick={(next) => changeOption(permissionOption.key, next)}
+        />
+      ) : (
         <label className="pm-mini-select" title={permissionOption.field.label}>
           <EyeIcon size={10} />
           <select
@@ -959,6 +1039,13 @@ export function PlanningAgentControls({
           </select>
           <span aria-hidden>▾</span>
         </label>
+      ))}
+      </>)}
+      {layout === "rows" && permissionOption && (
+        <div className="pm-agent-row note">
+          <span />
+          <em>⌁ shell always asks — $ commands surface the approval card whatever the list says</em>
+        </div>
       )}
     </div>
   );

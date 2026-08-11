@@ -394,22 +394,88 @@ function StageBriefCard({
 
       {baseStage ? (
         <div className="loop-brief-execution base">
-          <label>Execution <span>this run · later stages inherit from here</span></label>
-          <PlanningAgentControls value={agentConfig} onChange={onBaseAgent} pinned={pinnedPolicy} />
+          <label><b>◈</b> Run configuration <span>this run · later stages inherit from here</span><em>template › run override › inherit</em></label>
+          <PlanningAgentControls value={agentConfig} onChange={onBaseAgent} pinned={pinnedPolicy} layout="rows" />
+          <div className="pm-agent-row">
+            <span>Timeout</span>
+            <div>
+              <span className="loop-brief-timeout">{stage.retry.timeout_minutes} min</span>
+              <em>the stage is cut off and retried from the start when this elapses</em>
+            </div>
+          </div>
+          {stage.agent && (
+            <div className="pm-agent-row">
+              <span>Allowed</span>
+              <div className="loop-brief-prefix-row">
+                {/* `compact` is the chip layout the loop editor uses: they
+                    wrap, so a long allowlist stays a few lines instead of one
+                    row per command. */}
+                <CommandPrefixEditor
+                  compact
+                  prefixes={commandPrefixes}
+                  onChange={onApprovedCommandPrefixes}
+                />
+                {brief.approved_command_prefixes != null && (
+                  <button type="button" onClick={() => onApprovedCommandPrefixes(null)}>
+                    reset to inherit
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       ) : brief.agent ? (
         <div className="loop-brief-execution override">
-          <label>Execution <span>run override</span></label>
+          <label><b>◈</b> Run configuration <span>run override</span><em>template › run override › inherit</em></label>
           <PlanningAgentControls
             value={overrideConfig}
             onChange={(next) => onAgent(overrideDelta(next, agentConfig))}
             pinned={pinnedPolicy}
+            layout="rows"
           />
+          <div className="pm-agent-row">
+            <span>Timeout</span>
+            <div>
+              <span className="loop-brief-timeout">{stage.retry.timeout_minutes} min</span>
+              <em>the stage is cut off and retried from the start when this elapses</em>
+            </div>
+          </div>
+          {stage.agent && (
+            <div className="pm-agent-row">
+              <span>Allowed</span>
+              <div className="loop-brief-prefix-row">
+                {/* `compact` is the chip layout the loop editor uses: they
+                    wrap, so a long allowlist stays a few lines instead of one
+                    row per command. */}
+                <CommandPrefixEditor
+                  compact
+                  prefixes={commandPrefixes}
+                  onChange={onApprovedCommandPrefixes}
+                />
+                {brief.approved_command_prefixes != null && (
+                  <button type="button" onClick={() => onApprovedCommandPrefixes(null)}>
+                    reset to inherit
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           <button type="button" onClick={() => onAgent(null)}>reset to inherit</button>
         </div>
       ) : (
         <div className="loop-brief-execution inherit">
-          <span>execution · inherits first agent stage{execution ? ` · ${execution.provider} · ${execution.model}` : ""}</span>
+          <label><b>◈</b> Run configuration <span>⇡ inherits the first agent stage</span><em>template › run override › inherit</em></label>
+          {/* Resolved values, not one truncated line: these decide what the
+              run costs and how it behaves, and a stage that inherits them is
+              still running with them. */}
+          <ResolvedExecution execution={execution} pinned={pinnedPolicy} />
+          <div className="pm-agent-row">
+            <span>Timeout</span>
+            <div>
+              <span className="loop-brief-timeout">{stage.retry.timeout_minutes} min</span>
+              <em>the stage is cut off and retried from the start when this elapses</em>
+            </div>
+          </div>
           <button type="button" disabled={!agentConfig} onClick={() => agentConfig && onAgent({ provider: null, model: null, options: {} })}><EditIcon size={9} /> change</button>
         </div>
       )}
@@ -433,17 +499,7 @@ function StageBriefCard({
         </div>
       )}
 
-      {expanded && (
-        <section className="loop-brief-commands">
-          <header>
-            <strong>Approved command prefixes</strong>
-            <span>{brief.approved_command_prefixes == null ? (baseStage ? "loop default" : "inherited") : "this work"}</span>
-            {brief.approved_command_prefixes != null && <button type="button" onClick={() => onApprovedCommandPrefixes(null)}>Reset to inherit</button>}
-          </header>
-          <CommandPrefixEditor prefixes={commandPrefixes} onChange={onApprovedCommandPrefixes} />
-          <small>Matching commands run without pausing this stage for approval.</small>
-        </section>
-      )}
+
 
       <div className="loop-brief-for-work">
         <label className="loop-brief-note">
@@ -555,6 +611,47 @@ function instructionSummary(instructions: string): string {
 
 function templateContextLabel(context: LoopStepDefinition["inputs"][number]): string {
   return context.paths.join(", ") || context.ref || context.step || context.kind.replaceAll("_", " ");
+}
+
+/** The execution a stage will actually run with, one value per row.
+ *
+ *  An inheriting stage used to render a single truncated line naming only the
+ *  provider and model. Effort and permissions were invisible, so the two
+ *  values that most change what a run costs and what it is allowed to touch
+ *  could only be found by opening the stage that set them.
+ */
+function ResolvedExecution({
+  execution,
+  pinned,
+}: {
+  execution: PlanningAgentConfig | null;
+  pinned: { effort: string | null; fast: boolean | null; permissions: string | null };
+}) {
+  if (!execution) {
+    return <span className="loop-brief-resolved empty">No agent stage above this one to inherit from.</span>;
+  }
+  const effort = pinned.effort ?? stringOption(execution.options, "effort");
+  const fast = pinned.fast ?? (stringOption(execution.options, "fast") === "true");
+  const rows: Array<[string, string]> = [
+    ["Agent", [execution.provider, execution.model].filter(Boolean).join(" · ")],
+    ["Effort", [effort || "provider default", fast ? "fast" : null].filter(Boolean).join(" · ")],
+    ["Permissions", pinned.permissions ? `${pinned.permissions} only` : "inherited"],
+  ];
+  return (
+    <dl className="loop-brief-resolved">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function stringOption(options: Record<string, string> | undefined, key: string): string {
+  const value = options?.[key];
+  return typeof value === "string" ? value : "";
 }
 
 function pinnedExecution(stage: LoopStepDefinition): string {

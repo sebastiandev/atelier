@@ -11330,11 +11330,116 @@ a.pm-track-row:hover strong {
   gap: 5px;
   flex-wrap: wrap;
 }
+/* Run setup stacks them: one labelled row per value, 76px label column. The
+   inline row is right for a dialog that is mostly about something else. */
+.pm-agent-controls.rows {
+  display: grid;
+  flex: 0 0 100%;
+  gap: 15px;
+  /* Off the header above it, so the card opens with a break rather than the
+     first control sitting against the title. */
+  margin-top: 5px;
+  min-width: 0;
+}
+.pm-agent-row {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pm-agent-row > span {
+  color: var(--fg-4);
+  font: var(--chrome-weight) 9.5px var(--chrome-font);
+  letter-spacing: var(--chrome-track);
+  text-transform: var(--chrome-case);
+}
+.pm-agent-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tag);
+  background: var(--bg-1);
+  color: var(--fg-4);
+}
+.pm-agent-segmented > button {
+  padding: 2px 12px;
+  border: 0;
+  border-radius: var(--radius-tag);
+  background: none;
+  color: var(--fg-3);
+  cursor: pointer;
+  font: 10.5px var(--font-mono);
+  transition: background 80ms, color 80ms;
+}
+.pm-agent-segmented > button:hover:not(.selected) { color: var(--fg); }
+.pm-agent-segmented > button.selected {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+/* The Allowed row is a direct child of the card, not of the controls grid,
+   so it needs its own full-width basis -- a grid inside a flex parent with no
+   basis shrinks and collapses its value column -- and its own top margin,
+   since the card's 6px flex gap is tighter than the rhythm between rows. */
+.loop-brief-execution > .pm-agent-row {
+  flex: 0 0 100%;
+  margin-top: 6px;
+}
+.loop-brief-prefix-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+/* The compact editor wraps its own chips; it needs the row's width to do it,
+   or the add-form's `flex: 1 0 100%` measures against nothing. */
+.loop-brief-prefix-row > .command-prefix-editor { flex: 1 1 100%; min-width: 0; }
+/* No negative pull. Twice now a pull that looked safe against a line of text
+   ran into the segmented control above, which is a bordered box and taller.
+   The label column already ties the note to its row; it does not need to be
+   dragged up to read as belonging there. */
+.pm-agent-row.note { line-height: 1.5; }
+.loop-brief-timeout {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tag);
+  background: var(--bg-1);
+  color: var(--fg-2);
+  font: 10.5px var(--font-mono);
+}
+/* Set on the stage, in the loop editor, beside the same agent and effort --
+   shown here because a timeout read without the model it applies to is not
+   worth much, which is the handoff's whole reason for co-locating them. */
+.pm-agent-row > div > em {
+  color: var(--fg-4);
+  font: 10px var(--font-mono);
+  font-style: normal;
+}
+.pm-agent-row.note > em {
+  color: var(--fg-4);
+  font: 10px var(--font-mono);
+  font-style: normal;
+}
+.pm-agent-row > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
 .pm-mini-select {
   position: relative;
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 24px;
   max-width: 100%;
   padding: 3px 6px 3px 8px;
   border: 1px solid var(--line);
@@ -11380,9 +11485,13 @@ a.pm-track-row:hover strong {
   font-family: var(--font-mono);
 }
 .pm-fast-toggle {
+  /* Same box metrics as `.pm-mini-select`, which it sits in a row with. The
+     select carries an extra 2px of right padding for its caret, so matching
+     `padding` alone left the two a pixel out of line. */
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 24px;
   padding: 3px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius-tag);
@@ -15792,10 +15901,45 @@ select:disabled {
 .loop-brief-pinned > span { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
 .loop-brief-pinned > em { flex: 0 0 auto; font-style: normal; }
 .loop-brief-execution {
+  /* Outlined, per the handoff: agent, effort and permissions decide what a
+     run costs and what it may touch, and they used to read as a footnote
+     under the brief rather than as the run's configuration. */
   min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-1);
   color: var(--fg-4);
   font: 10.5px var(--font-mono);
 }
+.loop-brief-execution > label > b { margin-right: 4px; color: var(--accent); font-weight: 400; }
+.loop-brief-execution > label > em {
+  margin-left: auto;
+  color: var(--fg-4);
+  font-weight: 400;
+  font-style: normal;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.loop-brief-resolved {
+  /* A flex child with no basis shrinks to min-content, which collapses the
+     `minmax(0, 1fr)` value column and wraps the text one character per line.
+     The label beside it takes a full row the same way. */
+  display: grid;
+  flex: 0 0 100%;
+  gap: 3px;
+  min-width: 0;
+  margin: 6px 0 0;
+}
+.loop-brief-resolved > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+.loop-brief-resolved dt { color: var(--fg-4); }
+.loop-brief-resolved dd { margin: 0; color: var(--fg-2); overflow-wrap: anywhere; }
+.loop-brief-resolved.empty { color: var(--fg-4); }
 .loop-brief-execution.base,
 .loop-brief-execution.override {
   display: flex;
@@ -15818,10 +15962,15 @@ select:disabled {
   text-transform: none;
 }
 .loop-brief-execution.inherit {
+  /* Wraps, like `.base` and `.override`. Without it a `flex: 0 0 100%` child
+     overflows to the right of the card instead of taking its own line, which
+     is what put the resolved rows outside the border. Dimmed, not collapsed:
+     an inheriting stage still runs with these values. */
   display: flex;
-  min-height: 24px;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
+  opacity: 0.92;
 }
 .loop-brief-execution.inherit > span {
   overflow: hidden;
