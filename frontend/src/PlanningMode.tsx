@@ -1511,11 +1511,14 @@ function PlanRail({
   const [open, setOpen] = useState(true);
   const setPlanningRailWidth = useLayoutStore((s) => s.setPlanningRailWidth);
   const activeProgress = counts.running + counts.review + counts.ready + counts.draft;
-  const pullRequests = plan.artifacts.flatMap((item) =>
-    item.runs
-      .filter((run): run is PlanArtifactRun & { pr: PrLifecycle } => Boolean(run.pr))
-      .map((run) => ({ artifactId: item.id, runId: run.id, pr: run.pr })),
-  );
+  // One entry per story, from its latest run that opened a PR -- same rule as
+  // the story panel. Earlier runs' pull requests are history: their state is
+  // never refreshed again, so listing them shows stale "open" rows for work
+  // that has long since merged or been abandoned.
+  const pullRequests = plan.artifacts.flatMap((item) => {
+    const run = [...item.runs].reverse().find((entry) => entry.pr);
+    return run?.pr ? [{ artifactId: item.id, runId: run.id, pr: run.pr }] : [];
+  });
   return (
     <aside className="pm-rail">
       <div className="pm-mode-static">
@@ -2093,14 +2096,19 @@ function ArtifactDetail({
   const editable = !readOnly && (status === "draft" || status === "ready" || status === "blocked");
   const dirty = draft !== detail.content;
   const latestRun = detail.artifact.runs.at(-1) ?? null;
-  const latestPr =
-    [...detail.artifact.runs].reverse().find((run) => run.pr)?.pr ?? null;
+  const latestPrRun = [...detail.artifact.runs].reverse().find((run) => run.pr) ?? null;
+  const latestPr = latestPrRun?.pr ?? null;
   const latestLoopStatus = latestRun ? loopStatus(latestRun) : null;
   const latestRunData = latestRun ? planningRunData(detail.artifact, latestRun) : null;
   const latestRunReviewable = latestLoopStatus === "completed" || latestLoopStatus === "awaiting_approval";
-  const pullRequests = detail.artifact.runs
-    .filter((item): item is PlanArtifactRun & { pr: PrLifecycle } => Boolean(item.pr))
-    .map((item) => ({ runId: item.id, pr: item.pr }));
+  // The latest run's PR only. Listing every run's meant a cancelled or
+  // superseded run kept its pull request on screen forever: nothing refreshes
+  // a finished run's PR state, so it stayed frozen at whatever it last said --
+  // a story whose current PR was merged still showed an "open" one from a run
+  // abandoned weeks earlier.
+  const pullRequests = latestPr
+    ? [{ runId: latestPrRun!.id, pr: latestPr }]
+    : [];
   const approvalBlocker = detail.artifact.launch_blockers.find((blocker) =>
     blocker.toLowerCase().startsWith("approve "),
   );
