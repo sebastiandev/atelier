@@ -90,7 +90,9 @@ async def refresh(
 ) -> PlanArtifactDetail:
     """Synchronize PR review state for one Planning run."""
     target, store = _target(workstore, files, loop_runs, req)
-    await pr_review.refresh(target, gateway, force=req.force)
+    await pr_review.refresh(
+        target, gateway, force=req.force, save=lambda: store.save(target)
+    )
     store.save(target)
     return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 

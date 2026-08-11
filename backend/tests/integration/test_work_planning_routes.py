@@ -3194,6 +3194,12 @@ def test_a_follow_up_continues_a_run_whose_stored_revision_no_longer_matches(
             if not isinstance(loop_state, dict) or not loop_state.get("definition_revision"):
                 continue
             loop_state["definition_revision"] = "0ldrev"
+            # The snapshot's own revision moves with it: both are written from
+            # the same value, so restamping one alone fabricates a state no
+            # build produces and the revision check rightly rejects it.
+            snapshot = loop_state.get("definition_snapshot")
+            if isinstance(snapshot, dict):
+                snapshot["revision"] = "0ldrev"
             connection.execute(
                 text("UPDATE loop_runs SET state = :state, definition_revision = '0ldrev'"
                      " WHERE id = :id"),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
@@ -216,15 +217,29 @@ def _addressed_detail(loop: dict[str, Any], pass_number: int) -> str:
 
 
 def _one_or_two_lines(text: str) -> str:
-    """Collapse a report field to the first sentence, hard-capped."""
+    """Collapse a report field to a short, safely quotable line.
+
+    No sentence splitting: it cut on the first ``". "``, so "Fixed the i.e.
+    case. Then hardened the parser." was posted as "Fixed the i.e." -- a
+    truncated non-sentence presented as the account of what changed. The cap
+    lands on a word boundary instead.
+
+    ``@`` and ``#`` are escaped. This text is an agent's prose going onto a
+    public pull request, where ``@handle`` notifies a real person and ``#123``
+    cross-links an issue; neither is something a report meant to do, and both
+    would happen on every addressed comment.
+    """
     collapsed = " ".join(text.split())
     if not collapsed:
         return ""
-    head, separator, _ = collapsed.partition(". ")
-    first = head + ("." if separator else "")
-    if len(first) <= _DETAIL_LIMIT:
-        return first
-    return first[: _DETAIL_LIMIT - 1].rstrip() + "\u2026"
+    if len(collapsed) > _DETAIL_LIMIT:
+        cut = collapsed[:_DETAIL_LIMIT]
+        boundary = cut.rfind(" ")
+        collapsed = (cut[:boundary] if boundary > 0 else cut).rstrip(" ,;:") + "\u2026"
+    return _MENTION.sub(r"\\\g<0>", collapsed)
+
+
+_MENTION = re.compile(r"[@#](?=\w)")
 
 
 async def _post_addressed_replies(
@@ -243,9 +258,19 @@ async def _post_addressed_replies(
     next completion replied to all of them again. A failure now costs at most
     the comment it happened on, and the others stay answered exactly once.
     """
+    answered = {
+        actions.str_or_empty(row.get("id"))
+        for row in comments
+        if row.get("reply_posted_at")
+    }
     for row in list(comments):
         pass_number = row.get("addressed_in_pass")
         if not isinstance(pass_number, int) or row.get("reply_posted_at"):
+            continue
+        # By upstream id, not by row: two rows can name the same comment (a
+        # merge that appends rather than upserts, an import), and answering
+        # each of them puts two identical replies on one thread.
+        if actions.str_or_empty(row.get("id")) in answered:
             continue
         comment = _domain_comment(row)
         if comment is None:
@@ -262,6 +287,7 @@ async def _post_addressed_replies(
             continue
         posted_at = actions.now_iso()
         row["reply_posted_at"] = posted_at
+        answered.add(actions.str_or_empty(row.get("id")))
         comments.append(
             {
                 "id": reply.id,
@@ -277,7 +303,13 @@ async def _post_addressed_replies(
                 "reply_posted_at": posted_at,
             }
         )
-        checkpoint()
+        try:
+            checkpoint()
+        except Exception:
+            # The reply is already public. Losing the run's other marks because
+            # this write failed would re-post every one of them, so the batch
+            # stops here and leaves the rest unanswered rather than duplicated.
+            return
 
 
 def _domain_comment(row: dict[str, Any]) -> PrComment | None:

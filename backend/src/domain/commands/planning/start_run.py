@@ -326,11 +326,12 @@ def _resolve_definition(
     definition_id = req.loop_definition_id
     pinned = _pinned_definition(req, definition_id)
     if pinned is not None:
-        return pinned
-    if definition_id is None:
-        definition = builtin_loop_definition("atelier-fast")
-        if definition is None:
+        definition = pinned
+    elif definition_id is None:
+        builtin = builtin_loop_definition("atelier-fast")
+        if builtin is None:
             raise LoopDefinitionNotFound("loop definition not found: atelier-fast")
+        definition = builtin
     else:
         definition = locate_definition(
             repository,
@@ -356,7 +357,11 @@ def _pinned_definition(
     Preconditions: ``req.loop_definition_snapshot`` came from the run being
     continued. Postconditions: returns that exact definition, or ``None`` when
     there is nothing pinned or it names a different loop, in which case the
-    caller resolves from the library as before.
+    caller resolves from the library as before. The result still goes through
+    the validity and revision checks below: skipping them was how the first
+    version of this branch quietly dropped two guards that the library path
+    kept, and the pinned revision matches by construction, so the check the bug
+    was about still passes.
 
     The goal-driven path has always done this (``domain/loop/start.py``); only
     Planning re-read the library and then demanded the stored revision still

@@ -459,7 +459,9 @@ async def refresh_pr(
     get_run(loop_runs, key)
     store = LoopRunStore(loop_runs)
     target = _target_or_raise(store, key)
-    await pr_review.refresh(target, gateway, force=req.force)
+    await pr_review.refresh(
+        target, gateway, force=req.force, save=lambda: store.save(target)
+    )
     store.save(target)
     return get_run(loop_runs, key)
 

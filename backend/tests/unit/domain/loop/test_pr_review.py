@@ -151,7 +151,27 @@ async def test_refresh_merges_review_and_replies_to_addressed_comment_once() -> 
     assert comments[1]["is_viewer"] is True
 
 
-@pytest.mark.anyio
+class _RecordingGateway:
+    """Answer everything, recording which comment each reply was for."""
+
+    def __init__(self) -> None:
+        self.answered: list[str] = []
+
+    async def reply(self, ref: PrRef, comment: PrComment, body: str) -> PrComment:
+        self.answered.append(comment.id)
+        return PrComment(
+            id=f"reply-to-{comment.id}",
+            author="atelier",
+            location=comment.location,
+            body=body,
+            created_at="2026-07-20T12:00:00Z",
+            url="https://github.com/acme/repo/pull/7#reply",
+            kind=comment.kind,
+            reply_target_id=comment.reply_target_id,
+            is_viewer=True,
+        )
+
+
 class _FlakyGateway:
     """Answer the first comment, then fail -- a rate limit mid-batch."""
 
@@ -202,7 +222,7 @@ def test_the_reply_says_what_the_pass_changed_rather_than_what_was_asked() -> No
 
     assert body == (
         "Addressed in [`a1b2c3d`](https://github.com/acme/repo/commit/a1b2c3d)."
-        " Guarded the empty branch."
+        " Guarded the empty branch. Also tidied the helper."
     )
 
 
@@ -288,10 +308,14 @@ async def test_a_reply_that_fails_does_not_unrecord_the_ones_already_posted() ->
         row["id"] for row in saved[-1] if row.get("reply_posted_at")
     }
     assert "comment-1" in answered
-    # And a second run over the same state must not answer it again.
-    gateway_again = _FlakyGateway()
+    # And a second run over the same state must not answer it again. Assert on
+    # the comment the gateway was handed, not on the reply body: a body never
+    # contains the comment id, so a substring check passes either way.
+    gateway_again = _RecordingGateway()
     await pr_review.post_addressed_replies(target, gateway_again, lambda: None)  # type: ignore[arg-type]
-    assert [body for body in gateway_again.replies if "comment-1" in body] == []
+    assert "comment-1" not in gateway_again.answered
+    # comment-2 never got its reply out, so it is still owed one.
+    assert gateway_again.answered == ["comment-2"]
 
 
 @pytest.mark.anyio
