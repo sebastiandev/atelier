@@ -1,7 +1,7 @@
 import {
   type CSSProperties,
   type ReactNode,
-  useEffect,
+  useCallback, useEffect,
   useMemo,
   useState,
 } from "react";
@@ -63,6 +63,7 @@ import {
   providerPermissionOption,
   useProviderDescriptors,
 } from "./providerDescriptors";
+import { resolvePlanLink } from "./editedPaths";
 import { RichMarkdownEditor } from "./RichMarkdownEditor";
 import { ShellTopbar, type ShellTopbarCrumb } from "./ShellTopbar";
 import {
@@ -174,6 +175,7 @@ type PlanningModeProps = {
   ) => Promise<void>;
   onChatOpen: (open: boolean) => void;
   onPlanningChatUpdated: (chat: ChatSummary) => void;
+  onPlanningFilesEdited: (paths: string[]) => void;
 };
 
 type PlanUiStatus =
@@ -242,6 +244,7 @@ export function PlanningMode({
   onRefreshRunPr,
   onChatOpen,
   onPlanningChatUpdated,
+  onPlanningFilesEdited,
 }: PlanningModeProps) {
   const readOnly = work.status !== "active";
   const tree = useMemo(() => splitPlan(plan), [plan]);
@@ -324,7 +327,27 @@ export function PlanningMode({
     && view.kind !== "run"
     && view.kind !== "setup";
   const planningReady = Boolean(planningChatSummary?.planning_readiness?.ready);
-  const planReferences = plan?.artifacts ?? [];
+  // Stable across plan polls that return the same documents: a fresh array
+  // each tick would rebuild `makePlanLinkTo`, defeat `MarkdownText`'s memo and
+  // re-parse every document -- the code-block flash that memo exists to stop.
+  const artifacts = plan?.artifacts;
+  const planReferences = useMemo(() => artifacts ?? [], [artifacts]);
+  // Plan documents link to each other with relative paths. The browser would
+  // resolve those against the app URL, leave the route table and land on the
+  // home screen; resolving against the linking document instead opens the
+  // document the author meant, which also selects it in the rail.
+  const makePlanLinkTo = useCallback(
+    (fromPath: string) => (href: string) => {
+      const target = resolvePlanLink(href, fromPath);
+      if (!target) return null;
+      const match = planReferences.find((item) => item.path === target);
+      // A relative link to something the plan does not own stays inert rather
+      // than navigating away from the plan.
+      if (!match) return null;
+      return () => onView({ kind: "artifact", id: match.id });
+    },
+    [planReferences, onView],
+  );
   const materializerActive = materializationStatus?.state === "running";
   const materializerVisible =
     materializationStatus?.state === "running" ||
@@ -418,6 +441,7 @@ export function PlanningMode({
               openPlanLabel={sourcePlanLabel}
               openPlanDisabled={sourcePlanBusy}
               onChatUpdated={onPlanningChatUpdated}
+              onFilesEdited={onPlanningFilesEdited}
             />
           )}
         </main>
@@ -449,6 +473,7 @@ export function PlanningMode({
             openPlanLabel={saving ? "Opening plan..." : "Open plan overview"}
             openPlanDisabled={saving || readOnly}
             onChatUpdated={onPlanningChatUpdated}
+            onFilesEdited={onPlanningFilesEdited}
           />
         </main>
       </div>
@@ -516,6 +541,7 @@ export function PlanningMode({
             draft={draft}
             saving={saving || readOnly}
             readOnly={readOnly}
+            makeLinkTo={makePlanLinkTo}
             onDraftChange={onDraftChange}
             onSave={onSave}
             onReset={onReset}
@@ -631,6 +657,7 @@ export function PlanningMode({
             draft={draft}
             saving={saving || readOnly}
             readOnly={readOnly}
+            makeLinkTo={makePlanLinkTo}
             onDraftChange={onDraftChange}
             onSave={onSave}
             onReset={onReset}
@@ -703,6 +730,7 @@ export function PlanningMode({
             planningPlacement="dock"
             onClose={() => onChatOpen(false)}
             onUpdated={onPlanningChatUpdated}
+            onFilesEdited={onPlanningFilesEdited}
           />
         </aside>
       ) : !readOnly && hasPlanningChat && view.kind !== "run" ? (
@@ -1327,6 +1355,7 @@ function PlanningChatCanvas({
   openPlanLabel,
   openPlanDisabled,
   onChatUpdated,
+  onFilesEdited,
 }: {
   chatSlug: string | null;
   chatSummary: ChatSummary | null;
@@ -1337,6 +1366,7 @@ function PlanningChatCanvas({
   openPlanLabel: string;
   openPlanDisabled: boolean;
   onChatUpdated: (chat: ChatSummary) => void;
+  onFilesEdited: (paths: string[]) => void;
 }) {
   return (
     <div className="pm-conversation-canvas">
@@ -1353,6 +1383,7 @@ function PlanningChatCanvas({
           openPlanLabel={openPlanLabel}
           openPlanDisabled={openPlanDisabled}
           onUpdated={onChatUpdated}
+          onFilesEdited={onFilesEdited}
         />
       ) : (
         <div className="pm-conversation-fallback">
@@ -2014,6 +2045,7 @@ function EpicDetail({
 }
 
 function ArtifactDetail({
+  makeLinkTo,
   artifact,
   detail,
   draft,
@@ -2031,6 +2063,7 @@ function ArtifactDetail({
   artifact: PlanArtifact | null;
   detail: PlanArtifactDetail | null;
   draft: string;
+  makeLinkTo: (fromPath: string) => (href: string) => (() => void) | null;
   readOnly: boolean;
   saving: boolean;
   onDraftChange: (value: string) => void;
@@ -2046,6 +2079,14 @@ function ArtifactDetail({
   onEpic: () => void;
   onApprovePlan: () => void;
 }) {
+  // Above the guards: a hook after an early return runs a different number of
+  // times once `detail` arrives, which is a hooks-order crash on the ordinary
+  // loading path. Memoized because `MarkdownText` is memo'd to avoid
+  // re-parsing markdown on every keystroke elsewhere in the tree.
+  const linkTo = useMemo(
+    () => makeLinkTo(detail?.artifact.path ?? artifact?.path ?? ""),
+    [makeLinkTo, detail?.artifact.path, artifact?.path],
+  );
   if (!artifact) return <div className="pm-loading">Artifact not found.</div>;
   if (!detail) return <div className="pm-loading">Loading source…</div>;
   const status = uiStatus(detail.artifact);
@@ -2110,6 +2151,7 @@ function ArtifactDetail({
             className="pm-doc-editor"
             value={draft}
             onChange={onDraftChange}
+            onLinkTo={linkTo}
             readOnly={!editable}
           />
           <div className="pm-doc-actions">
@@ -2208,6 +2250,7 @@ function ArtifactDetail({
 }
 
 function SourceDoc({
+  makeLinkTo,
   artifact,
   detail,
   draft,
@@ -2221,6 +2264,7 @@ function SourceDoc({
   artifact: PlanArtifact | null;
   detail: PlanArtifactDetail | null;
   draft: string;
+  makeLinkTo: (fromPath: string) => (href: string) => (() => void) | null;
   readOnly: boolean;
   saving: boolean;
   onDraftChange: (value: string) => void;
@@ -2228,6 +2272,10 @@ function SourceDoc({
   onReset: () => void;
   onApprovePlan: () => void;
 }) {
+  const linkTo = useMemo(
+    () => makeLinkTo(artifact?.path ?? ""),
+    [makeLinkTo, artifact?.path],
+  );
   if (!artifact) return <div className="pm-loading">Source document not found.</div>;
   if (!detail) return <div className="pm-loading">Loading source…</div>;
   const dirty = draft !== detail.content;
@@ -2255,6 +2303,7 @@ function SourceDoc({
           className="pm-doc-editor source"
           value={draft}
           onChange={onDraftChange}
+          onLinkTo={linkTo}
           readOnly={readOnly}
         />
         <div className="pm-doc-actions">

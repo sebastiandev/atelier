@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   DndContext,
@@ -92,6 +92,7 @@ import {
 import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { DeleteWorkDialog } from "./DeleteWorkDialog";
+import { relativeToRoot } from "./editedPaths";
 import { HandoffDialog } from "./HandoffDialog";
 import {
   anchoredMenuPosition,
@@ -834,6 +835,46 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   // that action refreshes on its own.
   const planDetailRef = useRef<PlanArtifactDetail | null>(null);
   planDetailRef.current = planArtifactDetail;
+
+  // The planning chat writes plan files directly. The supervisor allows one
+  // subscriber per chat, so this cannot watch the stream itself -- `ChatTile`
+  // owns it and reports finished writes up. An edit to the story on screen
+  // reloads it; anything else is left alone.
+  const planReloadRef = useRef(0);
+  const handlePlanningFilesEdited = useCallback(
+    (paths: string[]) => {
+      const root = plan?.plan_artifacts_path;
+      const open = planDetailRef.current;
+      if (!root || !open || !selectedPlanArtifactId) return;
+      const touched = paths.some(
+        (path) => relativeToRoot(path, root) === open.artifact.path,
+      );
+      if (!touched) return;
+      // Two edits in quick succession issue two fetches. Without a sequence
+      // guard the earlier one can resolve last and write the older content
+      // back, so the story visibly reverts. The hash check cannot catch it:
+      // the stale content differs from the newer content just as much as the
+      // newer differs from the old.
+      const request = (planReloadRef.current += 1);
+      getPlanArtifact(workSlug, selectedPlanArtifactId)
+        .then((detail) => {
+          if (request !== planReloadRef.current) return;
+          const previous = planDetailRef.current;
+          if (!previous || previous.artifact.id !== detail.artifact.id) return;
+          if (detail.artifact.source_hash === previous.artifact.source_hash) return;
+          setPlanArtifactDetail(detail);
+          // Never discard what the user is part-way through writing. Same rule
+          // the run poll uses: only an untouched draft follows the file.
+          setPlanDraft((currentDraft) =>
+            currentDraft === previous.content ? detail.content : currentDraft,
+          );
+        })
+        .catch(() => {
+          // Opportunistic, like the run poll: an explicit action still errors.
+        });
+    },
+    [plan?.plan_artifacts_path, selectedPlanArtifactId, workSlug],
+  );
 
   const planHasUnsettledRun = useMemo(
     () =>
@@ -1919,6 +1960,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           onRefreshRunPr={handleRefreshPlanRunPr}
           onChatOpen={setPlanChatOpen}
           onPlanningChatUpdated={patchChatSummary}
+          onPlanningFilesEdited={handlePlanningFilesEdited}
         />
         {completeOpen && (
           <CompleteWorkDialog

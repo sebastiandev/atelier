@@ -59,9 +59,24 @@ import {
 import { editorUrl, useSettingsStore } from "./state/settings";
 import { type AgentEvent, useAgentStream } from "./useAgentStream";
 
+/** No `replay_limit` on the socket, which the supervisor reads as "replay the
+ *  whole transcript from disk" rather than a bounded tail. */
+const FULL_REPLAY = 0;
+
 export type RunDock =
   | { kind: "loop"; stageId: string | null }
-  | { kind: "transcript"; agentSlug: string; endSeq: number | null; startSeq: number; title: string }
+  | {
+      kind: "transcript";
+      agentSlug: string;
+      endSeq: number | null;
+      startSeq: number;
+      title: string;
+      /** Which occurrence is on screen, and whether it was the run's current
+       *  one when opened. Opening the live stage's transcript follows the run
+       *  as it moves on; opening a past occurrence stays where it was put. */
+      occurrenceId: string;
+      followCurrent: boolean;
+    }
   | { kind: "discussion"; chat: ChatSummary }
   | null;
 
@@ -164,6 +179,12 @@ function StreamedRunSurface(
 ) {
   const stream = useAgentStream(props.agentStage.agent_slug!, {
     readOnly: props.readOnly,
+    // Full replay, not the 100-event default. This stream also backs the
+    // transcript dock, and a transcript that silently starts partway through
+    // is worse than a slow one: the reader cannot tell that it is truncated,
+    // and scrolling up simply stops. Agent tiles keep their cap because they
+    // are a live activity view, not a record.
+    initialReplayLimit: FULL_REPLAY,
   });
   return (
     <RunSurfaceContent
@@ -245,7 +266,25 @@ function RunSurfaceContent({
   const showingTerminalOccurrence = terminalOccurrence !== null
     && (selectedOccurrenceId === null
       || selectedOccurrence?.occurrenceId === terminalOccurrence.occurrenceId);
+  // A transcript opened on the live stage follows the run when it moves on.
+  // Without this the dock kept showing the stage that had just finished, so
+  // watching a loop meant closing and reopening the panel at every transition.
+  // A transcript opened on a past occurrence stays put: the user went looking
+  // for it, and yanking it away mid-read would be worse than leaving it.
+  const dockOccurrenceId = dock?.kind === "transcript" ? dock.occurrenceId : null;
+  const dockFollows = dock?.kind === "transcript" && dock.followCurrent;
+  useEffect(() => {
+    if (!dockFollows || currentOccurrence === null || !currentOccurrence.agent_slug) return;
+    if (dockOccurrenceId === currentOccurrence.occurrenceId) return;
+    onDock(transcriptDock(currentOccurrence, occurrences, true));
+    // `occurrences` is rebuilt every render; the occurrence id is what actually
+    // changes, and re-running on the array identity would re-dock constantly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dockFollows, dockOccurrenceId, currentOccurrence?.occurrenceId, currentOccurrence?.agent_slug]);
+
   const latestPrOccurrence = [...occurrences].reverse().find((item) => item.kind === "pr") ?? null;
+  const latestTaskOccurrenceId =
+    [...occurrences].reverse().find((item) => item.kind === "agent_task")?.occurrenceId ?? null;
   // The approval stage is a human gate and never files a report of its own, so
   // the result panel shows the last stage that actually produced one.
   const resultOccurrence = [...occurrences]
@@ -478,7 +517,7 @@ function RunSurfaceContent({
                     ? () => onSendPrFeedback([], `Resolve the Create PR failure: ${data.statusReason}`)
                     : undefined}
                   onTranscript={() => selectedOccurrence?.agent_slug && onDock(
-                    transcriptDock(selectedOccurrence, occurrences),
+                    transcriptDock(selectedOccurrence, occurrences, showingCurrentOccurrence),
                   )}
                 />
                 {selectedOccurrenceId !== null && selectedOccurrence && (
@@ -488,6 +527,7 @@ function RunSurfaceContent({
                     definition={data.definition}
                     feedback={data.feedback}
                     waivedFindings={data.waivedFindings}
+                    latestTaskOccurrenceId={latestTaskOccurrenceId}
                     events={selectedOccurrence.occurrenceId === currentOccurrence?.occurrenceId ? events : []}
                     pr={data.pr}
                     prComments={data.prComments}
@@ -510,6 +550,7 @@ function RunSurfaceContent({
               <StageOutput
                 feedback={data.feedback}
                 waivedFindings={data.waivedFindings}
+                latestTaskOccurrenceId={latestTaskOccurrenceId}
                 agent={outputAgent}
                 busy={busy}
                 definition={data.definition}
@@ -574,7 +615,7 @@ function RunSurfaceContent({
             ? () => setRequesting((value) => !value)
             : undefined}
           onTranscript={() => selectedOccurrence?.agent_slug && onDock(
-            transcriptDock(selectedOccurrence, occurrences),
+            transcriptDock(selectedOccurrence, occurrences, showingCurrentOccurrence),
           )}
         />
       </div>
@@ -704,7 +745,7 @@ function HistoricalOccurrenceTranscriptDock({
   startSeq: number;
   title: string;
 }) {
-  const stream = useAgentStream(agentSlug, { readOnly: true });
+  const stream = useAgentStream(agentSlug, { readOnly: true, initialReplayLimit: FULL_REPLAY });
   return (
     <RunTranscriptDock
       agentSlug={agentSlug}
@@ -946,22 +987,40 @@ export function LoopRunStageSpine({
   // part worth seeing. Earlier passes therefore fold into one line together,
   // and open back into the per-pass lines. A pass the user has expanded by hand
   // is never folded away underneath them.
+  // A pass holding the occurrence on screen is never folded away: its report
+  // is being read, and hiding its line leaves nothing to click back to.
+  const selectedPass = passGroups.find(([, items]) =>
+    items.some((item) => item.occurrenceId === selectedOccurrenceId),
+  )?.[0];
   const foldable = passGroups
     .map(([passNumber]) => passNumber)
-    .filter((passNumber) => passNumber !== currentPass && !expandedPasses.has(passNumber));
+    .filter(
+      (passNumber) =>
+        passNumber !== currentPass
+        && passNumber !== selectedPass
+        && !expandedPasses.has(passNumber),
+    );
+  // Only the contiguous run of passes at the front. Folding a scattered set
+  // would put one summary line above a pass it postdates, because the line
+  // renders at the earliest folded pass's position.
+  const leading: number[] = [];
+  for (const [passNumber] of passGroups) {
+    if (!foldable.includes(passNumber)) break;
+    leading.push(passNumber);
+  }
   // One earlier pass is already one line; folding it would only rename it.
-  const folded = showEarlier || foldable.length < 2 ? [] : foldable;
+  const folded = showEarlier || leading.length < 2 ? [] : leading;
   const foldedSet = new Set(folded);
   return (
     <div className="run-pass-stack">
-      {showEarlier && foldable.length > 1 && (
+      {showEarlier && leading.length > 1 && (
         <button
           type="button"
           className="run-pass-fold"
           aria-expanded
           onClick={() => setShowEarlier(false)}
         >
-          ▾ fold {foldable.length} earlier passes
+          ▾ fold earlier passes
         </button>
       )}
       {passGroups.map(([passNumber, items]) => {
@@ -1150,6 +1209,7 @@ function StageOutput({
   definition,
   events,
   feedback,
+  latestTaskOccurrenceId,
   waivedFindings,
   onConfig,
   onRefreshPr,
@@ -1164,6 +1224,7 @@ function StageOutput({
   definition: LoopDefinitionSnapshot | null;
   events: AgentEvent[];
   feedback: LoopFeedbackRecord[];
+  latestTaskOccurrenceId: string | null;
   waivedFindings: string[];
   onConfig: () => void;
   onRefreshPr?: (force?: boolean) => Promise<void>;
@@ -1206,7 +1267,7 @@ function StageOutput({
       {updatingPr && <div className="run-stage-pr-mode">Reuses this run's saved PR setup and branch. No new pull request is created.</div>}
       {stage.status === "changes_requested" && returnTarget && <div className="run-stage-return"><ReturnIcon size={11} /> loop returns to {returnTarget} · pass {stage.passNumber + 1}</div>}
       {running && stage.agent_slug && <RunLiveActivity events={events} />}
-      {!running && stage.summary && <StageReport stage={stage} feedback={feedback} waivedFindings={waivedFindings} />}
+      {!running && stage.summary && <StageReport stage={stage} feedback={feedback} waivedFindings={waivedFindings} isLatestTask={stage.occurrenceId === latestTaskOccurrenceId} />}
       {stage.kind === "pr" && pr && (
         <PrLifecyclePanel
           addressedComments={stage.addressed_comments}
@@ -1428,7 +1489,7 @@ function ResultView({
         </div>
         {onCreatePr && <button className="btn primary" disabled={busy} onClick={onCreatePr}><span aria-hidden>⇱</span> Create PR</button>}
       </div>
-      {stage ? <StageReport stage={stage} feedback={data.feedback} waivedFindings={data.waivedFindings} /> : (
+      {stage ? <StageReport stage={stage} feedback={data.feedback} waivedFindings={data.waivedFindings} isLatestTask /> : (
         <>
           <section><header><strong>Changed files</strong><span>{data.changedFiles.length}</span></header>{data.changedFiles.map((file) => <div className="file-row" key={file.path}><span className="fname">{file.path}</span><span className="fstat"><span className="add">+{file.additions}</span><span className="del">-{file.deletions}</span></span></div>)}{data.changedFiles.length === 0 && <p className="dim">No changed files reported.</p>}</section>
           <section><header><strong>Validation evidence</strong></header>{data.evidence.map((item) => <span className="run-evidence" key={item}><CheckIcon size={9} /> {item}</span>)}{data.evidence.length === 0 && <p className="dim">No validation evidence reported.</p>}</section>
@@ -1699,10 +1760,16 @@ function RunActions({
 function StageReport({
   stage,
   feedback,
+  isLatestTask,
   waivedFindings,
 }: {
   stage: RunStageOccurrence;
   feedback: LoopFeedbackRecord[];
+  /** Whether this is the newest implementation occurrence on the run.
+   *  Dismissals are run-wide and carry no pass, so listing them under an
+   *  older pass's report would claim that pass was told about a finding
+   *  waived after it ran. */
+  isLatestTask: boolean;
   waivedFindings: string[];
 }) {
   const findings = stage.finding_details.length > 0
@@ -1714,7 +1781,7 @@ function StageReport({
   return (
     <div className="report doc">
       {stage.kind === "agent_task" && <RequestedChanges feedback={feedback} stage={stage} />}
-      {stage.kind === "agent_task" && <DismissedFindings findings={waivedFindings} />}
+      {stage.kind === "agent_task" && isLatestTask && <DismissedFindings findings={waivedFindings} />}
       <ReportSection label={stage.kind === "agent_review" ? "Verdict & summary" : "Summary"} icon={<DocIcon size={11} />}><div className="report-summary">{stage.summary}</div></ReportSection>
       {stage.criteria_coverage.length > 0 && <ReportSection label="Acceptance criteria" icon={<CheckIcon size={11} />} count={stage.criteria_coverage.length}>{stage.criteria_coverage.map((criterion, index) => <div className={`crit ${criterion.met ? "met" : "unmet"}`} key={`${criterion.text}-${index}`}><span className="cbox" role="img" aria-label={criterion.met ? "Met" : "Not met"}>{criterion.met ? <CheckIcon size={12} /> : <span aria-hidden>×</span>}</span><span><span className="ctext">{criterion.text}</span>{criterion.note && <span className="cnote">{criterion.note}</span>}</span></div>)}</ReportSection>}
       {stage.findings.length > 0 && <ReportSection label="Findings" icon={<EyeIcon size={11} />} count={stage.findings.length}>{findings.map((finding, index) => <div className="finding" key={`${finding.text}-${index}`}><span className={`sev ${finding.severity}`}>{finding.severity}</span><span className="fbody"><span className="ftext">{finding.text}</span>{finding.location && <span className="floc">{finding.location}</span>}</span></div>)}</ReportSection>}
@@ -1902,6 +1969,7 @@ function stageOccurrences(data: RunSurfaceData): RunStageOccurrence[] {
 function transcriptDock(
   selected: RunStageOccurrence,
   occurrences: RunStageOccurrence[],
+  followCurrent: boolean,
 ): Extract<RunDock, { kind: "transcript" }> {
   return {
     kind: "transcript",
@@ -1909,6 +1977,8 @@ function transcriptDock(
     startSeq: transcriptStartSeq(selected, occurrences),
     endSeq: selected.transcriptEndSeq,
     title: `${selected.name} · pass ${selected.passNumber} transcript`,
+    occurrenceId: selected.occurrenceId,
+    followCurrent,
   };
 }
 

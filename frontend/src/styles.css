@@ -3745,6 +3745,19 @@ h5.md-h {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* An in-plan link opens the document in place. Marked so it does not look
+   like the outbound links beside it, which leave the app. */
+button.md-link.internal {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--md-accent);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.md-link.internal:hover { color: var(--accent); }
 .md-inline-code {
   background: var(--bg);
   border: 1px solid var(--line);
@@ -13971,7 +13984,6 @@ select:disabled {
 }
 .run-pass.current { box-shadow: inset 2px 0 0 var(--accent); }
 .run-pass.selected:not(.current) { border-color: var(--accent-line); }
-.run-pass-heading,
 .run-pass-collapsed.earlier > strong { color: var(--fg-3); font-weight: 500; }
 .run-pass-fold {
   justify-self: start;
@@ -13984,6 +13996,7 @@ select:disabled {
   cursor: pointer;
 }
 .run-pass-fold:hover { color: var(--fg-2); background: var(--bg-3); }
+.run-pass-heading,
 .run-pass-collapsed {
   display: flex;
   align-items: center;

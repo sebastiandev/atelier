@@ -16,7 +16,20 @@ import { codeToHtml } from "shiki";
  * markdown gets re-parsed and `ShikiCode` re-applies its innerHTML,
  * which causes a visible flash on highlighted code blocks.
  */
-export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
+export const MarkdownText = memo(function MarkdownText({
+  text,
+  onLinkTo,
+}: {
+  text: string;
+  /** Turn a link into an in-app navigation. Given the raw `href`, return a
+   *  handler to run on click, or `null` to leave the link alone.
+   *
+   *  Only the plan viewer supplies this. Everywhere else -- agent transcripts,
+   *  loop instructions -- keeps the plain external link, which is what those
+   *  links are.
+   */
+  onLinkTo?: (href: string) => (() => void) | null;
+}) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -55,11 +68,27 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
         h1: ({ children }) => <h3 className="md-h">{children}</h3>,
         h2: ({ children }) => <h4 className="md-h">{children}</h4>,
         h3: ({ children }) => <h5 className="md-h">{children}</h5>,
-        a: ({ children, href }) => (
-          <a className="md-link" href={href} target="_blank" rel="noreferrer">
-            {children}
-          </a>
-        ),
+        a: ({ children, href }) => {
+          const navigate = href && onLinkTo ? onLinkTo(href) : null;
+          if (navigate) {
+            // A plan document, opened in app. Deliberately a button rather
+            // than an anchor: the only href available is the raw relative one
+            // (`../intent.md`), which is exactly the value the browser
+            // resolves against the app URL and lands on the home screen. An
+            // anchor carrying it would look like a link you could open in a
+            // new tab, and every modifier-click would hit that bug.
+            return (
+              <button type="button" className="md-link internal" onClick={() => navigate()}>
+                {children}
+              </button>
+            );
+          }
+          return (
+            <a className="md-link" href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          );
+        },
       }}
     >
       {text}

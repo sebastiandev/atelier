@@ -924,10 +924,12 @@ function StageDefinitionInspector({ stage, stages, outcomes, advanced, local, sa
       </select></label>
     </div>
     <div className="loop-inspector-body themed-scrollbar">
-      {stage.agent && <section className="stage-editor-rail-group"><header><strong>Execution defaults</strong><small>{stage.kind === "pr" ? "defaults to the loop's implementing stage" : "loops & runs can override"}</small></header><AgentPanel stage={stage} stages={stages} stageEditor onPatch={onPatch} /></section>}
+      {/* A check runs no agent but still has a timeout, and the timeout no
+          longer lives under Advanced, so this section renders for it too. */}
+      {(stage.agent || stage.kind === "deterministic_check") && <section className="stage-editor-rail-group"><header><strong>Execution defaults</strong><small>{stage.kind === "pr" ? "defaults to the loop's implementing stage" : "loops & runs can override"}</small></header><AgentPanel stage={stage} stages={stages} stageEditor onPatch={onPatch} /></section>}
       <StageOutcomeContract stage={stage} outcomes={outcomes} onChange={onOutcomes} />
       {stage.kind !== "pr" && <div className="stage-outcome-note"><ReturnIcon size={12} /><span>A stage declares what it can return. It has no graph of its own. Each loop maps these outcomes to stages, pause, or fail.</span></div>}
-      {stage.kind !== "user_approval" && stage.kind !== "pr" && <><button className={"loop-advanced-toggle" + (advanced ? " open" : "")} onClick={onAdvanced}><ChevronRightIcon size={11} /> Advanced · retry limit · timeout · report preset</button>{advanced && <AdvancedPanel stage={stage} onPatch={onPatch} />}</>}
+      {stage.kind !== "user_approval" && stage.kind !== "pr" && <><button className={"loop-advanced-toggle" + (advanced ? " open" : "")} onClick={onAdvanced}><ChevronRightIcon size={11} /> Advanced · retry limit</button>{advanced && <AdvancedPanel stage={stage} onPatch={onPatch} />}</>}
       {storage && <section className="stage-editor-rail-group">
         <header><strong>Storage folder</strong><small>where the library keeps this stage</small></header>
         <div className="loop-storage-field">
@@ -1751,10 +1753,44 @@ function ContextPanel({ stage, rootPath, kinds = CONTEXT_KINDS, label = "Inputs"
   );
 }
 
+/** Minutes before the stage is cut off and retried from the start.
+ *
+ *  Rendered with the agent and effort that determine it, never under
+ *  Advanced: a timeout picked without seeing the model is guesswork, and a
+ *  wrong one costs a full retry.
+ */
+function TimeoutRow({ stage, onPatch }: { stage: LoopStepDefinition; onPatch: (patch: Partial<LoopStepDefinition>) => void }) {
+  return (
+    <div className="stage-posture-card">
+      <span><strong>Timeout</strong><small>the stage is cut off and retried from the start when this elapses</small></span>
+      <input
+        type="number"
+        aria-label="Timeout minutes"
+        min={1}
+        max={1440}
+        value={stage.retry.timeout_minutes}
+        onChange={(event) => {
+          // An empty field is `Number("") === 0`, and a zero-minute timeout
+          // cuts the stage off and retries it immediately. Clearing the box to
+          // retype keeps the last good value until a real number is typed.
+          const next = Number(event.target.value);
+          if (!Number.isFinite(next) || next < 1) return;
+          onPatch({ retry: { ...stage.retry, timeout_minutes: next } });
+        }}
+      />
+    </div>
+  );
+}
+
 function AgentPanel({ stage, stages, stageEditor = false, onPatch }: { stage: LoopStepDefinition; stages: LoopStepDefinition[]; stageEditor?: boolean; onPatch: (patch: Partial<LoopStepDefinition>) => void }) {
   const { descriptors } = useProviderDescriptors();
   if (stage.kind === "deterministic_check") {
-    return <div className="loop-inspector-note"><FlaskIcon size={13} /> Checks use no agent and run with a bounded timeout.</div>;
+    return (
+      <>
+        <div className="loop-inspector-note"><FlaskIcon size={13} /> Checks use no agent and run with a bounded timeout.</div>
+        <TimeoutRow stage={stage} onPatch={onPatch} />
+      </>
+    );
   }
   if (!stage.agent) return null;
   const provider = descriptors?.find((item) => item.name === stage.agent?.provider) ?? null;
@@ -1859,6 +1895,7 @@ function AgentPanel({ stage, stages, stageEditor = false, onPatch }: { stage: Lo
         {prefixControl}
         <small><LockIcon size={10} /> Literal command prefixes only. Shell composition or chaining may still ask.</small>
       </div>
+      <TimeoutRow stage={stage} onPatch={onPatch} />
     </>;
   }
   return (
@@ -1942,7 +1979,6 @@ function AdvancedPanel({ stage, onPatch }: { stage: LoopStepDefinition; onPatch:
   return (
     <div className="loop-advanced-panel">
       <InspectorField label="Retry limit"><input type="number" min={1} max={20} value={stage.retry.max_attempts} onChange={(event) => onPatch({ retry: { ...stage.retry, max_attempts: Number(event.target.value) } })} /></InspectorField>
-      <InspectorField label="Timeout · minutes"><input type="number" min={1} max={1440} value={stage.retry.timeout_minutes} onChange={(event) => onPatch({ retry: { ...stage.retry, timeout_minutes: Number(event.target.value) } })} /></InspectorField>
     </div>
   );
 }

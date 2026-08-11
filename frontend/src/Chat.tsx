@@ -62,6 +62,7 @@ import {
   ChatTileTranscript,
 } from "./ChatTileSurface";
 import { useDragHandle } from "./dragHandleContext";
+import { completedEditPaths } from "./editedPaths";
 import {
   anchoredMenuPosition,
   type FloatingMenuPosition,
@@ -773,6 +774,7 @@ export function ChatTile({
   planReferences = [],
   collapseHistoryByDefault = false,
   onDraftedGoal,
+  onFilesEdited,
   onClose,
   onStartAgent,
   onUpdated,
@@ -795,6 +797,11 @@ export function ChatTile({
    *  loop's setup screen take the conclusion of a discussion straight into
    *  its brief instead of asking the user to copy it out. */
   onDraftedGoal?: (goal: string) => void;
+  /** Called with the absolute paths of files the agent has finished writing.
+   *  Lifted out of this component because the supervisor allows one subscriber
+   *  per chat: a view that wants to react cannot open its own stream without
+   *  kicking this one off. */
+  onFilesEdited?: (paths: string[]) => void;
   onClose?: () => void;
   onStartAgent?: (chat: ChatDetail) => Promise<void> | void;
   onUpdated?: (chat: ChatSummary) => void;
@@ -959,6 +966,22 @@ export function ChatTile({
     reportedGoalRef.current = draftedGoal;
     onDraftedGoal(draftedGoal);
   }, [draftedGoal, onDraftedGoal]);
+  const reportedEditSeqRef = useRef(0);
+  useEffect(() => {
+    // A different chat has its own sequence numbers; carrying the previous
+    // chat's high-water mark over would filter out everything below it.
+    reportedEditSeqRef.current = 0;
+  }, [chatSlug]);
+  useEffect(() => {
+    if (!onFilesEdited) return;
+    // The whole list, not a slice of it: a live stream delivers the call and
+    // its result in different batches, and a slice that starts after the call
+    // cannot name the path the result completed. `completedEditPaths` filters
+    // the results instead, so replayed history is not re-announced.
+    const { paths, lastSeq } = completedEditPaths(events, reportedEditSeqRef.current);
+    if (lastSeq > reportedEditSeqRef.current) reportedEditSeqRef.current = lastSeq;
+    if (paths.length > 0) onFilesEdited(paths);
+  }, [chatSlug, events, onFilesEdited]);
   const lastMetrics = useMemo(() => latestMetrics(events), [events]);
   const sessionTotals = useMemo(() => sessionMetrics(events), [events]);
   const activityPhase = useMemo(

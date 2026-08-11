@@ -14,6 +14,8 @@ type MarkdownSection = {
 type RichMarkdownEditorProps = {
   className?: string;
   onChange: (value: string) => void;
+  /** Passed straight to `MarkdownText`; see its `onLinkTo`. */
+  onLinkTo?: (href: string) => (() => void) | null;
   readOnly?: boolean;
   value: string;
 };
@@ -21,6 +23,7 @@ type RichMarkdownEditorProps = {
 export function RichMarkdownEditor({
   className,
   onChange,
+  onLinkTo,
   readOnly = false,
   value,
 }: RichMarkdownEditorProps) {
@@ -118,7 +121,7 @@ export function RichMarkdownEditor({
               ) : (
                 <div className="rich-md-preview">
                   {previewText.trim() ? (
-                    <MarkdownText text={previewText} />
+                    <MarkdownText text={previewText} onLinkTo={onLinkTo} />
                   ) : (
                     <div className="rich-md-empty-body">No body content.</div>
                   )}
