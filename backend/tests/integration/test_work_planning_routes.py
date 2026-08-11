@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pathlib
 import subprocess
 import sys
 import time
@@ -564,6 +565,40 @@ def test_plan_manifest_dependencies_are_path_based_metadata(
     assert refreshed.status_code == 200, refreshed.text
     story = next(a for a in refreshed.json()["artifacts"] if a["id"] == "story-001")
     assert story["dependencies"] == ["brief"]
+
+
+def test_a_dependency_on_a_deleted_document_stops_blocking(
+    app_client: TestClient, test_settings: Settings
+) -> None:
+    """Plan documents are removed outside Atelier as a matter of course -- the
+    planning agent writes and deletes them directly. The manifest owns the
+    dependency edge, so editing the referencing file cannot clear it, and the
+    story stayed blocked on a document that no longer existed."""
+    _create_work(app_client)
+    repo_root = test_settings.workspace_root / "repos" / "planner"
+    _start_plan(app_client, repo_root)
+    manifest_path = (
+        test_settings.workspace_root / "works" / "WRK-001" / "planning" / "manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text())
+    for item in manifest["artifacts"]:
+        if item["path"] == "stories/story-001.md":
+            # One edge onto a document about to be deleted, one onto something
+            # that was never in the plan at all.
+            item["dependencies"] = ["intent.md", "never-existed.md"]
+    manifest_path.write_text(json.dumps(manifest))
+    plan = app_client.get("/api/works/WRK-001/plan").json()
+    (pathlib.Path(plan["plan_artifacts_path"]) / "intent.md").unlink()
+
+    refreshed = app_client.get("/api/works/WRK-001/plan")
+
+    assert refreshed.status_code == 200, refreshed.text
+    story = next(a for a in refreshed.json()["artifacts"] if a["id"] == "story-001")
+    # The deleted one is gone; the one that never existed still blocks, because
+    # that is a real missing dependency rather than a stale edge.
+    assert story["dependencies"] == ["never-existed"]
+    assert any("never-existed" in blocker for blocker in story["launch_blockers"])
+    assert not any("brief" in blocker for blocker in story["launch_blockers"])
 
 
 def test_start_plan_indexes_precreated_files_without_content_payload(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import replace
 from pathlib import PurePosixPath
@@ -113,6 +114,8 @@ _LOOP_STATUSES: set[LoopStatus] = {
 _PROPOSAL_STATUSES: set[str] = {"pending", "accepted", "rejected"}
 _TRACKING_KINDS: set[str] = {"jira", "pr", "blocker", "bug"}
 
+
+_log = logging.getLogger(__name__)
 
 class PlanningNotStarted(ValueError):
     """Planning has not been started for this work."""
@@ -230,14 +233,30 @@ class PlanningService:
     ) -> list[PlanArtifactSummary]:
         staged: list[tuple[dict[str, Any], str, str]] = []
         path_to_id: dict[str, str] = {}
+        # A manifest entry whose file is gone is a deletion, whoever made it.
+        # Plan documents are edited outside Atelier as a matter of course -- the
+        # planning agent writes and removes them directly -- so a delete that
+        # only reconciles when it goes through the app would miss the ordinary
+        # case. Recorded here because this is the point that already knows.
+        deleted: set[str] = set()
         for entry in entries:
             rel_path = entry["path"]
             content = self._read_text(work_slug, rel_path)
             if content is None:
+                deleted.add(rel_path)
+                deleted.add(_artifact_id(rel_path, entry["artifact_kind"]))
                 continue
             artifact_id = _artifact_id(rel_path, entry["artifact_kind"])
             path_to_id[rel_path] = artifact_id
             staged.append((entry, content, artifact_id))
+        if deleted:
+            _log.info(
+                "planning: dropping %d deleted artifact(s) from %s and pruning "
+                "dependencies on them: %s",
+                len(deleted) // 2,
+                work_slug,
+                ", ".join(sorted(p for p in deleted if p.endswith(".md"))),
+            )
 
         rows: list[PlanArtifactSummary] = []
         for entry, content, _artifact_id_value in staged:
@@ -254,7 +273,7 @@ class PlanningService:
                     prefer_heading=False,
                     executable=entry["executable"],
                     dependencies=_resolve_manifest_dependencies(
-                        entry["dependencies"], path_to_id
+                        entry["dependencies"], path_to_id, deleted
                     ),
                 )
             )
@@ -412,14 +431,29 @@ def _valid_artifact_path(path: str) -> bool:
 
 
 def _resolve_manifest_dependencies(
-    dependencies: list[str], path_to_id: dict[str, str]
+    dependencies: list[str],
+    path_to_id: dict[str, str],
+    deleted: set[str] | None = None,
 ) -> list[str]:
+    """Resolve stored dependency refs to artifact ids, dropping deleted ones.
+
+    An edge onto a document that has been removed from the plan is stale, not
+    unmet: leaving it makes `_launch_blockers` report "Dependency X is missing"
+    forever, and editing the referencing file cannot clear it because the
+    manifest, not the file, owns the edge. An edge onto something that was
+    never in the plan is left alone -- that one is a real missing dependency
+    and the blocker is the point.
+    """
+    gone = deleted or set()
     resolved: list[str] = []
     for dep in dependencies:
         dep = dep.strip().strip("`")
         if not dep or dep.lower() in {"none", "n/a", "na"}:
             continue
-        resolved.append(path_to_id.get(dep, _dependency_id(dep)))
+        dep_id = path_to_id.get(dep, _dependency_id(dep))
+        if dep in gone or dep_id in gone:
+            continue
+        resolved.append(dep_id)
     return resolved
 
 
