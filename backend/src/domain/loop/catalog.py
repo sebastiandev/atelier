@@ -47,16 +47,9 @@ def list_available_definitions(
             )
         }
     )
-    by_id.update(
-        {
-            definition.definition_id: definition
-            for definition in _stored(
-                repository,
-                roots.work,
-                scope=LoopDefinitionScope.WORK,
-            )
-        }
-    )
+    # Work overlays are neither listed nor resolved: see `save_definition`.
+    # Files already on disk are left alone and ignored, so a Work that forked
+    # a loop returns to the library copy rather than losing anything.
     rank = {
         LoopDefinitionScope.BUILTIN: 0,
         LoopDefinitionScope.LIBRARY: 1,
@@ -89,7 +82,6 @@ def locate_definition(
     candidates: tuple[tuple[LoopDefinitionScope, str | None], ...]
     if scope is None:
         candidates = (
-            (LoopDefinitionScope.WORK, roots.work),
             (LoopDefinitionScope.LIBRARY, roots.library),
             (LoopDefinitionScope.BUILTIN, None),
         )

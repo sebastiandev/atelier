@@ -11406,8 +11406,9 @@ a.pm-track-row:hover strong {
 .loop-brief-timeout {
   display: inline-flex;
   align-items: center;
+  width: 64px;
   min-height: 24px;
-  padding: 2px 10px;
+  padding: 2px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius-tag);
   background: var(--bg-1);

@@ -247,8 +247,11 @@ export function LoopStructureEditor({
     <LoopEditorScreen
       workSlug={workSlug}
       rootPath={rootPath}
-      saveScope="work"
-      seed={definition ? editorSeed(definition, false, "work") : newLoopSeed("work")}
+      // Always the library. A Work-scoped save wrote a copy that shadowed the
+      // library for every story in that Work, silently and for good; a run
+      // never needed it, because it pins its own definition snapshot.
+      saveScope="library"
+      seed={definition ? editorSeed(definition, false, "library") : newLoopSeed("library")}
       onClose={onClose}
       onSaved={onSaved}
     />
@@ -300,7 +303,7 @@ export function LoopLibraryScreen({
       <LoopEditorScreen
         workSlug={workSlug}
         rootPath={rootPath}
-        saveScope={editor.definition.scope === "work" ? "work" : "library"}
+        saveScope="library"
         seed={editor}
         onClose={() => setEditor(null)}
         onSaved={() => {
@@ -327,7 +330,6 @@ export function LoopLibraryScreen({
 
   const builtins = definitions?.filter((row) => row.scope === "builtin") ?? [];
   const repository = definitions?.filter((row) => row.scope === "library") ?? [];
-  const work = definitions?.filter((row) => row.scope === "work") ?? [];
   const defaultBuiltin = defaultLoop(builtins);
   const builtinStages = stageDefinitions?.filter((row) => row.scope === "builtin") ?? [];
   const repositoryStages = stageDefinitions?.filter((row) => row.scope === "library") ?? [];
@@ -498,7 +500,8 @@ export function LoopLibraryScreen({
             onDelete={(definition) => void remove(definition)}
             busyId={busyId}
           />
-          {work.length > 0 && <LoopLibraryGroup label="Work" note="available only to this Work" definitions={work} onEdit={(definition) => setEditor(editorSeed(definition, false, "work"))} onDuplicate={(definition) => setEditor(editorSeed(definition, true, "work"))} onExport={(definition) => void exportLoop(definition)} onDelete={(definition) => void remove(definition)} busyId={busyId} />}
+          {/* No Work group: the catalog no longer lists Work-scoped loops, and
+              editing one would post a scope the backend refuses. */}
         </> : <>
           <p className="stage-library-intro">Stages are loop-independent building blocks. A loop injects run-time inputs and wires outcomes.</p>
           <StageLibraryGroup label="Built-in" note="read-only · bundled" definitions={builtinStages} onEdit={(definition) => setStageEditor(stageEditorSeed(definition, false))} onDuplicate={(definition) => setStageEditor(stageEditorSeed(definition, true))} onExport={(definition) => void exportStage(definition)} />
@@ -1320,7 +1323,7 @@ function LoopEditorScreen({
             {saveScope === "work" && (
               <button className="btn sm" disabled={saving || !draft.name.trim() || !draft.id} onClick={() => void save("library")}><CopyIcon size={11} /> Save to library</button>
             )}
-            <button className="btn primary sm" disabled={!dirty || saving || !draft.name.trim() || !draft.id} onClick={() => void save()}><CheckIcon size={11} /> {saving ? "Saving…" : "Save"}</button>
+            <button className="btn primary sm" disabled={!dirty || saving || !draft.name.trim() || !draft.id} onClick={() => void save()}><CheckIcon size={11} /> {saving ? "Saving…" : "↑ Save to library"}</button>
           </>
         )}
         showUtilities={false}

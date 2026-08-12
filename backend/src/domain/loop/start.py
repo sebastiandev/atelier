@@ -332,7 +332,7 @@ async def start(
         target_id=DEFAULT_TARGET_ID,
         agent_slug=run_agent_slug,
         run_id=run_id,
-        definition=definition,
+        definition=briefs.with_brief_timeouts(definition, brief),
         entry_step_id=entry.step_id,
         entry_agent_slug=entry_agent_slug,
         source_agent_slug=source_agent_slug or entry_agent_slug,

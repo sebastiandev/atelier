@@ -280,7 +280,7 @@ async def execute(
         target_id=req.artifact_id,
         agent_slug=agent_slug,
         run_id=run_id,
-        definition=definition,
+        definition=briefs.with_brief_timeouts(definition, brief),
         entry_step_id=entry.step_id,
         entry_agent_slug=agent_slug,
         entry_is_agent=followups.entry_needs_agent(entry),

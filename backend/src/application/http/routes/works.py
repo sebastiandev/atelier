@@ -3554,6 +3554,7 @@ def _to_loop_brief(payload: LoopBriefSchema) -> LoopBrief:
                     if stage.approved_command_prefixes is not None
                     else None
                 ),
+                timeout_minutes=stage.timeout_minutes,
             )
             for stage in payload.stages
         ),

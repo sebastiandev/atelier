@@ -1629,7 +1629,7 @@ def test_default_run_uses_builtin_loop_when_definition_is_omitted(
         json={
             **payload,
             "name": "Shadowed fast",
-            "scope": "work",
+            "scope": "library",
             "work_slug": "WRK-001",
             "expected_revision": None,
         },
@@ -1681,7 +1681,8 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
         "/api/loops",
         json={
             **overlay_payload,
-            "scope": "work",
+            "name": "Reviewed fork",
+            "scope": "library",
             "work_slug": "WRK-001",
             "expected_revision": None,
         },
@@ -1702,8 +1703,10 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
     active_records = app_client.app.state.loop_runs.list_active()
     assert len(active_records) == 1
     run_key = active_records[0].run_key
-    assert active_records[0].definition_id == "atelier-reviewed"
-    assert active_records[0].definition_snapshot["id"] == "atelier-reviewed"
+    # Persisting an edit forks under its own id now; work-scoped
+    # shadowing of a built-in id is gone.
+    assert active_records[0].definition_id == "reviewed-fork"
+    assert active_records[0].definition_snapshot["id"] == "reviewed-fork"
 
     _append_stage_report(
         app_client,
@@ -2126,7 +2129,7 @@ def test_selected_loop_launches_a_fresh_agent_briefed_for_the_stage(
         json={
             **builtin.json(),
             "name": "Work reviewed",
-            "scope": "work",
+            "scope": "library",
             "work_slug": "WRK-001",
             "expected_revision": None,
             "forked_from": "atelier-reviewed",
@@ -2243,7 +2246,8 @@ def test_selected_loop_forks_supplied_agent_for_first_stage_override(
         "/api/loops",
         json={
             **payload,
-            "scope": "work",
+            "name": "Forked 2246",
+            "scope": "library",
             "work_slug": "WRK-001",
             "expected_revision": None,
         },
@@ -2306,7 +2310,7 @@ def test_selected_loop_preflight_remembers_reused_stage_config(
             **payload,
             "id": "reuse-config",
             "name": "Reuse config",
-            "scope": "work",
+            "scope": "library",
             "work_slug": "WRK-001",
             "expected_revision": None,
         },
@@ -2350,7 +2354,8 @@ def _plan_with_a_stage_policy(
         "/api/loops",
         json={
             **payload,
-            "scope": "work",
+            "name": "Forked 2353",
+            "scope": "library",
             "work_slug": "WRK-001",
             "expected_revision": None,
         },
@@ -3564,7 +3569,13 @@ def _reviewed_with_required_note(app_client: TestClient) -> dict:
     review["note_required"] = True
     saved = app_client.post(
         "/api/loops",
-        json={**payload, "scope": "work", "work_slug": "WRK-001", "expected_revision": None},
+        json={
+            **payload,
+            "name": "Forked 3567",
+            "scope": "library",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+        },
     )
     assert saved.status_code == 201, saved.text
     return saved.json()
@@ -3611,7 +3622,8 @@ def test_story_run_shorthand_still_fills_required_notes_for_the_client(
         "/api/loops",
         json={
             **payload,
-            "scope": "work",
+            "name": "Forked 3614",
+            "scope": "library",
             "work_slug": "WRK-001",
             "expected_revision": None,
         },

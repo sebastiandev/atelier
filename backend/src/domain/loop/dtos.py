@@ -413,6 +413,11 @@ class LoopStageBrief:
     agent: LoopBriefAgent | None = None
     review_gate: LoopReviewGateMode | None = None
     approved_command_prefixes: tuple[str, ...] | None = None
+    # Minutes before this stage is cut off, for this run only. The stage owns
+    # the default; a brief may raise or lower it for the work in hand without
+    # editing the loop, and the value is baked into the run's pinned snapshot
+    # so the monitor reads it like any other stage timeout.
+    timeout_minutes: int | None = None
 
 
 @dataclass(frozen=True)

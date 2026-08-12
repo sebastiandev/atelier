@@ -226,7 +226,7 @@ def test_work_loop_brief_round_trips(
 
 
 def _reviewed_with_required_note(app_client: TestClient) -> dict:
-    """A WRK-001 fork of Atelier Reviewed whose review stage demands a note.
+    """A library fork of Atelier Reviewed whose review stage demands a note.
 
     The built-ins no longer declare ``note_required`` -- a reviewer already
     gets the goal, the target and the diff -- so the contract is exercised
@@ -237,7 +237,15 @@ def _reviewed_with_required_note(app_client: TestClient) -> dict:
     review["note_required"] = True
     saved = app_client.post(
         "/api/loops",
-        json={**payload, "scope": "work", "work_slug": "WRK-001", "expected_revision": None},
+        json={
+            **payload,
+            # Its own name, so its own id: a fork no longer shadows the
+            # built-in it came from.
+            "name": "Reviewed with note",
+            "scope": "library",
+            "work_slug": "WRK-001",
+            "expected_revision": None,
+        },
     )
     assert saved.status_code == 201, saved.text
     return saved.json()
@@ -506,7 +514,7 @@ def test_edited_run_reuses_the_exact_legacy_workspace(
             "id": "edited-loop",
             "name": "Edited loop",
             "description": "Before editing.",
-            "scope": "work",
+            "scope": "library",
             "work_slug": "WRK-001",
             "stages": base["stages"],
         },
@@ -530,7 +538,7 @@ def test_edited_run_reuses_the_exact_legacy_workspace(
             "id": "edited-loop",
             "name": "Edited loop",
             "description": "Use this updated revision.",
-            "scope": "work",
+            "scope": "library",
             "work_slug": "WRK-001",
             "expected_revision": original["revision"],
             "stages": original["stages"],

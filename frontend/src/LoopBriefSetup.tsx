@@ -242,6 +242,7 @@ export function LoopBriefSetup({
                 onNote={(note) => patchStage(stage.id, { note })}
                 onReviewGate={(review_gate) => patchStage(stage.id, { review_gate })}
                 onApprovedCommandPrefixes={(approved_command_prefixes) => patchStage(stage.id, { approved_command_prefixes })}
+                onTimeout={(timeout_minutes) => patchStage(stage.id, { timeout_minutes })}
                 onRemoveContext={(index) => removeContext(stage.id, index)}
                 onReplaceContext={(index, context) => replaceContext(stage.id, index, context)}
               />
@@ -312,6 +313,7 @@ function StageBriefCard({
   onNote,
   onReviewGate,
   onApprovedCommandPrefixes,
+  onTimeout,
   onRemoveContext,
   onReplaceContext,
 }: {
@@ -331,6 +333,7 @@ function StageBriefCard({
   onNote: (note: string) => void;
   onReviewGate: (mode: "automatic" | "human_check" | null) => void;
   onApprovedCommandPrefixes: (prefixes: string[] | null) => void;
+  onTimeout: (minutes: number | null) => void;
   onRemoveContext: (index: number) => void;
   onReplaceContext: (index: number, context: LoopBriefContext) => void;
 }) {
@@ -399,8 +402,26 @@ function StageBriefCard({
           <div className="pm-agent-row">
             <span>Timeout</span>
             <div>
-              <span className="loop-brief-timeout">{stage.retry.timeout_minutes} min</span>
-              <em>the stage is cut off and retried from the start when this elapses</em>
+              <input
+                className="loop-brief-timeout"
+                type="number"
+                aria-label="Timeout minutes"
+                min={1}
+                max={1440}
+                value={brief.timeout_minutes ?? stage.retry.timeout_minutes}
+                onChange={(event) => {
+                  // An empty box is `Number("") === 0`, and a zero-minute
+                  // timeout cuts the stage off at once; keep the last good
+                  // value until a real number is typed.
+                  const next = Number(event.target.value);
+                  if (!Number.isFinite(next) || next < 1) return;
+                  onTimeout(next === stage.retry.timeout_minutes ? null : next);
+                }}
+              />
+              <em>min · stage default {stage.retry.timeout_minutes}</em>
+              {brief.timeout_minutes != null && (
+                <button type="button" onClick={() => onTimeout(null)}>reset to stage</button>
+              )}
             </div>
           </div>
           {stage.agent && (
@@ -436,8 +457,26 @@ function StageBriefCard({
           <div className="pm-agent-row">
             <span>Timeout</span>
             <div>
-              <span className="loop-brief-timeout">{stage.retry.timeout_minutes} min</span>
-              <em>the stage is cut off and retried from the start when this elapses</em>
+              <input
+                className="loop-brief-timeout"
+                type="number"
+                aria-label="Timeout minutes"
+                min={1}
+                max={1440}
+                value={brief.timeout_minutes ?? stage.retry.timeout_minutes}
+                onChange={(event) => {
+                  // An empty box is `Number("") === 0`, and a zero-minute
+                  // timeout cuts the stage off at once; keep the last good
+                  // value until a real number is typed.
+                  const next = Number(event.target.value);
+                  if (!Number.isFinite(next) || next < 1) return;
+                  onTimeout(next === stage.retry.timeout_minutes ? null : next);
+                }}
+              />
+              <em>min · stage default {stage.retry.timeout_minutes}</em>
+              {brief.timeout_minutes != null && (
+                <button type="button" onClick={() => onTimeout(null)}>reset to stage</button>
+              )}
             </div>
           </div>
           {stage.agent && (
@@ -472,8 +511,26 @@ function StageBriefCard({
           <div className="pm-agent-row">
             <span>Timeout</span>
             <div>
-              <span className="loop-brief-timeout">{stage.retry.timeout_minutes} min</span>
-              <em>the stage is cut off and retried from the start when this elapses</em>
+              <input
+                className="loop-brief-timeout"
+                type="number"
+                aria-label="Timeout minutes"
+                min={1}
+                max={1440}
+                value={brief.timeout_minutes ?? stage.retry.timeout_minutes}
+                onChange={(event) => {
+                  // An empty box is `Number("") === 0`, and a zero-minute
+                  // timeout cuts the stage off at once; keep the last good
+                  // value until a real number is typed.
+                  const next = Number(event.target.value);
+                  if (!Number.isFinite(next) || next < 1) return;
+                  onTimeout(next === stage.retry.timeout_minutes ? null : next);
+                }}
+              />
+              <em>min · stage default {stage.retry.timeout_minutes}</em>
+              {brief.timeout_minutes != null && (
+                <button type="button" onClick={() => onTimeout(null)}>reset to stage</button>
+              )}
             </div>
           </div>
           <button type="button" disabled={!agentConfig} onClick={() => agentConfig && onAgent({ provider: null, model: null, options: {} })}><EditIcon size={9} /> change</button>

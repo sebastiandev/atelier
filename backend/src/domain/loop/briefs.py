@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from src.domain.loop.dtos import (
@@ -195,6 +196,13 @@ def brief_snapshot(brief: LoopBrief) -> dict[str, Any]:
                     if stage.approved_command_prefixes is not None
                     else {}
                 ),
+                # Emitted only when set, so a brief written before per-run
+                # timeouts existed round-trips byte-for-byte.
+                **(
+                    {"timeout_minutes": stage.timeout_minutes}
+                    if stage.timeout_minutes is not None
+                    else {}
+                ),
             }
             for stage in brief.stages
         ],
@@ -244,7 +252,20 @@ def _stage_from_snapshot(value: object) -> LoopStageBrief:
         approved_command_prefixes=_command_prefixes(
             value.get("approved_command_prefixes")
         ),
+        timeout_minutes=_timeout_minutes(value.get("timeout_minutes")),
     )
+
+
+def _timeout_minutes(value: object) -> int | None:
+    """A per-run stage timeout, or ``None`` to keep the stage's own.
+
+    Anything unreadable reads as absent rather than raising: a brief is user
+    data that has been on disk across versions, and an unusable value should
+    fall back to the stage default, not refuse the run.
+    """
+    if not isinstance(value, int) or isinstance(value, bool):
+        return None
+    return value if 1 <= value <= 1440 else None
 
 
 def _context_from_snapshot(value: object) -> LoopBriefContext:
@@ -290,6 +311,38 @@ def _command_prefixes(value: object) -> tuple[str, ...] | None:
     return tuple(value)
 
 
+def with_brief_timeouts(definition: Any, brief: LoopBrief | None) -> Any:
+    """Apply the brief's per-stage timeouts to the definition it will run as.
+
+    Preconditions: ``definition`` is the loop selected for this run, before it
+    is snapshotted. Postconditions: returns a definition whose stages carry the
+    brief's timeouts; stages the brief does not name keep their own.
+
+    Applied before the snapshot rather than at launch, so the pinned definition
+    is the one that actually ran and the monitor reads the timeout exactly as
+    it reads any other stage's -- no second place to look, and run history
+    shows the value the run used.
+    """
+    if brief is None:
+        return definition
+    overrides = {
+        stage.stage_id: stage.timeout_minutes
+        for stage in brief.stages
+        if stage.timeout_minutes is not None
+    }
+    if not overrides:
+        return definition
+    return replace(
+        definition,
+        stages=tuple(
+            replace(stage, retry=replace(stage.retry, timeout_minutes=overrides[stage.step_id]))
+            if stage.step_id in overrides
+            else stage
+            for stage in definition.stages
+        ),
+    )
+
+
 __all__ = [
     "LoopBriefInvalid",
     "brief_from_snapshot",
@@ -300,5 +353,6 @@ __all__ = [
     "resolved_review_gate",
     "stage_brief",
     "validate_brief",
+    "with_brief_timeouts",
     "with_legacy_required_defaults",
 ]

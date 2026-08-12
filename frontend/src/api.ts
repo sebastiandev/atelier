@@ -715,6 +715,9 @@ export type LoopStageBrief = {
   note: string;
   context: LoopBriefContext[];
   agent: LoopBriefAgent | null;
+  /** Minutes before this stage is cut off, for this run only. `null` keeps the
+   *  stage's own default; the value is baked into the run's pinned snapshot. */
+  timeout_minutes?: number | null;
   review_gate?: LoopReviewGateMode | null;
   approved_command_prefixes?: string[] | null;
 };

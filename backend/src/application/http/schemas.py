@@ -914,6 +914,14 @@ class LoopStageBriefSchema(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+    # Omitted unless set, so a brief written before this existed round-trips
+    # byte-for-byte and an older client that never sends it is unaffected.
+    timeout_minutes: int | None = Field(
+        default=None,
+        ge=1,
+        le=1440,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class LoopBriefSchema(BaseModel):
