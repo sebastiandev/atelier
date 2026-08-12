@@ -8,6 +8,7 @@ from src.domain.loop.dtos import (
     LoopAgentPolicy,
     LoopContextKind,
     LoopContextReference,
+    LoopHistoryLevel,
     LoopOutcome,
     LoopPermission,
     LoopPrConfig,
@@ -88,7 +89,23 @@ def _implement() -> StageDefinition:
                 "Implement the target end to end. Follow repository guidance, "
                 "update tests, and report changed files and validation evidence."
             ),
-            inputs=(LoopContextReference(LoopContextKind.TARGET, required=True),),
+            inputs=(
+                LoopContextReference(LoopContextKind.TARGET, required=True),
+                # What the user is asking of this attempt, including the note a
+                # review gate sends back with.
+                LoopContextReference(LoopContextKind.FEEDBACK),
+                # Not to stop it raising findings, but to stop it fixing one the
+                # user deliberately let stand.
+                LoopContextReference(LoopContextKind.WAIVED_FINDINGS),
+            ),
+            # A review sends this stage back; without the report it is sent back
+            # *with*, the findings it is meant to address never reach it and only
+            # the gate's free-text note does. Optional, because the first pass has
+            # no prior report to read.
+            reports=(LoopReportReference(required=False),),
+            # A fresh agent every pass, so without this it cannot tell a first
+            # attempt from a fourth.
+            history=LoopHistoryLevel.SUMMARIES,
             agent=LoopAgentPolicy(
                 session=LoopSessionPolicy.FRESH, permissions=LoopPermission.WRITE
             ),
@@ -127,7 +144,17 @@ def _review(definition_id: str, name: str, instructions: str) -> StageDefinition
             inputs=(
                 LoopContextReference(LoopContextKind.TARGET, required=True),
                 LoopContextReference(LoopContextKind.WORKSPACE_DIFF, required=True),
+                LoopContextReference(LoopContextKind.FEEDBACK),
+                # So a later pass does not re-raise what the user dismissed at
+                # the gate.
+                LoopContextReference(LoopContextKind.WAIVED_FINDINGS),
             ),
+            # Judging whether a correction answered the original finding needs
+            # the account of what was corrected. Unnamed, because a palette
+            # stage cannot know what the implementation stage is called in the
+            # loop that will use it.
+            reports=(LoopReportReference(required=False),),
+            history=LoopHistoryLevel.SUMMARIES,
             agent=LoopAgentPolicy(session=LoopSessionPolicy.FRESH, permissions=LoopPermission.READ),
                 retry=LoopRetryPolicy(max_attempts=2, timeout_minutes=15),
             note_required=False,

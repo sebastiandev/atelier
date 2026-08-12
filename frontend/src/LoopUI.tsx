@@ -725,15 +725,26 @@ function StageDefinitionInstructions({ stage, documentId, preview, onPreview, on
   </>;
 }
 
-function EditableRuntimeInputs({ stage, onPatch }: {
+/** The value the add-input picker uses for a report. Not a context kind: a
+ *  report is stored in its own field, and only the picker unifies them. */
+const REPORT_INPUT_VALUE = "__stage_report__";
+
+function EditableRuntimeInputs({ stage, stages, reportsEditable, onPatch }: {
   stage: LoopStepDefinition;
+  stages: LoopStepDefinition[];
+  reportsEditable: boolean;
   onPatch: (patch: Partial<LoopStepDefinition>) => void;
 }) {
   const runtime = stage.inputs
     .map((item, index) => ({ item, index }))
     .filter(({ item }) => RUNTIME_CONTEXT_KINDS.some((kind) => kind.kind === item.kind));
+  const reports = stage.reports ?? [];
+  const others = stages.filter((row) => row.id !== stage.id);
   function patch(index: number, item: LoopContextReference) {
     onPatch({ inputs: stage.inputs.map((current, itemIndex) => itemIndex === index ? item : current) });
+  }
+  function patchReport(index: number, next: LoopReportReference) {
+    onPatch({ reports: reports.map((item, at) => (at === index ? next : item)) });
   }
   return <section className="loop-inspector-field stage-editor-section stage-runtime-editable">
     <header><strong>Run-time inputs</strong><small>bound by this loop · editable here, in the loop's context</small></header>
@@ -745,11 +756,34 @@ function EditableRuntimeInputs({ stage, onPatch }: {
         <em className="tag info">injected</em>
         <button type="button" className="btn ghost icon sm" onClick={() => onPatch({ inputs: stage.inputs.filter((_, itemIndex) => itemIndex !== index) })} aria-label={`Remove ${item.kind}`}>×</button>
       </div>)}
+      {reportsEditable && reports.map((item, index) => <div className="stage-runtime-row" key={`report:${item.from}:${index}`}>
+        <span className="stage-runtime-glyph">⇣</span>
+        <span className="stage-runtime-kind">report from</span>
+        <select className="loop-report-from" aria-label="Report from stage" value={item.from} onChange={(event) => patchReport(index, { ...item, from: event.target.value })}>
+          <option value="previous">whichever ran last</option>
+          {others.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+        </select>
+        <button type="button" className={item.required ? "required active" : "required"} onClick={() => patchReport(index, { ...item, required: !item.required })}>{item.required ? "required" : "optional"}</button>
+        <em className="tag info">injected</em>
+        <button type="button" className="btn ghost icon sm" onClick={() => onPatch({ reports: reports.filter((_, at) => at !== index) })} aria-label="Remove report">×</button>
+      </div>)}
     </div>
     <label className="stage-runtime-add">+ add input<select aria-label="Add run-time input" value="" onChange={(event) => {
-      if (!event.target.value) return;
-      onPatch({ inputs: [...stage.inputs, { kind: event.target.value as LoopContextKind, required: false, paths: [], step: null, ref: null }] });
-    }}><option value="">Choose…</option>{RUNTIME_CONTEXT_KINDS.map((kind) => <option key={kind.kind} value={kind.kind}>{kind.label}</option>)}</select></label>
+      const chosen = event.target.value;
+      if (!chosen) return;
+      if (chosen === REPORT_INPUT_VALUE) {
+        onPatch({ reports: [...reports, { from: "previous", required: false }] });
+        return;
+      }
+      onPatch({ inputs: [...stage.inputs, { kind: chosen as LoopContextKind, required: false, paths: [], step: null, ref: null }] });
+    }}>
+      <option value="">Choose…</option>
+      {RUNTIME_CONTEXT_KINDS.map((kind) => <option key={kind.kind} value={kind.kind}>{kind.label}</option>)}
+      {/* Stored separately, offered here: a report is something the stage is
+          given, and splitting it out is what let loops ship an implementation
+          stage that could never see the review sending it back. */}
+      {reportsEditable && <option value={REPORT_INPUT_VALUE}>Stage report</option>}
+    </select></label>
     <small className="stage-editor-footnote">The library copy keeps these read-only. Loops adjust them at link time.</small>
   </section>;
 }
@@ -760,47 +794,16 @@ const HISTORY_LEVELS: Array<{ value: LoopHistoryLevel; label: string; hint: stri
   { value: "full", label: "Full", hint: "every report of every pass" },
 ];
 
-/** Which earlier reports a stage reads, and how much of the run it is told. */
-function StageReportsPanel({ stage, stages, onPatch }: {
+/** How much of the run a stage is told about, beyond what it declares.
+ *  Reports used to live here too; they are inputs now, and are edited with
+ *  the rest of them. */
+function StageHistoryPanel({ stage, onPatch }: {
   stage: LoopStepDefinition;
-  stages: LoopStepDefinition[];
   onPatch: (patch: Partial<LoopStepDefinition>) => void;
 }) {
-  const reports = stage.reports ?? [];
-  const others = stages.filter((row) => row.id !== stage.id);
   const history = stage.history ?? "none";
-  function patch(index: number, next: LoopReportReference) {
-    onPatch({ reports: reports.map((item, at) => (at === index ? next : item)) });
-  }
   return (
     <>
-      <InspectorField label="Reports" hint="an earlier stage's account, labelled">
-        <div className="loop-context-list">
-          {reports.map((item, index) => (
-            <div className="loop-context-row" key={`${item.from}:${index}`}>
-              <span className="loop-context-icon"><ReturnIcon size={13} /></span>
-              <select className="loop-report-from" value={item.from} onChange={(event) => patch(index, { ...item, from: event.target.value })}>
-                <option value="previous">whichever ran last</option>
-                {others.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
-              </select>
-              <button
-                type="button"
-                className={item.required ? "required active" : "required"}
-                onClick={() => patch(index, { ...item, required: !item.required })}
-              >{item.required ? "required" : "optional"}</button>
-              <button
-                className="btn ghost icon sm"
-                onClick={() => onPatch({ reports: reports.filter((_, at) => at !== index) })}
-                aria-label="Remove report"
-              >×</button>
-            </div>
-          ))}
-          {reports.length === 0 && <div className="loop-inspector-note">No reports declared yet.</div>}
-        </div>
-        <div className="loop-add-context">
-          <button onClick={() => onPatch({ reports: [...reports, { from: "previous", required: true }] })}>+ Report</button>
-        </div>
-      </InspectorField>
       <InspectorField label="Run history" hint="what happened before this pass">
         <select
           className="loop-history-select"
@@ -829,9 +832,11 @@ function StageContextSections({ stage, stages, rootPath, editableInputs, showBun
   const runtimeInputs = stage.inputs.filter((item) =>
     RUNTIME_CONTEXT_KINDS.some((kind) => kind.kind === item.kind),
   );
+  const reportsAllowed = stage.kind !== "user_approval" && stage.kind !== "deterministic_check";
+  const declaredReports = reportsAllowed ? stage.reports ?? [] : [];
   return <>
     {editableInputs ? (
-      <EditableRuntimeInputs stage={stage} onPatch={onPatch} />
+      <EditableRuntimeInputs stage={stage} stages={stages} reportsEditable={reportsAllowed} onPatch={onPatch} />
     ) : (
       <section className="loop-inspector-field stage-editor-section">
         <header><strong>Run-time inputs</strong><small>provided by the loop · read-only here</small></header>
@@ -840,13 +845,17 @@ function StageContextSections({ stage, stages, rootPath, editableInputs, showBun
             const meta = CONTEXT_KINDS.find((kind) => kind.kind === item.kind);
             return <div className="stage-runtime-row" key={`${item.kind}:${index}`}><span className="stage-runtime-glyph">⇣</span><strong>{(meta?.label ?? item.kind).toLowerCase()}</strong><span>{item.required ? "required" : "optional"}</span><em className="tag info">injected</em></div>;
           })}
-          {runtimeInputs.length === 0 && <div className="stage-editor-empty">No run-time inputs declared.</div>}
+          {declaredReports.map((item, index) => {
+            const from = stages.find((row) => row.id === item.from);
+            return <div className="stage-runtime-row" key={`report:${item.from}:${index}`}><span className="stage-runtime-glyph">⇣</span><strong>report from {from?.name ?? (item.from === "previous" ? "whichever ran last" : item.from)}</strong><span>{item.required ? "required" : "optional"}</span><em className="tag info">injected</em></div>;
+          })}
+          {runtimeInputs.length === 0 && declaredReports.length === 0 && <div className="stage-editor-empty">No run-time inputs declared.</div>}
         </div>
         <small className="stage-editor-footnote">Bound automatically when a loop links this stage. Adjust them per loop in the loop editor.</small>
       </section>
     )}
-    {editableInputs && stage.kind !== "user_approval" && stage.kind !== "deterministic_check" && (
-      <StageReportsPanel stage={stage} stages={stages} onPatch={onPatch} />
+    {editableInputs && reportsAllowed && (
+      <StageHistoryPanel stage={stage} onPatch={onPatch} />
     )}
     {showBundled && <ContextSubsetPanel
       stage={stage}
@@ -888,6 +897,7 @@ function ContextSubsetPanel({ stage, rootPath, kinds, label, hint, addLabel, foo
     footnote={footnote}
     compact={compact}
     showSafetyNote={false}
+    showReports={false}
     onRootPath={onRootPath}
     onPatch={(patch) => {
       if (patch.inputs === undefined) return;
@@ -1569,9 +1579,9 @@ function StageInspector({
         {!stage.stage_ref && onSaveToLibrary && <div className="stage-linked-banner local"><span><strong>Local to this loop</strong><em>unsaved</em></span><small>Save it once to reuse it in other loops.</small><div><button onClick={onSaveToLibrary}>Save to library</button></div></div>}
         {tab === "instructions" && <InstructionsPanel stage={stage} preview={preview} onPreview={onPreview} onPatch={onPatch} />}
         {tab === "context" && <>
-          <ContextPanel stage={stage} rootPath={rootPath} onRootPath={onRootPath} onPatch={onPatch} />
+          <ContextPanel stage={stage} stages={stages} rootPath={rootPath} onRootPath={onRootPath} onPatch={onPatch} />
           {stage.kind !== "user_approval" && stage.kind !== "deterministic_check" && (
-            <StageReportsPanel stage={stage} stages={stages} onPatch={onPatch} />
+            <StageHistoryPanel stage={stage} onPatch={onPatch} />
           )}
         </>}
         {tab === "agent" && <AgentPanel stage={stage} stages={stages} onPatch={onPatch} />}
@@ -1640,8 +1650,9 @@ function InstructionsPanel({ stage, preview, onPreview, onPatch }: { stage: Loop
   );
 }
 
-function ContextPanel({ stage, rootPath, kinds = CONTEXT_KINDS, label = "Inputs", hint = "references, not copies", addLabel = "Add input", footnote, compact = false, showSafetyNote = true, onRootPath, onPatch }: {
+function ContextPanel({ stage, stages = [], rootPath, kinds = CONTEXT_KINDS, label = "Inputs", hint = "references, not copies", addLabel = "Add input", footnote, compact = false, showSafetyNote = true, showReports = true, onRootPath, onPatch }: {
   stage: LoopStepDefinition;
+  stages?: LoopStepDefinition[];
   rootPath?: string | null;
   kinds?: typeof CONTEXT_KINDS;
   label?: string;
@@ -1650,15 +1661,24 @@ function ContextPanel({ stage, rootPath, kinds = CONTEXT_KINDS, label = "Inputs"
   footnote?: string;
   compact?: boolean;
   showSafetyNote?: boolean;
+  /** A subset panel only round-trips `inputs`, so a report control there
+   *  would silently discard every edit. */
+  showReports?: boolean;
   onRootPath: (path: string) => void;
   onPatch: (patch: Partial<LoopStepDefinition>) => void;
 }) {
   const inputs = stage.inputs;
+  const reportsAllowed = showReports && stage.kind !== "user_approval" && stage.kind !== "deterministic_check";
+  const reports = reportsAllowed ? stage.reports ?? [] : [];
+  const reportSources = stages.filter((row) => row.id !== stage.id);
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
   const [pickerError, setPickerError] = useState<string | null>(null);
   const [choosingRoot, setChoosingRoot] = useState(false);
   function patch(index: number, next: LoopContextReference) {
     onPatch({ inputs: inputs.map((item, itemIndex) => itemIndex === index ? next : item) });
+  }
+  function patchReport(index: number, next: LoopReportReference) {
+    onPatch({ reports: reports.map((item, at) => (at === index ? next : item)) });
   }
   function choosePath(index: number) {
     setPickerError(null);
@@ -1711,12 +1731,32 @@ function ContextPanel({ stage, rootPath, kinds = CONTEXT_KINDS, label = "Inputs"
               </div>
             );
           })}
-          {inputs.length === 0 && !compact && <div className="loop-inspector-note">No inputs declared yet.</div>}
+          {reports.map((item, index) => (
+            <div className="loop-context-row" key={`report:${item.from}:${index}`}>
+              <span className="loop-context-icon"><ReturnIcon size={13} /></span>
+              <span className="loop-context-copy"><strong>Stage report</strong><small>an earlier stage's account, labelled — findings included</small>
+                <select className="loop-report-from" aria-label="Report from stage" value={item.from} onChange={(event) => patchReport(index, { ...item, from: event.target.value })}>
+                  <option value="previous">whichever ran last</option>
+                  {reportSources.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+                </select>
+              </span>
+              <button className={"loop-required-toggle" + (item.required ? " active" : "")} onClick={() => patchReport(index, { ...item, required: !item.required })}>{item.required ? "required" : "optional"}</button>
+              <button className="btn ghost icon sm" onClick={() => onPatch({ reports: reports.filter((_, at) => at !== index) })} aria-label="Remove report">×</button>
+            </div>
+          ))}
+          {inputs.length === 0 && reports.length === 0 && !compact && <div className="loop-inspector-note">No inputs declared yet.</div>}
         </div>
         {compact && <div className="loop-add-context stage-context-add">{kinds.filter((item) => item.kind !== "shared_context").map((item) => <button key={item.kind} onClick={() => add(item.kind)}>{item.kind === "files" ? "@" : item.kind === "folder" ? <FolderIcon size={10} /> : <EditIcon size={10} />} {item.kind === "files" ? "File" : item.label}</button>)}</div>}
       </InspectorField>
       {!compact && <InspectorField label={addLabel}>
-        <div className="loop-add-context">{kinds.map((item) => <button key={item.kind} onClick={() => add(item.kind)}>+ {item.label}</button>)}</div>
+        <div className="loop-add-context">
+          {kinds.map((item) => <button key={item.kind} onClick={() => add(item.kind)}>+ {item.label}</button>)}
+          {/* Stored in its own field, offered with the rest: a report is one
+              of the things a stage is given, and keeping it in a separate
+              panel is what let loops ship an implementation stage that could
+              never see the review sending it back. */}
+          {reportsAllowed && <button onClick={() => onPatch({ reports: [...reports, { from: "previous", required: false }] })}>+ Stage report</button>}
+        </div>
       </InspectorField>}
       {pickerError && <div className="loop-inspector-note"><AlertIcon size={13} /> {pickerError}</div>}
       {rootPath && <div className="loop-inspector-note"><FolderIcon size={13} /> Paths are relative to <code>{rootPath}</code>.</div>}
