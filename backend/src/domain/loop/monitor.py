@@ -44,6 +44,7 @@ from src.domain.loop.ports import (
     LoopRunStateStore,
 )
 from src.domain.loop.prompts import (
+    build_follow_up_prompt,
     build_report_blocks,
     build_stage_prompt,
     prompt_for,
@@ -81,23 +82,6 @@ _RUNTIME_RELEASE_STATUSES = {
     LoopStatus.BLOCKED_USER.value,
     LoopStatus.FAILED.value,
 }
-
-
-def _stage_recovery_prompt(
-    workstore: WorkStore,
-    *,
-    work_slug: str,
-    agent_slug: str,
-    stage: LoopStepDefinition,
-) -> str:
-    """Build recovery guidance with the stage agent's original request."""
-    original_request = ""
-    for event in workstore.read_transcript_from_cursor(work_slug, agent_slug, 0):
-        text = event.get("text")
-        if event.get("type") == "user_input" and isinstance(text, str) and text.strip():
-            original_request = text
-            break
-    return stage_inactivity_recovery_prompt(stage, original_request)
 
 
 class LoopRunNotFound(ValueError):
@@ -346,21 +330,19 @@ async def _execute_claimed(
                 and actions.claim_connection_recovery(current_row, runtime_error)
             ):
                 try:
-                    await _loop_runtime.send_loop_prompt(
+                    await _send_recovery_prompt(
                         workstore,
                         supervisor,
                         worktree_manager,
                         sharestore,
                         share_provisioner,
                         settings,
-                        work_slug=req.work_slug,
-                        agent_slug=agent_slug,
-                        prompt=_stage_recovery_prompt(
-                            workstore,
-                            work_slug=req.work_slug,
-                            agent_slug=agent_slug,
-                            stage=current_stage,
-                        ),
+                        req,
+                        target,
+                        current_stage,
+                        current_row,
+                        agent_slug,
+                        actions.str_or_empty(loop.get("previous_stage_id")),
                     )
                 except Exception as exc:
                     current_row["status"] = LoopStepStatus.FAILED.value
@@ -403,21 +385,19 @@ async def _execute_claimed(
                 current_row, events
             ):
                 try:
-                    await _loop_runtime.send_loop_prompt(
+                    await _send_recovery_prompt(
                         workstore,
                         supervisor,
                         worktree_manager,
                         sharestore,
                         share_provisioner,
                         settings,
-                        work_slug=req.work_slug,
-                        agent_slug=agent_slug,
-                        prompt=_stage_recovery_prompt(
-                            workstore,
-                            work_slug=req.work_slug,
-                            agent_slug=agent_slug,
-                            stage=current_stage,
-                        ),
+                        req,
+                        target,
+                        current_stage,
+                        current_row,
+                        agent_slug,
+                        actions.str_or_empty(loop.get("previous_stage_id")),
                     )
                 except Exception as exc:
                     current_row["status"] = LoopStepStatus.FAILED.value
@@ -483,30 +463,28 @@ async def _execute_claimed(
                 attempt = actions.int_or_default(
                     current_row.get("attempt") if current_row else None, 1
                 )
-                runtime_missing = not supervisor.is_registered(
-                    agent_slug
-                ) or supervisor.is_lazy_registered(agent_slug)
                 recovered_attempt = actions.int_or_default(
                     current_row.get("recovered_attempt") if current_row else None, 0
                 )
                 if current_row is not None and recovered_attempt != attempt:
                     try:
-                        await _loop_runtime.send_loop_prompt(
+                        # Always resumes. A nudge exists to unstick the session
+                        # that holds the stage's work; restarting it throws that
+                        # away. A missing runtime resumes from the persisted
+                        # session id just the same.
+                        await _send_recovery_prompt(
                             workstore,
                             supervisor,
                             worktree_manager,
                             sharestore,
                             share_provisioner,
                             settings,
-                            work_slug=req.work_slug,
-                            agent_slug=agent_slug,
-                            prompt=_stage_recovery_prompt(
-                                workstore,
-                                work_slug=req.work_slug,
-                                agent_slug=agent_slug,
-                                stage=current_stage,
-                            ),
-                            fresh_session=not runtime_missing,
+                            req,
+                            target,
+                            current_stage,
+                            current_row,
+                            agent_slug,
+                            actions.str_or_empty(loop.get("previous_stage_id")),
                         )
                     except Exception as exc:
                         current_row["status"] = LoopStepStatus.FAILED.value
@@ -522,6 +500,13 @@ async def _execute_claimed(
                         await supervisor.stop_agent(agent_slug)
                         return target
                     current_row["recovered_attempt"] = attempt
+                    # The nudge is deliberately bare -- the session already
+                    # holds the report contract -- so the repair path is what
+                    # restates it if the agent answers in prose. A stage that
+                    # spent its repair budget before stalling would otherwise
+                    # fail INVALID_REPORT on its first post-nudge word, having
+                    # never been asked to correct itself after the stall.
+                    current_row.pop("repair_attempt", None)
                     loop["status"] = LoopStatus.RUNNING.value
                     loop["status_reason"] = (
                         f"{current_stage.name} reconnected after 5 minutes without agent activity."
@@ -900,7 +885,7 @@ async def _advance_after_stage_report(
 
     if not isinstance(next_stage, AgentStage):
         raise LoopTransitionInvalid(f"loop stage cannot run an agent: {next_stage.step_id}")
-    next_agent = await _launch_or_resume_stage_agent(
+    next_agent, session_continues = await _launch_or_resume_stage_agent(
         workstore,
         supervisor,
         worktree_manager,
@@ -932,6 +917,7 @@ async def _advance_after_stage_report(
         next_agent,
         current_id,
         resolution_note=resolution_note,
+        session_continues=session_continues,
     )
     next_row["status"] = LoopStepStatus.RUNNING.value
     next_row["attempt"] = actions.int_or_default(next_row.get("attempt"), 0) + 1
@@ -1197,10 +1183,15 @@ async def _launch_or_resume_stage_agent(
     stage: AgentStage,
     stage_row: dict[str, Any],
     loop: dict[str, Any],
-) -> str:
+) -> tuple[str, bool]:
+    """Return the stage's agent and whether it keeps the session it already had.
+
+    The caller needs both: an agent whose session continues has the seed in its
+    transcript and must not be sent another one.
+    """
     existing = actions.str_or_none(stage_row.get("agent_slug"))
     if stage.agent.session.value == "reuse" and existing:
-        return existing
+        return existing, True
 
     agents = {
         agent.slug: agent
@@ -1254,7 +1245,7 @@ async def _launch_or_resume_stage_agent(
     )
     if launched.slug is None:
         raise RuntimeError("loop stage launch returned an agent without slug")
-    return launched.slug
+    return launched.slug, False
 
 
 def _write_stage_agent_slug(definition: LoopDefinition, loop: dict[str, Any]) -> str:
@@ -1269,6 +1260,61 @@ def _write_stage_agent_slug(definition: LoopDefinition, loop: dict[str, Any]) ->
         if slug:
             return slug
     return ""
+
+
+async def _send_recovery_prompt(
+    workstore: WorkStore,
+    supervisor: AgentSupervisorService,
+    worktree_manager: WorktreeManager,
+    sharestore: SharedFolderStore,
+    share_provisioner: ShareProvisioner,
+    settings: Any,
+    req: MonitorLoopRunRequest,
+    target: LoopRunTarget,
+    stage: LoopStepDefinition,
+    stage_row: dict[str, Any],
+    agent_slug: str,
+    previous_stage_id: str,
+) -> None:
+    """Restart a stalled or disconnected stage in whatever session it has left.
+
+    Preconditions: the stage is the run's current one and its agent belongs to
+    the Work. Postconditions: the agent has been prompted to continue.
+
+    A bare nudge only works while the session that ran the stage is still there
+    to resume. When the agent never persisted one, resuming starts an empty
+    session instead, and "continue" would be the only thing in it -- so that
+    case gets the full seed rather than a word.
+    """
+    if _loop_runtime.holds_a_session(
+        workstore, work_slug=req.work_slug, agent_slug=agent_slug
+    ):
+        await _loop_runtime.send_loop_prompt(
+            workstore,
+            supervisor,
+            worktree_manager,
+            sharestore,
+            share_provisioner,
+            settings,
+            work_slug=req.work_slug,
+            agent_slug=agent_slug,
+            prompt=stage_inactivity_recovery_prompt(),
+        )
+        return
+    await _send_stage_prompt(
+        workstore,
+        supervisor,
+        worktree_manager,
+        sharestore,
+        share_provisioner,
+        settings,
+        req,
+        target,
+        stage,
+        stage_row,
+        agent_slug,
+        previous_stage_id,
+    )
 
 
 async def _send_stage_prompt(
@@ -1286,6 +1332,7 @@ async def _send_stage_prompt(
     previous_stage_id: str,
     *,
     resolution_note: str = "",
+    session_continues: bool = False,
 ) -> None:
     prompt_type = prompt_for(stage)
     if isinstance(stage, PrStage):
@@ -1326,30 +1373,34 @@ async def _send_stage_prompt(
         if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs)
         else ""
     )
-    prompt = build_stage_prompt(
-        prompt_type(
-            run_id=req.run_id,
-            work_slug=req.work_slug,
-            artifact_id=target.target_id,
-            artifact_title=target.title,
-            source_ref=target.source_ref,
-            stage=stage,
-            reports=build_report_blocks(report_rows),
-            history=history.lines(
-                loop, stage.history, frozenset(step for step, _ in report_rows)
-            ),
-            previous_changed_files=changed_files,
-            workspace_diff=workspace_diff,
-            resolution_note=resolution_note,
-            resolved_context=tuple(actions.str_list(stage_row.get("resolved_context"))),
-            context_warnings=(
-                *actions.str_list(stage_row.get("context_warnings")),
-                *actions.unresolved_report_warnings(loop, stage, previous_stage_id),
-            ),
-            brief_note=brief_note,
-            brief_context=brief_context,
-            waived_findings=_declared_waived(stage, loop),
-        )
+    prompt_input = prompt_type(
+        run_id=req.run_id,
+        work_slug=req.work_slug,
+        artifact_id=target.target_id,
+        artifact_title=target.title,
+        source_ref=target.source_ref,
+        stage=stage,
+        reports=build_report_blocks(report_rows),
+        history=history.lines(loop, stage.history, frozenset(step for step, _ in report_rows)),
+        previous_changed_files=changed_files,
+        workspace_diff=workspace_diff,
+        resolution_note=resolution_note,
+        resolved_context=tuple(actions.str_list(stage_row.get("resolved_context"))),
+        context_warnings=(
+            *actions.str_list(stage_row.get("context_warnings")),
+            *actions.unresolved_report_warnings(loop, stage, previous_stage_id),
+        ),
+        brief_note=brief_note,
+        brief_context=brief_context,
+        waived_findings=_declared_waived(stage, loop),
+    )
+    # A `reuse` stage re-entered on a later pass keeps the session that ran it
+    # last time, so the seed is already in its transcript. Sending another is
+    # the same re-seed this form exists to avoid.
+    prompt = (
+        build_follow_up_prompt(prompt_input)
+        if session_continues
+        else build_stage_prompt(prompt_input)
     )
     await _loop_runtime.send_loop_prompt(
         workstore,

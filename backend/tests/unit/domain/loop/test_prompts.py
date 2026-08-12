@@ -16,6 +16,7 @@ from src.domain.loop.prompts import (
     ReviewStagePrompt,
     StageReportBlock,
     TaskStagePrompt,
+    build_follow_up_prompt,
     build_stage_prompt,
 )
 from src.domain.worktrees import WorktreeState
@@ -239,3 +240,110 @@ def test_dismissed_findings_render_only_when_declared() -> None:
     # Undeclared input is not rendered: the caller decides by declaration, and
     # the renderer has nothing to suppress.
     assert "Already dismissed" not in _task_prompt(_task_stage())
+
+
+def _follow_up(
+    stage: LoopStepDefinition,
+    *,
+    note: str = "Rename the endpoint.",
+    waived_findings: tuple[str, ...] = (),
+) -> str:
+    """Render the follow-up a resumed stage receives."""
+    return build_follow_up_prompt(
+        TaskStagePrompt(
+            run_id="run-1",
+            work_slug="WRK-001",
+            artifact_id="objective",
+            artifact_title="Goal",
+            source_ref="Goal",
+            stage=stage,
+            resolution_note=note,
+            waived_findings=waived_findings,
+        )
+    )
+
+
+def test_follow_up_carries_the_request_and_the_report_contract() -> None:
+    prompt = _follow_up(_task_stage())
+
+    assert "Rename the endpoint." in prompt
+    # The agent still has to answer in the report shape, and it is the one part
+    # of the seed it may consider finished with.
+    assert "single-line JSON report" in prompt
+
+
+def test_follow_up_omits_context_the_resumed_session_already_holds() -> None:
+    prompt = _follow_up(
+        _task_stage(LoopContextKind.WORKSPACE_DIFF, LoopContextKind.CHANGED_FILES)
+    )
+
+    assert "Implement the target." not in prompt
+    assert "Execute loop run" not in prompt
+    assert "What has already happened" not in prompt
+    assert "Current workspace diff" not in prompt
+    assert "Changed files from prior stage reports" not in prompt
+
+
+def test_follow_up_states_the_request_once() -> None:
+    prompt = _follow_up(_task_stage(), note="Rename the endpoint.")
+
+    assert prompt.count("Rename the endpoint.") == 1
+
+
+def test_follow_up_without_a_note_still_asks_the_stage_to_continue() -> None:
+    prompt = _follow_up(_task_stage(), note="")
+
+    assert "Continue this stage." in prompt
+
+
+def test_follow_up_renders_newly_dismissed_findings() -> None:
+    prompt = _follow_up(_task_stage(), waived_findings=("Timeline parity is untested.",))
+
+    assert "Already dismissed by the user" in prompt
+    assert "Timeline parity is untested." in prompt
+
+
+def test_follow_up_carries_reports_written_while_the_session_waited() -> None:
+    prompt = build_follow_up_prompt(
+        TaskStagePrompt(
+            run_id="run-1",
+            work_slug="WRK-001",
+            artifact_id="objective",
+            artifact_title="Goal",
+            source_ref="Goal",
+            stage=_task_stage(reports=("code-review",)),
+            reports=(
+                StageReportBlock(
+                    stage_id="code-review",
+                    stage_name="Code review",
+                    summary="The writer path is unguarded.",
+                    findings=("Fix the race.",),
+                ),
+            ),
+            resolution_note="Address the review.",
+        )
+    )
+
+    # A review's verdict is written by another agent, so the resumed session
+    # never saw it -- it is the usual reason the user asks for changes.
+    assert "The writer path is unguarded." in prompt
+    assert "Fix the race." in prompt
+
+
+def test_follow_up_carries_context_resolved_for_this_entry() -> None:
+    prompt = build_follow_up_prompt(
+        TaskStagePrompt(
+            run_id="run-1",
+            work_slug="WRK-001",
+            artifact_id="objective",
+            artifact_title="Goal",
+            source_ref="Goal",
+            stage=_task_stage(LoopContextKind.WAIVED_FINDINGS),
+            resolved_context=("docs/architecture.md",),
+            context_warnings=("optional missing: plan_index",),
+            resolution_note="Continue.",
+        )
+    )
+
+    assert "docs/architecture.md" in prompt
+    assert "optional missing: plan_index" in prompt

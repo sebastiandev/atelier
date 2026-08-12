@@ -734,6 +734,7 @@ def test_connection_closed_continues_same_stage_once(
 ) -> None:
     started = _start_run(app_client, tmp_path)
     agent_slug = _first_agent_slug(started)
+    _establish_session(app_client, agent_slug)
     portal = app_client.portal
     assert portal is not None
     portal.call(app_client.app.state.supervisor.stop_agent, agent_slug)
@@ -764,7 +765,7 @@ def test_connection_closed_continues_same_stage_once(
         time.sleep(0.05)
 
     assert len(user_inputs) == 2
-    assert str(user_inputs[-1]["text"]).startswith("Continue stage `implementation`")
+    assert str(user_inputs[-1]["text"]) == "continue"
     assert current["status"] == "running"
     assert current["stages"][0]["agent_slug"] == agent_slug
     assert current["stages"][0]["attempt"] == 1
@@ -784,7 +785,7 @@ def test_connection_closed_continues_same_stage_once(
     assert failed["stages"][0]["attempt"] == 1
 
 
-def test_silent_live_stage_restarts_once_with_original_request(
+def test_silent_live_stage_is_nudged_once_without_restarting_its_session(
     app_client: TestClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -792,6 +793,8 @@ def test_silent_live_stage_restarts_once_with_original_request(
 ) -> None:
     started = _start_run(app_client, tmp_path)
     agent_slug = _first_agent_slug(started)
+    _establish_session(app_client, agent_slug)
+    teardowns = _record_agent_teardowns(app_client, monkeypatch)
     advanced = _advance_monitor_clock(monkeypatch, minutes=6)
     monkeypatch.setattr(supervisor_service, "datetime", advanced)
 
@@ -812,12 +815,15 @@ def test_silent_live_stage_restarts_once_with_original_request(
         time.sleep(0.05)
 
     assert len(user_inputs) == 2
+    # The nudge lands in the session that already holds the stage request, so
+    # it carries no context of its own and must not re-state the request.
     recovery = str(user_inputs[-1]["text"])
-    assert recovery.startswith("Continue stage `implementation`")
-    assert "Original stage request:" in recovery
-    assert "Implement the standalone loop endpoint." in recovery
+    assert recovery == "continue"
     assert current["stages"][0]["attempt"] == 1
     assert app_client.app.state.supervisor.is_registered(agent_slug)
+    # The nudge resumes: the runtime is never torn down, so the stage keeps the
+    # session holding the work and reasoning it already has.
+    assert teardowns == []
     time.sleep(0.1)
     assert (
         len(
@@ -840,6 +846,7 @@ def test_stale_permission_denial_continues_active_stage_once(
 ) -> None:
     started = _start_run(app_client, tmp_path)
     agent_slug = _first_agent_slug(started)
+    _establish_session(app_client, agent_slug)
     transcript = app_client.app.state.workstore
     transcript.append_transcript_event_with_seq(
         "WRK-001",
@@ -868,7 +875,7 @@ def test_stale_permission_denial_continues_active_stage_once(
             event
             for event in transcript.read_transcript_from_cursor("WRK-001", agent_slug, 0)
             if event.get("type") == "user_input"
-            and str(event.get("text", "")).startswith("Continue stage `implementation`")
+            and str(event.get("text", "")) == "continue"
         ]
         if recovery_inputs:
             break
@@ -880,7 +887,7 @@ def test_stale_permission_denial_continues_active_stage_once(
         event
         for event in transcript.read_transcript_from_cursor("WRK-001", agent_slug, 0)
         if event.get("type") == "user_input"
-        and str(event.get("text", "")).startswith("Continue stage `implementation`")
+        and str(event.get("text", "")) == "continue"
     ]
     assert len(all_inputs) == 1
 
@@ -893,6 +900,7 @@ def test_silent_missing_runtime_is_reconnected_once(
 ) -> None:
     started = _start_run(app_client, tmp_path)
     agent_slug = _first_agent_slug(started)
+    _establish_session(app_client, agent_slug)
     portal = app_client.portal
     assert portal is not None
     portal.call(app_client.app.state.supervisor.stop_agent, agent_slug)
@@ -914,7 +922,7 @@ def test_silent_missing_runtime_is_reconnected_once(
         time.sleep(0.05)
 
     assert len(user_inputs) == 2
-    assert str(user_inputs[-1]["text"]).startswith("Continue stage `implementation`")
+    assert str(user_inputs[-1]["text"]) == "continue"
     assert app_client.app.state.supervisor.is_registered(agent_slug)
 
 
@@ -1444,6 +1452,7 @@ def _append_stage_report(
     *,
     validation_evidence: str = "tests passed",
     artifact_refs: list[str] | None = None,
+    blocker: str = "None.",
 ) -> None:
     """Append one complete loop report and idle marker for an active stage."""
     _wait_for_agent_idle(client, agent_slug)
@@ -1462,7 +1471,7 @@ def _append_stage_report(
                         "validation_evidence": validation_evidence,
                         "divergences": "None.",
                         "skipped_scope": "None.",
-                        "blocker": "None.",
+                        "blocker": blocker,
                         "artifact_refs": artifact_refs or [],
                     }
                 }
@@ -1518,6 +1527,33 @@ def _first_agent_slug(run: dict[str, object]) -> str:
     agent_slug = stages[0]["agent_slug"]
     assert isinstance(agent_slug, str)
     return agent_slug
+
+
+def _establish_session(client: TestClient, agent_slug: str) -> None:
+    """Give a stage agent the provider session a real one has after its turn.
+
+    Every shipped adapter emits `session_established` and the supervisor
+    persists it, so an agent that has run is resumable. The stub dispatcher
+    used in these tests never does, and recovery behaviour turns on exactly
+    that distinction.
+    """
+    client.app.state.workstore.set_agent_session_id(agent_slug, f"sess-{agent_slug}")
+
+
+def _record_agent_teardowns(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> list[str]:
+    """Record every runtime teardown, the observable half of a fresh session."""
+    supervisor = client.app.state.supervisor
+    stopped: list[str] = []
+    original = supervisor.stop_agent
+
+    async def recording_stop_agent(agent_slug: str, *args: object, **kwargs: object) -> None:
+        stopped.append(agent_slug)
+        await original(agent_slug, *args, **kwargs)
+
+    monkeypatch.setattr(supervisor, "stop_agent", recording_stop_agent)
+    return stopped
 
 
 def _wait_for_stage(client: TestClient, stage_id: str) -> dict[str, object]:
@@ -1839,3 +1875,154 @@ def test_approving_a_gate_as_is_keeps_the_reviewer_findings_visible(
     assert review["findings"] == ["Fix the race."]
     assert review["reports"][0]["findings"] == ["Fix the race.", "Rename the fixture."]
     assert len(review["finding_details"]) == len(review["findings"])
+
+
+def test_blocker_answer_resumes_the_asking_agent_without_reseeding_it(
+    app_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _start_run(app_client, tmp_path)
+    agent_slug = _first_agent_slug(started)
+    _establish_session(app_client, agent_slug)
+    teardowns = _record_agent_teardowns(app_client, monkeypatch)
+    _append_stage_report(
+        app_client,
+        agent_slug,
+        "blocked_user",
+        [],
+        blocker="Which lock helper should the writer use?",
+    )
+    _wait_for_status(app_client, "blocked_user")
+    before = len(
+        [
+            event
+            for event in app_client.app.state.workstore.read_transcript_from_cursor(
+                "WRK-001", agent_slug, 0
+            )
+            if event.get("type") == "user_input"
+        ]
+    )
+
+    # Blocking releases the runtime by design, so only teardowns from here on
+    # would mean the answer restarted the session rather than resuming it.
+    released_while_blocked = len(teardowns)
+    resumed = app_client.post(
+        "/api/works/WRK-001/runs/run-001/resume",
+        json={"resolution_note": "Use the shared lock helper."},
+    )
+    assert resumed.status_code == 200, resumed.text
+
+    running = _wait_for_status(app_client, "running")
+    stage = next(item for item in running["stages"] if item["id"] == "implementation")
+    # The agent that raised the blocker is the one that gets the answer.
+    assert stage["agent_slug"] == agent_slug
+    inputs = [
+        event
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", agent_slug, 0
+        )
+        if event.get("type") == "user_input"
+    ]
+    assert len(inputs) == before + 1
+    answer = str(inputs[-1]["text"])
+    assert "Use the shared lock helper." in answer
+    # It still holds the seed, so the answer must not repeat it.
+    assert "Execute loop run" not in answer
+    assert "What has already happened" not in answer
+    assert "single-line JSON report" in answer
+    # Same agent is not the same session: answering tears nothing down, so the
+    # answer lands in the session that raised the blocker.
+    assert len(teardowns) == released_while_blocked
+
+
+def test_a_stalled_agent_without_a_session_is_reseeded_not_nudged(
+    app_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quiet_amp_dispatch: None,
+) -> None:
+    started = _start_run(app_client, tmp_path)
+    agent_slug = _first_agent_slug(started)
+    # No _establish_session: resuming this agent starts an empty session, so a
+    # bare "continue" would be the only thing in it.
+    advanced = _advance_monitor_clock(monkeypatch, minutes=6)
+    monkeypatch.setattr(supervisor_service, "datetime", advanced)
+
+    deadline = time.monotonic() + 3
+    user_inputs: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        user_inputs = [
+            event
+            for event in app_client.app.state.workstore.read_transcript_from_cursor(
+                "WRK-001", agent_slug, 0
+            )
+            if event.get("type") == "user_input"
+        ]
+        if len(user_inputs) >= 2:
+            break
+        time.sleep(0.05)
+
+    assert len(user_inputs) == 2
+    recovery = str(user_inputs[-1]["text"])
+    assert recovery != "continue"
+    assert "Execute loop run" in recovery
+    assert "Implement the standalone loop endpoint." in recovery
+
+
+def test_a_reuse_stage_reentered_gets_a_follow_up_not_a_second_seed(
+    app_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    created = app_client.post(
+        "/api/works",
+        json={"name": "Reuse work", "description": "Iterate in one session."},
+    )
+    assert created.status_code == 201, created.text
+    root = tmp_path / "repository"
+    root.mkdir()
+    payload = app_client.get("/api/loops/atelier-reviewed").json()
+    payload["name"] = "Reuse loop"
+    payload["scope"] = "library"
+    payload["stages"][0]["agent"]["session"] = "reuse"
+    definition = app_client.post("/api/loops", json=payload)
+    assert definition.status_code == 201, definition.text
+    definition_body = definition.json()
+
+    started = app_client.post(
+        "/api/works/WRK-001/runs",
+        json={
+            "goal": "Implement the reused change.",
+            "root_path": str(root),
+            "loop_definition_id": definition_body["id"],
+            "loop_revision": definition_body["revision"],
+            "provider": "amp",
+            "model": "smart",
+            "options": {},
+        },
+    ).json()
+    implementation_slug = started["stages"][0]["agent_slug"]
+    assert isinstance(implementation_slug, str)
+    _append_stage_report(app_client, implementation_slug, "pass", [])
+    reviewing = _wait_for_stage(app_client, "code-review")
+    review = next(stage for stage in reviewing["stages"] if stage["id"] == "code-review")
+    _append_stage_report(app_client, review["agent_slug"], "changes_requested", ["Fix the race."])
+
+    implementing = _wait_for_stage(app_client, "implementation")
+    reentered = next(
+        stage for stage in implementing["stages"] if stage["id"] == "implementation"
+    )
+    # Reuse means the same agent, and therefore the same session.
+    assert reentered["agent_slug"] == implementation_slug
+    prompts = [
+        str(event.get("text", ""))
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", implementation_slug, 0
+        )
+        if event.get("type") == "user_input"
+    ]
+    assert len(prompts) == 2
+    # The first entry seeded it; the second must not seed it again.
+    assert "Execute loop run" in prompts[0]
+    assert "Execute loop run" not in prompts[-1]
+    assert "Fix the race." in prompts[-1]

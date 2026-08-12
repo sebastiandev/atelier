@@ -137,6 +137,58 @@ def _pr_prompt_type(stage: PrStage) -> type[StagePromptInput]:
     return PrStagePrompt
 
 
+def _changes_guidance(stage: LoopStepDefinition) -> str:
+    """Return how a stage may use the `changes_requested` outcome."""
+    if isinstance(stage, PrStage):
+        return (
+            "Never use `changes_requested`: publishing is the last decision, and review "
+            "findings you cannot act on are not yours to reopen. If you cannot publish, "
+            "use `failed`, or `blocked_user` when only the user can unblock it."
+        )
+    return "Use `changes_requested` only from a review stage."
+
+
+def build_follow_up_prompt(value: StagePromptInput) -> str:
+    """Render the next turn for a stage whose session is being resumed.
+
+    Preconditions: the agent still holds the session that ran this stage, so its
+    transcript already carries the seed -- the target, the posture, the stage
+    instructions, the history and the diff.
+    Postconditions: the prompt carries only what the agent cannot already know:
+    reports produced by *other* stages since it last ran, context re-resolved
+    for this entry, what is being asked of it now, findings newly taken off the
+    table, and the report contract it has to answer in.
+
+    Re-seeding a live session instead is what makes an agent redo settled work:
+    the account of what already happened arrives a second time and reads as a
+    fresh order. The caller decides what belongs here -- a report block is only
+    passed when another stage wrote it, never the agent's own.
+    """
+    waived = (
+        "\n\n## Already dismissed by the user -- leave these alone\n"
+        + "\n".join(f"- {item}" for item in value.waived_findings)
+        if value.waived_findings
+        else ""
+    )
+    # Written by someone else while this session was idle, so the transcript
+    # premise does not cover it.
+    elsewhere = "".join(_report_block(report) for report in value.reports)
+    since = f"\n## What happened while you waited{elsewhere}" if elsewhere else ""
+    asked = _open_requests(value).strip() or "Continue this stage."
+    return (
+        f"{since}"
+        f"{_context_index(value)}\n\n"
+        f"{asked}"
+        f"{waived}\n\n"
+        "When this stage reaches a stopping point, respond with exactly one "
+        "single-line JSON report and no Markdown fence:\n"
+        f"{_report_example()}\n\n"
+        "Use outcome `blocked_user` only for a concrete decision or action that "
+        f"only the user can provide. {_changes_guidance(value.stage)} Use explicit "
+        "`None.` strings when a text field has no content."
+    )
+
+
 def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
     context_kinds = {item.kind for item in value.stage.inputs}
     previous = "".join(_report_block(report) for report in value.reports)
@@ -164,13 +216,7 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         if value.waived_findings
         else ""
     )
-    changes_guidance = (
-        "Never use `changes_requested`: publishing is the last decision, and review "
-        "findings you cannot act on are not yours to reopen. If you cannot publish, "
-        "use `failed`, or `blocked_user` when only the user can unblock it."
-        if isinstance(value.stage, PrStage)
-        else "Use `changes_requested` only from a review stage."
-    )
+    changes_guidance = _changes_guidance(value.stage)
     return (
         f"Execute loop run `{value.run_id}`, stage `{value.stage.step_id}` "
         f"({value.stage.name}) for `{value.artifact_id}`: {value.artifact_title}.\n\n"
@@ -341,23 +387,14 @@ def stage_report_repair_prompt(stage: LoopStepDefinition) -> str:
     )
 
 
-def stage_inactivity_recovery_prompt(
-    stage: LoopStepDefinition,
-    original_request: str = "",
-) -> str:
-    """Resume an interrupted stage without repeating completed work."""
-    guidance = (
-        f"Continue stage `{stage.step_id}` from the existing workspace. The "
-        "previous provider runtime stopped emitting activity, so inspect the "
-        "current state and do not repeat completed work."
-    )
-    if original_request.strip():
-        return f"{guidance}\n\nOriginal stage request:\n{original_request.strip()}"
-    return (
-        f"{guidance} Finish anything still "
-        "required, then respond with exactly one single-line JSON report using "
-        f"this shape and no Markdown fence:\n{_report_example()}"
-    )
+def stage_inactivity_recovery_prompt() -> str:
+    """Nudge a stalled stage agent that still holds its own session.
+
+    The nudge lands in the transcript that already carries the stage request,
+    so restating it would read as a new instruction and invite the agent to
+    redo settled work.
+    """
+    return "continue"
 
 
 __all__ = [
@@ -365,6 +402,7 @@ __all__ = [
     "ReviewStagePrompt",
     "StagePromptInput",
     "TaskStagePrompt",
+    "build_follow_up_prompt",
     "build_stage_prompt",
     "prompt_for",
     "stage_inactivity_recovery_prompt",

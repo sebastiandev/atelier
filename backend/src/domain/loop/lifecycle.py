@@ -25,7 +25,7 @@ from src.domain.loop.dtos import (
 from src.domain.loop.models import LoopRunTarget
 from src.domain.loop.prompts import (
     StageReportBlock,
-    TaskStagePrompt,
+    build_follow_up_prompt,
     build_report_blocks,
     build_stage_prompt,
     prompt_for,
@@ -197,22 +197,33 @@ async def resume(
                 settings,
                 work_slug=target.work_slug,
                 agent_slug=agent_slug,
-                prompt=_resume_prompt(
-                    target,
-                    loop,
-                    current_stage_row,
-                    stage,
-                    _retry_note(resolution_note) if retry_failed else resolution_note,
-                    (
-                        runtime.workspace_prompt_context(
-                            workstore,
-                            worktree_manager,
-                            work_slug=target.work_slug,
-                            agent_slug=agent_slug,
-                        )
-                        if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs)
-                        else ""
-                    ),
+                # A retry runs in the replacement agent launched above, which
+                # starts empty and needs the whole seed. A blocker answer goes
+                # back to the agent that asked, mid-pass, still holding the
+                # session it asked from -- so it gets the answer alone.
+                prompt=(
+                    _resume_prompt(
+                        target,
+                        loop,
+                        current_stage_row,
+                        stage,
+                        _retry_note(resolution_note),
+                        (
+                            runtime.workspace_prompt_context(
+                                workstore,
+                                worktree_manager,
+                                work_slug=target.work_slug,
+                                agent_slug=agent_slug,
+                            )
+                            if any(
+                                item.kind == LoopContextKind.WORKSPACE_DIFF
+                                for item in stage.inputs
+                            )
+                            else ""
+                        ),
+                    )
+                    if retry_failed
+                    else _blocker_answer_prompt(target, loop, stage, resolution_note)
                 ),
             )
         except runtime.AgentNotFound as exc:
@@ -382,8 +393,6 @@ async def request_changes(
         work_slug=target.work_slug,
         agent_slug=agent_slug,
     )
-    brief = briefs.optional_brief_from_snapshot(run.get("brief"))
-    brief_note, brief_context = briefs.prompt_values(brief, stage.step_id)
     try:
         await runtime.send_loop_prompt(
             workstore,
@@ -394,16 +403,20 @@ async def request_changes(
             settings,
             work_slug=target.work_slug,
             agent_slug=agent_slug,
-            prompt=build_stage_prompt(
-                TaskStagePrompt(
+            # This send-back resumes the agent that produced the result, so it
+            # gets the follow-up form: its own account of the stage is already
+            # in the transcript. Re-seeding here is what made it restate and
+            # redo work. What it has *not* seen is whatever ran between it and
+            # the approval -- a review's verdict is the usual reason the user is
+            # asking for changes at all -- so that report travels with the note.
+            prompt=build_follow_up_prompt(
+                prompt_for(stage)(
                     run_id=target.run_id,
                     work_slug=target.work_slug,
                     artifact_id=target.target_id,
                     artifact_title=target.title,
                     source_ref=target.source_ref,
                     stage=stage,
-                    # The result being sent back, when the stage asked for a
-                    # report at all. The request itself travels as the note.
                     reports=(
                         (
                             StageReportBlock(
@@ -416,23 +429,9 @@ async def request_changes(
                         if stage.reports
                         else ()
                     ),
-                    # This stage is being sent back to on a loop that already
-                    # has a full ledger, so it is the last place that should
-                    # start with no account of what came before.
-                    history=history.lines(loop, stage.history),
                     waived_findings=_declared_waived(stage, loop),
-                    previous_changed_files=actions.latest_changed_file_prompt_lines(loop),
-                    workspace_diff=(
-                        runtime.workspace_prompt_context(
-                            workstore,
-                            worktree_manager,
-                            work_slug=target.work_slug,
-                            agent_slug=agent_slug,
-                        )
-                        if any(item.kind == LoopContextKind.WORKSPACE_DIFF for item in stage.inputs)
-                        else ""
-                    ),
-                    resolution_note=note,
+                    # Re-resolved for this entry, so it can differ from what the
+                    # session was seeded with a pass ago.
                     resolved_context=tuple(actions.str_list(stage_row.get("resolved_context"))),
                     context_warnings=(
                         *actions.str_list(stage_row.get("context_warnings")),
@@ -440,8 +439,7 @@ async def request_changes(
                             loop, stage, actions.str_or_empty(loop.get("previous_stage_id"))
                         ),
                     ),
-                    brief_note=brief_note,
-                    brief_context=brief_context,
+                    resolution_note=_asked_of_this_attempt(target, stage, note),
                 )
             ),
         )
@@ -630,17 +628,13 @@ def _declared_waived(stage: LoopStepDefinition, loop: dict[str, Any]) -> tuple[s
     return tuple(feedback.dismissed(loop))
 
 
-def _resume_prompt(
+def _asked_of_this_attempt(
     target: LoopRunTarget,
-    loop: dict[str, Any],
-    stage_row: dict[str, Any],
     stage: LoopStepDefinition,
     resolution_note: str,
-    workspace_diff: str,
 ) -> str:
-    """Build the typed continuation prompt for one paused stage."""
-    prompt_type = prompt_for(stage)
-    resolution = "\n\n".join(
+    """Compose what the user is asking of this attempt, whatever resumes it."""
+    return "\n\n".join(
         value
         for value in (
             # A PR stage publishes rather than acts on requests, so it does not
@@ -657,6 +651,48 @@ def _resume_prompt(
         )
         if value
     )
+
+
+def _blocker_answer_prompt(
+    target: LoopRunTarget,
+    loop: dict[str, Any],
+    stage: LoopStepDefinition,
+    resolution_note: str,
+) -> str:
+    """Build the next turn for a stage resumed with the answer it asked for.
+
+    The agent that raised the blocker still holds the session it raised it in,
+    so it needs the answer and nothing else. Re-seeding it mid-pass would hand
+    back its own account of the stage as though it were a new order.
+
+    Findings are the exception: the user may have waived some while the stage
+    sat blocked, and the session predates that.
+    """
+    return build_follow_up_prompt(
+        prompt_for(stage)(
+            run_id=target.run_id,
+            work_slug=target.work_slug,
+            artifact_id=target.target_id,
+            artifact_title=target.title,
+            source_ref=target.source_ref,
+            stage=stage,
+            waived_findings=_declared_waived(stage, loop),
+            resolution_note=_asked_of_this_attempt(target, stage, resolution_note),
+        )
+    )
+
+
+def _resume_prompt(
+    target: LoopRunTarget,
+    loop: dict[str, Any],
+    stage_row: dict[str, Any],
+    stage: LoopStepDefinition,
+    resolution_note: str,
+    workspace_diff: str,
+) -> str:
+    """Build the full seed a paused stage's replacement agent starts from."""
+    prompt_type = prompt_for(stage)
+    resolution = _asked_of_this_attempt(target, stage, resolution_note)
     brief = briefs.optional_brief_from_snapshot(target.run.get("brief"))
     brief_note, brief_context = briefs.prompt_values(brief, stage.step_id)
     report_rows = actions.declared_report_rows(

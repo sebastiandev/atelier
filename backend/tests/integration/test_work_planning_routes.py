@@ -1664,11 +1664,13 @@ def test_reviewed_loop_routes_findings_back_to_implementation(
         str(reviewer_three["slug"]),
     ]
 
-    async def fake_launch_reviewer(*_args: Any, **_kwargs: Any) -> str:
+    async def fake_launch_reviewer(*_args: Any, **_kwargs: Any) -> tuple[str, bool]:
         stage = _args[-3]
+        # False: every stage here is `fresh`, so its agent starts a new session
+        # and gets the full seed.
         if stage.step_id == "implementation":
-            return str(implementation["slug"])
-        return reviewer_slugs.pop(0)
+            return str(implementation["slug"]), False
+        return reviewer_slugs.pop(0), False
 
     monkeypatch.setattr(
         loop_monitor,
@@ -1943,8 +1945,8 @@ def test_secure_loop_runs_code_and_security_review(
     security_reviewer = _create_agent(app_client, root)
     reviewer_slugs = [str(code_reviewer["slug"]), str(security_reviewer["slug"])]
 
-    async def fake_launch_reviewer(*_args: Any, **_kwargs: Any) -> str:
-        return reviewer_slugs.pop(0)
+    async def fake_launch_reviewer(*_args: Any, **_kwargs: Any) -> tuple[str, bool]:
+        return reviewer_slugs.pop(0), False
 
     monkeypatch.setattr(
         loop_monitor,

@@ -140,6 +140,20 @@ def last_transcript_seq(
     return max(seqs, default=0)
 
 
+def holds_a_session(workstore: WorkStore, *, work_slug: str, agent_slug: str) -> bool:
+    """Whether resuming this agent would continue a provider session at all.
+
+    An agent with no persisted session id is resumed with ``session_id=None``,
+    which starts a new session however the caller asked. A prompt that assumes
+    the transcript already holds the stage -- a bare nudge, a follow-up -- would
+    then land in an empty one, so callers check before choosing that shape.
+    """
+    return any(
+        agent.slug == agent_slug and agent.session_id
+        for agent in workstore.list_agents_for_work(work_slug)
+    )
+
+
 async def _ensure_registered(
     workstore: WorkStore,
     supervisor: AgentSupervisorService,
