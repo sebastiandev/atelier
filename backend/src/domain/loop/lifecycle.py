@@ -246,6 +246,7 @@ async def resume(
             actions.int_or_default(current_stage_row.get("attempt"), 1) + 1
         )
         current_stage_row.pop("repair_attempt", None)
+        actions.clear_stall_recovery(current_stage_row)
     run["status"] = LoopRunStatus.RUNNING.value
     run["completed_at"] = None
     loop["status"] = LoopStatus.RUNNING.value
@@ -459,6 +460,7 @@ async def request_changes(
     stage_row["status"] = LoopStepStatus.RUNNING.value
     stage_row["attempt"] = actions.int_or_default(stage_row.get("attempt"), 1) + 1
     stage_row.pop("repair_attempt", None)
+    actions.clear_stall_recovery(stage_row)
     loop["current_stage_id"] = destination
     # The approval is what this stage is answering, so a later retry resolves
     # `previous` to it rather than to whatever transition last ran.

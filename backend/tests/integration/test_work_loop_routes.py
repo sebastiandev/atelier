@@ -44,6 +44,9 @@ def quiet_amp_dispatch() -> Iterator[None]:
         build_adapter.register(AmpAgentConfig)(original)
 
 
+_LADDER_EVENTS = {"user_input", "user_stop"}
+
+
 def _advance_monitor_clock(monkeypatch: pytest.MonkeyPatch, *, minutes: int) -> type[datetime]:
     """Move monitor wall time forward without sleeping in integration tests."""
 
@@ -57,6 +60,32 @@ def _advance_monitor_clock(monkeypatch: pytest.MonkeyPatch, *, minutes: int) -> 
 
     monkeypatch.setattr(loop_monitor, "datetime", AdvancedDateTime)
     return AdvancedDateTime
+
+
+def _advance_monitor_clock_steadily(
+    monkeypatch: pytest.MonkeyPatch, *, minutes: int, step_seconds: int = 20
+) -> type[datetime]:
+    """Move monitor wall time forward on every read.
+
+    The stall ladder waits on real elapsed time between rungs -- an interrupt
+    has a grace window, and each rung needs another silent stretch -- so a
+    fixed offset would freeze it on the first one.
+    """
+    state = {"steps": 0}
+
+    class SteadyDateTime(_REAL_DATETIME):
+        """Datetime replacement whose offset grows with each reading."""
+
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            """Return real wall time plus an ever-growing offset."""
+            state["steps"] += 1
+            return _REAL_DATETIME.now(tz) + timedelta(
+                minutes=minutes, seconds=step_seconds * state["steps"]
+            )
+
+    monkeypatch.setattr(loop_monitor, "datetime", SteadyDateTime)
+    return SteadyDateTime
 
 
 def test_objective_loop_run_starts_completes_and_accepts(
@@ -2026,3 +2055,89 @@ def test_a_reuse_stage_reentered_gets_a_follow_up_not_a_second_seed(
     assert "Execute loop run" in prompts[0]
     assert "Execute loop run" not in prompts[-1]
     assert "Fix the race." in prompts[-1]
+
+
+def test_a_stage_that_ignores_its_nudge_is_interrupted_before_the_next_one(
+    app_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quiet_amp_dispatch: None,
+) -> None:
+    started = _start_run(app_client, tmp_path)
+    agent_slug = _first_agent_slug(started)
+    _establish_session(app_client, agent_slug)
+    advanced = _advance_monitor_clock_steadily(monkeypatch, minutes=6)
+    monkeypatch.setattr(supervisor_service, "datetime", advanced)
+
+    deadline = time.monotonic() + 10
+    stops: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        events = list(
+            app_client.app.state.workstore.read_transcript_from_cursor(
+                "WRK-001", agent_slug, 0
+            )
+        )
+        stops = [event for event in events if event.get("type") == "user_stop"]
+        seen = [str(event["type"]) for event in events if event.get("type") in _LADDER_EVENTS]
+        # Wait for the whole rung, not just its first half: the interrupt is
+        # only half a strike and the nudge it enables lands a poll later.
+        if stops and "user_input" in seen[seen.index("user_stop") :]:
+            break
+        time.sleep(0.05)
+
+    # A nudge that produced nothing means the turn is wedged, not merely
+    # finished early, so the next rung ends the turn before prompting again.
+    assert len(stops) == 1
+    ordered = [
+        event
+        for event in app_client.app.state.workstore.read_transcript_from_cursor(
+            "WRK-001", agent_slug, 0
+        )
+        if event.get("type") in _LADDER_EVENTS
+    ]
+    kinds = [str(event["type"]) for event in ordered]
+    # The interrupt exists to clear the queue so the *next* nudge is read, so
+    # a nudge has to follow it. Asserting only that a stop happened passed
+    # while the ladder cancelled twice and never prompted again.
+    assert kinds[:1] == ["user_input"]
+    assert "user_stop" in kinds
+    stop_at = kinds.index("user_stop")
+    assert "user_input" in kinds[stop_at:], f"no nudge followed the interrupt: {kinds}"
+
+
+def test_a_stage_that_never_comes_back_is_failed_as_stalled(
+    app_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quiet_amp_dispatch: None,
+) -> None:
+    started = _start_run(app_client, tmp_path)
+    agent_slug = _first_agent_slug(started)
+    _establish_session(app_client, agent_slug)
+    advanced = _advance_monitor_clock_steadily(monkeypatch, minutes=6, step_seconds=45)
+    monkeypatch.setattr(supervisor_service, "datetime", advanced)
+
+    failed = _wait_for_status(app_client, "failed", timeout=20.0)
+
+    assert "stopped responding" in str(failed["status_reason"])
+    assert failed["stages"][0]["status"] == "failed"
+    # Stalled, not timed out: the stage still had clock left, and the cause is
+    # recorded as such so retry reads it for what it was.
+    record = app_client.app.state.loop_runs.get("WRK-001", loop_run_key("run-001"))
+    assert record is not None
+    assert record.state["loop"]["failure_kind"] == LoopFailureKind.STALLED.value
+    assert not app_client.app.state.supervisor.is_registered(agent_slug)
+    events = list(
+        app_client.app.state.workstore.read_transcript_from_cursor("WRK-001", agent_slug, 0)
+    )
+    nudges = [
+        event
+        for event in events
+        if event.get("type") == "user_input" and str(event.get("text")) == "continue"
+    ]
+    stops = [event for event in events if event.get("type") == "user_stop"]
+    # Three recoveries before giving up, and the first is nudge-only: an
+    # interrupt is half a strike, so counting it as one would spend the budget
+    # in two rungs instead of three.
+    assert len(nudges) == 3
+    assert len(stops) == 2

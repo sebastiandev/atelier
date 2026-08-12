@@ -91,6 +91,10 @@ class LoopFailureKind(StrEnum):
     STOPPED = "stopped"
     INVALID_REPORT = "invalid_report"
     STAGE_OUTCOME = "stage_outcome"
+    # Distinct from TIMEOUT: the stage still had time left, but stopped
+    # answering and would not restart, so waiting out its clock only delays
+    # telling the user. Retry stays available either way.
+    STALLED = "stalled"
 
 
 class LoopDefinitionScope(StrEnum):

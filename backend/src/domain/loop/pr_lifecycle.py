@@ -764,10 +764,10 @@ def _reset_pass_occurrences(loop: dict[str, Any]) -> None:
         for key in (
             "auto_approved_permission_ids",
             "connection_recovered_attempt",
-            "recovered_attempt",
             "recovered_stale_permission_ids",
         ):
             row.pop(key, None)
+        actions.clear_stall_recovery(row)
     loop["attempt"] = 1
 
 

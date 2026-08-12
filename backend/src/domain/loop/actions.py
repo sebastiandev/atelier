@@ -494,6 +494,22 @@ def str_list(value: object) -> list[str]:
 
 
 
+def clear_stall_recovery(stage_row: dict[str, Any]) -> None:
+    """Forget what a stage spent recovering from stalls.
+
+    Preconditions: ``stage_row`` is a mutable stage snapshot.
+    Postconditions: the stall ladder starts from the top the next time this
+    row stalls.
+
+    Called wherever a stage gets a genuinely new run at its work -- a retry,
+    a send-back, a follow-up pass. The strikes belong to the agent that went
+    silent, and charging them to its replacement would cut that one's ladder
+    short before it had stalled once.
+    """
+    for key in ("recovery_strikes", "recovered_at", "recovered_attempt", "interrupted_at"):
+        stage_row.pop(key, None)
+
+
 def _permissions_value(stage: LoopStepDefinition) -> str | None:
     """The stage's declared permission, or ``None`` when it launches no agent."""
     policy = stage_agent_policy(stage)
@@ -513,6 +529,7 @@ __all__ = [
     "changed_file_prompt_lines",
     "claim_connection_recovery",
     "claim_stale_permission_recovery",
+    "clear_stall_recovery",
     "command_matches_approved_prefix",
     "declared_report_rows",
     "dict_or_empty",
