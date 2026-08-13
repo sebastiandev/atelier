@@ -330,7 +330,7 @@ def test_follow_up_carries_reports_written_while_the_session_waited() -> None:
     assert "Fix the race." in prompt
 
 
-def test_follow_up_carries_context_resolved_for_this_entry() -> None:
+def test_follow_up_carries_what_did_not_resolve_but_not_the_index() -> None:
     prompt = build_follow_up_prompt(
         TaskStagePrompt(
             run_id="run-1",
@@ -340,10 +340,24 @@ def test_follow_up_carries_context_resolved_for_this_entry() -> None:
             source_ref="Goal",
             stage=_task_stage(LoopContextKind.WAIVED_FINDINGS),
             resolved_context=("docs/architecture.md",),
-            context_warnings=("optional missing: plan_index",),
+            context_warnings=("required report from build: never reported",),
             resolution_note="Continue.",
         )
     )
 
-    assert "docs/architecture.md" in prompt
-    assert "optional missing: plan_index" in prompt
+    # Whether a declared report arrived depends on which stage sent this one
+    # back, so it is recomputed per entry and can be news.
+    assert "required report from build: never reported" in prompt
+    # The index resolved once when the run started, so this session already
+    # has it and repeating it says nothing.
+    assert "docs/architecture.md" not in prompt
+
+
+def test_follow_up_omits_the_context_index_when_nothing_resolved() -> None:
+    prompt = _follow_up(_task_stage(LoopContextKind.WAIVED_FINDINGS))
+
+    # The unresolved fallback lists the stage's own declarations back at it
+    # ("target (optional): backend-resolved"), which reads as though context
+    # had failed to resolve. A resumed session already has the real index.
+    assert "Context references" not in prompt
+    assert "backend-resolved" not in prompt

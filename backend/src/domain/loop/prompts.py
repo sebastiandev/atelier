@@ -177,7 +177,7 @@ def build_follow_up_prompt(value: StagePromptInput) -> str:
     asked = _open_requests(value).strip() or "Continue this stage."
     return (
         f"{since}"
-        f"{_context_index(value)}\n\n"
+        f"{_context_warnings(value)}\n\n"
         f"{asked}"
         f"{waived}\n\n"
         "When this stage reaches a stopping point, respond with exactly one "
@@ -323,6 +323,25 @@ def _report_block(report: StageReportBlock) -> str:
         )
     )
     return f"\n\n{heading}:\n" + (body or "This stage has not reported yet.\n")
+
+
+def _context_warnings(value: StagePromptInput) -> str:
+    """Render what did not resolve, for a session that already has the seed.
+
+    The index itself is resolved once when the run starts, so a resumed agent
+    was already given it and repeating it says nothing. Warnings are not:
+    whether a declared report ever arrived depends on which stage sent this
+    one back, so it is recomputed per entry and can be news.
+
+    Rendering the index's unresolved fallback here instead would list the
+    stage's own declarations back at it -- "target (optional):
+    backend-resolved" -- reading as though context had failed to resolve.
+    """
+    if not value.context_warnings:
+        return ""
+    return "\n\nContext missing for this attempt:\n" + "\n".join(
+        f"- {item}" for item in value.context_warnings
+    )
 
 
 def _context_index(value: StagePromptInput) -> str:

@@ -223,7 +223,9 @@ async def resume(
                         ),
                     )
                     if retry_failed
-                    else _blocker_answer_prompt(target, loop, stage, resolution_note)
+                    else _blocker_answer_prompt(
+                        target, loop, current_stage_row, stage, resolution_note
+                    )
                 ),
             )
         except runtime.AgentNotFound as exc:
@@ -431,9 +433,9 @@ async def request_changes(
                         else ()
                     ),
                     waived_findings=_declared_waived(stage, loop),
-                    # Re-resolved for this entry, so it can differ from what the
-                    # session was seeded with a pass ago.
-                    resolved_context=tuple(actions.str_list(stage_row.get("resolved_context"))),
+                    # Warnings only, for the same reason as the blocker answer:
+                    # the index is seed-time state this session already has,
+                    # while an unreported dependency is per-entry news.
                     context_warnings=(
                         *actions.str_list(stage_row.get("context_warnings")),
                         *actions.unresolved_report_warnings(
@@ -658,6 +660,7 @@ def _asked_of_this_attempt(
 def _blocker_answer_prompt(
     target: LoopRunTarget,
     loop: dict[str, Any],
+    stage_row: dict[str, Any],
     stage: LoopStepDefinition,
     resolution_note: str,
 ) -> str:
@@ -679,6 +682,15 @@ def _blocker_answer_prompt(
             source_ref=target.source_ref,
             stage=stage,
             waived_findings=_declared_waived(stage, loop),
+            # Warnings only. The index itself resolved when the run started and
+            # is already in this session; whether a declared report arrived
+            # depends on which stage sent this one back, so it is recomputed.
+            context_warnings=(
+                *actions.str_list(stage_row.get("context_warnings")),
+                *actions.unresolved_report_warnings(
+                    loop, stage, actions.str_or_empty(loop.get("previous_stage_id"))
+                ),
+            ),
             resolution_note=_asked_of_this_attempt(target, stage, resolution_note),
         )
     )

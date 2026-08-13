@@ -2141,3 +2141,26 @@ def test_a_stage_that_never_comes_back_is_failed_as_stalled(
     # in two rungs instead of three.
     assert len(nudges) == 3
     assert len(stops) == 2
+
+
+def test_a_stalled_stage_stays_visibly_stalled_while_the_ladder_works(
+    app_client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quiet_amp_dispatch: None,
+) -> None:
+    started = _start_run(app_client, tmp_path)
+    agent_slug = _first_agent_slug(started)
+    _establish_session(app_client, agent_slug)
+    advanced = _advance_monitor_clock(monkeypatch, minutes=6)
+    monkeypatch.setattr(supervisor_service, "datetime", advanced)
+
+    # Reporting a nudged stage as `running` is what made a stall look exactly
+    # like a long stage: the UI keys its warning and its early retry button off
+    # this status.
+    stalled = _wait_for_status(app_client, "waiting_report")
+
+    reason = str(stalled["status_reason"])
+    assert "No agent activity for 5 minutes" in reason
+    assert "attempt 1 of 3" in reason
+    assert "2 more attempts" in reason

@@ -112,6 +112,29 @@ def _recovery_strikes(stage_row: dict[str, Any]) -> int:
     return 1 if legacy and legacy == attempt else 0
 
 
+def _stall_reason(stage: LoopStepDefinition, strike: int) -> str:
+    """Say where the ladder is, so a watching person can judge whether to act.
+
+    Preconditions: ``strike`` is the recovery about to be spent, counting from
+    one. Postconditions: names what was tried and what is left.
+    """
+    left = max(0, _MAX_RECOVERY_STRIKES - strike)
+    remaining = (
+        f"{left} more {'attempt' if left == 1 else 'attempts'} before the stage is stalled"
+        if left
+        else "no attempts left"
+    )
+    action = (
+        "nudged to continue"
+        if strike <= _NUDGE_ONLY_STRIKE
+        else "interrupted and nudged to continue"
+    )
+    return (
+        f"No agent activity for 5 minutes. {stage.name} was {action} "
+        f"(attempt {strike} of {_MAX_RECOVERY_STRIKES}) — {remaining}."
+    )
+
+
 def _interrupt_stamp(stage_row: dict[str, Any]) -> datetime | None:
     """Return when this stage's turn was interrupted, if one is pending."""
     return _stage_row_time(stage_row, "interrupted_at")
@@ -633,11 +656,11 @@ async def _execute_claimed(
                     # than merely finished early: end it before prompting again.
                     if await _interrupt_stalled_turn(supervisor, agent_slug):
                         current_row["interrupted_at"] = now.isoformat()
-                        loop["status"] = LoopStatus.RUNNING.value
-                        loop["status_reason"] = (
-                            f"{current_stage.name} was interrupted after "
-                            "5 minutes without agent activity."
-                        )
+                        # Stays WAITING_REPORT while the ladder works: the run
+                        # is not healthy, and reporting it as running hides the
+                        # one window where a person can still step in.
+                        loop["status"] = LoopStatus.WAITING_REPORT.value
+                        loop["status_reason"] = _stall_reason(current_stage, strikes + 1)
                         run["loop"] = loop
                         _write_run(store, target)
                         if _idle_expired(req, idle_for):
@@ -690,18 +713,36 @@ async def _execute_claimed(
                     # fail INVALID_REPORT on its first post-nudge word, having
                     # never been asked to correct itself after the stall.
                     current_row.pop("repair_attempt", None)
-                    loop["status"] = LoopStatus.RUNNING.value
-                    loop["status_reason"] = (
-                        f"{current_stage.name} reconnected after 5 minutes without agent activity."
-                    )
+                    # Not RUNNING: the nudge is a symptom, not a recovery. The
+                    # stage is only healthy again once the agent answers it,
+                    # and the branch below flips it back when that happens.
+                    # Reporting it as running here is what made a stall look
+                    # exactly like a long stage until the ladder gave up.
+                    loop["status"] = LoopStatus.WAITING_REPORT.value
+                    loop["status_reason"] = _stall_reason(current_stage, strikes + 1)
                     run["loop"] = loop
                     _write_run(store, target)
                     continue
             elif loop.get("status") == LoopStatus.WAITING_REPORT.value:
-                loop["status"] = LoopStatus.RUNNING.value
-                loop["status_reason"] = f"{current_stage.name} is running."
-                run["loop"] = loop
-                _write_run(store, target)
+                # Only the agent answering clears the warning. A nudge lands in
+                # the same transcript, so the plain "activity resumed" test
+                # cleared it on the very next poll and the stall stayed
+                # invisible however long the ladder ran.
+                settled_row = _stage_row(loop, current_stage.step_id)
+                # No stamp means no recovery is pending -- including a run that
+                # was parked in this status before the ladder existed, which
+                # would otherwise never leave it.
+                if (
+                    settled_row is None
+                    or not settled_row.get("recovered_at")
+                    or _agent_moved_since_recovery(settled_row, events)
+                ):
+                    if settled_row is not None:
+                        actions.clear_stall_recovery(settled_row)
+                    loop["status"] = LoopStatus.RUNNING.value
+                    loop["status_reason"] = f"{current_stage.name} is running."
+                    run["loop"] = loop
+                    _write_run(store, target)
 
         if not observation.finished:
             if _idle_expired(req, idle_for):
