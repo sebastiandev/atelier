@@ -339,6 +339,16 @@ def _try_finalize(
         )
     except materialization.MaterializationReportNotFound:
         return None
+    except (
+        materialization.InvalidMaterializationReport,
+        materialization.InvalidPlanMaterialization,
+    ) as exc:
+        # A report that arrived and could not be accepted is a result, not a
+        # crash. Letting it escape killed the task that was polling: the plan
+        # was finished on disk, nothing finalized it, and the only thing the
+        # user ever saw was "idle, no source-plan report exists" -- with the
+        # actual reason, which files were missing, thrown away.
+        raise MaterializationIncomplete(str(exc)) from exc
 
 
 def _last_event_seq(events: list[dict[str, Any]]) -> int:

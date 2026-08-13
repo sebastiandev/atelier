@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -21,7 +20,6 @@ from src.domain.agents.effort import spec_option_key
 from src.domain.chatstore import ChatStore
 from src.domain.commands.chats import connect
 from src.domain.commands.chats import send_input as send_chat_input
-from src.domain.commands.planning import mark_ready as planning_mark_ready
 from src.domain.planning.ports import PlanningFiles
 from src.domain.supervisor import (
     AgentSubscription,
@@ -124,40 +122,13 @@ async def _drain(
             }
         )
     async for event in sub.stream():
+        # Forwarding only. Planning readiness used to be derived here, which
+        # meant whichever socket happened to be attached when the message
+        # landed consumed the one-shot and every other subscriber -- including
+        # the view holding the Create-source-plan button -- never learned. It
+        # is derived on the chat pump now and arrives as a normal event.
         await websocket.send_json(event)
-        readiness_event = _planning_readiness_event(chatstore, chat_slug, event)
-        if readiness_event is not None:
-            await websocket.send_json(readiness_event)
 
-
-def _planning_readiness_event(
-    chatstore: ChatStore,
-    chat_slug: str,
-    event: dict[str, object],
-) -> dict[str, object] | None:
-    """Persist and render a Planning readiness event from a completed message."""
-    if event.get("type") != "message_complete":
-        return None
-    text = event.get("text")
-    if not isinstance(text, str):
-        return None
-    result = planning_mark_ready.execute(
-        chatstore,
-        planning_mark_ready.MarkPlanningChatReadyRequest(
-            chat_slug=chat_slug,
-            assistant_text=text,
-        ),
-    )
-    if result is None or not result.changed:
-        return None
-    payload = {
-        "type": "planning_readiness",
-        "ts": datetime.now(UTC).isoformat(),
-        "ready": result.readiness.ready,
-        "summary": result.readiness.summary,
-    }
-    seq = chatstore.append_transcript_event_with_seq(chat_slug, payload)
-    return {"seq": seq, **payload}
 
 
 async def _receive_inputs(

@@ -180,7 +180,13 @@ def _(req: PlanningMaterializationPrompt) -> str:
         "- If a local framework command would require network access or package "
         "installation, skip it and write the planning files directly from the "
         "available local templates/context.",
-        "- Keep paths in the final report relative to the framework output folder.",
+        "- Grouping this plan in its own folder inside the output folder is "
+        "fine and often right. If you do, report that folder once as `root` "
+        "and keep every path relative to it. Otherwise omit `root`.",
+        "- Keep paths in the final report relative to `root` when you report "
+        "one, and to the framework output folder when you do not. A path that "
+        "does not resolve is the one thing that makes a finished plan "
+        "unusable.",
         "- Do not include Markdown file content in the final report.",
         "- Use dependencies as relative artifact paths from the same final report.",
         "- Mark executable items such as implementation stories, tasks, spikes, "
@@ -188,7 +194,8 @@ def _(req: PlanningMaterializationPrompt) -> str:
         f"- artifact_kind must be one of: {artifact_kinds}.",
         "",
         "When the files exist on disk, finish with exactly one single-line JSON report:",
-        '{"atelier_plan_materialization":{"artifacts":[{"path":"relative-file.md",'
+        '{"atelier_plan_materialization":{"root":"optional-plan-folder",'
+        '"artifacts":[{"path":"relative-file.md",'
         '"title":"Human title","artifact_kind":"story","executable":true,'
         '"dependencies":["dependency.md"]}]}}',
         "",

@@ -312,6 +312,9 @@ def finalize_materialization_report(
     if not chat.working_directory:
         raise InvalidMaterializationChat(f"chat {chat_slug} has no working folder")
     report = _latest_report(record.transcript)
+    _dir, planning_folder = resolve_plan_artifacts_dir(
+        chat.working_directory, framework, work_slug, plan_artifacts_dir
+    )
     return submit_plan_materialization(
         workstore,
         files,
@@ -320,7 +323,7 @@ def finalize_materialization_report(
         root_path=chat.working_directory,
         framework=framework,
         profile=profile,
-        artifacts=_entries_from_report(report),
+        artifacts=_entries_from_report(report, planning_folder),
         plan_artifacts_dir=plan_artifacts_dir,
     )
 
@@ -342,6 +345,7 @@ def materialization_options(provider: Provider, options: dict[str, Any]) -> dict
     elif provider == "amp":
         next_options["permission_mode"] = "default"
     return next_options
+
 
 
 def _validate_entries(
@@ -501,24 +505,67 @@ def _latest_report(transcript: list[Any]) -> dict[str, Any]:
     )
 
 
-def _entries_from_report(report: dict[str, Any]) -> tuple[PlanArtifactEntry, ...]:
+def _entries_from_report(
+    report: dict[str, Any], plan_artifacts_path: str | None = None
+) -> tuple[PlanArtifactEntry, ...]:
     raw = report.get("artifacts")
     if not isinstance(raw, list):
         raise InvalidMaterializationReport("'artifacts' must be a list")
+    root = _report_root(report, plan_artifacts_path)
     entries: list[PlanArtifactEntry] = []
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise InvalidMaterializationReport(f"artifact {index} must be an object")
         entries.append(
             PlanArtifactEntry(
-                path=_required_str(item, "path", index),
+                path=root + _required_str(item, "path", index),
                 title=_required_str(item, "title", index),
                 artifact_kind=_artifact_kind(item.get("artifact_kind"), index),
                 executable=_required_bool(item, "executable", index),
-                dependencies=tuple(_dependencies(item.get("dependencies"), index)),
+                dependencies=tuple(
+                    root + dependency
+                    for dependency in _dependencies(item.get("dependencies"), index)
+                ),
             )
         )
     return tuple(entries)
+
+
+def _report_root(report: dict[str, Any], plan_artifacts_path: str | None) -> str:
+    """Return the reported folder its paths are relative to, as a prefix.
+
+    Preconditions: ``plan_artifacts_path`` is the absolute planning folder, or
+    ``None`` when the caller has none to check against.
+    Postconditions: empty when no root is reported; otherwise a trailing-slashed
+    relative prefix that is inside the planning folder.
+
+    Grouping a plan into its own folder is the right call for a repository that
+    will hold several, and a materializer that does it reports paths relative
+    to the folder it created. Only the folder itself has to be said out loud;
+    anything outside the planning folder is refused rather than resolved.
+    """
+    raw = report.get("root")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return ""
+    if not isinstance(raw, str):
+        raise InvalidMaterializationReport("'root' must be a string")
+    candidate = Path(raw.strip())
+    if plan_artifacts_path is not None and candidate.is_absolute():
+        planning_folder = Path(plan_artifacts_path).resolve()
+        resolved = candidate.resolve()
+        if resolved == planning_folder:
+            return ""
+        if not resolved.is_relative_to(planning_folder):
+            raise InvalidMaterializationReport(
+                f"reported root is outside the planning folder: {raw}"
+            )
+        candidate = Path(resolved.relative_to(planning_folder))
+    elif candidate.is_absolute():
+        raise InvalidMaterializationReport(f"reported root is not relative: {raw}")
+    rel = PurePosixPath(candidate.as_posix())
+    if any(part in {"", ".", ".."} for part in rel.parts):
+        raise InvalidMaterializationReport(f"invalid reported root: {raw}")
+    return f"{rel.as_posix()}/" if rel.parts else ""
 
 
 def _required_str(item: dict[str, Any], key: str, index: int) -> str:

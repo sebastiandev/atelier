@@ -3,6 +3,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from src.application.ws import chats as ws_chats
 from src.domain.agents import record_artifact
 from src.domain.chatstore import ChatStoreService
 from src.domain.commands.loops import runs as loop_run_commands
+from src.domain.commands.planning import mark_ready as planning_mark_ready
 from src.domain.commands.planning import run_monitor as planning_run_monitor
 from src.domain.connections import ConnectionStoreService
 from src.domain.loop.dtos import LoopRunSourceKind
@@ -224,9 +226,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             record_artifact=_track_artifact,
             describe_worktree_state=worktree_manager.describe_state,
         )
+        def _observe_chat_message(chat_slug: str, text: str) -> dict[str, Any] | None:
+            """Mark a Planning chat ready from what its planner just said.
+
+            Runs on the chat pump, so the readiness option is written once per
+            message and the event that announces it reaches every subscriber.
+            """
+            result = planning_mark_ready.execute(
+                chatstore,
+                planning_mark_ready.MarkPlanningChatReadyRequest(
+                    chat_slug=chat_slug,
+                    assistant_text=text,
+                ),
+            )
+            if result is None or not result.changed:
+                return None
+            return {
+                "type": "planning_readiness",
+                "ts": datetime.now(UTC).isoformat(),
+                "ready": result.readiness.ready,
+                "summary": result.readiness.summary,
+            }
+
         chat_supervisor = AgentSupervisorService(
             chat_transcript_log,
             chatstore.set_chat_session_id,
+            observe_message=_observe_chat_message,
         )
         for work in workstore.list_works():
             if work.slug is None:

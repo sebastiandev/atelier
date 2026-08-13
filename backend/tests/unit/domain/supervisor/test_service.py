@@ -1519,3 +1519,47 @@ def test_the_sweep_does_not_evict_a_fresh_runtime_that_reused_the_slug() -> None
 
     assert evicted == []
     assert registered is True, "the replacement runtime must survive"
+
+
+def test_a_derived_fact_from_one_message_reaches_every_subscriber() -> None:
+    """A caller can turn what an agent said into a durable event.
+
+    Deriving it while serving one websocket instead meant whichever socket
+    happened to be attached consumed the one-shot, and every other subscriber
+    -- including the view gated on the fact -- never learned it.
+    """
+    seen: list[tuple[str, str]] = []
+
+    def observe(slug: str, text: str) -> dict[str, Any] | None:
+        seen.append((slug, text))
+        return {"type": "derived", "ts": UTC_NOW.isoformat(), "from": text} if text else None
+
+    async def run() -> list[dict[str, Any]]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log, observe_message=observe)
+        adapter = StubAgentAdapter([MessageComplete(ts=UTC_NOW, text="ready")])
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.shutdown()
+        return log.events[("WRK-001", "agt-1")]
+
+    events = _run(run())
+
+    assert seen == [("agt-1", "ready")]
+    # Published like any other event, so it fans out live and a reader that
+    # arrives later finds it on disk.
+    assert [e["type"] for e in events] == ["message_complete", "derived"]
+    assert events[1]["from"] == "ready"
+
+
+def test_a_message_the_observer_ignores_publishes_nothing_extra() -> None:
+    async def run() -> list[dict[str, Any]]:
+        log = StubTranscriptLog()
+        supervisor = AgentSupervisorService(log, observe_message=lambda _s, _t: None)
+        adapter = StubAgentAdapter([MessageComplete(ts=UTC_NOW, text="still thinking")])
+        await _start(supervisor, "WRK-001", "agt-1", adapter, _start_context())
+        await _await_agent(supervisor, "agt-1")
+        await supervisor.shutdown()
+        return log.events[("WRK-001", "agt-1")]
+
+    assert [e["type"] for e in _run(run())] == ["message_complete"]

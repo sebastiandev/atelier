@@ -102,6 +102,7 @@ from src.domain.agents import (
     AgentEvent,
     AgentStartContext,
     ArtifactMarker,
+    MessageComplete,
     PermissionDecisionValue,
     SessionEstablished,
     TurnMetrics,
@@ -112,6 +113,10 @@ from src.domain.worktrees import WorktreeState
 
 SetSessionIdFn = Callable[[str, str], None]
 RecordArtifactFn = Callable[[str, str, dict[str, Any]], Artifact]
+#: Given a slug and one completed assistant message, return an extra event
+#: to publish, or ``None``. Lets a caller derive a durable fact from what an
+#: agent said without the supervisor knowing what the fact means.
+ObserveMessageFn = Callable[[str, str], dict[str, Any] | None]
 DescribeWorktreeStateFn = Callable[[Path], WorktreeState]
 
 RUNTIME_LIVENESS_QUIET_SECONDS = 60.0
@@ -225,6 +230,7 @@ class AgentSupervisorService:
         set_session_id: SetSessionIdFn = lambda _slug, _sid: None,
         record_artifact: RecordArtifactFn | None = None,
         describe_worktree_state: DescribeWorktreeStateFn | None = None,
+        observe_message: ObserveMessageFn | None = None,
     ) -> None:
         self._transcript_log = transcript_log
         # Called when an adapter emits SessionEstablished — the supervisor
@@ -239,6 +245,13 @@ class AgentSupervisorService:
         # leave it unset.
         self._record_artifact = record_artifact
         self._describe_worktree_state = describe_worktree_state
+        # Called once per completed assistant message, on the pump rather
+        # than per subscriber. Anything it derives is published like any
+        # other event, so every stream sees it and a reader that arrives
+        # later finds it on disk. Deriving it while serving one connection
+        # instead meant whichever socket happened to be attached consumed
+        # it, and the rest never learned.
+        self._observe_message = observe_message
         self._states: dict[str, _AgentState] = {}
         self._registry_lock = asyncio.Lock()
 
@@ -787,6 +800,12 @@ class AgentSupervisorService:
                 await self._publish(state, _event_to_dict(event))
                 if isinstance(event, ArtifactMarker) and self._record_artifact:
                     await self._record_marker(state, event)
+                if isinstance(event, MessageComplete) and self._observe_message:
+                    derived = await asyncio.to_thread(
+                        self._observe_message, state.agent_slug, event.text
+                    )
+                    if derived is not None:
+                        await self._publish(state, derived)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
