@@ -263,6 +263,20 @@ async def reset_materializer_runtime(
     chatstore.clear_chat_session_id(chat_slug)
 
 
+async def restart_materializer_process(
+    supervisor: AgentSupervisorService,
+    chat_slug: str,
+) -> None:
+    """Stop a wedged materializer runtime without discarding its session.
+
+    Preconditions: ``chat_slug`` identifies a stored materializer chat.
+    Postconditions: the provider process is gone and the stored session id
+    remains, so the next runtime resumes the work it had already done rather
+    than starting the plan over.
+    """
+    await supervisor.stop_agent(chat_slug)
+
+
 def finalize_materialization_report(
     workstore: WorkStore,
     chatstore: ChatStore,

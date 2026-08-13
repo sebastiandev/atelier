@@ -1228,12 +1228,34 @@ function LoopEditorScreen({
   }
 
   function deleteStage(stage: LoopStepDefinition) {
+    // Whoever passed to this stage now passes to whatever it passed to, so
+    // removing a stage closes the gap instead of punching one. Unwiring it
+    // left the stage before it with nowhere to go on pass, which only
+    // surfaced as "needs a pass destination" on save.
+    const bridge = stage.transitions.pass && stage.transitions.pass !== stage.id
+      ? stage.transitions.pass
+      : null;
     const stages = draft.stages
       .filter((item) => item.id !== stage.id)
       .map((item) => ({
         ...item,
         transitions: Object.fromEntries(
-          Object.entries(item.transitions).map(([key, value]) => [key, value === stage.id ? null : value]),
+          Object.entries(item.transitions).map(([key, value]) => [
+            key,
+            // Only `pass` bridges. A `changes_requested` edge pointing at the
+            // removed stage meant "send the work back *there*"; forwarding it
+            // to that stage's successor would send corrections onward instead.
+            //
+            // And never onto itself: a review that sends work back forms a
+            // cycle, so deleting the far side of one would otherwise leave the
+            // near side passing to itself — which satisfies "needs a pass
+            // destination" while being an infinite loop.
+            value === stage.id
+              ? key === "pass" && bridge !== item.id
+                ? bridge
+                : null
+              : value,
+          ]),
         ),
       }));
     updateDraft({ ...draft, stages });

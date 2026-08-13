@@ -7,6 +7,13 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
+from src.domain.agents.stall_recovery import (
+    StallAction,
+    StallPolicy,
+    StallState,
+    next_stall_action,
+    record_nudge,
+)
 from src.domain.agents.turn_monitor import observe_turn
 from src.domain.chats import runtime as chat_runtime
 from src.domain.chatstore import ChatRecord
@@ -32,6 +39,13 @@ from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import WorkStore
 
 _MAX_IDLE_FOLLOW_UPS = 2
+# Far wider than a loop stage's five minutes: materializing a plan means
+# reading a repository and writing epics, which is quiet, long work.
+_MATERIALIZER_STALL_POLICY = StallPolicy(silence_seconds=20 * 60)
+_NUDGE_PROMPT = "continue"
+# Asking to cancel is a local call; waiting on it is not worth parking the
+# poll that enforces every other bound.
+_INTERRUPT_REQUEST_SECONDS = 10
 _MAX_CONNECTION_RECOVERIES = 1
 _POLL_INTERVAL_SECONDS = 0.5
 
@@ -66,6 +80,11 @@ class MaterializePlanRequest:
     planning_chat_slug: str | None = None
     artifacts: tuple[PlanArtifactEntry, ...] = ()
     fresh_session: bool = False
+    # Retry stops a wedged provider process without discarding its
+    # session, so the replacement resumes the plan instead of starting it
+    # over. `fresh_session` remains for the paths that genuinely cannot
+    # restore a session.
+    restart_runtime: bool = False
 
 
 async def execute(
@@ -143,7 +162,14 @@ async def execute(
         await materialization.reset_materializer_runtime(
             chatstore, chat_supervisor, chat_slug
         )
+    elif req.restart_runtime:
+        await materialization.restart_materializer_process(chat_supervisor, chat_slug)
+    # A session that survived already holds the brief and everything it has
+    # written, so it needs a word rather than the whole brief again. Only a
+    # session that was discarded has to be told what it is doing.
+    resumed = not req.fresh_session
     recover_first = _has_materializer_activity(chatstore, chat_slug)
+    stall = StallState()
     original_brief = _original_materialization_brief(record)
     runtime_prompt = _runtime_prompt(req)
     follow_ups = 0
@@ -163,10 +189,11 @@ async def execute(
             raise MaterializationIncomplete("materializer Work is not active")
         if recover_first:
             await chat_supervisor.send_input(
-                chat_slug, _recovery_prompt(req, original_brief)
+                chat_slug,
+                _NUDGE_PROMPT if resumed else _recovery_prompt(req, original_brief),
             )
             recover_first = False
-        iteration_result, error = await _poll_for_report_or_turn_end(
+        iteration_result, error, stall = await _poll_for_report_or_turn_end(
             workstore,
             chatstore,
             files,
@@ -174,6 +201,7 @@ async def execute(
             chat_supervisor,
             req,
             chat_slug,
+            stall,
         )
         if iteration_result is not None:
             await _restart_planning_chat(chat_supervisor, req)
@@ -188,6 +216,7 @@ async def execute(
                 await materialization.reset_materializer_runtime(
                     chatstore, chat_supervisor, chat_slug
                 )
+                resumed = False
                 recover_first = True
                 continue
             raise MaterializationIncomplete(error)
@@ -207,21 +236,77 @@ async def _poll_for_report_or_turn_end(
     chat_supervisor: AgentSupervisorService,
     req: MaterializePlanRequest,
     chat_slug: str,
-) -> tuple[WorkPlanView | None, str | None]:
-    """Poll durable transcript state until the current provider turn ends."""
+    stall: StallState,
+) -> tuple[WorkPlanView | None, str | None, StallState]:
+    """Poll durable transcript state until the current provider turn ends.
+
+    A materializer is legitimately quiet for a long time -- it is reading a
+    repository and writing epics -- so the stall window is far wider than a
+    loop stage's. Wide is not unbounded: without one, a wedged turn left this
+    polling at half-second intervals for as long as the process lived, and the
+    only way out was a person noticing and retrying.
+    """
     events = list(chatstore.read_transcript_from_cursor(chat_slug, 0))
     cursor = _last_event_seq(events)
     while True:
         plan = _try_finalize(workstore, chatstore, files, loop_runs, req, chat_slug)
         if plan is not None:
-            return plan, None
-        observation = observe_turn(events, datetime.now(UTC))
+            return plan, None, stall
+        now = datetime.now(UTC)
+        observation = observe_turn(events, now)
         if observation.terminal_error is not None:
-            return None, observation.terminal_error
+            return None, observation.terminal_error, stall
         if observation.finished:
-            return None, None
+            return None, None, stall
         if not chat_supervisor.is_registered(chat_slug):
-            return None, "Materializer runtime is unavailable."
+            return None, "Materializer runtime is unavailable.", stall
+        decision = next_stall_action(
+            observation=observation,
+            events=events,
+            state=stall,
+            policy=_MATERIALIZER_STALL_POLICY,
+            now=now,
+        )
+        stall = decision.state
+        if decision.action is StallAction.GIVE_UP:
+            # Leaving the wedged process registered would keep it burning its
+            # budget, and would make the user's next Retry re-attach to it.
+            await chat_supervisor.stop_agent(chat_slug)
+            return (
+                None,
+                (
+                    "The materializer stopped responding and did not restart after "
+                    f"{_MATERIALIZER_STALL_POLICY.max_strikes} attempts."
+                ),
+                stall,
+            )
+        if decision.action is StallAction.INTERRUPT:
+            # A wedged turn never reads its queue, so the nudge would sit
+            # behind it. Bounded and best effort: cancelling waits on the
+            # runtime reporting ready, and one that never does would park this
+            # poll for the life of the process.
+            try:
+                await asyncio.wait_for(
+                    chat_supervisor.stop_turn(chat_slug),
+                    timeout=_INTERRUPT_REQUEST_SECONDS,
+                )
+            except Exception:
+                # The nudge still goes out; a runtime too broken to cancel
+                # fails loudly on the send that follows.
+                stall = replace(stall, interrupted_at=None)
+        elif decision.action is StallAction.NUDGE:
+            # Bare on purpose: this session already holds the brief and
+            # whatever it has written so far, so restating them would read as a
+            # new instruction and invite it to start over.
+            try:
+                await chat_supervisor.send_input(chat_slug, _NUDGE_PROMPT)
+            except Exception as exc:
+                # The dead-pump case this ladder exists for: `send_input`
+                # raises once the runtime's task is gone. Reported as a
+                # recoverable runtime error so the caller's one reconnect can
+                # answer it, rather than escaping as an unhandled exception.
+                return None, f"Materializer runtime is unavailable: {exc}", stall
+            stall = record_nudge(stall, datetime.now(UTC))
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
         fresh = list(chatstore.read_transcript_from_cursor(chat_slug, cursor))
         if fresh:

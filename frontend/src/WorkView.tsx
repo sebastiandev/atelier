@@ -1377,6 +1377,34 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
   }
 
+  /** A run control can outlive the state it was drawn for: run rows are
+   *  polled every few seconds, so the backend may have moved on between the
+   *  render and the click. Refetch before reporting, or the card that caused
+   *  the error stays on screen and the action reads as simply broken. */
+  async function reportRunActionFailure(err: unknown, artifactId: string) {
+    const raw = err instanceof Error ? err.message : String(err);
+    // Anchored, because the wrapper formats failures as "<status> <text>: …".
+    // A loose search hits any message that merely contains those digits and
+    // would replace a real error with a reassuring one.
+    const movedOn = /^\s*(409|422)\b/.test(raw) && /\bis not\b/i.test(raw);
+    if (movedOn) {
+      // Only here. Refetching pulls the whole plan and resets the open tab,
+      // which is worth it to clear the control that caused this and pointless
+      // for a failure the state had nothing to do with.
+      try {
+        await refreshPlan(artifactId);
+      } catch {
+        // The original failure is what the user needs; a refresh that also
+        // fails must not replace it.
+      }
+    }
+    setPlanError(
+      movedOn
+        ? "This run has moved on, so that no longer applies. The view is up to date now."
+        : raw,
+    );
+  }
+
   async function handleRetryPlanRunStage(
     artifact: PlanArtifact,
     runId: string,
@@ -1390,7 +1418,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       setPlanDraft(saved.content);
       await refreshPlan(saved.artifact.id);
     } catch (err) {
-      setPlanError(err instanceof Error ? err.message : String(err));
+      await reportRunActionFailure(err, artifact.id);
     } finally {
       setPlanSaving(false);
     }
@@ -1406,7 +1434,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       await refreshPlan(saved.artifact.id);
       showToast("Result approved.");
     } catch (err) {
-      setPlanError(err instanceof Error ? err.message : String(err));
+      await reportRunActionFailure(err, artifact.id);
       throw err;
     } finally {
       setPlanSaving(false);
@@ -1423,7 +1451,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       await refreshPlan(saved.artifact.id);
       showToast("Stage stopped. You can retry it from the run.");
     } catch (err) {
-      setPlanError(err instanceof Error ? err.message : String(err));
+      await reportRunActionFailure(err, artifact.id);
     } finally {
       setPlanSaving(false);
     }
@@ -1439,7 +1467,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       await refreshPlan(saved.artifact.id);
       showToast("Run cancelled. Its workspace was preserved.");
     } catch (err) {
-      setPlanError(err instanceof Error ? err.message : String(err));
+      await reportRunActionFailure(err, artifact.id);
       throw err;
     } finally {
       setPlanSaving(false);
@@ -1465,7 +1493,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       await refreshPlan(saved.artifact.id);
       showToast("Changes requested. Implementation resumed.");
     } catch (err) {
-      setPlanError(err instanceof Error ? err.message : String(err));
+      await reportRunActionFailure(err, artifact.id);
       throw err;
     } finally {
       setPlanSaving(false);

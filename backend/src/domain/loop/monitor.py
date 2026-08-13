@@ -10,8 +10,10 @@ from functools import singledispatch
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from src.domain.agents import stall_recovery
 from src.domain.agents.launch import AgentLaunchRequest, launch_agent
 from src.domain.agents.ports import AgentAdapterFactory
+from src.domain.agents.stall_recovery import StallAction, StallPolicy, StallState
 from src.domain.agents.turn_monitor import observe_turn
 from src.domain.artifacts.models import PrArtifact
 from src.domain.artifacts.pr_status import is_terminal_pr_status
@@ -84,7 +86,12 @@ _MAX_RECOVERY_STRIKES = 3
 _NUDGE_ONLY_STRIKE = 1
 # An interrupt that never lands must not park the stage until its clock runs
 # out; after this the nudge goes out regardless.
-_INTERRUPT_GRACE_SECONDS = 60
+_LOOP_STALL_POLICY = StallPolicy(
+    silence_seconds=_INACTIVITY_WARNING_SECONDS,
+    max_strikes=_MAX_RECOVERY_STRIKES,
+    nudge_only_strikes=_NUDGE_ONLY_STRIKE,
+    interrupt_grace_seconds=60,
+)
 # Asking to cancel is a local call; waiting on it is not worth stalling the
 # monitor that enforces every other deadline.
 _INTERRUPT_REQUEST_SECONDS = 10
@@ -96,8 +103,8 @@ _RUNTIME_RELEASE_STATUSES = {
 }
 
 
-def _recovery_strikes(stage_row: dict[str, Any]) -> int:
-    """Return how many recoveries this stall episode has already spent.
+def _stall_state(stage_row: dict[str, Any]) -> StallState:
+    """Read a stage row's stall bookkeeping into the shared state.
 
     Preconditions: ``stage_row`` is a persisted stage snapshot.
     Postconditions: a row written before recovery counted strikes reports one
@@ -105,20 +112,74 @@ def _recovery_strikes(stage_row: dict[str, Any]) -> int:
     escalates from where it left off instead of starting over.
     """
     strikes = stage_row.get("recovery_strikes")
-    if isinstance(strikes, int) and not isinstance(strikes, bool):
-        return max(0, strikes)
-    legacy = actions.int_or_default(stage_row.get("recovered_attempt"), 0)
-    attempt = actions.int_or_default(stage_row.get("attempt"), 1)
-    return 1 if legacy and legacy == attempt else 0
+    if not isinstance(strikes, int) or isinstance(strikes, bool):
+        legacy = actions.int_or_default(stage_row.get("recovered_attempt"), 0)
+        attempt = actions.int_or_default(stage_row.get("attempt"), 1)
+        strikes = 1 if legacy and legacy == attempt else 0
+    return StallState(
+        strikes=max(0, strikes),
+        recovered_at=stall_recovery.parse_stamp(stage_row.get("recovered_at")),
+        interrupted_at=stall_recovery.parse_stamp(stage_row.get("interrupted_at")),
+    )
+
+
+def _has_stall_state(stage_row: dict[str, Any]) -> bool:
+    """Whether a row is carrying stall bookkeeping worth clearing."""
+    return any(
+        stage_row.get(key) is not None
+        for key in ("recovery_strikes", "recovered_at", "interrupted_at", "recovered_attempt")
+    )
+
+
+def _store_stall_state(stage_row: dict[str, Any], state: StallState) -> None:
+    """Persist stall bookkeeping onto a stage row.
+
+    Preconditions: ``stage_row`` is mutable.
+    Postconditions: the row carries the current episode, and the pre-strike
+    field it may have arrived with is gone so it cannot be read again.
+    """
+    stage_row.pop("recovered_attempt", None)
+    if state == StallState():
+        actions.clear_stall_recovery(stage_row)
+        return
+    stage_row["recovery_strikes"] = state.strikes
+    for key, value in (
+        ("recovered_at", state.recovered_at),
+        ("interrupted_at", state.interrupted_at),
+    ):
+        if value is None:
+            stage_row.pop(key, None)
+        else:
+            stage_row[key] = value.isoformat()
+
+
+def _mark_stalled(
+    loop: dict[str, Any],
+    run: dict[str, Any],
+    stage: LoopStepDefinition,
+    strike: int,
+) -> None:
+    """Report the stage as stalled while the ladder is still working on it.
+
+    Preconditions: ``strike`` is the rung being spent, counting from one. It is
+    passed rather than read off the state because an interrupt does not spend
+    its strike until the nudge it precedes goes out, so the state still holds
+    the previous count while that rung is in progress.
+    Postconditions: the run reads as needing attention rather than running,
+    which is what the warning and its stop control key off.
+    """
+    loop["status"] = LoopStatus.WAITING_REPORT.value
+    loop["status_reason"] = _stall_reason(stage, max(1, strike))
+    run["loop"] = loop
 
 
 def _stall_reason(stage: LoopStepDefinition, strike: int) -> str:
     """Say where the ladder is, so a watching person can judge whether to act.
 
-    Preconditions: ``strike`` is the recovery about to be spent, counting from
-    one. Postconditions: names what was tried and what is left.
+    Preconditions: ``strike`` is the recovery being spent, counting from one.
+    Postconditions: names what was tried and what is left.
     """
-    left = max(0, _MAX_RECOVERY_STRIKES - strike)
+    left = max(0, _LOOP_STALL_POLICY.max_strikes - strike)
     remaining = (
         f"{left} more {'attempt' if left == 1 else 'attempts'} before the stage is stalled"
         if left
@@ -126,18 +187,13 @@ def _stall_reason(stage: LoopStepDefinition, strike: int) -> str:
     )
     action = (
         "nudged to continue"
-        if strike <= _NUDGE_ONLY_STRIKE
+        if strike <= _LOOP_STALL_POLICY.nudge_only_strikes
         else "interrupted and nudged to continue"
     )
     return (
         f"No agent activity for 5 minutes. {stage.name} was {action} "
-        f"(attempt {strike} of {_MAX_RECOVERY_STRIKES}) — {remaining}."
+        f"(attempt {strike} of {_LOOP_STALL_POLICY.max_strikes}) — {remaining}."
     )
-
-
-def _interrupt_stamp(stage_row: dict[str, Any]) -> datetime | None:
-    """Return when this stage's turn was interrupted, if one is pending."""
-    return _stage_row_time(stage_row, "interrupted_at")
 
 
 async def _interrupt_stalled_turn(
@@ -165,70 +221,6 @@ async def _interrupt_stalled_turn(
         # too broken to cancel fails loudly on the send that follows.
         return False
     return True
-
-
-# The agent doing work, as opposed to anything that merely happened around
-# it. An allowlist, because the transcript also carries what the loop itself
-# writes (a nudge, an interrupt) and what an interrupt provokes in reply
-# (status changes, errors, a cancelled turn settling) -- read as progress,
-# any of those reset the ladder that was escalating them.
-_AGENT_PROGRESS_EVENT_TYPES = frozenset(
-    {
-        "message_delta",
-        "message_complete",
-        "thinking_delta",
-        "thinking_complete",
-        "tool_call",
-        "tool_call_update",
-        "tool_result",
-        "plan_update",
-    }
-)
-
-
-def _agent_moved_since_recovery(
-    stage_row: dict[str, Any], events: list[dict[str, Any]]
-) -> bool:
-    """Whether the agent itself produced work after the last recovery.
-
-    Preconditions: ``events`` are this agent's transcript entries in order.
-    Postconditions: true only for agent output newer than the recovery stamp.
-
-    A stalled agent still emits things that are not work -- the loop's own
-    prompt, the interrupt that answers it, the status change that follows.
-    Only output means it came back.
-    """
-    recovered_at = _stage_row_time(stage_row, "recovered_at")
-    if recovered_at is None:
-        return False
-    return any(
-        event.get("type") in _AGENT_PROGRESS_EVENT_TYPES
-        and (timestamp := _event_time(event)) is not None
-        and timestamp > recovered_at
-        for event in events
-    )
-
-
-def _stage_row_time(stage_row: dict[str, Any], key: str) -> datetime | None:
-    """Return one stage-row timestamp, normalised the way events are.
-
-    A row is on-disk state an older build or a hand edit may have written
-    without an offset; comparing a naive value against an aware ``now`` raises
-    inside the poll loop, which would take the run's monitor down with it.
-    """
-    return _event_time({"ts": stage_row.get(key)})
-
-
-def _event_time(event: dict[str, Any]) -> datetime | None:
-    """Return one transcript event's timestamp, when it carries a usable one."""
-    raw = event.get("ts") or event.get("created_at")
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
 class LoopRunNotFound(ValueError):
@@ -569,10 +561,8 @@ async def _execute_claimed(
                 _write_run(store, target)
                 continue
 
-            last_activity_at = observation.last_activity_at
             now = datetime.now(UTC)
             elapsed_seconds = observation.elapsed_seconds
-            waiting_permission = observation.waiting_permission
             timeout_seconds = current_stage.retry.timeout_minutes * 60
             if elapsed_seconds is not None and elapsed_seconds >= timeout_seconds:
                 current_row = _stage_row(loop, current_stage.step_id)
@@ -594,51 +584,20 @@ async def _execute_claimed(
                 await supervisor.stop_agent(agent_slug)
                 return target
 
-            # A tool call that is still running emits nothing while it works —
-            # a test suite or a sub-agent exploration can be silent for far
-            # longer than the warning window. Treating that as a stall
-            # restarts a stage that was never stuck, throwing away its
-            # progress and the work the tool was in the middle of.
-            inactive = (
-                not waiting_permission
-                and not observation.tool_in_flight
-                and last_activity_at is not None
-                and (now - last_activity_at).total_seconds() >= _INACTIVITY_WARNING_SECONDS
+            stall_row = _stage_row(loop, current_stage.step_id)
+            decision = stall_recovery.next_stall_action(
+                observation=observation,
+                events=events,
+                state=_stall_state(stall_row) if stall_row is not None else StallState(),
+                policy=_LOOP_STALL_POLICY,
+                now=now,
             )
-            if inactive:
-                current_row = _stage_row(loop, current_stage.step_id)
-                if current_row is not None and _agent_moved_since_recovery(
-                    current_row, events
-                ):
-                    # It worked and stopped again: a fresh stall, not a
-                    # continuation, so escalation starts from the top rather
-                    # than counting a long healthy run against the stage. Any
-                    # interrupt still pending belonged to the stall it broke.
-                    actions.clear_stall_recovery(current_row)
-                    _write_run(store, target)
-                strikes = _recovery_strikes(current_row) if current_row else 0
-                interrupted_at = _interrupt_stamp(current_row) if current_row else None
-                # An interrupt is the first half of a strike, not a strike of
-                # its own: it clears the queue so the nudge below is read. Once
-                # the turn ends, this falls through to that nudge rather than
-                # cancelling again.
-                if current_row is not None and interrupted_at is not None:
-                    if not observation.finished and (
-                        (now - interrupted_at).total_seconds() < _INTERRUPT_GRACE_SECONDS
-                    ):
-                        run["loop"] = loop
-                        _write_run(store, target)
-                        if _idle_expired(req, idle_for):
-                            return target
-                        await asyncio.sleep(req.poll_interval_seconds)
-                        idle_for += req.poll_interval_seconds
-                        continue
-                    current_row.pop("interrupted_at", None)
-                elif current_row is not None and strikes >= _MAX_RECOVERY_STRIKES:
-                    current_row["status"] = LoopStepStatus.FAILED.value
+            if stall_row is not None:
+                if decision.action is StallAction.GIVE_UP:
+                    stall_row["status"] = LoopStepStatus.FAILED.value
                     reason = (
                         f"{current_stage.name} stopped responding and did not "
-                        f"restart after {_MAX_RECOVERY_STRIKES} attempts."
+                        f"restart after {_LOOP_STALL_POLICY.max_strikes} attempts."
                     )
                     _fail_run(
                         run,
@@ -651,24 +610,32 @@ async def _execute_claimed(
                     _write_run(store, target)
                     await supervisor.stop_agent(agent_slug)
                     return target
-                elif current_row is not None and strikes >= _NUDGE_ONLY_STRIKE:
-                    # A plain nudge already failed, so the turn is wedged rather
-                    # than merely finished early: end it before prompting again.
+                if decision.action is StallAction.AWAIT_INTERRUPT:
+                    # Already reported when the interrupt went out; the wait
+                    # itself is not news.
+                    _store_stall_state(stall_row, decision.state)
+                    _write_run(store, target)
+                    if _idle_expired(req, idle_for):
+                        return target
+                    await asyncio.sleep(req.poll_interval_seconds)
+                    idle_for += req.poll_interval_seconds
+                    continue
+                nudging = decision.action is StallAction.NUDGE
+                if decision.action is StallAction.INTERRUPT:
+                    # A runtime with no live turn has nothing to cancel, so it
+                    # takes the nudge this rung was going to follow with rather
+                    # than spending the rung on a no-op.
                     if await _interrupt_stalled_turn(supervisor, agent_slug):
-                        current_row["interrupted_at"] = now.isoformat()
-                        # Stays WAITING_REPORT while the ladder works: the run
-                        # is not healthy, and reporting it as running hides the
-                        # one window where a person can still step in.
-                        loop["status"] = LoopStatus.WAITING_REPORT.value
-                        loop["status_reason"] = _stall_reason(current_stage, strikes + 1)
-                        run["loop"] = loop
+                        _store_stall_state(stall_row, decision.state)
+                        _mark_stalled(loop, run, current_stage, decision.state.strikes + 1)
                         _write_run(store, target)
                         if _idle_expired(req, idle_for):
                             return target
                         await asyncio.sleep(req.poll_interval_seconds)
                         idle_for += req.poll_interval_seconds
                         continue
-                if current_row is not None:
+                    nudging = True
+                if nudging:
                     try:
                         # Always resumes. A nudge exists to unstick the session
                         # that holds the stage's work; restarting it throws that
@@ -684,12 +651,12 @@ async def _execute_claimed(
                             req,
                             target,
                             current_stage,
-                            current_row,
+                            stall_row,
                             agent_slug,
                             actions.str_or_empty(loop.get("previous_stage_id")),
                         )
                     except Exception as exc:
-                        current_row["status"] = LoopStepStatus.FAILED.value
+                        stall_row["status"] = LoopStepStatus.FAILED.value
                         reason = f"{current_stage.name} could not reconnect: {exc}"
                         _fail_run(
                             run,
@@ -701,48 +668,37 @@ async def _execute_claimed(
                         _write_run(store, target)
                         await supervisor.stop_agent(agent_slug)
                         return target
-                    current_row["recovery_strikes"] = strikes + 1
-                    # Stamped after the send so the prompt's own transcript
-                    # entry does not read as the agent moving.
-                    current_row["recovered_at"] = datetime.now(UTC).isoformat()
-                    current_row.pop("recovered_attempt", None)
+                    spent = stall_recovery.record_nudge(decision.state, datetime.now(UTC))
+                    _store_stall_state(stall_row, spent)
                     # The nudge is deliberately bare -- the session already
                     # holds the report contract -- so the repair path is what
                     # restates it if the agent answers in prose. A stage that
                     # spent its repair budget before stalling would otherwise
                     # fail INVALID_REPORT on its first post-nudge word, having
                     # never been asked to correct itself after the stall.
-                    current_row.pop("repair_attempt", None)
-                    # Not RUNNING: the nudge is a symptom, not a recovery. The
-                    # stage is only healthy again once the agent answers it,
-                    # and the branch below flips it back when that happens.
-                    # Reporting it as running here is what made a stall look
-                    # exactly like a long stage until the ladder gave up.
-                    loop["status"] = LoopStatus.WAITING_REPORT.value
-                    loop["status_reason"] = _stall_reason(current_stage, strikes + 1)
-                    run["loop"] = loop
+                    stall_row.pop("repair_attempt", None)
+                    _mark_stalled(loop, run, current_stage, spent.strikes)
                     _write_run(store, target)
                     continue
-            elif loop.get("status") == LoopStatus.WAITING_REPORT.value:
-                # Only the agent answering clears the warning. A nudge lands in
-                # the same transcript, so the plain "activity resumed" test
-                # cleared it on the very next poll and the stall stayed
-                # invisible however long the ladder ran.
-                settled_row = _stage_row(loop, current_stage.step_id)
-                # No stamp means no recovery is pending -- including a run that
-                # was parked in this status before the ladder existed, which
-                # would otherwise never leave it.
-                if (
-                    settled_row is None
-                    or not settled_row.get("recovered_at")
-                    or _agent_moved_since_recovery(settled_row, events)
-                ):
-                    if settled_row is not None:
-                        actions.clear_stall_recovery(settled_row)
-                    loop["status"] = LoopStatus.RUNNING.value
-                    loop["status_reason"] = f"{current_stage.name} is running."
-                    run["loop"] = loop
+                # Nothing pending means nothing to remember, including the
+                # pre-strike field a row may still be carrying. Written only
+                # when it actually changes something: this runs on every poll
+                # of every healthy stage.
+                if decision.state == StallState() and _has_stall_state(stall_row):
+                    actions.clear_stall_recovery(stall_row)
                     _write_run(store, target)
+            # The warning only lifts once the agent has answered: a nudge lands
+            # in the same transcript, so lifting it on any activity cleared it
+            # on the very next poll and left the stall invisible however long
+            # the ladder ran.
+            if (
+                loop.get("status") == LoopStatus.WAITING_REPORT.value
+                and decision.state.recovered_at is None
+            ):
+                loop["status"] = LoopStatus.RUNNING.value
+                loop["status_reason"] = f"{current_stage.name} is running."
+                run["loop"] = loop
+                _write_run(store, target)
 
         if not observation.finished:
             if _idle_expired(req, idle_for):

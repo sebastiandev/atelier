@@ -1292,7 +1292,14 @@ async def _ensure_plan_materialization_task(
         except asyncio.CancelledError:
             pass
     if replace_existing:
-        req = replace(req, fresh_session=replace_existing)
+        # Restart the process, resume the session. Retrying used to discard
+        # the provider session too, so everything the materializer had worked
+        # out -- which epics exist, what is left -- went with it and the
+        # recovery prompt re-seeded an empty session with the original brief.
+        # The written files survived either way; the reasoning did not. The
+        # process still has to go: Retry is what a person presses when it is
+        # wedged, and re-attaching to a dead pump would fix nothing.
+        req = replace(req, fresh_session=False, restart_runtime=True)
     task = asyncio.create_task(
         planning_materialize.execute(
             workstore,

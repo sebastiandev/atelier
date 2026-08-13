@@ -490,13 +490,12 @@ function RunSurfaceContent({
                 <div>
                   <strong>No agent activity for five minutes</strong>
                   <p>{data.statusReason}</p>
-                  {onRetry && (
-                    <div className="run-state-actions">
-                      <button className="btn primary sm" disabled={busy} onClick={() => void onRetry()}>
-                        <LoopIcon size={11} /> Retry stage
-                      </button>
-                    </div>
-                  )}
+                  {/* No retry here on purpose. Retrying straight from this
+                      state runs while the loop is still working the stage and
+                      still writing the run, so the two overwrite each other.
+                      Stop stage first and the loop stands down, which is the
+                      same two steps this button used to hide. */}
+                  <small>Atelier keeps trying to revive the agent before it reports the stage as failed. Stop the stage at any time to take over and retry it yourself.</small>
                 </div>
               </div>
             )}
