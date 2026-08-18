@@ -30,6 +30,7 @@ import subprocess
 from pathlib import Path
 
 from src.domain.update_check import UpdateStatus
+from src.infrastructure.git.env import git_env
 
 _log = logging.getLogger(__name__)
 
@@ -102,6 +103,11 @@ class GitUpdateChecker:
             capture_output=True,
             text=True,
             timeout=self._fetch_timeout,
+            # Same reason as the worktree manager: a prompt here would
+            # go to the server's terminal, not the user, and burn the
+            # whole fetch timeout waiting for an answer nobody gives.
+            env=git_env(),
+            stdin=subprocess.DEVNULL,
         )
         if fetch.returncode != 0:
             # Fork without an upstream-style remote, offline host, etc.

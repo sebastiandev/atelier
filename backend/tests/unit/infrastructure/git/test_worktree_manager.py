@@ -14,6 +14,7 @@ import pytest
 
 from src.domain.worktrees import WorktreeProvisionFailed
 from src.infrastructure.filesystem.paths import WorkspacePaths
+from src.infrastructure.git import worktree_manager
 from src.infrastructure.git.worktree_manager import GitWorktreeManager
 
 
@@ -734,3 +735,38 @@ def test_ensure_forked_symlinks_devtime_artifacts(
     link = forked / ".venv"
     assert link.is_symlink()
     assert link.resolve() == venv.resolve()
+
+
+def test_a_hung_git_call_fails_instead_of_blocking_forever(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A git that never returns used to park the request thread for the
+    life of the process, leaving the agent idle with no way to see why."""
+
+    def never_returns(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(cmd=["git", "fetch"], timeout=180)
+
+    monkeypatch.setattr(worktree_manager.subprocess, "run", never_returns)
+
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        worktree_manager._run_git(tmp_path, "fetch", "--quiet", "origin", "HEAD")
+
+    assert "timed out" in caught.value.stderr
+
+
+def test_git_is_given_no_terminal_to_read_a_passphrase_from(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+
+    def record(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(worktree_manager.subprocess, "run", record)
+
+    worktree_manager._run_git(tmp_path, "status")
+
+    assert captured["stdin"] is subprocess.DEVNULL
+    assert captured["timeout"] == worktree_manager._GIT_TIMEOUT_SECONDS
+    assert "-o BatchMode=yes" in captured["env"]["GIT_SSH_COMMAND"]  # type: ignore[index]

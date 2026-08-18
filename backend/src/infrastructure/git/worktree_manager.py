@@ -31,6 +31,7 @@ from pathlib import Path
 
 from src.domain.worktrees.ports import WorktreeProvisionFailed, WorktreeState
 from src.infrastructure.filesystem.paths import WorkspacePaths
+from src.infrastructure.git.env import auth_hint, git_env
 
 _log = logging.getLogger(__name__)
 
@@ -79,9 +80,10 @@ class GitWorktreeManager:
             _run_git(source, "fetch", "--quiet", "origin", "HEAD")
             revision = _git_out(source, "rev-parse", "FETCH_HEAD")
         except subprocess.CalledProcessError as exc:
+            detail = _stderr(exc)
             raise WorktreeProvisionFailed(
-                f"git fetch origin HEAD failed for {source}: {_stderr(exc)}",
-                stderr=_stderr(exc),
+                f"git fetch origin HEAD failed for {source}: {detail}",
+                stderr=f"{detail}{auth_hint(detail)}",
             ) from exc
         if not revision:
             raise WorktreeProvisionFailed(
@@ -646,14 +648,49 @@ def _branch_name(work_slug: str, agent_slug: str) -> str:
     return f"atelier/{work_slug}/{agent_slug}"
 
 
+# Long enough for a cold fetch on a large repo over a slow link, short
+# enough that a wedged call fails inside one impatient user's attention
+# span rather than never. Paired with git_env(), which is what stops the
+# call blocking on a prompt in the first place.
+_GIT_TIMEOUT_SECONDS = 180
+
+
 def _run_git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            check=True,
+            capture_output=True,
+            text=True,
+            env=git_env(),
+            timeout=_GIT_TIMEOUT_SECONDS,
+            # No inherited terminal to read from, so a git that ignores
+            # the env above still fails rather than blocking on input.
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Re-raised as CalledProcessError so every call site keeps its
+        # existing handling — the ones that tolerate failure still
+        # tolerate it, the ones that wrap it still wrap it.
+        raise subprocess.CalledProcessError(
+            returncode=128,
+            cmd=["git", *args],
+            output=_decode(exc.stdout),
+            stderr=(
+                f"git {args[0] if args else ''} timed out after "
+                f"{_GIT_TIMEOUT_SECONDS}s in {cwd}"
+            ),
+        ) from exc
+
+
+def _decode(raw: str | bytes | None) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", "replace")
+    return raw
+
 
 
 def _git_out(cwd: Path, *args: str) -> str:
