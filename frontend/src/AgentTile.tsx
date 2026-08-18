@@ -1202,17 +1202,23 @@ export function AgentTile({
           )}
           <TranscriptUnits units={units} agentSlug={agentSlug} />
         </div>
-        {(lastMetrics || isCurrentlyActive) && (
-          <TurnMetricsBar
-            metrics={lastMetrics}
-            session={sessionTotals}
-            meta={modelMeta}
-            activityPhase={composerActivity}
-            context={contextSnapshot}
-            compacting={compacting}
-            onCompact={readOnly ? undefined : openCompactionModal}
-          />
-        )}
+        {/* Always mounted. The bar is a fixture of the composer, not a
+            turn artifact: gating it on metrics-or-activity made it
+            appear when a turn started and vanish when the agent went
+            idle or the socket blinked, so the branch and context
+            readings a user checks *between* turns were exactly the ones
+            missing. TurnMetricsBar already renders an em-dash row when
+            the rollup is null, so an agent that hasn't finished a turn
+            shows placeholders in a stable slot rather than nothing. */}
+        <TurnMetricsBar
+          metrics={lastMetrics}
+          session={sessionTotals}
+          meta={modelMeta}
+          activityPhase={composerActivity}
+          context={contextSnapshot}
+          compacting={compacting}
+          onCompact={readOnly ? undefined : openCompactionModal}
+        />
         {!readOnly && pendingPermissions.length > 0 && (
           <PermissionApprovalDialog
             pendingPermissions={pendingPermissions}

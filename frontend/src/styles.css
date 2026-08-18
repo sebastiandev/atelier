@@ -4760,7 +4760,15 @@ button.md-link.internal {
   margin: 0 1rem 1rem;
   padding: 0.75rem 0.85rem 0.85rem;
   border: 1px solid var(--line-soft);
-  border-radius: var(--radius-tile);
+  /* Square on top: .turn-metrics sits directly above at the same 1rem
+     inset (see .agent-tile-body > .turn-metrics), so the two are one
+     block with a shared divider rather than two stacked cards. A curve
+     here left the composer's corner turning away from a metrics bar
+     whose edge ran straight past it. --radius-input, not --radius-tile,
+     because the Direction-D rule near the end of this file re-declares
+     .composer with that token and wins; two rules disagreeing on the
+     radius is how the edge strips below drifted out of alignment. */
+  border-radius: 0 0 var(--radius-input) var(--radius-input);
   background: var(--bg-1);
   overflow: visible;
   transition: border-color 160ms ease, background 160ms ease;
@@ -4931,11 +4939,17 @@ button.md-link.internal {
 }
 .composer-context-gauge {
   position: absolute;
-  top: -1px;
-  left: -1px;
-  right: -1px;
+  /* Flush, not the -1px bleed this had when .composer carried a 1px
+     border: the Direction-D rule sets `border: 0`, so a -1px inset now
+     hangs the strip a pixel past the box on both sides. Against the
+     square top corner that overhang is what read as a leftover curve. */
+  top: 0;
+  left: 0;
+  right: 0;
   height: 2px;
-  border-radius: var(--radius-pop) var(--radius-pop) 0 0;
+  /* Square, matching the composer's top corners — it sits on the divider
+     shared with the metrics bar above, which has no curve to follow. */
+  border-radius: 0;
   background: var(--bg-2);
   overflow: hidden;
   pointer-events: none;
@@ -4954,14 +4968,19 @@ button.md-link.internal {
   background: var(--ctx-crit);
   box-shadow: 0 0 8px var(--ctx-crit);
 }
+/* Sits *on* the composer's bottom edge, mirroring how
+   .composer-context-gauge sits on its top edge: flush to the box, and
+   carrying the composer's own bottom corner radii so the sweep follows
+   the curve into the corner instead of running past it. Floating it
+   below on `top: 100%` + a 3px margin read as a second, unrelated line
+   that failed to meet the rounded corner above it. */
 .composer-activity-rail {
   position: absolute;
-  top: 100%;
-  left: -1px;
-  right: -1px;
+  bottom: 0;
+  left: 0;
+  right: 0;
   height: 2px;
-  margin-top: 3px;
-  border-radius: var(--radius-tag);
+  border-radius: 0 0 var(--radius-input) var(--radius-input);
   background: transparent;
   overflow: hidden;
   pointer-events: none;
@@ -13377,6 +13396,19 @@ select:disabled {
   outline: 0;
   box-shadow: var(--focus-ring), inset 0 0 0 1px var(--focus-line);
 }
+/* The composer's top edge is the divider it shares with the metrics bar,
+   not an outer edge of its own. Lighting it on focus drew a bright line
+   *through* the block and re-separated the two halves the square corners
+   just joined, so focus traces the three sides that actually bound the
+   input. The outer halo goes with it — a glow above the divider would
+   say the same thing more softly. Standalone inputs in the rule above
+   keep the full ring; they have four real edges. */
+.composer:focus-within {
+  box-shadow:
+    inset 1px 0 0 var(--focus-line),
+    inset -1px 0 0 var(--focus-line),
+    inset 0 -1px 0 var(--focus-line);
+}
 .composer textarea:focus-visible {
   box-shadow: none;
 }
@@ -13504,7 +13536,11 @@ select:disabled {
 .composer,
 .chat-composer {
   border: 0;
-  border-radius: var(--radius-input);
+  /* Top stays square for the same reason as .composer: the metrics bar
+     above shares this edge. Only the outer bottom corners round. This is
+     the declaration that actually wins — .composer sets the same pair
+     earlier; keep the two in step. */
+  border-radius: 0 0 var(--radius-input) var(--radius-input);
   background: var(--bg-2);
 }
 .agent-tile-body > .turn-metrics {

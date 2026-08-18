@@ -605,24 +605,28 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
             )}
           </div>
         </ChatTileTranscript>
-        {(lastMetrics || streamActive) && (
-          <TurnMetricsBar
-            metrics={lastMetrics}
-            session={sessionTotals}
-            meta={modelMeta}
-            activityPhase={activityPhase}
-            context={contextSnapshot}
-            compacting={compacting}
-            onCompact={readOnly ? undefined : () =>
-              setCompactDialog({
-                phase: "confirm",
-                context: contextSnapshot,
-                error: null,
-              })
-            }
-            compactTitle="Compact this chat context"
-          />
-        )}
+        {/* Always mounted, matching AgentTile. Gating on
+            metrics-or-activity made the bar appear when a turn started
+            and vanish when it ended, so the context reading a user
+            checks between turns was the one not rendered.
+            TurnMetricsBar draws an em-dash row when the rollup is
+            null, so the slot stays put and fills in. */}
+        <TurnMetricsBar
+          metrics={lastMetrics}
+          session={sessionTotals}
+          meta={modelMeta}
+          activityPhase={activityPhase}
+          context={contextSnapshot}
+          compacting={compacting}
+          onCompact={readOnly ? undefined : () =>
+            setCompactDialog({
+              phase: "confirm",
+              context: contextSnapshot,
+              error: null,
+            })
+          }
+          compactTitle="Compact this chat context"
+        />
         <div className="chat-composer-wrap">
           <StalledRuntimeBanner
             title="Chat appears stalled"
@@ -1583,24 +1587,28 @@ export function ChatTile({
             <div className="chat-opening">Loading {chatSlug}...</div>
           )}
         </ChatTileTranscript>
-        {(lastMetrics || streamActive) && (
-          <TurnMetricsBar
-            metrics={lastMetrics}
-            session={sessionTotals}
-            meta={modelMeta}
-            activityPhase={activityPhase}
-            context={contextSnapshot}
-            compacting={compacting}
-            onCompact={readOnly ? undefined : () =>
-              setCompactDialog({
-                phase: "confirm",
-                context: contextSnapshot,
-                error: null,
-              })
-            }
-            compactTitle="Compact this chat context"
-          />
-        )}
+        {/* Always mounted, matching AgentTile. Gating on
+            metrics-or-activity made the bar appear when a turn started
+            and vanish when it ended, so the context reading a user
+            checks between turns was the one not rendered.
+            TurnMetricsBar draws an em-dash row when the rollup is
+            null, so the slot stays put and fills in. */}
+        <TurnMetricsBar
+          metrics={lastMetrics}
+          session={sessionTotals}
+          meta={modelMeta}
+          activityPhase={activityPhase}
+          context={contextSnapshot}
+          compacting={compacting}
+          onCompact={readOnly ? undefined : () =>
+            setCompactDialog({
+              phase: "confirm",
+              context: contextSnapshot,
+              error: null,
+            })
+          }
+          compactTitle="Compact this chat context"
+        />
         {!readOnly && pendingPermissions.length > 0 && (
           <PermissionApprovalDialog
             pendingPermissions={pendingPermissions}

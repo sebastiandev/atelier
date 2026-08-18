@@ -319,6 +319,33 @@ rail that uses `--p-color` and only sweeps while `.composer.is-working`
 is present. Keep those signals on opposite edges: top means context
 capacity, bottom means live activity.
 
+The metrics bar and the composer are one block, not two stacked cards.
+`.agent-tile-body > .turn-metrics` carries the same `1rem` inset as the
+composer's margin so their side edges line up, and the composer's top
+corners are square (`0 0 var(--radius-tile) var(--radius-tile)`) so the
+edge they share reads as an internal divider. Focus follows from that:
+`.composer:focus-within` lights the left, right, and bottom insets only.
+The top is not an outer edge of the input, and lighting it drew a bright
+line straight through the block, re-separating the two halves. Standalone
+inputs in the shared `:focus-within` rule keep the full ring plus halo —
+they have four real edges.
+
+Both edge strips are *on* the edge, not floating beside it: each sits flush to the
+box and takes the composer's own corner radius (`--radius-input`) on its
+two outer corners, so the fill turns into the corner with the box.
+
+Three ways this drifts, all of which have happened. Offsetting the
+activity rail below the composer (`top: 100%` plus a margin) makes it a
+second, unrelated line whose ends miss the corner above them. Giving a
+strip a *larger* radius than the box it sits on overshoots the curve and
+reads flat by the time the edge has started to turn. And bleeding a strip
+`-1px` past the box to cover a border only works while a border is there
+— the Direction-D pass sets `border: 0` on `.composer`, so the same
+`-1px` now hangs the strip a pixel proud on each side and reads as a
+stray curve at the square top corners. `.composer` declares its radius
+twice (once in its own rule, once in the Direction-D block that wins);
+keep both on `--radius-input` or the strips will drift again.
+
 The compact action belongs in the mono status row above the composer,
 not in a second alert strip. It appears at the warning threshold and
 uses the same tone as the `ctx N%` label and top-edge gauge so the three
