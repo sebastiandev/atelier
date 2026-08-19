@@ -32,8 +32,13 @@ function writeDismissedSha(sha: string): void {
 
 // Top-of-screen banner. Mounts once in <App>; renders nothing until
 // the backend confirms an update is available AND the SHA hasn't
-// been dismissed this session. Click expands a popover with the
-// repo path + a one-click "copy cd <repo> && claude" action.
+// been dismissed this session. Click expands a popover with the repo
+// path and a one-click copy of the command that performs the update.
+//
+// The command is `./atelier update`, not an agent session: updating a
+// checkout is a procedure, and asking someone to open Claude Code to run
+// it puts an LLM in the path of `git pull`. Same shape as Claude Code's
+// and Codex's own update prompts — here is the command, run it.
 export function UpdateBanner() {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -77,7 +82,7 @@ export function UpdateBanner() {
 
   const copyCommand = useCallback(async () => {
     if (!status) return;
-    const cmd = `cd ${status.repo_path} && claude`;
+    const cmd = `cd ${status.repo_path} && ./atelier update`;
     try {
       await navigator.clipboard.writeText(cmd);
       setCopied(true);
@@ -130,8 +135,9 @@ export function UpdateBanner() {
           aria-label="Update available"
         >
           <p className="update-banner-popover-body">
-            Run <code>/update</code> in Claude — it pulls main,
-            installs deps, and runs any pending migrations.
+            Run <code>./atelier update</code> in your terminal — it pulls
+            main, installs dependencies, and applies any pending migrations,
+            then tells you what to restart.
           </p>
           <div className="update-banner-popover-path">
             <span className="update-banner-popover-path-label">Repo</span>
@@ -143,7 +149,7 @@ export function UpdateBanner() {
               className="btn primary"
               onClick={copyCommand}
             >
-              {copied ? "Copied" : "Copy: cd <repo> && claude"}
+              {copied ? "Copied" : "Copy: cd <repo> && ./atelier update"}
             </button>
             <button
               type="button"

@@ -167,7 +167,7 @@ Loose work uses the neutral tokens (`--bg-2`, `--line`, `--fg-3`) so the same sh
 
 ### UpdateChip
 
-`UpdateChip.tsx` lives in every topbar (Home, ProjectScreen, WorkView) just before `TweaksToggle`. It polls `GET /api/update-status` every 10 minutes; when the backend reports `available=true` it renders a small accent-tinted pill ("Update available"). Clicking it reveals a popover with the repo path and a single primary action that copies `cd <repo> && claude` to the clipboard — the chip is a hint to run `/update` inside Claude, not a self-acting upgrader. Dismiss persists in `sessionStorage` keyed on the upstream SHA, so the chip reappears when a new upstream commit lands even if previously dismissed.
+`UpdateChip.tsx` lives in every topbar (Home, ProjectScreen, WorkView) just before `TweaksToggle`. It polls `GET /api/update-status` every 10 minutes; when the backend reports `available=true` it renders a small accent-tinted pill ("Update available"). Clicking it reveals a popover with the repo path and a single primary action that copies `cd <repo> && ./atelier update` to the clipboard — the chip is a hint, not a self-acting upgrader. It points at the CLI rather than an agent session because updating a checkout is a procedure, and routing `git pull` through an LLM is not an improvement; this matches how Claude Code and Codex prompt for their own updates. Self-updating from inside the app is deliberately not offered — the backend would be replacing the code it is running. Dismiss persists in `sessionStorage` keyed on the upstream SHA, so the chip reappears when a new upstream commit lands even if previously dismissed.
 
 ## AgentTile — modes
 

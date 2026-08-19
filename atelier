@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Thin shim so `atelier <command>` works from the repo root — or from
+# anywhere, if you symlink this onto your PATH:
+#
+#     ln -s "$PWD/atelier" ~/.local/bin/atelier
+#
+# Hence the link resolution below: $0 is the *symlink's* path, so a naive
+# `cd $(dirname $0)` lands in ~/.local/bin and never finds the repo.
+#
+# The implementation is scripts/atelier.py and is standard-library only, so
+# any Python 3.11+ on PATH can run it — deliberately not `uv run`, because
+# `atelier update` is what *installs* the backend venv in the first place.
+set -euo pipefail
+
+self="$0"
+while [ -L "$self" ]; do
+  target="$(readlink "$self")"
+  case "$target" in
+    /*) self="$target" ;;
+    *)  self="$(dirname "$self")/$target" ;;
+  esac
+done
+cd "$(dirname "$self")"
+
+for py in python3 python; do
+  if command -v "$py" >/dev/null 2>&1; then
+    exec "$py" scripts/atelier.py "$@"
+  fi
+done
+
+echo "atelier: needs Python 3.11+ on PATH (looked for python3, python)" >&2
+exit 1

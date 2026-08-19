@@ -61,7 +61,7 @@ Browser ──► Router (update_status.py)
 
 Returns the last successful snapshot from `UpdateCheckPoller` — a 2h background loop in `infrastructure/update_check/` that runs `git fetch` + compares local `HEAD` to `origin/main`. The route does no git work itself; on hosts where the poller hasn't completed a cycle yet (just-started backend, no network, no `.git`), it returns `available=false` with `repo_path` populated from the checker.
 
-The frontend's topbar `UpdateChip` polls this every 10 minutes; the chip is hidden when `available=false`, and clicking it reveals a popover that recommends running `/update` inside Claude from `repo_path`.
+The frontend's topbar `UpdateChip` polls this every 10 minutes; the chip is hidden when `available=false`, and clicking it reveals a popover that recommends running `./atelier update` from `repo_path`.
 
 ---
 

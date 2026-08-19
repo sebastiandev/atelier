@@ -79,13 +79,76 @@ Cloned to coordinating in about a minute. Atelier is a local web app — Python 
 
 ```bash
 git clone https://github.com/sebastiandev/atelier.git
-cd atelier && ./scripts/dev.sh
+cd atelier && ./atelier launch
 ```
 
-**02 · Open the workspace** — frontend at `127.0.0.1:4173`, API at `:8001`. Create a work unit, launch agents.
+**02 · Open the workspace** — `launch` waits for the frontend, then opens Atelier in its own window (frontend `127.0.0.1:4173`, API `:8001`). Create a work unit, launch agents.
 
-Use alternate ports with `./scripts/dev.sh --fe 4183 --be 8011`.
+Use alternate ports with `./atelier launch --fe 4183 --be 8011`, and `--no-browser` to start the servers without opening anything. `ATELIER_BROWSER` picks a specific browser when you have several.
 
+**03 · Keep it current** — one command, whenever you want the latest.
+
+```bash
+./atelier update
+```
+
+It pulls, installs whatever the pull changed, applies on-disk migrations, and tells you what to restart. It never stops your servers — that call stays yours.
+
+
+### The `atelier` command
+
+Two things you'll do often, without opening an agent:
+
+```bash
+./atelier launch     # start Atelier and open it
+./atelier update     # bring the checkout up to date
+```
+
+**`launch`** starts the backend and frontend, waits for the frontend to
+actually serve, then opens Atelier in its own window — no tab strip, no
+address bar — when you have a Chromium-family browser (Chrome, Chromium,
+Edge, Brave, Vivaldi). Firefox and Safari can't do chromeless windows, so
+there you get an ordinary tab. `Ctrl-C` stops both servers.
+
+| | |
+|---|---|
+| `--fe PORT` / `--be PORT` | override the ports (defaults 4173 / 8001) |
+| `--no-browser` | start the servers and open nothing |
+| `ATELIER_BROWSER` | path to the browser you want, when you have several |
+
+If more than one suitable browser is installed, `launch` names the ones it
+didn't pick rather than asking — a question with the same answer every day
+isn't worth your time.
+
+**`update`** does the whole thing in one command: pulls the branch you're
+on, installs whatever the pull changed (`uv sync`, the ACP runtime, the
+frontend), applies on-disk migrations, and prints what needs restarting.
+
+```
+$ ./atelier update
+  ✓ pulled 3 commits (b35c976..991c46c)
+  ✓ uv sync
+  ✓ npm install --prefix backend/acp-runtime
+  · no FS migrations registered
+  ! restart the backend — DB migrations pending
+
+  991c46c Move the ACP wrappers forward, and the SDK with them
+```
+
+It asks before pulling over uncommitted changes, and never stashes,
+switches branches, or resolves a conflict for you. It also never stops your
+servers — it tells you what to restart and leaves the timing to you. Add
+`--yes` to accept its prompts in a script.
+
+Both commands need only Python 3.11+ on your PATH. `update` is what
+installs everything else.
+
+Run them from the repo root as `./atelier …`, or symlink the shim onto your
+PATH to drop the `./` and call it from anywhere:
+
+```bash
+ln -s "$PWD/atelier" ~/.local/bin/atelier   # or any dir on your PATH
+```
 
 ### One-click desktop launcher
 
@@ -97,7 +160,6 @@ Prefer double-clicking an app icon over typing a script?
 
 # Windows (PowerShell, requires Git Bash on PATH)
 powershell -ExecutionPolicy Bypass -File scripts\install-launcher.ps1
-cd atelier && ./scripts/dev.sh
 ```
 
 This drops an `Atelier.app` (macOS), `atelier.desktop` entry (Linux), or

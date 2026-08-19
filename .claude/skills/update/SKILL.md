@@ -1,78 +1,54 @@
 ---
 name: update
-description: Pull latest main, install dependencies, run any pending FS-side migrations, and remind the user to restart dev. Use when the user says "update", "pull latest", or "sync with main".
+description: Bring the checkout up to date — pull, install changed dependencies, run FS migrations, and report what needs restarting. Wraps `./atelier update`. Use when the user says "update", "pull latest", or "sync with main".
 ---
 
 # Update — sync the working copy with main
 
-Brings a contributor's checkout up to date end-to-end: code, deps, on-disk state, plus a clear pointer for whatever needs a manual restart. Designed to be safe to run with a backend currently up — but the user has to actually stop/restart it themselves (we don't kill processes we don't own).
+The procedure lives in `scripts/atelier.py` and runs as `./atelier update`.
+This skill exists for the parts a script should not decide alone.
 
-## Steps
+**Do not restate the steps here.** They were written twice once already —
+prose and code drift, and a drifted procedure is worse than no script,
+because the skill and the command then quietly do different things.
 
-### 1. Confirm the working tree is safe to pull
-
-Run:
-
-```bash
-git status --short
-git rev-parse --abbrev-ref HEAD
-```
-
-- If the branch isn't `main`, ask the user whether to switch first or update the current branch (`git pull --rebase origin <branch>`).
-- If the working tree has uncommitted changes, surface them and ask before pulling. Don't `git stash` automatically — the BC rule in `CLAUDE.md` covers user state, and a stash is one more thing the user has to remember to restore.
-
-### 2. Pull
-
-Capture HEAD before pulling so subsequent steps can detect a no-op:
+## Run it
 
 ```bash
-PRE_HEAD=$(git rev-parse HEAD)
-git pull --ff-only origin main
-POST_HEAD=$(git rev-parse HEAD)
+./atelier update
 ```
 
-If `git pull` fails (diverged branch), fall back to `git pull --rebase origin main` and surface any merge conflicts to the user — don't try to resolve them blindly.
+That pulls `origin/<current branch>`, installs whatever the pull changed
+(`uv sync`, the ACP runtime, the frontend), runs every
+`scripts/migrate-*.py`, and prints what the user has to restart themselves.
+It is safe to run with the servers up, and it never stops them.
 
-**"Already up to date" is not a reason to stop.** If `PRE_HEAD == POST_HEAD` the local branch was already at `origin/main` — but the user may have pulled manually since the backend last started, leaving FS migrations un-run or DB migrations un-applied. Continue to steps 3-5 regardless. The skills are idempotent; running them on a no-op pull is cheap and safety-relevant.
+Read the output back to the user rather than summarising it away — the
+restart lines are the part they act on.
 
-### 3. Install dependencies if lockfiles changed
+## Where you come in
 
-Diff the pull range (empty when `PRE_HEAD == POST_HEAD`):
+The command asks before doing anything it cannot undo, and refuses to guess
+when there is no terminal. When it stops, that is your cue:
 
-```bash
-git diff --name-only "$PRE_HEAD" "$POST_HEAD" -- backend/uv.lock backend/pyproject.toml backend/acp-runtime/package-lock.json backend/acp-runtime/package.json frontend/package-lock.json frontend/package.json
-```
-
-- If `backend/uv.lock` or `backend/pyproject.toml` changed → `cd backend && uv sync` (use `uv sync` rather than activating a venv; it's faster and skips the activation dance).
-- If `backend/acp-runtime/package-lock.json` or `backend/acp-runtime/package.json` changed → `npm install --prefix backend/acp-runtime`.
-- If `frontend/package-lock.json` or `frontend/package.json` changed → `cd frontend && npm install`.
-
-Skip silently when nothing changed — this is the common case and shouldn't add 10 seconds of "nothing to do" output.
-
-### 4. Run FS-side migrations
-
-DB schema migrations auto-apply on backend boot, so we don't run them here. **FS-side state migrations (transcripts, on-disk JSON shape changes) need explicit invocation** — invoke the `/migrate` skill to do this, which globs `scripts/migrate-*.py` and runs each.
-
-**Always run this step, even on a no-op pull.** Migrations are idempotent (see the `/migrate` contract); the cost of a re-run is "no FS-side migrations registered" or "0 files rewritten", and the benefit is covering the case where the user pulled manually before invoking this skill.
-
-### 5. Tell the user what (if anything) needs a restart
-
-Use the pulled range (`$PRE_HEAD..$POST_HEAD`) — empty on a no-op pull:
-
-- If backend dependencies changed OR commits in the pulled range touch `backend/src/infrastructure/database/migrations.py` → the backend needs a restart so DB migrations apply. Surface this; don't restart yourself.
-- If ACP runtime dependencies changed → newly-started ACP sessions will use the new wrappers; already-running ACP provider subprocesses need their agent/chat session stopped and restarted to pick them up.
-- If frontend dependencies changed OR commits in the pulled range touch `frontend/src/`, `frontend/index.html`, or `frontend/vite.config.ts` → recommend a Vite refresh / restart. Same caveat — surface, don't act.
-
-**No-op pull (`PRE_HEAD == POST_HEAD`) extra step:** the user may already have pulled commits manually that haven't been consumed by a backend restart. We can't tell from git state alone whether they've restarted since their last pull. Add a one-line, non-alarming reminder: *"If you pulled commits since the last backend start, restart the backend now so DB migrations apply."* — then stop.
-
-If nothing changed in either layer AND this was an actual pull that moved HEAD, say so and stop without the reminder.
-
-### 6. Show the new HEAD
-
-One line — `git log --oneline -1` — so the user sees what they just pulled.
+- **Uncommitted changes.** It lists them and asks. Look at what is actually
+  there before advising: a stray build artifact is not a reason to stop, an
+  edited source file mid-refactor is. Never `git stash` on the user's
+  behalf — that is one more thing for them to remember to restore, and the
+  BC rule in `CLAUDE.md` covers user state.
+- **On a branch other than `main`.** It offers to pull that branch's own
+  upstream, never to merge `main` into it. If the user wanted `main`, say so
+  and let them switch.
+- **A pull that is not fast-forward.** It stops rather than rebasing. Read
+  the divergence and explain it; do not resolve conflicts blind.
+- **`--yes`** accepts those prompts. Use it only when the user has already
+  said yes to the specific thing being asked.
 
 ## What this skill is NOT
 
-- Not for first-time setup. That's covered by the README's "Getting started". This skill assumes deps are installed at least once.
-- Not for branch switching, conflict resolution, or anything destructive. If the safe-to-pull check fails, hand control back to the user.
-- Not for restarting the dev server — that's `/dev`. We deliberately keep update + dev separate so a user who's running `dev.sh` in another terminal can update without us touching their process tree.
+- Not first-time setup — that is the README's "Getting started". This
+  assumes dependencies have been installed at least once.
+- Not branch switching, conflict resolution, or anything destructive.
+- Not for starting the servers. That is `/dev` (`./atelier launch`), kept
+  separate so a user running the servers in another terminal can update
+  without anything touching their process tree.
