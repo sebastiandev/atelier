@@ -346,6 +346,15 @@ stray curve at the square top corners. `.composer` declares its radius
 twice (once in its own rule, once in the Direction-D block that wins);
 keep both on `--radius-input` or the strips will drift again.
 
+Themes must not hardcode a composer background. The composer is `--bg-2`
+because the handoff puts it there (Direction D: "bg-2 fill, no border,
+`--radius-input`"), and the metrics bar directly above it is `--bg-2` for
+the same reason — that is what makes the two read as one dock. The ANSI
+theme carried a literal `oklch(0.215 …)` from before that pass, which won
+on specificity and left the input a visibly darker panel than the bar
+sitting on it, in that theme only. Pick the token; a theme that needs a
+different tone should move the ramp, not one surface.
+
 The composer is deliberately **not** a member of the tonal
 `:is(input, textarea, select, .input, .textarea)` group. `:is()` takes the
 specificity of its most specific argument, and that group's first argument

@@ -4756,7 +4756,8 @@ button.md-link.internal {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  /* Separates what you type from the controls that act on it. */
+  gap: 0.65rem;
   margin: 0 1rem 1rem;
   padding: 0.75rem 0.85rem 0.85rem;
   border: 1px solid var(--line-soft);
@@ -4775,6 +4776,11 @@ button.md-link.internal {
 }
 .composer textarea {
   width: 100%;
+  /* Two lines of room before it grows. One line put the caret a hair
+     above the model/effort row and read as a search box rather than
+     somewhere to write a paragraph; the JS auto-grow sets an inline
+     `height` from scrollHeight, and min-height simply floors it. */
+  min-height: calc(1.5em * 2);
   background: transparent;
   border: 0;
   color: var(--fg);
@@ -6757,7 +6763,6 @@ button.md-link.internal {
 
 /* Surface tweaks */
 [data-theme="ansi"] .agent-tile { background: var(--panel); border-color: var(--line); }
-[data-theme="ansi"] .composer   { background: oklch(0.215 0.012 255); }
 [data-theme="ansi"] .canvas {
   /* Soften the dot-grid — too noisy on a lifted bg */
   background:
