@@ -346,6 +346,15 @@ stray curve at the square top corners. `.composer` declares its radius
 twice (once in its own rule, once in the Direction-D block that wins);
 keep both on `--radius-input` or the strips will drift again.
 
+The composer is deliberately **not** a member of the tonal
+`:is(input, textarea, select, .input, .textarea)` group. `:is()` takes the
+specificity of its most specific argument, and that group's first argument
+(`input` plus three `:not([type=…])` clauses) weighs (0,3,1) — so while the
+composer was listed there, the group silently beat every later `.composer`
+rule at (0,1,0) and re-rounded all four corners regardless of what came
+after. The composer is a form container, not a text field; it states its
+own border, radius, background, and color in its own rule.
+
 The compact action belongs in the mono status row above the composer,
 not in a second alert strip. It appears at the warning threshold and
 uses the same tone as the `ctx N%` label and top-edge gauge so the three

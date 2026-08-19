@@ -13336,9 +13336,7 @@ a.pm-track-row:hover strong {
   textarea,
   select,
   .input,
-  .textarea,
-  .chat-composer,
-  .composer
+  .textarea
 ) {
   border: 0;
   border-radius: var(--radius-input);
@@ -13533,15 +13531,22 @@ select:disabled {
   border-radius: var(--radius-tag);
   background: var(--bg-2);
 }
+/* The composer used to ride along in the tonal `:is(input, textarea, …)`
+   group above. It cannot: that group's first argument carries three
+   `:not([type=…])` clauses, and :is() takes the specificity of its most
+   specific argument, so the whole selector weighs (0,3,1) and beat every
+   later `.composer` rule at (0,1,0) — re-rounding all four corners no
+   matter what was declared afterwards. The composer is a form container,
+   not a text field, so it states its own surface here instead. Keep
+   these declarations in sync with that group if it changes. */
 .composer,
 .chat-composer {
   border: 0;
-  /* Top stays square for the same reason as .composer: the metrics bar
-     above shares this edge. Only the outer bottom corners round. This is
-     the declaration that actually wins — .composer sets the same pair
-     earlier; keep the two in step. */
+  /* Top stays square: the metrics bar above shares this edge. Only the
+     outer bottom corners round. */
   border-radius: 0 0 var(--radius-input) var(--radius-input);
   background: var(--bg-2);
+  color: var(--fg);
 }
 .agent-tile-body > .turn-metrics {
   width: auto;
