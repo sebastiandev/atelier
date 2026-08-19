@@ -276,10 +276,14 @@ class CodexAgentConfig:
 class ClaudeAcpModel(str, Enum):
     """Model choices exposed by the official ``claude-agent-acp`` wrapper.
 
-    These are the wrapper's session-config-option *values* (captured live
-    2026-07-24, wrapper 0.61.0) — aliases resolved by the Claude Code
-    runtime, not API model ids. ``DEFAULT`` defers to the user's Claude
-    CLI configuration (currently resolves to Opus 4.8 with 1M context).
+    These are the wrapper's session-config-option *values* (re-captured
+    live 2026-08-19 against wrapper 0.70.0) — aliases resolved by the
+    Claude Code runtime, not API model ids. The set of values is unchanged
+    since 0.61.0; what they resolve to is not. ``opus[1m]`` and
+    ``DEFAULT`` both resolve to Opus 5 with 1M context today (they were
+    Opus 4.8 when this was captured against 0.61.0), which is why the
+    labels in ``specs.py`` need re-checking whenever the wrapper is
+    bumped: the alias stays put while the model behind it moves.
     """
 
     DEFAULT = "default"

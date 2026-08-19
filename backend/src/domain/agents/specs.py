@@ -551,10 +551,14 @@ class CodexSpec:
 _CLAUDE_ACP_MODEL_META: dict[str, ModelMeta] = {
     # Wrapper option values are runtime aliases; pricing/window mirror the
     # models they resolve to (per the wrapper's own option descriptions,
-    # captured 2026-07-24): default/opus[1m]→Opus 4.8 (1M). ACP agents
-    # report authoritative cost via usage_update,
-    # so these numbers only back the dialog's price hints and the FE's
-    # fallback estimate.
+    # re-captured 2026-08-19 against wrapper 0.70.0): default/opus[1m] now
+    # resolve to Opus 5 (1M), not Opus 4.8. The numbers below are unchanged
+    # because Opus 5 carries Opus 4.8's pricing and window — only the label
+    # moved. The alias is what the wrapper offers, so the *label* has to
+    # track what it resolves to or the dialog names a model the user can no
+    # longer pick. ACP agents report authoritative cost via usage_update, so
+    # these numbers only back the dialog's price hints and the FE's fallback
+    # estimate.
     ClaudeAcpModel.DEFAULT.value: ModelMeta(
         context_window=1_000_000,
         input_per_mtok=5.0,
@@ -627,8 +631,8 @@ class ClaudeAcpSpec:
                 values=_enum_values(ClaudeAcpModel),
                 default=ClaudeAcpModel.DEFAULT.value,
                 value_labels=[
-                    "CLI default — Opus 4.8 1M (recommended)",
-                    "Opus 4.8 (1M)",
+                    "CLI default — Opus 5 1M (recommended)",
+                    "Opus 5 (1M)",
                     "Fable 5 (1M)",
                     "Sonnet 5",
                     "Haiku 4.5",
