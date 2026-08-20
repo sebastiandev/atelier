@@ -51,9 +51,19 @@ export type ConnectionStatus =
 const CLOSE_CODE_AGENT_NOT_RUNNING = 4404;
 
 // Exponential reconnect schedule: 1s → 2s → 4s → 8s → 16s → 30s (cap).
-// Resets to 0 on a successful connect so transient blips don't push us
-// to the cap.
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000, 30000];
+
+// How long a connection must survive before we call it good and clear the
+// backoff.
+//
+// Resetting in `onopen` looked right and was not: the backend closes 4409
+// whenever a provider's pump dies, and each retry then opened (resetting
+// the schedule), failed to rebuild, and closed again — a flat 1s hammer
+// where the ladder above was supposed to back off. Escalation only ever
+// happened when the socket never opened at all. A connection that opens
+// and immediately dies has told us nothing works yet, so it must not count
+// as success.
+const CONNECTION_HEALTHY_AFTER_MS = 5000;
 const STREAM_EVENT_FLUSH_MS = 50;
 const DEFAULT_INITIAL_REPLAY_LIMIT = 100;
 
@@ -140,6 +150,7 @@ export function useAgentStream(
   useEffect(() => {
     let cancelled = false;
     let retryHandle: number | null = null;
+    let healthyHandle: number | null = null;
 
     function isCurrentConnection(ws: WebSocket, connectionId: number): boolean {
       return (
@@ -153,6 +164,10 @@ export function useAgentStream(
       if (retryHandle !== null) {
         window.clearTimeout(retryHandle);
         retryHandle = null;
+      }
+      if (healthyHandle !== null) {
+        window.clearTimeout(healthyHandle);
+        healthyHandle = null;
       }
     }
 
@@ -227,8 +242,16 @@ export function useAgentStream(
 
       ws.onopen = () => {
         if (!isCurrentConnection(ws, connectionId)) return;
-        retryAttemptRef.current = 0;
         setStatus("connected");
+        // Not reset here — see CONNECTION_HEALTHY_AFTER_MS. A socket that
+        // opens and dies straight away is a failure wearing a success's
+        // clothes, and clearing the ladder on it removes the only thing
+        // stopping a tight retry loop.
+        healthyHandle = window.setTimeout(() => {
+          healthyHandle = null;
+          if (!isCurrentConnection(ws, connectionId)) return;
+          retryAttemptRef.current = 0;
+        }, CONNECTION_HEALTHY_AFTER_MS);
       };
 
       ws.onmessage = (msg) => {

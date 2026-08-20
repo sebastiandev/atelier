@@ -8,6 +8,7 @@ them is `git pull` and `npm install`, which the shell already tests.
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -21,47 +22,141 @@ atelier = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(atelier)
 
 
-def _labels(changed: list[str]) -> list[str]:
-    return [label for label, _argv, _cwd in atelier.pending_dependency_jobs(changed)]
+def _labels(jobs) -> list[str]:
+    return [label for label, _argv, _cwd in jobs]
 
 
-# -- what a pull implies --------------------------------------------------
+# -- deciding what to install ---------------------------------------------
+#
+# The rule under test: staleness is a property of the working tree, not of
+# the commit range a pull happened to move. Asking the range has a wrong
+# answer whenever the lockfile changed outside it -- a manual `git pull`
+# first, or a later pull that carries no lockfile -- and the consequence is
+# new code running against old dependencies.
+
+
+def _tree(tmp_path, *, lock_mtime: float | None, marker_mtime: float | None) -> None:
+    """Lay out one lockfile/marker pair at the paths the CLI expects."""
+    lock = tmp_path / "frontend" / "package-lock.json"
+    marker = tmp_path / "frontend" / "node_modules" / ".package-lock.json"
+    if lock_mtime is not None:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text("{}")
+        os.utime(lock, (lock_mtime, lock_mtime))
+    if marker_mtime is not None:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("{}")
+        os.utime(marker, (marker_mtime, marker_mtime))
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(atelier, "REPO", tmp_path)
+    return tmp_path
+
+
+def test_a_lockfile_newer_than_the_install_is_stale(repo) -> None:
+    _tree(repo, lock_mtime=2000, marker_mtime=1000)
+    assert atelier.is_stale(
+        "frontend/package-lock.json", "frontend/node_modules/.package-lock.json"
+    )
+
+
+def test_an_install_newer_than_its_lockfile_is_current(repo) -> None:
+    _tree(repo, lock_mtime=1000, marker_mtime=2000)
+    assert not atelier.is_stale(
+        "frontend/package-lock.json", "frontend/node_modules/.package-lock.json"
+    )
+
+
+def test_a_checkout_that_never_installed_is_stale(repo) -> None:
+    """The two-month-old checkout, and the fresh clone, look the same here."""
+    _tree(repo, lock_mtime=1000, marker_mtime=None)
+    assert atelier.is_stale(
+        "frontend/package-lock.json", "frontend/node_modules/.package-lock.json"
+    )
+
+
+def test_nothing_to_install_from_is_not_stale(repo) -> None:
+    _tree(repo, lock_mtime=None, marker_mtime=None)
+    assert not atelier.is_stale(
+        "frontend/package-lock.json", "frontend/node_modules/.package-lock.json"
+    )
+
+
+def test_a_job_with_no_marker_always_runs(repo) -> None:
+    """uv sync is its own staleness check, so it is never skipped."""
+    assert atelier.is_stale("", "")
+
+
+def test_the_manual_pull_still_installs(repo) -> None:
+    """The regression this replaced.
+
+    A user pulls by hand, then runs the command. The pull moves nothing and
+    the range is empty -- but the tree is stale, so the installs must run.
+    Under the old range-based rule this returned nothing at all.
+    """
+    _tree(repo, lock_mtime=2000, marker_mtime=1000)
+    assert "npm install (frontend)" in _labels(atelier.pending_dependency_jobs())
+
+
+def test_a_later_pull_that_carries_no_lockfile_still_installs(repo) -> None:
+    """The half-fix the review caught.
+
+    Hand-pull ten commits, then let the command pull one more that touches
+    no lockfile. The range is non-empty and lockfile-free, so a range-based
+    rule skips the install even though the tree is stale.
+    """
+    _tree(repo, lock_mtime=2000, marker_mtime=1000)
+    assert "npm install (frontend)" in _labels(atelier.pending_dependency_jobs())
+
+
+def test_a_current_tree_installs_nothing(repo) -> None:
+    """The common case stays cheap: no unconditional network cost."""
+    for lock, marker in (
+        ("backend/acp-runtime/package-lock.json",
+         "backend/acp-runtime/node_modules/.package-lock.json"),
+        ("frontend/package-lock.json", "frontend/node_modules/.package-lock.json"),
+    ):
+        (repo / lock).parent.mkdir(parents=True, exist_ok=True)
+        (repo / lock).write_text("{}")
+        os.utime(repo / lock, (1000, 1000))
+        (repo / marker).parent.mkdir(parents=True, exist_ok=True)
+        (repo / marker).write_text("{}")
+        os.utime(repo / marker, (2000, 2000))
+    # uv sync has no marker and is always offered; the npm jobs must not be.
+    assert _labels(atelier.pending_dependency_jobs()) == ["uv sync"]
+
+
+# -- did an installer actually do anything? ------------------------------
 
 
 @pytest.mark.parametrize(
-    "changed, expected",
+    "output",
     [
-        ([], []),
-        (["README.md"], []),
-        (["backend/uv.lock"], ["uv sync"]),
-        (["backend/pyproject.toml"], ["uv sync"]),
-        (
-            ["backend/acp-runtime/package-lock.json"],
-            ["npm install --prefix backend/acp-runtime"],
-        ),
-        (["frontend/package-lock.json"], ["npm install (frontend)"]),
+        "Installed 10 packages in 19ms",
+        "Uninstalled 3 packages",
+        "added 12 packages, and audited 300 packages",
+        "removed 4 packages",
     ],
 )
-def test_a_changed_lockfile_implies_its_install(changed, expected) -> None:
-    assert _labels(changed) == expected
+def test_installer_work_is_recognised(output: str) -> None:
+    assert atelier.changed_anything(output)
 
 
-def test_one_pull_can_imply_every_install() -> None:
-    """Today's ACP bump moved two of the three at once."""
-    changed = [
-        "backend/uv.lock",
-        "backend/acp-runtime/package-lock.json",
-        "frontend/package.json",
-    ]
-    assert _labels(changed) == [
-        "uv sync",
-        "npm install --prefix backend/acp-runtime",
-        "npm install (frontend)",
-    ]
-
-
-def test_a_lockfile_elsewhere_is_not_ours() -> None:
-    assert _labels(["docs/package-lock.json", "backend/acp-runtime/README.md"]) == []
+@pytest.mark.parametrize(
+    "output",
+    [
+        "Resolved 67 packages in 3ms\nChecked 51 packages in 1ms",
+        "",
+        "up to date, audited 300 packages",
+    ],
+)
+def test_a_no_op_install_is_not_reported_as_a_restart_reason(output: str) -> None:
+    """`uv sync` runs on every update; calling that a change would put a
+    'restart the backend' warning on every single run until it stopped
+    being read."""
+    assert not atelier.changed_anything(output)
 
 
 # -- what the user must restart -------------------------------------------

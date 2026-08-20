@@ -106,10 +106,37 @@ def fail(message: str) -> int:
 # -- process helpers ------------------------------------------------------
 
 
-def run(argv: Sequence[str], cwd: Path | None = None, quiet: bool = False) -> int:
-    """Run a command, streaming its output unless ``quiet``."""
-    out = subprocess.DEVNULL if quiet else None
-    return subprocess.call(list(argv), cwd=str(cwd or REPO), stdout=out, stderr=out)
+def run(argv: Sequence[str], cwd: Path | None = None) -> tuple[int, str]:
+    """Run a command quietly, returning its status and combined output.
+
+    Output is captured rather than discarded so a failure can say why. The
+    previous version sent both streams to /dev/null, which made every
+    failure read `error: uv sync failed` with nothing else -- no way for the
+    user to act and nothing to paste into a bug report. On success the
+    output is dropped by the caller; on failure it is the whole story.
+    """
+    try:
+        proc = subprocess.run(
+            list(argv),
+            cwd=str(cwd or REPO),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return 1, str(exc)
+    return proc.returncode, f"{proc.stdout}{proc.stderr}".strip()
+
+
+def explain(output: str, limit: int = 12) -> None:
+    """Print the tail of a failed command's output, indented."""
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines:
+        return
+    if len(lines) > limit:
+        print(f"      … {len(lines) - limit} earlier lines omitted")
+    for line in lines[-limit:]:
+        print(f"      {line}")
 
 
 def capture(argv: Sequence[str], cwd: Path | None = None) -> str:
@@ -157,39 +184,80 @@ def confirm(question: str, assume_yes: bool) -> bool:
 
 # -- update: what a pull implies ------------------------------------------
 
-# Each entry: the paths that trigger it, a label, and how to install it.
-DEPENDENCY_JOBS: tuple[tuple[tuple[str, ...], str, tuple[str, ...], str], ...] = (
+# Each entry: a label, how to install it, where from, and how to tell
+# whether it is already done.
+DEPENDENCY_JOBS: tuple[tuple[str, tuple[str, ...], str, str, str], ...] = (
+    # uv sync is its own staleness check: local, idempotent, and ~0.1s when
+    # there is nothing to do, so there is no marker worth consulting.
+    #
+    # --inexact installs what the lockfile needs without removing what it
+    # does not mention. A bare `uv sync` uninstalls the dev extras
+    # (pytest, ruff, mypy) on every run -- the footgun CLAUDE.md warns
+    # about -- so an update would quietly break a contributor's toolchain
+    # and then report "dependencies changed" from its own churn.
+    ("uv sync", ("uv", "sync", "--inexact"), "backend", "", ""),
     (
-        ("backend/uv.lock", "backend/pyproject.toml"),
-        "uv sync",
-        ("uv", "sync"),
-        "backend",
-    ),
-    (
-        ("backend/acp-runtime/package-lock.json", "backend/acp-runtime/package.json"),
         "npm install --prefix backend/acp-runtime",
         ("npm", "install", "--prefix", "backend/acp-runtime"),
         ".",
+        "backend/acp-runtime/package-lock.json",
+        "backend/acp-runtime/node_modules/.package-lock.json",
     ),
     (
-        ("frontend/package-lock.json", "frontend/package.json"),
         "npm install (frontend)",
         ("npm", "install"),
         "frontend",
+        "frontend/package-lock.json",
+        "frontend/node_modules/.package-lock.json",
     ),
 )
 
 
-def pending_dependency_jobs(
-    changed: Iterable[str],
-) -> list[tuple[str, tuple[str, ...], str]]:
-    """Which installs a set of changed paths implies, in declaration order."""
-    touched = set(changed)
-    jobs = []
-    for triggers, label, argv, cwd in DEPENDENCY_JOBS:
-        if touched.intersection(triggers):
-            jobs.append((label, argv, cwd))
-    return jobs
+# Words each installer uses when it actually did something. `uv sync` has
+# no marker to consult, so it runs on every update and reports a no-op as
+# "Audited N packages"; treating that as an install told the user to
+# restart the backend after every single update, which is how a warning
+# stops being read at all.
+_INSTALL_HAPPENED = ("installed", "uninstalled", "added", "removed", "changed")
+
+
+def changed_anything(output: str) -> bool:
+    """Did an installer report doing work, rather than confirming a no-op?"""
+    lowered = output.lower()
+    return any(word in lowered for word in _INSTALL_HAPPENED)
+
+
+def is_stale(lockfile: str, marker: str) -> bool:
+    """Is the installed tree older than the lockfile that describes it?
+
+    This replaces asking the *git range* which lockfiles moved. That
+    question has a wrong answer whenever the range does not contain the
+    change: a user who ran `git pull` by hand and then this command sees an
+    empty range, and one who pulls a further commit sees a range without
+    the lockfile in it. Both end up running new code against old
+    dependencies -- the failure this is meant to prevent.
+
+    Asking the tree instead is correct in all three cases, including the
+    checkout that has simply never installed anything. Same test
+    `scripts/dev-backend.sh` already applies to the ACP runtime.
+    """
+    if not lockfile:
+        return True  # no marker to consult; the installer decides
+    lock, installed = REPO / lockfile, REPO / marker
+    if not lock.exists():
+        return False  # nothing to install from
+    if not installed.exists():
+        return True  # never installed
+    return lock.stat().st_mtime > installed.stat().st_mtime
+
+
+def pending_dependency_jobs() -> list[tuple[str, tuple[str, ...], str]]:
+    """The installs this checkout actually needs, in declaration order."""
+    return [
+        (label, argv, cwd)
+        for label, argv, cwd, lockfile, marker in DEPENDENCY_JOBS
+        if is_stale(lockfile, marker)
+    ]
 
 
 def restart_notices(changed: Iterable[str], installed: Iterable[str]) -> list[str]:
@@ -241,9 +309,23 @@ def fs_migrations() -> list[Path]:
 def cmd_update(args: argparse.Namespace) -> int:
     if not REPO.joinpath(".git").exists():
         return fail(f"{REPO} is not a git checkout")
+    if shutil.which("git") is None:
+        return fail("git is not installed, or not on PATH")
 
     branch = git("rev-parse", "--abbrev-ref", "HEAD")
     dirty = bool(git("status", "--porcelain"))
+
+    # Detached HEAD reports the literal string "HEAD", which would sail
+    # through the branch check below and pull `origin/HEAD` -- the remote's
+    # default branch -- moving a user off the commit they deliberately
+    # parked on, after asking them a question that reads like a branch name.
+    if branch == "HEAD":
+        return fail(
+            "HEAD is detached, so there is no branch to update. Check out a "
+            "branch first: git checkout main"
+        )
+    if not branch:
+        return fail("could not determine the current branch")
 
     if dirty:
         print("  Uncommitted changes in the working tree:")
@@ -255,58 +337,73 @@ def cmd_update(args: argparse.Namespace) -> int:
     # Pull the branch you are on, never a different one. Updating a feature
     # branch from main would be a merge the user did not ask for, and
     # switching branches under them is worse.
-    if branch and branch != "main":
+    if branch != "main":
         if not confirm(f"On '{branch}', not main. Pull origin/{branch}?", args.yes):
             return fail(f"stopped — switch to main, or re-run to update '{branch}'")
-    target = branch or "main"
 
     before = git("rev-parse", "HEAD")
-    with Working(f"pulling origin/{target}"):
-        pull_failed = run(["git", "pull", "--ff-only", "origin", target], quiet=True) != 0
-    if pull_failed:
-        return fail(
-            f"git pull --ff-only origin {target} failed. Your branch has probably "
-            "diverged; resolve it yourself rather than letting this command guess."
-        )
+    with Working(f"pulling origin/{branch}"):
+        code, output = run(["git", "pull", "--ff-only", "origin", branch])
+    if code != 0:
+        # Do not guess why. A missing upstream, no network, and a local edit
+        # that blocks the fast-forward all land here, and telling all three
+        # that their branch diverged sends most users to fix the wrong thing.
+        print(f"  {WARN} git pull --ff-only origin {branch} failed:")
+        explain(output)
+        return fail("nothing was changed; resolve the above and re-run")
     after = git("rev-parse", "HEAD")
 
+    if not before or not after:
+        return fail("could not read HEAD before and after the pull")
+
     if before == after:
-        # Not a reason to stop. The user may have pulled by hand since the
-        # backend last started, leaving migrations un-run.
         step(SKIP, f"already up to date ({after[:7]})")
         changed: list[str] = []
     else:
-        count = git("rev-list", "--count", f"{before}..{after}")
+        count = git("rev-list", "--count", f"{before}..{after}") or "?"
         step(OK, f"pulled {count} commit{'' if count == '1' else 's'} ({before[:7]}..{after[:7]})")
         changed = git("diff", "--name-only", before, after).splitlines()
 
     installed: list[str] = []
-    jobs = pending_dependency_jobs(changed)
+    missing_tools: list[str] = []
+    jobs = pending_dependency_jobs()
     if not jobs:
-        step(SKIP, "dependencies unchanged")
+        step(SKIP, "dependencies already match their lockfiles")
     for label, argv, cwd in jobs:
         if shutil.which(argv[0]) is None:
             step(WARN, f"{label} skipped — '{argv[0]}' is not installed")
+            missing_tools.append(argv[0])
             continue
         with Working(label):
-            failed = run(argv, cwd=REPO / cwd, quiet=True) != 0
-        if failed:
-            return fail(f"{label} failed")
-        installed.append(label)
-        step(OK, label)
+            code, output = run(argv, cwd=REPO / cwd)
+        if code != 0:
+            print(f"  {WARN} {label} failed:")
+            explain(output)
+            return fail("dependencies are not up to date; resolve the above and re-run")
+        if changed_anything(output):
+            installed.append(label)
+            step(OK, label)
+        else:
+            step(SKIP, f"{label} — already current")
 
     migrations = fs_migrations()
     if not migrations:
         step(SKIP, "no FS migrations registered")
+    elif shutil.which("uv") is None:
+        # The dependency loop warns and continues when a tool is missing;
+        # doing anything else here would be a traceback three lines later.
+        step(WARN, f"{len(migrations)} FS migration(s) skipped — 'uv' is not installed")
+        missing_tools.append("uv")
     else:
         for script in migrations:
             with Working(f"migrating: {script.stem}"):
-                failed = (
-                    run(["uv", "run", "python", str(script)], cwd=REPO / "backend", quiet=True)
-                    != 0
+                code, output = run(
+                    ["uv", "run", "python", str(script)], cwd=REPO / "backend"
                 )
-            if failed:
-                return fail(f"{script.name} failed")
+            if code != 0:
+                print(f"  {WARN} {script.name} failed:")
+                explain(output)
+                return fail("on-disk state is partially migrated; resolve and re-run")
         step(OK, f"ran {len(migrations)} FS migration{'' if len(migrations) == 1 else 's'}")
 
     for notice in restart_notices(changed, installed):
@@ -320,6 +417,14 @@ def cmd_update(args: argparse.Namespace) -> int:
         )
 
     print(f"\n  {git('log', '--oneline', '-1')}")
+
+    if missing_tools:
+        # Exiting 0 here would tell a script -- and the user -- that the
+        # checkout is up to date when part of it was never installed.
+        return fail(
+            "not fully updated: install " + ", ".join(sorted(set(missing_tools)))
+            + " and re-run"
+        )
     return 0
 
 
