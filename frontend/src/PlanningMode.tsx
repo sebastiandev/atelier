@@ -498,6 +498,11 @@ export function PlanningMode({
           onRun={(runId) => onView({ kind: "run", id: selectedDetail.artifact.id, runId })}
           onViewLoop={() => setRunDock({ kind: "loop", stageId: selectedRun.loop_current_stage_id || null })}
         />
+      ) : view.kind === "run" ? (
+        // Heading to a run whose detail is still in flight. Rendering
+        // the plan rail here would flash the whole plan tree for a beat
+        // before the run rail replaces it — hold the column instead.
+        <aside className="pm-rail" style={{ width: planningRailWidth }} />
       ) : (
         <PlanRail
           work={work}
