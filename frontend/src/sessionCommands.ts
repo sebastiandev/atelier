@@ -44,11 +44,16 @@ function parseOrigin(raw: unknown): CommandOrigin | null {
 }
 
 /**
- * A plausible command name: no slashes, so a draft that is just an
- * absolute path (`/Users/me/notes.md`) or a URL path reads as ordinary
- * text rather than as a command the agent failed to advertise.
+ * A plausible command name.
+ *
+ * No slashes, so a draft that is just an absolute path
+ * (`/Users/me/notes.md`) or a URL path reads as ordinary text rather
+ * than as a command the agent failed to advertise — the slash is the
+ * discriminator, not the leading character. A `$` prefix is allowed
+ * because codex-acp namespaces plugin commands that way
+ * (`$ponytail:ponytail-audit`), and without it those cannot be searched.
  */
-const COMMAND_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
+const COMMAND_NAME = /^\$?[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 
 export type CommandMentionState = {
   start: number;

@@ -149,3 +149,31 @@ test("latestSessionCommands reads an origin when the agent reports one", () => {
     ["project", null],
   );
 });
+
+test("namespaced and $-prefixed command names stay searchable", () => {
+  // codex-acp advertises plugin commands as `$plugin:command`, and
+  // claude-acp advertises skills as `plugin:skill`.
+  const commands = [
+    { name: "$ponytail:ponytail-audit", description: "audit", hint: null, origin: null },
+    { name: "frontend-design:frontend-design", description: "design", hint: null, origin: null },
+  ];
+  for (const name of commands.map((c) => c.name)) {
+    assert.equal(
+      activeCommandMention(`/${name}`, name.length + 1)?.query,
+      name,
+      name,
+    );
+    assert.equal(unknownCommandName(`/${name} go`, commands), null, name);
+  }
+  // a typo in a namespaced name is still refused
+  assert.equal(
+    unknownCommandName("/$ponytail:nope", commands),
+    "$ponytail:nope",
+  );
+});
+
+test("a bare $ or a path is still not a command", () => {
+  const commands = [{ name: "$imagegen", description: "", hint: null, origin: null }];
+  assert.equal(unknownCommandName("/$/etc/passwd", commands), null);
+  assert.equal(activeCommandMention("/$", 2), null);
+});
