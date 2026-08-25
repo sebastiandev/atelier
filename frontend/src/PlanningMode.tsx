@@ -557,6 +557,12 @@ export function PlanningMode({
             onApprovePlan={onApprovePlan}
           />
         )}
+        {view.kind === "run" && !selectedDetail && (
+          // Deep-linked from search: the artifact detail is still in
+          // flight. Without this the artifact view renders for a frame
+          // and the jump reads as two screens instead of one.
+          <div className="pm-loading">Loading run…</div>
+        )}
         {view.kind === "run" && artifact && selectedDetail && (
           selectedRun ? (
             <LoopRunView

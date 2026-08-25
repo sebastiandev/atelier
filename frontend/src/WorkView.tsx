@@ -414,9 +414,15 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     setWorkMode("planning");
     setWorkModeExplicit(false);
     setLoopStartSeed(readLoopStartSeed(workSlug));
-    setPlanningView({ kind: "overview" });
-    // A planning run waits for the plan (below); a Loop-mode run has no
-    // artifact and is seeded straight through LoopMode.
+    // Set the run view up front so the overview never renders a frame
+    // behind a deep link. The selection still has to be re-applied once
+    // the plan resolves (below) -- the plan-load effect clears it -- but
+    // the view itself no longer flashes through the plan timeline.
+    setPlanningView(
+      deepLink?.artifactId
+        ? { kind: "run", id: deepLink.artifactId, runId: deepLink.runId }
+        : { kind: "overview" },
+    );
     setPendingRunLink(deepLink?.artifactId ? deepLink : null);
     setDeepLinkRunId(deepLink && !deepLink.artifactId ? deepLink.runId : null);
     setPlanOverviewTab("summary");
