@@ -182,7 +182,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   const [shares, setShares] = useState<SharedFolderSummary[]>([]);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [plan, setPlan] = useState<WorkPlan | null>(null);
-  const [planLoading, setPlanLoading] = useState(false);
+  // Starts true: the plan fetch begins in an effect, so a first frame
+  // with `false` renders the work shell before anything is known and
+  // the plan timeline flashes past on every navigation. The fetch
+  // clears it in a `finally`, including the no-plan 404 path.
+  const [planLoading, setPlanLoading] = useState(true);
   const [selectedPlanArtifactId, setSelectedPlanArtifactId] = useState<string | null>(null);
   const [planArtifactDetail, setPlanArtifactDetail] =
     useState<PlanArtifactDetail | null>(null);
@@ -424,6 +428,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         : { kind: "overview" },
     );
     setPendingRunLink(deepLink?.artifactId ? deepLink : null);
+    // Select the artifact now rather than after the plan lands: the
+    // detail fetch keys off this alone, so the two requests overlap and
+    // the wait becomes the slower of them instead of their sum.
+    setSelectedPlanArtifactId(deepLink?.artifactId ?? null);
     setDeepLinkRunId(deepLink && !deepLink.artifactId ? deepLink.runId : null);
     setPlanOverviewTab("summary");
     setPlanPromptDraft(null);
@@ -785,7 +793,9 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     let cancelled = false;
     setPlanLoading(true);
     setPlanError(null);
-    setSelectedPlanArtifactId(null);
+    // Keep a deep-linked artifact selected; clearing it here would
+    // cancel the detail fetch that started in parallel above.
+    setSelectedPlanArtifactId(deepLinkRef.current.link?.artifactId ?? null);
     setPlanArtifactDetail(null);
     setPlanDraft("");
     setPlanMaterializationStatus(null);
