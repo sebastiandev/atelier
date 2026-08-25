@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 from acp.schema import (
     AgentMessageChunk,
+    AvailableCommandsUpdate,
     ConfigOptionUpdate,
     PermissionOption,
     TextContentBlock,
@@ -30,6 +31,7 @@ from src.domain.agents import (
     MessageComplete,
     PermissionDecision,
     PermissionRequest,
+    SessionCommands,
     SessionConfigChanged,
     SessionConfigOptions,
     SessionEstablished,
@@ -1447,5 +1449,150 @@ def test_protocol_version_mismatch_fails_loudly() -> None:
             await adapter.start(
                 AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s")
             )
+
+    asyncio.run(scenario())
+
+
+def _commands_update(*names: str, hint: str | None = None) -> AvailableCommandsUpdate:
+    return AvailableCommandsUpdate(
+        sessionUpdate="available_commands_update",
+        availableCommands=[
+            {
+                "name": name,
+                "description": f"run {name}",
+                **({"input": {"hint": hint}} if hint else {}),
+            }
+            for name in names
+        ],
+    )
+
+
+def test_available_commands_update_emits_session_commands() -> None:
+    async def scenario() -> None:
+        adapter, _fake = _build()
+        await adapter.start(
+            AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s")
+        )
+        gen = adapter.events()
+        await anext(gen)  # session_established
+
+        await adapter.session_update("sess_1", _commands_update("init", hint="topic"))
+        event = await anext(gen)
+
+        assert isinstance(event, SessionCommands)
+        assert event.commands == (
+            {"name": "init", "description": "run init", "hint": "topic"},
+        )
+        await gen.aclose()
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_session_commands_replayed_to_a_late_subscriber() -> None:
+    """A reconnecting UI must still learn the command set: the frame
+    arrives once, right after session/new, and never repeats."""
+
+    async def scenario() -> None:
+        adapter, _fake = _build()
+        await adapter.start(
+            AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s")
+        )
+        first = adapter.events()
+        await anext(first)  # session_established
+        await adapter.session_update("sess_1", _commands_update("review"))
+        await anext(first)  # session_commands
+        await first.aclose()
+
+        second = adapter.events()
+        await anext(second)  # session_established
+        replayed = await anext(second)
+
+        assert isinstance(replayed, SessionCommands)
+        assert [c["name"] for c in replayed.commands] == ["review"]
+        await second.aclose()
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_unchanged_available_commands_do_not_re_emit() -> None:
+    """Re-advertising the same set is a no-op; a changed set queues once.
+
+    Asserted on the outgoing queue rather than through ``events()``: the
+    generator's preamble re-yields sticky state on resume, so a
+    consume-between-updates read cannot distinguish a fresh emission from
+    the replay of one.
+    """
+
+    async def scenario() -> None:
+        adapter, _fake = _build()
+        await adapter.start(
+            AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s")
+        )
+        await adapter.session_update("sess_1", _commands_update("init"))
+        queued = adapter._outgoing.qsize()
+
+        await adapter.session_update("sess_1", _commands_update("init"))
+        assert adapter._outgoing.qsize() == queued
+
+        await adapter.session_update("sess_1", _commands_update("init", "review"))
+        assert adapter._outgoing.qsize() == queued + 1
+        assert [c["name"] for c in adapter._session_commands] == ["init", "review"]
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_available_commands_survive_session_load_replay() -> None:
+    """The frame is session capability state, not turn content, so the
+    replay guard that suppresses restored history must not eat it."""
+
+    async def scenario() -> None:
+        adapter, _fake = _build()
+        await adapter.start(
+            AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s")
+        )
+        gen = adapter.events()
+        await anext(gen)  # session_established
+
+        adapter._replaying = True
+        await adapter.session_update("sess_1", _commands_update("init"))
+        adapter._replaying = False
+
+        event = await anext(gen)
+        assert isinstance(event, SessionCommands)
+        assert [c["name"] for c in event.commands] == ["init"]
+        await gen.aclose()
+        await adapter.close()
+
+    asyncio.run(scenario())
+
+
+def test_commands_without_a_usable_name_are_dropped() -> None:
+    async def scenario() -> None:
+        adapter, _fake = _build()
+        await adapter.start(
+            AgentStartContext(workdir=WORKDIR, model="m", system_prompt="s")
+        )
+        gen = adapter.events()
+        await anext(gen)  # session_established
+
+        await adapter.session_update(
+            "sess_1",
+            AvailableCommandsUpdate(
+                sessionUpdate="available_commands_update",
+                availableCommands=[
+                    {"name": "", "description": "nameless"},
+                    {"name": "init", "description": "guided setup"},
+                ],
+            ),
+        )
+        event = await anext(gen)
+
+        assert isinstance(event, SessionCommands)
+        assert [c["name"] for c in event.commands] == ["init"]
+        await gen.aclose()
+        await adapter.close()
 
     asyncio.run(scenario())

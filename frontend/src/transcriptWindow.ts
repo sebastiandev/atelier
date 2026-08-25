@@ -65,6 +65,7 @@ function countRenderableTranscriptEvents(
 
 function isRenderableTranscriptEvent(event: TranscriptEvent): boolean {
   return (
+    event.type !== "session_commands" &&
     event.type !== "session_config_options" &&
     event.type !== "session_config_changed"
   );

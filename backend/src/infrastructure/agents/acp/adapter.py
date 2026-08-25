@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from acp import Client
 from acp.schema import (
     AllowedOutcome,
+    AvailableCommandsUpdate,
     ConfigOptionUpdate,
     DeniedOutcome,
     McpServerStdio,
@@ -62,6 +63,7 @@ from src.domain.agents import (
     PermissionDecision,
     PermissionDecisionValue,
     PermissionRequest,
+    SessionCommands,
     SessionConfigChanged,
     SessionConfigOptions,
     SessionEstablished,
@@ -171,6 +173,7 @@ class AcpAdapter:
         self._pending_warning: str | None = None
         self._mapper = AcpUpdateMapper()
         self._session_config_options: tuple[dict[str, Any], ...] = ()
+        self._session_commands: tuple[dict[str, Any], ...] = ()
         self._replaying = False
         self._suppress_restored_updates_until_prompt = False
         self._user_inputs: asyncio.Queue[str | object] = asyncio.Queue()
@@ -331,6 +334,8 @@ class AcpAdapter:
             yield SessionEstablished(ts=_now(), session_id=self._session_id)
         if self._session_config_options:
             yield SessionConfigOptions(ts=_now(), options=self._session_config_options)
+        if self._session_commands:
+            yield SessionCommands(ts=_now(), commands=self._session_commands)
         self._pump_task = asyncio.create_task(
             self._run_input_pump(), name="acp-input-pump"
         )
@@ -401,6 +406,21 @@ class AcpAdapter:
     # -- ACP client callbacks (invoked by the SDK router) -----------------------
 
     async def session_update(self, session_id: str, update: Any, **kwargs: Any) -> None:
+        if isinstance(update, AvailableCommandsUpdate):
+            # Handled ahead of the replay guards below on purpose. Unlike a
+            # message or tool frame this is session capability state, not
+            # turn content: it is idempotent, it arrives once (OpenCode
+            # sends it immediately after session/new), and there is no
+            # session-response field to recover it from. Dropping it during
+            # a session/load replay would leave the composer with no command
+            # list for the rest of the session.
+            commands = _available_commands_payload(update)
+            if commands != self._session_commands:
+                self._session_commands = commands
+                await self._outgoing.put(
+                    SessionCommands(ts=_now(), commands=commands)
+                )
+            return
         if self._replaying:
             # session/load replays history as ordinary updates before its
             # response resolves; Atelier's own transcript already holds
@@ -1120,6 +1140,34 @@ def _config_options_payload(session_response: Any) -> tuple[dict[str, Any], ...]
         category = _string_attr(option, "category")
         if category is not None:
             item["category"] = category
+        out.append(item)
+    return tuple(out)
+
+
+def _available_commands_payload(update: Any) -> tuple[dict[str, Any], ...]:
+    """JSON-friendly command metadata from an ACP available_commands_update.
+
+    Mirrors ``_config_options_payload``: read defensively with ``getattr``
+    so a provider that grows the per-command schema cannot break the pump,
+    and drop entries without a usable name -- the frontend keys the picker
+    on it and sends it back as ``/<name>``.
+    """
+    out: list[dict[str, Any]] = []
+    for command in getattr(update, "available_commands", None) or []:
+        name = getattr(command, "name", None)
+        if not isinstance(name, str) or not name:
+            continue
+        item: dict[str, Any] = {"name": name}
+        description = getattr(command, "description", None)
+        if isinstance(description, str) and description:
+            item["description"] = description
+        # input is a RootModel wrapper around the (currently only)
+        # unstructured variant; the hint is what the composer shows as an
+        # argument placeholder.
+        hint = getattr(getattr(command, "input", None), "root", None)
+        hint_text = getattr(hint, "hint", None)
+        if isinstance(hint_text, str) and hint_text:
+            item["hint"] = hint_text
         out.append(item)
     return tuple(out)
 

@@ -316,6 +316,8 @@ def _event_summary(event: dict[str, Any]) -> str:
         return "session established"
     if event_type == "session_config_options":
         return "session options loaded"
+    if event_type == "session_commands":
+        return "session commands loaded"
     if event_type == "mode_change":
         return _str(event.get("mode_id"))
     if event_type == "error":

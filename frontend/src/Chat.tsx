@@ -61,6 +61,7 @@ import {
   ChatTileFrame,
   ChatTileTranscript,
 } from "./ChatTileSurface";
+import { useCommandPicker } from "./CommandPicker";
 import { useDragHandle } from "./dragHandleContext";
 import { completedEditPaths } from "./editedPaths";
 import {
@@ -293,6 +294,11 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     providerAuthAwaitingInput,
     confirmProviderAuth,
   } = useAgentStream(chatSlug, { resource: "chats", readOnly });
+  const commandPicker = useCommandPicker({
+    events,
+    setDraft,
+    textareaRef,
+  });
 
   async function refresh() {
     try {
@@ -415,10 +421,12 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
     if (readOnly || compacting) return;
     const body = draft.trim();
     if (!body || !chat || uploadingImageCount > 0) return;
+    if (commandPicker.rejectsUnknownCommand(body)) return;
     sendInput(messageWithPendingImages(body, pendingImageNotes));
     setDraft("");
     setPendingImageNotes([]);
     setImageUploadError(null);
+    commandPicker.reset();
   }
 
   function cancelSystemClipboardImagePaste() {
@@ -666,16 +674,28 @@ export function ChatView({ chatSlug }: { chatSlug: string }) {
                 {uploadingImageCount === 1 ? "" : "s"}...
               </div>
             )}
+            {commandPicker.picker}
+            {commandPicker.error}
             <textarea
               ref={textareaRef}
               rows={1}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                commandPicker.sync(e.target.value, e.target.selectionStart);
+              }}
+              onSelect={(e) => {
+                commandPicker.sync(
+                  e.currentTarget.value,
+                  e.currentTarget.selectionStart,
+                );
+              }}
               onKeyDown={(e) => {
                 if (isPasteKeyboardShortcut(e)) {
                   scheduleSystemClipboardImagePaste();
                   return;
                 }
+                if (commandPicker.handleKeyDown(e)) return;
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   send();
@@ -864,6 +884,11 @@ export function ChatTile({
     providerAuthAwaitingInput,
     confirmProviderAuth,
   } = useAgentStream(chatSlug, { resource: "chats", readOnly });
+  const commandPicker = useCommandPicker({
+    events,
+    setDraft,
+    textareaRef,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -1118,12 +1143,17 @@ export function ChatTile({
     if (!chat) return;
     const body = draft.trim();
     if (!body || uploadingImageCount > 0) return;
+    // The agent parses the leading slash itself and silently no-ops a
+    // name it doesn't know, so refuse here rather than let the user
+    // watch an empty turn.
+    if (commandPicker.rejectsUnknownCommand(body)) return;
     setHistoryExpanded(true);
     sendInput(messageWithPendingImages(body, pendingImageNotes));
     setDraft("");
     setPendingImageNotes([]);
     setImageUploadError(null);
     setMention(null);
+    commandPicker.reset();
   }
 
   function cancelSystemClipboardImagePaste() {
@@ -1679,18 +1709,30 @@ export function ChatTile({
                 next[cursor - 1] === "@";
               setDraft(next);
               syncMention(next, cursor, { allowStart: typedAt });
+              commandPicker.sync(next, cursor);
             }}
             onClick={(e) => {
               syncMention(e.currentTarget.value, e.currentTarget.selectionStart);
+              commandPicker.sync(
+                e.currentTarget.value,
+                e.currentTarget.selectionStart,
+              );
             }}
             onSelect={(e) => {
               syncMention(e.currentTarget.value, e.currentTarget.selectionStart);
+              commandPicker.sync(
+                e.currentTarget.value,
+                e.currentTarget.selectionStart,
+              );
             }}
             onKeyDown={(e) => {
               if (isPasteKeyboardShortcut(e)) {
                 scheduleSystemClipboardImagePaste();
                 return;
               }
+              // Only one picker can be open at a time: `@` needs a
+              // non-slash start and `/` needs position 0.
+              if (commandPicker.handleKeyDown(e)) return;
               if (mention) {
                 if (e.key === "Escape") {
                   e.preventDefault();
@@ -1765,6 +1807,8 @@ export function ChatTile({
             }
             disabled={composerDisabled}
           />
+          {commandPicker.picker}
+          {commandPicker.error}
           {mention && (
             <div className="composer-plan-mentions">
               <div className="composer-plan-mentions-head">

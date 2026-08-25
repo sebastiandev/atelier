@@ -30,6 +30,7 @@ from src.domain.supervisor import (
     AgentSupervisorService,
     AgentTerminated,
 )
+from src.domain.supervisor.service import STICKY_REPLAY_LIMIT
 from src.domain.worktrees import WorktreeState
 from src.infrastructure.agents import StubAgentAdapter
 from tests.unit.domain.workstore._stubs import StubTranscriptLog
@@ -620,6 +621,57 @@ def test_subscribe_with_replay_limit_replays_tail_and_marks_history() -> None:
         return result
 
     assert _run(run()) == ([4, 5], 4, True, 2)
+
+
+def test_sticky_replay_budget_is_per_type_not_shared() -> None:
+    """A chatty sticky type must not evict a quiet one.
+
+    ``session_config_options`` is re-emitted on every config refresh while
+    ``session_commands`` lands once per session; a shared newest-N window
+    would drop the command list and silently disable the composer picker.
+    """
+
+    async def run() -> list[str]:
+        log = StubTranscriptLog()
+        ts = UTC_NOW.isoformat()
+        events: list[dict[str, Any]] = [
+            {
+                "seq": 1,
+                "type": "session_commands",
+                "ts": ts,
+                "commands": [{"name": "init", "description": "guided setup"}],
+            }
+        ]
+        events.extend(
+            {
+                "seq": seq,
+                "type": "session_config_options",
+                "ts": ts,
+                "options": [{"id": "model", "current_value": "m"}],
+            }
+            for seq in range(2, 2 + STICKY_REPLAY_LIMIT * 2)
+        )
+        events.append(
+            {"seq": 999, "type": "message_complete", "ts": ts, "text": "newest"}
+        )
+        log.events[("WRK-001", "agt-1")] = events
+        supervisor = AgentSupervisorService(log)
+        await supervisor.register_agent(
+            "WRK-001",
+            "agt-1",
+            StubAgentAdapter([], keep_alive=True),
+            _start_context(),
+            lazy=True,
+        )
+
+        async with supervisor.subscribe("agt-1", cursor=0, replay_limit=1) as sub:
+            types = [e["type"] for e in sub.replay]
+
+        await supervisor.shutdown()
+        return types
+
+    types = asyncio.run(run())
+    assert "session_commands" in types
 
 
 def test_subscribe_with_replay_limit_keeps_sticky_session_config_metadata() -> None:

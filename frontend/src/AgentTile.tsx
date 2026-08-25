@@ -62,6 +62,7 @@ import {
   SimpleContextRow,
   type SimpleContextType,
 } from "./SimpleContextRow";
+import { useCommandPicker } from "./CommandPicker";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
 import { TileHeader } from "./TileHeader";
 import {
@@ -341,6 +342,11 @@ export function AgentTile({
   }, []);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const commandPicker = useCommandPicker({
+    events,
+    setDraft,
+    textareaRef,
+  });
   const clipboardFallbackTimerRef = useRef<number | null>(null);
   const systemClipboardPasteInFlightRef = useRef(false);
 
@@ -700,8 +706,13 @@ export function AgentTile({
     if (uploadingImageCount > 0) return;
     const text = draft.trim();
     if (!text && submittableContexts.length === 0) return;
+    // The agent parses the leading slash itself and silently no-ops a
+    // name it doesn't know, so refuse here rather than let the user
+    // watch an empty turn.
+    if (commandPicker.rejectsUnknownCommand(text)) return;
     sendInput(text || "Review the attached context.", submittableContexts);
     setDraft("");
+    commandPicker.reset();
     setPendingContexts([]);
     setContextUploadError(null);
     setPickerOpen(false);
@@ -752,6 +763,10 @@ export function AgentTile({
       scheduleSystemClipboardImagePaste();
       return;
     }
+    // An open picker owns the arrows, Enter/Tab and Esc. When it is
+    // closed every one of those falls through untouched — Esc in
+    // particular still means "stop the agent's turn".
+    if (commandPicker.handleKeyDown(e)) return;
     if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       submit();
@@ -1303,6 +1318,8 @@ export function AgentTile({
               )}
             </div>
           )}
+          {commandPicker.picker}
+          {commandPicker.error}
           <textarea
             ref={textareaRef}
             value={draft}
@@ -1312,6 +1329,13 @@ export function AgentTile({
                 return;
               }
               setDraft(e.target.value);
+              commandPicker.sync(e.target.value, e.target.selectionStart);
+            }}
+            onSelect={(e) => {
+              commandPicker.sync(
+                e.currentTarget.value,
+                e.currentTarget.selectionStart,
+              );
             }}
             onClick={(e) => {
               if (compactionBlocked) guardBlockedCompactionEvent(e);

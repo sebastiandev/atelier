@@ -195,9 +195,12 @@ class AcpUpdateMapper:
         if isinstance(update, UsageUpdate):
             self._on_usage(update)
             return []
-        # user_message_chunk (live echo / replay), available_commands_update,
-        # config_option_update, session_info_update, anything newer than us:
-        # deliberately ignored. Never crash the pump on an unknown frame.
+        # user_message_chunk (live echo / replay), session_info_update,
+        # anything newer than us: deliberately ignored. Never crash the pump
+        # on an unknown frame. available_commands_update and
+        # config_option_update never reach here -- the adapter intercepts
+        # both, because each is sticky session state it has to retain and
+        # re-emit on resubscribe rather than per-turn content.
         logger.debug(
             "ignoring ACP session update: %s",
             getattr(update, "session_update", type(update).__name__),

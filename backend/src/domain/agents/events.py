@@ -185,6 +185,27 @@ class SessionConfigOptions:
 
 
 @dataclass(frozen=True, kw_only=True)
+class SessionCommands:
+    """Provider-advertised slash commands for this session.
+
+    ACP agents announce their command set with ``available_commands_update``
+    (OpenCode surfaces its ``.opencode/command`` entries and skills this
+    way). Atelier records the advertised shape so the composer can offer a
+    picker and reject a name the agent does not know -- providers that
+    parse the leading slash themselves silently no-op an unknown command,
+    which is indistinguishable from a hung turn.
+
+    Like ``SessionConfigOptions`` the payload stays dict-shaped: entry
+    metadata is provider-owned, and ACP may grow the per-command schema
+    without Atelier needing to know.
+    """
+
+    type: Literal["session_commands"] = "session_commands"
+    ts: datetime
+    commands: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True, kw_only=True)
 class SessionConfigChanged:
     """A mutable provider session option changed successfully."""
 
@@ -389,6 +410,7 @@ AgentEvent = (
     | ToolResult
     | PlanUpdate
     | ModeChange
+    | SessionCommands
     | SessionConfigOptions
     | SessionConfigChanged
     | StatusChange
@@ -416,6 +438,7 @@ __all__ = [
     "PermissionRequest",
     "PlanUpdate",
     "ProviderContextCompacted",
+    "SessionCommands",
     "SessionConfigChanged",
     "SessionConfigOptions",
     "SessionEstablished",

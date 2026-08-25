@@ -139,7 +139,17 @@ SUBSCRIBER_QUEUE_MAX = 256
 # through these cleanup paths.
 ADAPTER_CLOSE_TIMEOUT_SECONDS = 5.0
 
-STICKY_REPLAY_EVENT_TYPES = {"session_config_options", "session_config_changed"}
+STICKY_REPLAY_EVENT_TYPES = {
+    "session_commands",
+    "session_config_options",
+    "session_config_changed",
+}
+#: Newest rows kept *per sticky type*, not across them. A shared budget
+#: lets a chatty type evict a quiet one: ``session_config_options`` is
+#: re-emitted on every ``session_config_refresh`` (the model dropdown
+#: fires one per open) while ``session_commands`` is emitted once per
+#: session, so ~50 dropdown opens would leave a reconnecting client with
+#: no command list and an inert unknown-command guard.
 STICKY_REPLAY_LIMIT = 50
 
 
@@ -599,16 +609,22 @@ class AgentSupervisorService:
     def _read_disk_sticky_window(
         self, work_slug: str, agent_slug: str, cursor: int, from_seq: int
     ) -> list[dict[str, Any]]:
-        return list(
-            self._transcript_log.read_recent_by_type(
-                work_slug,
-                agent_slug,
-                STICKY_REPLAY_EVENT_TYPES,
-                cursor,
-                STICKY_REPLAY_LIMIT,
-                before_seq=from_seq + 1,
+        # One scan per type so each gets its own budget; see
+        # STICKY_REPLAY_LIMIT.
+        rows: list[dict[str, Any]] = []
+        for event_type in STICKY_REPLAY_EVENT_TYPES:
+            rows.extend(
+                self._transcript_log.read_recent_by_type(
+                    work_slug,
+                    agent_slug,
+                    {event_type},
+                    cursor,
+                    STICKY_REPLAY_LIMIT,
+                    before_seq=from_seq + 1,
+                )
             )
-        )
+        rows.sort(key=lambda event: event["seq"])
+        return rows
 
     async def stop_agent(self, agent_slug: str) -> None:
         async with self._registry_lock:
@@ -1084,9 +1100,7 @@ def build_replay_subscription(
     limit = max(replay_limit, 0)
     subscription.replay_limit = limit
     tail = replay[len(replay) - limit :] if limit else []
-    sticky = [e for e in replay if e.get("type") in STICKY_REPLAY_EVENT_TYPES][
-        -STICKY_REPLAY_LIMIT:
-    ]
+    sticky = _newest_sticky_per_type(replay)
     subscription.replay = _merge_replay_windows(sticky, tail)
     if tail:
         oldest = tail[0]["seq"]
@@ -1126,6 +1140,22 @@ _OMIT_WHEN_NONE: dict[str, tuple[str, ...]] = {
         "git_detached",
     ),
 }
+
+
+def _newest_sticky_per_type(replay: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Newest ``STICKY_REPLAY_LIMIT`` rows of each sticky type, in seq order."""
+    by_type: dict[str, list[dict[str, Any]]] = {}
+    for event in replay:
+        event_type = event.get("type")
+        if event_type in STICKY_REPLAY_EVENT_TYPES:
+            by_type.setdefault(str(event_type), []).append(event)
+    rows = [
+        event
+        for events in by_type.values()
+        for event in events[-STICKY_REPLAY_LIMIT:]
+    ]
+    rows.sort(key=lambda event: event["seq"])
+    return rows
 
 
 def _event_to_dict(event: AgentEvent) -> dict[str, Any]:
