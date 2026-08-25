@@ -12516,7 +12516,11 @@ a.pm-track-row:hover strong {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--fg-4);
+  /* The column is a fixed 58px; without this a long id (a story ref,
+     say) spills over the name beside it instead of truncating. */
+  overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .search-result .body { min-width: 0; }
 .search-result .name {

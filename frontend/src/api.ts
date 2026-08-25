@@ -122,6 +122,28 @@ export function listWorks(): Promise<WorkSummary[]> {
   return fetch("/api/works").then((r) => jsonOrThrow<WorkSummary[]>(r));
 }
 
+/** One row of the cross-work recent-runs listing (`GET /api/runs`). */
+export type RecentRun = {
+  id: string;
+  number: number;
+  work_slug: string;
+  work_name: string;
+  goal: string;
+  status: string;
+  updated_at: string;
+  // Provenance: set when a planning story triggered the run. `source_title`
+  // is null when the plan could not be read — the ref alone still labels it.
+  source_kind: string | null;
+  source_ref: string | null;
+  source_title: string | null;
+};
+
+export function listRecentRuns(limit = 50): Promise<RecentRun[]> {
+  return fetch(`/api/runs?limit=${limit}`).then((r) =>
+    jsonOrThrow<RecentRun[]>(r),
+  );
+}
+
 export type UpdateStatus = {
   available: boolean;
   repo_path: string;

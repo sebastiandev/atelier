@@ -3428,7 +3428,9 @@ def _to_plan_run(run: PlanArtifactRun) -> PlanArtifactRunResponse:
     )
 
 
-def _to_work_loop_run(record: LoopRunRecord) -> WorkLoopRunResponse:
+def _to_work_loop_run(
+    record: LoopRunRecord, *, source_title: str | None = None
+) -> WorkLoopRunResponse:
     """Project one durable loop run onto its REST response."""
     state = record.state
     raw_loop = state.get("loop")
@@ -3514,6 +3516,11 @@ def _to_work_loop_run(record: LoopRunRecord) -> WorkLoopRunResponse:
         source_run_id=(str(state["source_run_id"]) if state.get("source_run_id") else None),
         run_kind=run_kind,
         seed_label=str(state.get("seed_label") or ""),
+        # Read the derived provenance, never target_kind -- see
+        # LoopRunRecord.source.
+        source_kind=(record.source.kind.value if record.source is not None else None),
+        source_ref=(record.source.ref if record.source is not None else None),
+        source_title=(source_title if record.source is not None else None),
         brief=_to_loop_brief_schema(brief) if brief is not None else None,
         review_gate=(
             dict(loop["review_gate"]) if isinstance(loop.get("review_gate"), dict) else None

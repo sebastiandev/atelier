@@ -1,13 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { ProjectSummary, WorkSummary } from "./api";
+import { listRecentRuns, type ProjectSummary, type RecentRun, type WorkSummary } from "./api";
 import { CheckIcon, SearchIcon } from "./Icons";
+import {
+  byRecentRun,
+  byRecentWork,
+  runMatches,
+} from "./searchRanking";
 
 export type SearchScope = "all" | { slug: string };
 
 type Result =
   | { kind: "project"; project: ProjectSummary }
-  | { kind: "work"; work: WorkSummary; project: ProjectSummary | null };
+  | { kind: "work"; work: WorkSummary; project: ProjectSummary | null }
+  | { kind: "run"; run: RecentRun };
+
+//: Alongside the existing 8 projects / 20 works. A picker, not a report.
+const RUN_LIMIT = 12;
+
+//: Terminal run statuses, mirroring the set `LoopRunRepository.list_active`
+//: excludes. Defined as "finished" rather than "running" so a new
+//: in-flight status shows a live dot by default instead of a wrong tick.
+const FINISHED_RUN_STATUSES = new Set([
+  "accepted",
+  "cancelled",
+  "cleaned",
+  "failed",
+]);
 
 type Props = {
   works: WorkSummary[];
@@ -27,10 +46,28 @@ export function SearchModal({
   const [q, setQ] = useState("");
   const [scope, setScope] = useState<SearchScope>(defaultScope);
   const [active, setActive] = useState(0);
+  const [runs, setRuns] = useState<RecentRun[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const rowRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  // Fetched here rather than passed in: the modal has four mount points
+  // (App, Home, ProjectScreen, WorkView) and prop-drilling would touch
+  // them all. Failure is silent by design — projects and works must
+  // render whether or not this resolves.
+  useEffect(() => {
+    let cancelled = false;
+    listRecentRuns()
+      .then((rows) => {
+        if (!cancelled) setRuns(rows);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const projectMap = useMemo(() => {
@@ -39,9 +76,16 @@ export function SearchModal({
     return m;
   }, [projects]);
 
+  const workBySlug = useMemo(() => {
+    const m = new Map<string, WorkSummary>();
+    for (const w of works) m.set(w.slug, w);
+    return m;
+  }, [works]);
+
   const results = useMemo<{
     projects: ProjectSummary[];
     works: WorkSummary[];
+    runs: RecentRun[];
   }>(() => {
     const term = q.trim().toLowerCase();
     const inScope = (slug: string | null | undefined) => {
@@ -62,8 +106,18 @@ export function SearchModal({
         (s) => s != null && s.toLowerCase().includes(term),
       );
     });
-    return { projects: projList.slice(0, 8), works: workList.slice(0, 20) };
-  }, [q, scope, works, projects]);
+    // A run belongs to its work's project, so the scope toggle reaches
+    // it through the work rather than through anything on the run.
+    const runList = runs.filter((run) => {
+      if (!inScope(workBySlug.get(run.work_slug)?.project_slug)) return false;
+      return runMatches(run, term);
+    });
+    return {
+      projects: projList.slice(0, 8),
+      works: [...workList].sort(byRecentWork).slice(0, 20),
+      runs: [...runList].sort(byRecentRun).slice(0, RUN_LIMIT),
+    };
+  }, [q, scope, works, projects, runs, workBySlug]);
 
   const flat = useMemo<Result[]>(
     () => [
@@ -78,6 +132,7 @@ export function SearchModal({
           ? projectMap.get(work.project_slug) ?? null
           : null,
       })),
+      ...results.runs.map<Result>((run) => ({ kind: "run", run })),
     ],
     [results, projectMap],
   );
@@ -86,9 +141,26 @@ export function SearchModal({
     setActive(0);
   }, [q, scope]);
 
+  // ↑/↓ move a cursor that can leave the viewport: the results panel
+  // scrolls, so the active row has to be pulled back into it. Without
+  // this the list only follows the mouse.
+  useEffect(() => {
+    rowRefs.current.length = flat.length;
+    rowRefs.current[active]?.scrollIntoView({ block: "nearest" });
+  }, [active, flat.length]);
+
   function openResult(r: Result) {
     if (r.kind === "project") {
       window.location.assign(`/projects/${r.project.slug}`);
+    } else if (r.kind === "run") {
+      // The story ref rides along so a planning run lands on its run
+      // view directly, with no pass through the work overview.
+      const artifact = r.run.source_ref
+        ? `&artifact=${encodeURIComponent(r.run.source_ref)}`
+        : "";
+      window.location.assign(
+        `/works/${r.run.work_slug}?run=${encodeURIComponent(r.run.id)}${artifact}`,
+      );
     } else {
       window.location.assign(`/works/${r.work.slug}`);
     }
@@ -136,7 +208,7 @@ export function SearchModal({
             ref={inputRef}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="search work units, projects, ids…"
+            placeholder="search work units, projects, loop runs, ids…"
           />
           {scopeProject && (
             <div className="scope-toggle view-toggle" role="tablist">
@@ -174,6 +246,9 @@ export function SearchModal({
               {results.projects.map((p, i) => (
                 <button
                   key={p.slug}
+                  ref={(node) => {
+                    rowRefs.current[i] = node;
+                  }}
                   className={
                     "search-result" + (active === i ? " kbd-active" : "")
                   }
@@ -218,6 +293,9 @@ export function SearchModal({
                 return (
                   <button
                     key={w.slug}
+                    ref={(node) => {
+                      rowRefs.current[flatIdx] = node;
+                    }}
                     className={
                       "search-result" +
                       (active === flatIdx ? " kbd-active" : "")
@@ -261,6 +339,69 @@ export function SearchModal({
                     <span className="tail">
                       {p ? p.name : "loose"}
                     </span>
+                  </button>
+                );
+              })}
+            </>
+          )}
+
+          {results.runs.length > 0 && (
+            <>
+              <div className="search-group-hd">
+                <span>Loop runs</span>
+                <span className="count">{results.runs.length}</span>
+              </div>
+              {results.runs.map((run, i) => {
+                const flatIdx =
+                  results.projects.length + results.works.length + i;
+                const work = workBySlug.get(run.work_slug) ?? null;
+                const p = work?.project_slug
+                  ? projectMap.get(work.project_slug) ?? null
+                  : null;
+                // A story-triggered run's `goal` is its artifact path,
+                // not prose — the story title is the readable label, and
+                // the ref goes underneath. A Loop-mode run has neither,
+                // so its goal *is* the label and status fills the line.
+                const label = run.source_title ?? run.goal;
+                const sub = run.source_ref ?? run.status;
+                return (
+                  <button
+                    key={`${run.work_slug}:${run.id}`}
+                    ref={(node) => {
+                      rowRefs.current[flatIdx] = node;
+                    }}
+                    className={
+                      "search-result" +
+                      (active === flatIdx ? " kbd-active" : "")
+                    }
+                    style={
+                      p ? { ["--proj-h" as string]: String(p.color) } : undefined
+                    }
+                    onMouseEnter={() => setActive(flatIdx)}
+                    onClick={() => openResult({ kind: "run", run })}
+                  >
+                    <span
+                      className="pip"
+                      style={
+                        !p
+                          ? { background: "var(--bg-2)", color: "var(--fg-3)" }
+                          : undefined
+                      }
+                    >
+                      {FINISHED_RUN_STATUSES.has(run.status) ? (
+                        <CheckIcon size={9} />
+                      ) : (
+                        <span className="dot live" />
+                      )}
+                    </span>
+                    <span className="id">
+                      {run.number > 0 ? `run ${run.number}` : "run"}
+                    </span>
+                    <span className="body">
+                      <div className="name">{highlight(label, q)}</div>
+                      <div className="desc">{highlight(sub, q)}</div>
+                    </span>
+                    <span className="tail">{highlight(run.work_name, q)}</span>
                   </button>
                 );
               })}

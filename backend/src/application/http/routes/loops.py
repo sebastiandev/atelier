@@ -14,6 +14,7 @@ from src.application.http.schemas import (
     LoopDefinitionResponse,
     LoopImportPreviewResponse,
     LoopStepDefinitionSchema,
+    RecentLoopRunResponse,
     SaveLoopDefinitionRequest,
     StageImportPlanResponse,
     TransportExportResponse,
@@ -28,15 +29,19 @@ from src.domain.commands.loops import (
     reveal_definition,
     save_definition,
 )
+from src.domain.commands.loops.runs import RECENT_RUNS_DEFAULT_LIMIT
+from src.domain.commands.runs import recent as recent_runs
 from src.domain.loop.dtos import (
     LoopDefinition,
     LoopDefinitionScope,
     LoopReportField,
     LoopReportSchema,
 )
+from src.domain.loop.models import LoopRunRecord
 from src.domain.loop.ports import (
     LoopDefinitionLocations,
     LoopDefinitionRepository,
+    LoopRunRepository,
     LoopWorkingRootRepository,
     StageDefinitionRepository,
 )
@@ -47,6 +52,7 @@ from src.domain.loop.stages import (
     StageDefinitionReadOnly,
 )
 from src.domain.loop.transport import TransportInvalid
+from src.domain.planning.ports import PlanningFiles
 from src.domain.workstore.ports import WorkStore
 from src.infrastructure.filesystem.loop_transport import (
     dump_transport_document,
@@ -82,6 +88,14 @@ def _locations(request: Request) -> LoopDefinitionLocations:
     return request.app.state.workspace_paths  # type: ignore[no-any-return]
 
 
+def _loop_runs(request: Request) -> LoopRunRepository:
+    return request.app.state.loop_runs  # type: ignore[no-any-return]
+
+
+def _planningfiles(request: Request) -> PlanningFiles:
+    return request.app.state.planningfiles  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(_workstore)]
 WorkingRootsDep = Annotated[
     LoopWorkingRootRepository, Depends(_working_roots)
@@ -91,6 +105,45 @@ StageDefinitionsDep = Annotated[
     StageDefinitionRepository, Depends(_stage_definitions)
 ]
 LocationsDep = Annotated[LoopDefinitionLocations, Depends(_locations)]
+LoopRunsDep = Annotated[LoopRunRepository, Depends(_loop_runs)]
+PlanningFilesDep = Annotated[PlanningFiles, Depends(_planningfiles)]
+
+
+@router.get("/runs", response_model=list[RecentLoopRunResponse])
+def list_recent_runs_endpoint(
+    loop_runs: LoopRunsDep,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    limit: int = RECENT_RUNS_DEFAULT_LIMIT,
+) -> list[RecentLoopRunResponse]:
+    """Recent loop runs across every Work, newest first."""
+    return [
+        RecentLoopRunResponse(
+            id=item.record.plan_run_id or item.record.run_key,
+            number=_run_number(item.record),
+            work_slug=item.record.work_slug,
+            work_name=item.work_name,
+            goal=item.record.target_ref,
+            status=item.record.status,
+            updated_at=item.record.updated_at.isoformat(),
+            source_kind=(
+                item.record.source.kind.value if item.record.source is not None else None
+            ),
+            source_ref=(
+                item.record.source.ref if item.record.source is not None else None
+            ),
+            source_title=item.source_title,
+        )
+        for item in recent_runs.execute(
+            loop_runs, workstore, planningfiles, limit
+        )
+    ]
+
+
+def _run_number(record: LoopRunRecord) -> int:
+    """The run's display number, or 0 when its state predates one."""
+    number = record.state.get("number") if isinstance(record.state, dict) else None
+    return number if isinstance(number, int) else 0
 
 
 @router.get("/loops", response_model=list[LoopDefinitionResponse])

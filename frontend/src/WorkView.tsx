@@ -135,6 +135,7 @@ import {
   providerDefaults,
   providerOptionsPayload,
 } from "./providerDescriptors";
+import { runDeepLinkFrom, type RunDeepLink } from "./searchRanking";
 import { SearchModal } from "./SearchModal";
 import { ShellTopbar } from "./ShellTopbar";
 import { SortableCanvasCell } from "./SortableCanvasCell";
@@ -211,6 +212,12 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   } | null>(null);
   const [workMode, setWorkMode] = useState<"manual" | "planning" | "loop">("planning");
   const [workModeExplicit, setWorkModeExplicit] = useState(false);
+  //: A ⌘K link to a Loop-mode run; consumed once by LoopMode.
+  const [deepLinkRunId, setDeepLinkRunId] = useState<string | null>(null);
+  //: A ⌘K link to a planning run, held until the plan resolves — the
+  //: plan-load effect clears the artifact selection, so applying it on
+  //: mount would be wiped before the run view could render.
+  const [pendingRunLink, setPendingRunLink] = useState<RunDeepLink | null>(null);
   const [loopStartSeed, setLoopStartSeed] = useState<LoopStartSeed | null>(null);
   const [planningView, setPlanningView] = useState<PlanningView>({ kind: "overview" });
   const [planOverviewTab, setPlanOverviewTab] =
@@ -370,9 +377,19 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.has("mode") || params.has("start")) {
+    // Read the ⌘K deep link before the params are stripped, apply it
+    // after the reset below — otherwise the reset would clobber it.
+    const deepLink = runDeepLinkFrom(window.location.search);
+    if (
+      params.has("mode") ||
+      params.has("start") ||
+      params.has("run") ||
+      params.has("artifact")
+    ) {
       params.delete("mode");
       params.delete("start");
+      params.delete("run");
+      params.delete("artifact");
       const query = params.toString();
       window.history.replaceState(
         null,
@@ -386,6 +403,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     setWorkModeExplicit(false);
     setLoopStartSeed(readLoopStartSeed(workSlug));
     setPlanningView({ kind: "overview" });
+    // A planning run waits for the plan (below); a Loop-mode run has no
+    // artifact and is seeded straight through LoopMode.
+    setPendingRunLink(deepLink?.artifactId ? deepLink : null);
+    setDeepLinkRunId(deepLink && !deepLink.artifactId ? deepLink.runId : null);
     setPlanOverviewTab("summary");
     setPlanPromptDraft(null);
     setPlanProfile("feature");
@@ -595,6 +616,23 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       setWorkStatusSaving(false);
     }
   }
+
+  // Apply a ⌘K planning-run link once the plan is in hand. Going through
+  // openPlanningView matters: it also selects the artifact, without which
+  // the detail is never fetched and the run view renders nothing. An id
+  // the plan no longer contains just leaves the overview showing.
+  useEffect(() => {
+    if (!pendingRunLink?.artifactId || plan === null) return;
+    const artifactId = pendingRunLink.artifactId;
+    const known = plan.artifacts.some((artifact) => artifact.id === artifactId);
+    setPendingRunLink(null);
+    if (!known) return;
+    openPlanningView({
+      kind: "run",
+      id: artifactId,
+      runId: pendingRunLink.runId,
+    });
+  }, [pendingRunLink, plan]);
 
   function openPlanningView(next: PlanningView) {
     setPlanningView(next);
@@ -1906,6 +1944,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
         project={project}
         artifacts={artifacts}
         initialSeed={loopStartSeed}
+        initialRunId={deepLinkRunId}
       />
     );
   }

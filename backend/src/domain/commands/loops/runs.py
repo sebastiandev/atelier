@@ -178,6 +178,30 @@ def list_runs(
     return store_list_runs(repository, work_slug)
 
 
+#: Rows a recent-runs listing returns when the caller names no limit,
+#: and the ceiling it clamps to. The listing feeds a search picker, not
+#: a report: past a couple of screens the rows stop being findable.
+RECENT_RUNS_DEFAULT_LIMIT = 50
+RECENT_RUNS_MAX_LIMIT = 200
+
+
+def list_recent_runs(
+    repository: LoopRunRepository,
+    limit: int = RECENT_RUNS_DEFAULT_LIMIT,
+) -> tuple[LoopRunRecord, ...]:
+    """Return the most recently updated runs across every Work.
+
+    Preconditions: none. ``limit`` is clamped into
+    ``1..RECENT_RUNS_MAX_LIMIT`` so a caller cannot ask for the whole
+    table.
+    Postconditions: newest first; no runs are changed. Terminal runs are
+    included -- jumping back to a finished run to re-read its result is
+    the point, and ``list_active`` already serves the other need.
+    """
+    bounded = max(1, min(limit, RECENT_RUNS_MAX_LIMIT))
+    return tuple(repository.list_recent(bounded))
+
+
 def get_run(
     repository: LoopRunRepository,
     req: LoopRunRequest,

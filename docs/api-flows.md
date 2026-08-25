@@ -876,6 +876,53 @@ Browser ──► Router ──► ConnectionStore.verify(slug)
 
 ---
 
+## Loop runs (cross-work)
+
+### `GET /api/runs?limit=50`
+
+Everything else that lists runs is scoped to one Work. ⌘K spans Works,
+so it gets one listing of its own rather than fanning out a request per
+Work.
+
+```
+Browser ──► Router (loops.py) ──► commands.runs.recent.execute(loop_runs, workstore, planning)
+                                       │
+                                       ├─► loops.runs.list_recent_runs()  (limit clamped 1..200)
+                                       │        └─► LoopRunRepository.list_recent()
+                                       │            ORDER BY updated_at DESC, id DESC LIMIT n
+                                       │
+                                       ├─► WorkStore.list_works()          (names)
+                                       └─► PlanningService.get_plan()      (story titles)
+                                            once per Work that has story-triggered runs
+```
+
+Three things this endpoint contracts:
+
+- **Ordering and limiting happen in SQL.** The listing exists to avoid
+  loading every run; sorting in Python would defeat it. `id` breaks
+  `updated_at` ties, which have second resolution.
+- **Terminal runs are included.** Jumping back to a finished run to
+  re-read its result is the point; `list_active` already serves the
+  other need.
+- **Labels degrade, they never fail.** A run whose Work is gone lists
+  with an empty name; a Work whose plan is unreadable lists its runs
+  with `source_title: null` and the `source_ref` alone. Dropping rows
+  because one plan file is bad would be worse than showing them
+  unlabelled.
+
+Provenance comes from `LoopRunRecord.source` — derived from
+`target_kind` + `artifact_id`, never stored twice — and is surfaced as
+the flat `source_kind` / `source_ref` / `source_title` trio, which
+`WorkLoopRunResponse` also gained (optional, so older clients are
+unaffected; always null there, since `store.list_runs` filters that
+endpoint to objective runs).
+
+The command lives in `domain/commands/runs/`, not `domain/commands/loops/`:
+that package may not import planning or sibling commands, and
+`tests/unit/domain/loop/test_architecture.py` enforces it.
+
+---
+
 ## Projects
 
 Project is metadata-only — no filesystem state, no children. The store is a thin SQL repo behind the `ProjectStore` port. Connections are referenced by slug (`default_jira_conn`, `default_sentry_conn`), not by id, so the project payload is portable.

@@ -107,6 +107,27 @@ class SqlLoopRunRepository:
             ).mappings()
             return [_to_run(row) for row in rows]
 
+    def list_recent(self, limit: int) -> list[LoopRunRecord]:
+        """Newest-updated runs across every work.
+
+        Ordered and limited in SQL: the listing exists to avoid loading
+        every run, so sorting in Python would defeat it. ``id`` breaks
+        ties because ``updated_at`` has second resolution and runs
+        started together would otherwise order arbitrarily.
+        """
+        if limit <= 0:
+            return []
+        with self._txn() as session:
+            rows = session.execute(
+                select(loop_runs_table)
+                .order_by(
+                    loop_runs_table.c.updated_at.desc(),
+                    loop_runs_table.c.id.desc(),
+                )
+                .limit(limit)
+            ).mappings()
+            return [_to_run(row) for row in rows]
+
     def list_active(self) -> list[LoopRunRecord]:
         terminal = {
             LoopStatus.ACCEPTED.value,

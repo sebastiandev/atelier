@@ -64,6 +64,8 @@ import {
 type Props = {
   artifacts: ArtifactSummary[];
   initialSeed: LoopStartSeed | null;
+  /** ⌘K deep link to one run; falls back to the newest when unresolved. */
+  initialRunId?: string | null;
   project: ProjectSummary | null;
   work: WorkDetail;
 };
@@ -79,6 +81,7 @@ const ACTIVE_RUN_STATUSES = new Set<LoopStatus>([
 export function LoopMode({
   artifacts,
   initialSeed,
+  initialRunId = null,
   project,
   work,
 }: Props) {
@@ -98,7 +101,9 @@ export function LoopMode({
     initialSeed?.createDefinition ?? false,
   );
   const [runs, setRuns] = useState<WorkLoopRun[]>([]);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(
+    initialRunId ?? null,
+  );
   const [workStatus, setWorkStatus] = useState(work.status);
   const [completeOpen, setCompleteOpen] = useState(false);
   const [busy, setBusy] = useState(false);

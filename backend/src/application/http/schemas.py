@@ -993,6 +993,26 @@ class SendPrFeedbackRequest(BaseModel):
     instruction: str = ""
 
 
+class RecentLoopRunResponse(BaseModel):
+    """One row of the cross-work recent-runs listing.
+
+    Deliberately not ``WorkLoopRunResponse``: that carries stage runs,
+    changed files and a full definition snapshot, which would make a
+    listing payload enormous. This is only what a search row renders.
+    """
+
+    id: str
+    number: int
+    work_slug: str
+    work_name: str
+    goal: str
+    status: LoopStatus
+    updated_at: str
+    source_kind: str | None = None
+    source_ref: str | None = None
+    source_title: str | None = None
+
+
 class WorkLoopRunResponse(BaseModel):
     id: str
     number: int
@@ -1023,6 +1043,12 @@ class WorkLoopRunResponse(BaseModel):
     source_run_id: str | None = None
     run_kind: LoopRunKind = LoopRunKind.INITIAL
     seed_label: str = ""
+    # What triggered the run, from ``LoopRunRecord.source``. All three stay
+    # None for a plain Loop-mode run. Flat rather than nested to match the
+    # rest of this response; optional so older clients are unaffected.
+    source_kind: str | None = None
+    source_ref: str | None = None
+    source_title: str | None = None
     brief: LoopBriefSchema | None = None
     review_gate: dict[str, Any] | None = None
     waived_findings_count: int = 0
