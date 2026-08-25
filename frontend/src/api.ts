@@ -2368,6 +2368,15 @@ export function openAgentInConsole(
   });
 }
 
+/** Ask the backend to open the registered agent workspace in Emacs. */
+export function openAgentInEditor(agentSlug: string): Promise<void> {
+  return fetch(`/api/agents/${agentSlug}/open-in-editor`, {
+    method: "POST",
+  }).then((response) => {
+    if (!response.ok) return jsonOrThrow<never>(response);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Connections
 // ---------------------------------------------------------------------------

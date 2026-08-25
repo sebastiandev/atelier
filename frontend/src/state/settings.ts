@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { getSettings, putSettings, type SettingsToolOption } from "../api";
+import { getSettings, putSettings, type SettingsToolOption } from "../api.ts";
 
 /**
  * User settings — the canonical store for everything the Settings page
@@ -112,6 +112,12 @@ const FALLBACK_EDITOR_OPTIONS: ToolOption[] = [
     label: "Vim (MacVim)",
     command: "mvim .",
     url_template: "mvim://open?url={file_uri}",
+  },
+  {
+    value: "emacs",
+    label: "Emacs",
+    command: "emacsclient -n -c .",
+    url_template: null,
   },
 ];
 

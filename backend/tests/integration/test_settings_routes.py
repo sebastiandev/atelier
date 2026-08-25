@@ -51,6 +51,12 @@ EDITOR_OPTIONS = [
         "command": "mvim .",
         "url_template": "mvim://open?url={file_uri}",
     },
+    {
+        "value": "emacs",
+        "label": "Emacs",
+        "command": "emacsclient -n -c .",
+        "url_template": None,
+    },
 ]
 
 TERMINAL_OPTIONS = [
@@ -146,6 +152,13 @@ def test_put_settings_round_trips(app_client: TestClient) -> None:
     )
     # Subsequent GET reflects the PUT.
     assert app_client.get("/api/settings").json() == response.json()
+
+
+def test_put_settings_round_trips_emacs(app_client: TestClient) -> None:
+    response = app_client.put("/api/settings", json={"editor": "emacs"})
+    assert response.status_code == 200
+    assert response.json() == expected_settings(editor="emacs")
+    assert app_client.get("/api/settings").json()["editor"] == "emacs"
 
 
 def test_put_settings_merges_partial(app_client: TestClient) -> None:

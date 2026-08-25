@@ -47,6 +47,7 @@ from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import TranscriptLog, WorkStore
 from src.domain.worktrees import WorktreeManager, WorktreeProvisionFailed
+from src.infrastructure.filesystem.editor import open_in_emacs
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 from src.infrastructure.filesystem.terminal import open_in_terminal
@@ -422,6 +423,47 @@ def open_agent_in_console(
         lambda path: open_in_terminal(path, kind=kind),
         label="open in console",
     )
+
+
+@router.post(
+    "/agents/{agent_slug}/open-in-editor",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def open_agent_in_editor(
+    agent_slug: str,
+    workstore: WorkStoreDep,
+    settings: SettingsDep,
+) -> None:
+    """Open the registered agent workspace in Emacs via ``emacsclient``."""
+    work_slug = workstore.get_work_slug_for_agent(agent_slug)
+    if work_slug is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+        )
+    agent = next(
+        (a for a in workstore.list_agents_for_work(work_slug) if a.slug == agent_slug),
+        None,
+    )
+    if agent is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+        )
+    target = _resolve_worktree_path(
+        WorkspacePaths(workspace_root=settings.workspace_root),
+        work_slug,
+        agent.worktree_slug or agent_slug,
+        agent.folder,
+    )
+    try:
+        open_in_emacs(str(target))
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "open in editor failed: emacsclient must be on PATH and a default "
+                f"Emacs server must already be running ({exc})"
+            ),
+        ) from exc
 
 
 @router.post(

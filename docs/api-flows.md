@@ -74,7 +74,21 @@ Browser ──► Router (settings.py)
                 └─► returns persisted scalars + tool descriptors
 ```
 
-`editor`, `terminal`, `layout`, `accent_hue`, and `theme` are persisted in the singleton DB row. `editor_options` and `terminal_options` are backend-owned descriptors (`value`, `label`, `command`, optional `url_template`) returned with every read/write response so the Settings UI renders selectable tools from the backend rather than from a local catalog. The descriptor fields are additive; older frontends ignore them.
+`editor`, `terminal`, `layout`, `accent_hue`, and `theme` are persisted in the singleton DB row. `editor_options` and `terminal_options` are backend-owned descriptors (`value`, `label`, `command`, optional `url_template`) returned with every read/write response so the Settings UI renders selectable tools from the backend rather than from a local catalog. Emacs has a null URL template because it uses the server-mediated launch flow below. The descriptor fields are additive; older frontends ignore them.
+
+---
+
+## `POST /api/agents/{agent_slug}/open-in-editor`
+
+```
+Browser ──► Router (agents.py)
+                ├─► resolve registered agent from agent_slug
+                ├─► select provisioned worktree or stored source-folder fallback
+                └─► editor.open_in_emacs(path)
+                    └─► emacsclient -n -c <path>
+```
+
+The request accepts only an agent slug; no client-provided path reaches the subprocess. The fixed, shell-free argv is supported on macOS and Linux and requires `emacsclient` on the backend PATH plus an already-running default Emacs server. `-n` makes the client return immediately after requesting the frame, so the HTTP response does not remain open until that frame closes. The child inherits a copy of the backend environment except for `ALTERNATE_EDITOR`, preventing `emacsclient` from starting a fallback editor, and the launch is capped at 10 seconds. Unknown agents return 404. Unsupported platforms, missing clients, unreachable servers, timeouts, and subprocess failures return an actionable 500; Atelier does not start or discover a daemon.
 
 ---
 

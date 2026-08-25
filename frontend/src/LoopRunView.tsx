@@ -25,6 +25,7 @@ import {
 } from "./api";
 import { ChatTile } from "./Chat";
 import { CreatePrDialog } from "./CreatePrDialog";
+import { openAgentEditor } from "./emacsEditor";
 import {
   AlertIcon,
   BranchIcon,
@@ -57,7 +58,7 @@ import {
   LOOP_INSPECTOR_MIN,
   useLayoutStore,
 } from "./state/layout";
-import { editorUrl, useSettingsStore } from "./state/settings";
+import { useSettingsStore } from "./state/settings";
 import { type AgentEvent, useAgentStream } from "./useAgentStream";
 
 /** No `replay_limit` on the socket, which the supervisor reads as "replay the
@@ -614,8 +615,15 @@ function RunSurfaceContent({
           discussionBusy={discussionBusy}
           onDiscuss={(stage, stageAgent) => void openDiscussion(stage, stageAgent)}
           onEditLoop={showingTerminalOccurrence ? onEditLoop : undefined}
-          onOpenEditor={!readOnly && workspacePath ? () => {
-            window.location.href = editorUrl(editor, workspacePath);
+          onOpenEditor={!readOnly && workspacePath
+            && (editor !== "emacs" || selectedOccurrence?.agent_slug) ? () => {
+            void openAgentEditor(
+              editor,
+              selectedOccurrence?.agent_slug ?? "",
+              workspacePath,
+            ).catch((reason) => {
+              setDiscussionError(reason instanceof Error ? reason.message : String(reason));
+            });
           } : undefined}
           onOpenConsole={!readOnly && consoleTarget ? () => {
             void consoleTarget().catch((reason) => {
