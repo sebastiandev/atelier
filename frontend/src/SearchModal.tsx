@@ -366,7 +366,10 @@ export function SearchModal({
                 const sub = run.source_ref ?? run.status;
                 return (
                   <button
-                    key={`${run.work_slug}:${run.id}`}
+                    // Run ids are numbered per artifact, not per work, so
+                    // two stories in one work can both hold a "run-001".
+                    // The artifact ref is what disambiguates them.
+                    key={`${run.work_slug}:${run.source_ref ?? "-"}:${run.id}`}
                     ref={(node) => {
                       rowRefs.current[flatIdx] = node;
                     }}

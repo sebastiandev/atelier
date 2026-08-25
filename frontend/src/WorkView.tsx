@@ -218,6 +218,10 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   //: plan-load effect clears the artifact selection, so applying it on
   //: mount would be wiped before the run view could render.
   const [pendingRunLink, setPendingRunLink] = useState<RunDeepLink | null>(null);
+  const deepLinkRef = useRef<{ slug: string; link: RunDeepLink | null }>({
+    slug: "",
+    link: null,
+  });
   const [loopStartSeed, setLoopStartSeed] = useState<LoopStartSeed | null>(null);
   const [planningView, setPlanningView] = useState<PlanningView>({ kind: "overview" });
   const [planOverviewTab, setPlanOverviewTab] =
@@ -377,9 +381,17 @@ export function WorkView({ workSlug }: { workSlug: string }) {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    // Read the ⌘K deep link before the params are stripped, apply it
-    // after the reset below — otherwise the reset would clobber it.
-    const deepLink = runDeepLinkFrom(window.location.search);
+    // Parsed through a ref, not straight off the URL: StrictMode runs
+    // this effect twice in dev, and the first pass strips the query, so
+    // a second read would see nothing and wipe the link we just took.
+    // Keyed by slug so navigating to another work re-reads.
+    if (deepLinkRef.current.slug !== workSlug) {
+      deepLinkRef.current = {
+        slug: workSlug,
+        link: runDeepLinkFrom(window.location.search),
+      };
+    }
+    const deepLink = deepLinkRef.current.link;
     if (
       params.has("mode") ||
       params.has("start") ||
