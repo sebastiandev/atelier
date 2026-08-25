@@ -13,7 +13,35 @@ export type SessionCommand = {
   name: string;
   description: string;
   hint: string | null;
+  /**
+   * Where the command came from — drives the picker's slot tag and its
+   * origin chips. Null whenever the agent didn't say, which today is
+   * every ACP wrapper we have probed: `AvailableCommand` carries only
+   * name/description/input, and `_meta` comes back empty from opencode,
+   * claude-acp and codex-acp alike. Rows fall back to a neutral tag and
+   * the chips hide themselves (0-count chips are hidden by spec), so the
+   * axis is ready the moment a provider starts reporting it.
+   */
+  origin: CommandOrigin | null;
 };
+
+export type CommandOrigin = "project" | "user" | "builtin";
+
+export const COMMAND_ORIGIN_TAG: Record<CommandOrigin, string> = {
+  project: "PRJ",
+  user: "USR",
+  builtin: "OC",
+};
+
+export const COMMAND_ORIGIN_LABEL: Record<CommandOrigin, string> = {
+  project: "project",
+  user: "user",
+  builtin: "built-in",
+};
+
+function parseOrigin(raw: unknown): CommandOrigin | null {
+  return raw === "project" || raw === "user" || raw === "builtin" ? raw : null;
+}
 
 /**
  * A plausible command name: no slashes, so a draft that is just an
@@ -38,6 +66,7 @@ function parseCommand(raw: unknown): SessionCommand | null {
     name,
     description: typeof item.description === "string" ? item.description : "",
     hint: typeof item.hint === "string" && item.hint ? item.hint : null,
+    origin: parseOrigin(item.origin),
   };
 }
 
@@ -74,57 +103,6 @@ export function activeCommandMention(
   if (/\s/.test(query)) return null;
   if (query !== "" && !COMMAND_NAME.test(query)) return null;
   return { start: 0, end: cursor, query, index: 0 };
-}
-
-/**
- * Rank of `command` against `term`, or null when it doesn't match.
- * Lower sorts first. Name beats description so `/rev` puts `review`
- * above a command that merely mentions "review" in its blurb.
- */
-function commandRank(command: SessionCommand, term: string): number | null {
-  const name = command.name.toLowerCase();
-  if (name.startsWith(term)) return 0;
-  if (name.includes(term)) return 1;
-  if (isSubsequence(term, name)) return 2;
-  if (command.description.toLowerCase().includes(term)) return 3;
-  return null;
-}
-
-/** True when every char of `term` appears in `text`, in order. */
-function isSubsequence(term: string, text: string): boolean {
-  if (term.length === 0) return true;
-  let i = 0;
-  for (const char of text) {
-    if (char === term[i]) i += 1;
-    if (i === term.length) return true;
-  }
-  return false;
-}
-
-/**
- * Commands matching `query`, best match first.
- *
- * Searches names *and* descriptions, and tolerates gaps in the name
- * (`/cmp` finds `compact`) — the advertised set runs long once a project
- * has its own commands, and an exact-prefix-only filter makes a command
- * you only half-remember unfindable.
- */
-export function filterSessionCommands(
-  commands: readonly SessionCommand[],
-  query: string,
-): SessionCommand[] {
-  const term = query.trim().toLowerCase();
-  if (!term) return [...commands];
-  return commands
-    .map((command) => ({ command, rank: commandRank(command, term) }))
-    .filter(
-      (entry): entry is { command: SessionCommand; rank: number } =>
-        entry.rank !== null,
-    )
-    .sort(
-      (a, b) => a.rank - b.rank || a.command.name.localeCompare(b.command.name),
-    )
-    .map((entry) => entry.command);
 }
 
 /**

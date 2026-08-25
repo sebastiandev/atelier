@@ -61,7 +61,9 @@ import {
   ChatTileFrame,
   ChatTileTranscript,
 } from "./ChatTileSurface";
-import { useCommandPicker } from "./CommandPicker";
+import { ComposerPicker, markMatches, pickerKeyDown } from "./ComposerPicker";
+import { searchTerms } from "./pickerSearch";
+import { useCommandPicker } from "./useCommandPicker";
 import { useDragHandle } from "./dragHandleContext";
 import { completedEditPaths } from "./editedPaths";
 import {
@@ -859,7 +861,6 @@ export function ChatTile({
   const clipboardFallbackTimerRef = useRef<number | null>(null);
   const systemClipboardPasteInFlightRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const mentionOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const lastSummarySeqRef = useRef(0);
   const pendingScrollRestoreRef = useRef<{
@@ -1072,6 +1073,10 @@ export function ChatTile({
   useEffect(() => {
     setHistoryExpanded(!collapsePlanningHistory);
   }, [chatSlug, collapsePlanningHistory]);
+  const mentionTerms = useMemo(
+    () => (mention ? searchTerms(mention.query) : []),
+    [mention],
+  );
   const mentionSearchMatches = useMemo(
     () =>
       mention
@@ -1108,17 +1113,6 @@ export function ChatTile({
     mention && mentionMatches.length > 0
       ? Math.min(mention.index, mentionMatches.length - 1)
       : -1;
-
-  useEffect(() => {
-    mentionOptionRefs.current.length = mentionMatches.length;
-  }, [mentionMatches.length]);
-
-  useEffect(() => {
-    if (!mention || selectedMentionIndex < 0) return;
-    mentionOptionRefs.current[selectedMentionIndex]?.scrollIntoView({
-      block: "nearest",
-    });
-  }, [mention, mentionMatches.length, selectedMentionIndex]);
 
   const hintHandlers = (text: string) => ({
     onMouseEnter: () => setHint(text),
@@ -1733,45 +1727,23 @@ export function ChatTile({
               // Only one picker can be open at a time: `@` needs a
               // non-slash start and `/` needs position 0.
               if (commandPicker.handleKeyDown(e)) return;
-              if (mention) {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  setMention(null);
-                  return;
-                }
-                if (mentionMatches.length > 0) {
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
+              if (
+                mention &&
+                pickerKeyDown(e, {
+                  count: mentionMatches.length,
+                  selectedIndex: selectedMentionIndex,
+                  onMove: (nextIndex) =>
                     setMention((current) =>
-                      current
-                        ? {
-                            ...current,
-                            index: (current.index + 1) % mentionMatches.length,
-                          }
-                        : current,
-                    );
-                    return;
-                  }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setMention((current) =>
-                      current
-                        ? {
-                            ...current,
-                            index:
-                              (current.index - 1 + mentionMatches.length) %
-                              mentionMatches.length,
-                          }
-                        : current,
-                    );
-                    return;
-                  }
-                  if (e.key === "Enter" || e.key === "Tab") {
-                    e.preventDefault();
-                    insertPlanReference(mentionMatches[selectedMentionIndex]);
-                    return;
-                  }
-                }
+                      current ? { ...current, index: nextIndex } : current,
+                    ),
+                  onPick: (index) => {
+                    const picked = mentionMatches[index];
+                    if (picked) insertPlanReference(picked);
+                  },
+                  onDismiss: () => setMention(null),
+                })
+              ) {
+                return;
               }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
@@ -1810,73 +1782,38 @@ export function ChatTile({
           {commandPicker.picker}
           {commandPicker.error}
           {mention && (
-            <div className="composer-plan-mentions">
-              <div className="composer-plan-mentions-head">
-                <span className="composer-plan-mentions-title">
-                  Plan references
-                </span>
-                <div className="composer-plan-mention-filters">
-                  {visibleMentionFilters.map((filter) => (
-                    <button
-                      key={filter.id}
-                      type="button"
-                      className={filter.id === activeMentionFilter ? "active" : undefined}
-                      aria-pressed={filter.id === activeMentionFilter}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => {
-                        setMentionFilter(filter.id);
-                        setMention((current) =>
-                          current ? { ...current, index: 0 } : current,
-                        );
-                      }}
-                    >
-                      <span>{filter.label}</span>
-                      <span>{filter.count}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div
-                className="composer-plan-mentions-list"
-                role="listbox"
-                aria-label="Plan documents"
-              >
-                {mentionMatches.length > 0 ? (
-                  mentionMatches.map((ref, index) => (
-                    <button
-                      key={ref.id}
-                      ref={(node) => {
-                        mentionOptionRefs.current[index] = node;
-                      }}
-                      type="button"
-                      role="option"
-                      aria-selected={index === selectedMentionIndex}
-                      className={index === selectedMentionIndex ? "active" : undefined}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        insertPlanReference(ref);
-                      }}
-                    >
-                      <span
-                        className="pm-ref-kind"
-                        data-ref-kind={ref.kind}
-                        data-executable={ref.executable || undefined}
-                      >
-                        {planReferenceLabel(ref)}
-                      </span>
-                      <span className="pm-ref-main">
-                        <strong>{ref.title}</strong>
-                        <small>{ref.path}</small>
-                      </span>
-                    </button>
-                  ))
-                ) : (
-                  <div className="composer-plan-mentions-empty">
-                    No matching plan documents
-                  </div>
-                )}
-              </div>
-            </div>
+            <ComposerPicker
+              trigger="at"
+              title="plan references"
+              items={mentionMatches.map((ref) => ({
+                id: ref.id,
+                tag: planReferenceLabel(ref),
+                tone: planReferenceTone(ref),
+                primary: markMatches(ref.title, mentionTerms),
+                secondary: markMatches(ref.path, mentionTerms),
+              }))}
+              filters={visibleMentionFilters.map((filter) => ({
+                id: filter.id,
+                label: filter.label,
+                count: filter.count,
+              }))}
+              activeFilter={activeMentionFilter}
+              onFilter={(id) => {
+                setMentionFilter(id as PlanReferenceFilter);
+                setMention((current) =>
+                  current ? { ...current, index: 0 } : current,
+                );
+              }}
+              selectedIndex={selectedMentionIndex}
+              onPick={(id) => {
+                const picked = mentionMatches.find((ref) => ref.id === id);
+                if (picked) insertPlanReference(picked);
+              }}
+              footerVerb="reference"
+              total={planReferences.length}
+              emptyLabel="no matching plan documents"
+              listLabel="Plan documents"
+            />
           )}
           <div className="composer-actions">
             <SessionModelPicker
@@ -3585,6 +3522,14 @@ function planReferenceLabel(ref: PlanArtifact): string {
   if (ref.kind === "bug") return "BUG";
   if (ref.kind === "hotfix") return "HOT";
   return ref.executable ? "ST" : ref.kind.slice(0, 3).toUpperCase();
+}
+
+function planReferenceTone(
+  ref: PlanArtifact,
+): "info" | "warn" | "danger" | undefined {
+  if (ref.kind === "spike") return "warn";
+  if (ref.kind === "bug" || ref.kind === "hotfix") return "danger";
+  return ref.executable ? "info" : undefined;
 }
 
 function providerLabelFor(provider: string): string {

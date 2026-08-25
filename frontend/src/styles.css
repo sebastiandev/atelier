@@ -1,3 +1,87 @@
+.composer-picker .picker-row-primary,
+.composer-picker .picker-row-secondary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The type rule: what you INSERT is mono, what you READ is UI type.
+   Commands insert the token, so mono goes on the primary line;
+   references insert the path, so mono drops to the secondary. */
+.composer-picker[data-trigger="slash"] .picker-row-primary {
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.composer-picker[data-trigger="slash"] .picker-row-secondary {
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+.composer-picker[data-trigger="at"] .picker-row-primary {
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.composer-picker[data-trigger="at"] .picker-row-secondary {
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.composer-picker .picker-mark {
+  border-radius: 2px;
+  padding: 0 1px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.composer-picker .key {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tile);
+  background: var(--bg-2);
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+/* The ⌘K search footer, verbatim — three lists, one contract. */
+.composer-picker-foot {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 14px;
+  padding: 8px 12px;
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.composer-picker-foot .seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.composer-picker-count {
+  margin-left: auto;
+}
+.composer-picker-empty {
+  display: grid;
+  gap: 4px;
+  padding: 0.55rem 0.6rem;
+}
+.composer-picker-empty b {
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.composer-picker-empty span {
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.composer-command-error {
+  padding: 0.3rem 0.6rem;
+  color: var(--danger);
+  font-size: 11.5px;
+}
+
 /* Design tokens — lifted from design_handoff_atelier/design_files/styles.css.
    Dark is the default at :root; [data-theme="light"] overrides for the
    light theme. App.tsx sets data-theme on <html> from useSettingsStore. */
@@ -4798,16 +4882,17 @@ button.md-link.internal {
 .composer textarea::placeholder {
   color: var(--fg-3);
 }
-.composer-plan-mentions {
+.composer-picker {
   position: absolute;
   left: 0.5rem;
   right: 0.5rem;
   bottom: calc(100% + 8px);
   z-index: 20;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  /* header and footer pin, only the list scrolls */
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 0.4rem;
-  max-height: min(260px, 48vh);
+  max-height: min(300px, 52vh);
   padding: 0;
   overflow: hidden;
   border: 0;
@@ -4815,7 +4900,7 @@ button.md-link.internal {
   background: var(--bg-2);
   box-shadow: var(--shadow-pop);
 }
-.composer-plan-mentions-head {
+.composer-picker-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4823,7 +4908,7 @@ button.md-link.internal {
   padding: 9px 12px 7px;
   color: var(--fg-2);
 }
-.composer-plan-mentions-title {
+.composer-picker-title {
   display: inline-flex;
   color: var(--fg-3);
   font: var(--chrome-weight) var(--chrome-size) var(--chrome-font);
@@ -4831,13 +4916,13 @@ button.md-link.internal {
   text-transform: var(--chrome-case);
   white-space: nowrap;
 }
-.composer-plan-mention-filters {
+.composer-picker-filters {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 2px;
 }
-.composer-plan-mention-filters button {
+.composer-picker-filters button {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -4852,30 +4937,29 @@ button.md-link.internal {
   letter-spacing: var(--chrome-track);
   text-transform: lowercase;
 }
-.composer-plan-mention-filters button:hover,
-.composer-plan-mention-filters button.active {
+.composer-picker-filters button:hover,
+.composer-picker-filters button.active {
   background: var(--accent-soft);
   color: var(--fg);
   box-shadow: inset 0 0 0 1px var(--accent-line);
 }
-.composer-plan-mention-filters button span:last-child {
+.composer-picker-filters button span:last-child {
   color: var(--fg-4);
 }
-.composer-plan-mention-filters button.active span:last-child {
+.composer-picker-filters button.active span:last-child {
   color: var(--accent);
 }
-.composer-plan-mentions-list {
+.composer-picker-list {
   display: grid;
-  gap: 2px;
+  gap: 1px;
   min-height: 0;
-  max-height: min(200px, 34vh);
   padding: 2px 4px 6px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.composer-plan-mentions-list > button {
+.composer-picker-list > button {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.45rem;
   width: 100%;
@@ -4889,11 +4973,11 @@ button.md-link.internal {
   cursor: pointer;
   font: inherit;
 }
-.composer-plan-mentions-list > button:hover,
-.composer-plan-mentions-list > button.active {
+.composer-picker-list > button:hover,
+.composer-picker-list > button.active {
   background: var(--bg-3);
 }
-.composer-plan-mentions .pm-ref-kind {
+.composer-picker .picker-tag {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -4907,83 +4991,39 @@ button.md-link.internal {
   font-family: var(--font-mono);
   font-size: 9px;
 }
-.composer-plan-mentions .pm-ref-kind[data-executable="true"] {
+.composer-picker .picker-tag[data-executable="true"] {
   background: var(--info-soft);
   color: var(--info);
 }
-.composer-plan-mentions .pm-ref-kind[data-ref-kind="spike"] {
+.composer-picker .picker-tag[data-ref-kind="spike"] {
   background: var(--warn-soft);
   color: var(--warn);
 }
-.composer-plan-mentions .pm-ref-kind:is([data-ref-kind="bug"], [data-ref-kind="hotfix"]) {
+.composer-picker .picker-tag:is([data-ref-kind="bug"], [data-ref-kind="hotfix"]) {
   background: var(--danger-soft);
   color: var(--danger);
 }
-.composer-plan-mentions .pm-ref-main {
+.composer-picker .picker-row-body {
   display: grid;
   min-width: 0;
   gap: 1px;
 }
-.composer-plan-mentions strong,
-.composer-plan-mentions small {
+.composer-picker strong,
+.composer-picker small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.composer-plan-mentions strong {
+.composer-picker strong {
   font-size: 12.5px;
   font-weight: 600;
 }
-.composer-plan-mentions small {
+.composer-picker small {
   color: var(--fg-4);
   font-family: var(--font-mono);
   font-size: 10.5px;
 }
-/* The `/` command picker reuses the plan-mention shell (same anchor,
-   same elevation); only the row interior differs -- name over
-   description instead of a kind chip plus path. Both classes are on the
-   same element, so the doubled selector outweighs the plan-mention rules
-   above regardless of source order. */
-.composer-plan-mentions.composer-commands .pm-ref-kind {
-  min-width: 0;
-  min-height: 0;
-  padding: 0;
-  background: none;
-  color: var(--fg-3);
-  font-family: var(--font-mono);
-}
-.composer-commands .cmd-ref-body {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-.composer-commands .cmd-ref-name {
-  color: var(--fg);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-.composer-commands .cmd-ref-hint {
-  color: var(--fg-4);
-}
-.composer-commands .cmd-ref-desc {
-  overflow: hidden;
-  color: var(--fg-3);
-  font-size: 11px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.composer-commands-count {
-  color: var(--fg-4);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-}
-.composer-command-error {
-  padding: 0.3rem 0.6rem;
-  color: var(--danger);
-  font-size: 11.5px;
-}
-
-.composer-plan-mentions-empty {
+.composer-picker-empty {
   padding: 0.55rem 0.6rem;
   color: var(--fg-3);
   font-size: 12px;
@@ -13426,7 +13466,7 @@ select:disabled {
   .twk-panel,
   .search-modal,
   .planning-bug-modal,
-  .composer-plan-mentions,
+  .composer-picker,
   .model-picker-menu,
   .composer-model-menu,
   .loop-add-menu,

@@ -62,7 +62,7 @@ import {
   SimpleContextRow,
   type SimpleContextType,
 } from "./SimpleContextRow";
-import { useCommandPicker } from "./CommandPicker";
+import { useCommandPicker } from "./useCommandPicker";
 import { useArtifactsRefresh } from "./state/artifactsRefresh";
 import { TileHeader } from "./TileHeader";
 import {

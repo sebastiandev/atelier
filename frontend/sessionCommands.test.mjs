@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { filterSessionCommands } from "./src/pickerSearch.ts";
 import {
   activeCommandMention,
-  filterSessionCommands,
   latestSessionCommands,
   unknownCommandName,
 } from "./src/sessionCommands.ts";
 
 const COMMANDS = [
-  { name: "init", description: "guided AGENTS.md setup", hint: null },
-  { name: "review", description: "review changes", hint: "commit|branch" },
+  { name: "init", description: "guided AGENTS.md setup", hint: null, origin: null },
+  {
+    name: "review",
+    description: "review changes",
+    hint: "commit|branch",
+    origin: null,
+  },
 ];
 
 test("latestSessionCommands takes the newest advertised set", () => {
@@ -25,7 +30,7 @@ test("latestSessionCommands takes the newest advertised set", () => {
     },
   ];
   assert.deepEqual(latestSessionCommands(events), [
-    { name: "init", description: "guided", hint: "topic" },
+    { name: "init", description: "guided", hint: "topic", origin: null },
   ]);
 });
 
@@ -77,18 +82,6 @@ test("activeCommandMention anchors at position 0", () => {
   });
 });
 
-test("filterSessionCommands matches name and description", () => {
-  assert.deepEqual(
-    filterSessionCommands(COMMANDS, "ini").map((c) => c.name),
-    ["init"],
-  );
-  assert.deepEqual(
-    filterSessionCommands(COMMANDS, "changes").map((c) => c.name),
-    ["review"],
-  );
-  assert.equal(filterSessionCommands(COMMANDS, "").length, 2);
-  assert.equal(filterSessionCommands(COMMANDS, "zzz").length, 0);
-});
 
 test("unknownCommandName rejects a name the agent never advertised", () => {
   assert.equal(unknownCommandName("/nope now", COMMANDS), "nope");
@@ -117,33 +110,42 @@ test("the picker still opens on a bare slash and a partial name", () => {
   assert.equal(activeCommandMention("/re", 3)?.query, "re");
 });
 
-test("filterSessionCommands ranks name matches above description matches", () => {
+
+
+
+test("filterSessionCommands requires every term to hit", () => {
+  // Spec §03: terms split on / - and whitespace, all must match, across
+  // name and description together.
   const commands = [
-    { name: "share", description: "review and share the session", hint: null },
-    { name: "review", description: "review changes", hint: null },
+    { name: "flaky-tests", description: "fix intermittent CI tests", hint: null, origin: null },
+    { name: "e2e-local-testing", description: "smoke tests", hint: null, origin: null },
   ];
   assert.deepEqual(
-    filterSessionCommands(commands, "review").map((c) => c.name),
-    ["review", "share"],
+    filterSessionCommands(commands, "flaky").map((c) => c.name),
+    ["flaky-tests"],
   );
-});
-
-test("filterSessionCommands tolerates gaps in the name", () => {
-  const commands = [{ name: "compact", description: "", hint: null }];
+  // "test" hits both; adding "ci" narrows to the one whose description has it
   assert.deepEqual(
-    filterSessionCommands(commands, "cmp").map((c) => c.name),
-    ["compact"],
+    filterSessionCommands(commands, "test-ci").map((c) => c.name),
+    ["flaky-tests"],
   );
-  assert.equal(filterSessionCommands(commands, "cpx").length, 0);
+  assert.equal(filterSessionCommands(commands, "flaky zzz").length, 0);
 });
 
-test("filterSessionCommands prefers a prefix over a mid-name hit", () => {
-  const commands = [
-    { name: "uncompact", description: "", hint: null },
-    { name: "compact", description: "", hint: null },
+test("latestSessionCommands reads an origin when the agent reports one", () => {
+  const events = [
+    {
+      seq: 1,
+      type: "session_commands",
+      ts: "",
+      commands: [
+        { name: "a", description: "", origin: "project" },
+        { name: "b", description: "", origin: "nonsense" },
+      ],
+    },
   ];
   assert.deepEqual(
-    filterSessionCommands(commands, "compact").map((c) => c.name),
-    ["compact", "uncompact"],
+    latestSessionCommands(events).map((c) => c.origin),
+    ["project", null],
   );
 });
