@@ -498,6 +498,14 @@ _DEVTIME_ENV_FILES = (
     ".env.production",
     ".env.production.local",
 )
+# Agent tooling config. Unlike the two classes above these dirs are
+# *partly* tracked: the repo commits ``.agents/architecture.md`` and its
+# docs while gitignoring the installed skills (bmad-*, speckit-*) and
+# ``.claude/settings.local.json``. Git gives the worktree the tracked
+# half and nothing else, so the agent lands in a checkout where its own
+# skills and permissions are missing. Mirrored by merging children
+# rather than linking the dir, since the dir itself already exists.
+_AGENT_CONFIG_DIRS = (".agents", ".claude", ".codex")
 
 
 def _symlink_devtime_artifacts(source: Path, target: Path) -> None:
@@ -510,6 +518,13 @@ def _symlink_devtime_artifacts(source: Path, target: Path) -> None:
       - **Files** — ``.env*`` (per ``_DEVTIME_ENV_FILES``). Without
         these the agent's app can't boot (pydantic raises on required
         fields, Vite silently bakes empty strings via ``define``).
+      - **Agent config** — ``.agents`` / ``.claude`` / ``.codex`` (per
+        ``_AGENT_CONFIG_DIRS``), merged child by child so the tracked
+        half git already checked out survives. Without this the agent
+        runs without the skills and permissions the repo's own humans
+        have. Directories are shared by link, loose files are *copied*
+        — an agent rewrites its own config, and a linked one would
+        write through into the human's checkout.
 
     Both classes are scanned at the source's top level and one level
     down (so monorepos with ``backend/.venv`` + ``frontend/.env.local``
@@ -523,6 +538,7 @@ def _symlink_devtime_artifacts(source: Path, target: Path) -> None:
     try:
         _link_top_level(source, target)
         _link_one_level_deep(source, target)
+        _link_agent_config(source, target)
     except OSError as exc:
         _log.warning(
             "devtime artifact symlinking partially failed for %s → %s: %s",
@@ -557,6 +573,69 @@ def _link_one_level_deep(source: Path, target: Path) -> None:
             _maybe_symlink(child / name, target_child / name)
         for name in _DEVTIME_ENV_FILES:
             _maybe_symlink_file(child / name, target_child / name)
+
+
+def _link_agent_config(source: Path, target: Path) -> None:
+    """Merge the source's agent-config dirs into the worktree.
+
+    ``.agents`` and friends are usually partly tracked, so the worktree
+    already holds a real directory at that path and the whole-dir link
+    ``_maybe_symlink`` would make is neither possible nor wanted. Walk
+    instead: descend while both sides have a directory, and fill in the
+    first entry the target lacks — linking directories, copying files
+    (see ``_copy_agent_config_file``). That leaves every checked-out
+    file untouched and fills in exactly the gitignored remainder.
+    """
+    for name in _AGENT_CONFIG_DIRS:
+        _merge_link_tree(source / name, target / name)
+
+
+def _merge_link_tree(src: Path, dst: Path) -> None:
+    # Only real dirs on both sides recurse; a symlinked src would let a
+    # link chain out of the repo, and a file at dst is the user's.
+    if not src.is_dir() or src.is_symlink():
+        return
+    dst.mkdir(parents=True, exist_ok=True)
+    for child in src.iterdir():
+        if child.name == ".DS_Store":
+            continue
+        link = dst / child.name
+        if link.is_dir() and not link.is_symlink():
+            _merge_link_tree(child, link)
+            continue
+        if link.exists() or link.is_symlink():
+            continue
+        if child.is_dir():
+            _maybe_symlink(child, link)
+        else:
+            _copy_agent_config_file(child, link)
+
+
+def _copy_agent_config_file(src: Path, dst: Path) -> None:
+    """Copy, never link, a loose agent-config file into the worktree.
+
+    Linking these breaks the isolation the worktree exists for: the file
+    an agent is most likely to *write* is its own config --
+    ``.claude/settings.local.json`` grows an entry every time an agent
+    grants itself a permission -- and through a symlink that write lands
+    in the human's checkout and outlives the worktree it came from.
+    A copy gives the agent the same starting state and keeps its edits
+    where they can be thrown away.
+
+    Directories are still shared by link (see ``_merge_link_tree``):
+    installed skills run to tens of megabytes and copying them per
+    worktree would be wasteful. The trade is deliberate — writes *inside*
+    a shared directory do reach the source, which is what makes editing
+    a skill from a worktree work.
+    """
+    if not src.is_file():
+        return
+    if dst.exists() or dst.is_symlink():
+        return
+    try:
+        shutil.copy2(src, dst)
+    except OSError as exc:
+        _log.debug("could not copy agent config %s → %s: %s", src, dst, exc)
 
 
 def _maybe_symlink(src: Path, link: Path) -> None:

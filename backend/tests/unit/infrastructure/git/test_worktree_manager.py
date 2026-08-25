@@ -770,3 +770,85 @@ def test_git_is_given_no_terminal_to_read_a_passphrase_from(
     assert captured["stdin"] is subprocess.DEVNULL
     assert captured["timeout"] == worktree_manager._GIT_TIMEOUT_SECONDS
     assert "-o BatchMode=yes" in captured["env"]["GIT_SSH_COMMAND"]  # type: ignore[index]
+
+
+def test_ensure_fills_in_gitignored_agent_config_beside_tracked_files(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """``.agents`` is the hard case: partly tracked, partly gitignored.
+    Git hands the worktree the tracked half only, so the agent lands
+    without the skills its own repo installed. The merge must add the
+    ignored children without disturbing the checked-out ones."""
+    (repo / ".agents" / "skills" / "tracked-skill").mkdir(parents=True)
+    (repo / ".agents" / "skills" / "tracked-skill" / "SKILL.md").write_text("kept\n")
+    (repo / ".agents" / "architecture.md").write_text("tracked\n")
+    (repo / ".gitignore").write_text(".agents/skills/bmad-*\n.claude/\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "agent config")
+    (repo / ".agents" / "skills" / "bmad-dev").mkdir(parents=True)
+    (repo / ".agents" / "skills" / "bmad-dev" / "SKILL.md").write_text("ignored\n")
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "settings.local.json").write_text("{}\n")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    ignored_skill = workdir / ".agents" / "skills" / "bmad-dev"
+    assert ignored_skill.is_symlink()
+    assert (ignored_skill / "SKILL.md").read_text() == "ignored\n"
+    assert (workdir / ".claude" / "settings.local.json").read_text() == "{}\n"
+    tracked_skill = workdir / ".agents" / "skills" / "tracked-skill" / "SKILL.md"
+    assert not tracked_skill.is_symlink()
+    assert tracked_skill.read_text() == "kept\n"
+
+
+def test_ensure_leaves_agent_config_alone_when_source_has_none(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """No ``.agents`` at the source means no fabricated one at the
+    target — an empty config dir would mislead tools that probe for it."""
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    assert not (workdir / ".agents").exists()
+    assert not (workdir / ".claude").exists()
+
+
+def test_ensure_copies_agent_config_files_so_writes_stay_in_the_worktree(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """The file an agent is likeliest to write is its own config.
+
+    Linked, a permission the agent grants itself lands in the human's
+    checkout and outlives the worktree it came from. Copied, the agent
+    starts from the same state and its edits stay disposable.
+    """
+    (repo / ".claude").mkdir()
+    source = repo / ".claude" / "settings.local.json"
+    source.write_text('{"permissions": []}\n')
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+    mirrored = workdir / ".claude" / "settings.local.json"
+
+    assert not mirrored.is_symlink()
+    assert mirrored.read_text() == '{"permissions": []}\n'
+
+    mirrored.write_text('{"permissions": ["Bash(rm:*)"]}\n')
+
+    assert source.read_text() == '{"permissions": []}\n'
+
+
+def test_ensure_still_shares_agent_skill_directories_by_link(
+    manager: GitWorktreeManager, repo: Path
+) -> None:
+    """Installed skills run to tens of megabytes; copying them per
+    worktree would be wasteful, so directories stay linked."""
+    skill = repo / ".claude" / "skills" / "bmad-dev"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("shared\n")
+
+    workdir = manager.ensure("WRK-001", "agt-1", repo)
+
+    # The link is made at the highest directory the worktree lacks, so
+    # it is ``skills`` itself that is shared, not each skill under it.
+    assert (workdir / ".claude" / "skills").is_symlink()
+    mirrored = workdir / ".claude" / "skills" / "bmad-dev" / "SKILL.md"
+    assert mirrored.read_text() == "shared\n"
