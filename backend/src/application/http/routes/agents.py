@@ -10,12 +10,12 @@ Wire format: provider + model + free ``options`` dict + folder. The
 provider's Spec validates ``options``; unknown keys → 422.
 """
 
-import subprocess
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from src.application.http.launchers import launch, resolved
 from src.application.http.schemas import (
     AgentCompactionSummaryResponse,
     AgentSummary,
@@ -50,6 +50,10 @@ from src.domain.worktrees import WorktreeManager, WorktreeProvisionFailed
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 from src.infrastructure.filesystem.terminal import open_in_terminal
+from src.infrastructure.filesystem.workspace_targets import (
+    agent_workspace,
+    worktree_or_folder,
+)
 from src.settings import Settings
 
 router = APIRouter()
@@ -382,36 +386,17 @@ def reveal_agent(
 
     Unknown values fall back to ``worktree`` to preserve the legacy
     no-arg call shape."""
-    work_slug = workstore.get_work_slug_for_agent(agent_slug)
-    if work_slug is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
-        )
-    agent = next(
-        (a for a in workstore.list_agents_for_work(work_slug) if a.slug == agent_slug),
-        None,
-    )
-    if agent is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
-        )
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
     if kind == "atelier":
+        work_slug = workstore.get_work_slug_for_agent(agent_slug)
+        if work_slug is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
+            )
         target = paths.agent_dir(work_slug, agent_slug)
     else:
-        target = _resolve_worktree_path(
-            paths,
-            work_slug,
-            agent.worktree_slug or agent_slug,
-            agent.folder,
-        )
-    try:
-        open_in_file_browser(str(target))
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"reveal failed: {exc}",
-        ) from exc
+        target = resolved(lambda: agent_workspace(workstore, paths, agent_slug))
+    launch(target, open_in_file_browser, label="reveal")
 
 
 @router.post(
@@ -430,33 +415,13 @@ def open_agent_in_console(
     browser. The ``kind`` query param picks a specific terminal app
     (``system`` / ``iterm2`` / ``terminator`` / ``gnome-terminal`` /
     ``konsole`` / ``tmux``); unknown values fall back to ``system``."""
-    work_slug = workstore.get_work_slug_for_agent(agent_slug)
-    if work_slug is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
-        )
-    agent = next(
-        (a for a in workstore.list_agents_for_work(work_slug) if a.slug == agent_slug),
-        None,
-    )
-    if agent is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND, detail=f"agent not found: {agent_slug}"
-        )
     paths = WorkspacePaths(workspace_root=settings.workspace_root)
-    target = _resolve_worktree_path(
-        paths,
-        work_slug,
-        agent.worktree_slug or agent_slug,
-        agent.folder,
+    target = resolved(lambda: agent_workspace(workstore, paths, agent_slug))
+    launch(
+        target,
+        lambda path: open_in_terminal(path, kind=kind),
+        label="open in console",
     )
-    try:
-        open_in_terminal(str(target), kind=kind)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"open in console failed: {exc}",
-        ) from exc
 
 
 @router.post(
@@ -592,7 +557,7 @@ def _to_summary(work_slug: str, agent: Agent, paths: WorkspacePaths) -> AgentSum
         started_at=agent.started_at,
         stopped_at=agent.stopped_at,
         worktree_path=str(
-            _resolve_worktree_path(
+            worktree_or_folder(
                 paths,
                 work_slug,
                 agent.worktree_slug or agent.slug,
@@ -602,13 +567,3 @@ def _to_summary(work_slug: str, agent: Agent, paths: WorkspacePaths) -> AgentSum
     )
 
 
-def _resolve_worktree_path(
-    paths: WorkspacePaths, work_slug: str, agent_slug: str, folder: Path
-) -> Path:
-    """The directory the adapter actually runs in. Mirrors
-    ``WorktreeManager.ensure``'s contract: the per-agent worktree if it
-    was provisioned (git source folder), otherwise the source folder."""
-    candidate = paths.worktree_dir(work_slug, agent_slug)
-    if candidate.exists():
-        return candidate
-    return folder

@@ -15,6 +15,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from src.application.http.launchers import launch, resolved
 from src.application.http.schemas import (
     AcceptPlanArtifactRequest,
     ArtifactSummary,
@@ -221,6 +222,8 @@ from src.domain.workstore.ports import TranscriptLog, WorkStore
 from src.domain.worktrees import WorktreeManager
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
+from src.infrastructure.filesystem.terminal import open_in_terminal
+from src.infrastructure.filesystem.workspace_targets import run_workspace
 from src.settings import Settings
 
 router = APIRouter()
@@ -425,6 +428,41 @@ def get_work_loop_run_endpoint(
     except loop_run_commands.RunNotFound as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/open-in-console",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def open_run_in_console(
+    work_slug: str,
+    run_id: str,
+    loop_runs: LoopRunRepositoryDep,
+    workstore: WorkStoreDep,
+    settings: SettingsDep,
+    kind: str = "system",
+) -> None:
+    """Open a terminal in the directory this run's work happened in.
+
+    Run-scoped rather than agent-scoped so it matches where the editor
+    opens: a run seeded from another keeps the source run's workspace,
+    which is not any one agent's worktree. Stages without an agent of
+    their own (a check, an approval) are reachable this way too.
+    """
+    try:
+        record = loop_run_commands.get_run(
+            loop_runs,
+            loop_run_commands.LoopRunRequest(work_slug, run_id),
+        )
+    except loop_run_commands.RunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    target = resolved(lambda: run_workspace(record, workstore, paths))
+    launch(
+        target,
+        lambda path: open_in_terminal(path, kind=kind),
+        label="open in console",
+    )
 
 
 @router.post(

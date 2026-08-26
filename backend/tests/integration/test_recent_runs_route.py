@@ -7,6 +7,7 @@ clamp, and the provenance fields a search row renders.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,30 +20,35 @@ BASE = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
 
 def _store_run(
     client: TestClient,
-    run_key: str,
+    run_id: str,
     work_slug: str,
     *,
     minutes: int,
     artifact_id: str | None = None,
     number: int = 1,
+    workspace: str = "",
 ) -> None:
+    # Keys are namespaced by target the way the runner writes them, so a
+    # run id round-trips through ``loop_run_key`` in the route.
     record = LoopRunRecord(
-        run_key=run_key,
+        run_key=(
+            f"loop-{artifact_id}-{run_id}" if artifact_id else f"loop-objective-{run_id}"
+        ),
         work_slug=work_slug,
         target_kind=(
             LoopTargetKind.PLANNING_ARTIFACT
             if artifact_id
             else LoopTargetKind.OBJECTIVE
         ),
-        target_ref=f"goal for {run_key}",
+        target_ref=f"goal for {run_id}",
         artifact_id=artifact_id,
-        plan_run_id=f"run-{run_key}" if artifact_id else None,
+        plan_run_id=run_id,
         definition_id="atelier-fast",
         definition_revision="rev-1",
         definition_snapshot={},
         status=LoopStatus.RUNNING,
         current_step_id=None,
-        state={"number": number},
+        state={"number": number, "workspace_path": workspace},
         started_at=BASE,
         updated_at=BASE + timedelta(minutes=minutes),
     )
@@ -139,3 +145,57 @@ def test_work_run_response_stays_backward_compatible(works: TestClient) -> None:
     assert rows[0]["source_kind"] is None
     assert rows[0]["source_ref"] is None
     assert rows[0]["source_title"] is None
+
+
+# ---------------------------------------------------------------------------
+# REST: open a run's workspace in a terminal — run-scoped, so it lands where
+# the editor does and works on stages that never had an agent
+# ---------------------------------------------------------------------------
+
+
+def test_open_run_in_console_uses_the_runs_own_workspace(
+    works: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from src.application.http.routes import works as works_module
+
+    captured: dict[str, object] = {}
+
+    def fake_open(path: str, kind: str = "system") -> None:
+        captured["path"] = path
+        captured["kind"] = kind
+
+    monkeypatch.setattr(works_module, "open_in_terminal", fake_open)
+    workspace = tmp_path / "run-workspace"
+    workspace.mkdir()
+    _store_run(works, "run-a", "WRK-001", minutes=1, workspace=str(workspace))
+
+    response = works.post(
+        "/api/works/WRK-001/runs/run-a/open-in-console?kind=iterm2"
+    )
+
+    assert response.status_code == 204, response.text
+    assert captured["path"] == str(workspace)
+    assert captured["kind"] == "iterm2"
+
+
+def test_open_run_in_console_404s_for_an_unknown_run(works: TestClient) -> None:
+    response = works.post("/api/works/WRK-001/runs/run-404/open-in-console")
+
+    assert response.status_code == 404
+
+
+def test_open_run_in_console_reports_a_launcher_that_will_not_start(
+    works: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from src.application.http.routes import works as works_module
+
+    def raising(path: str, kind: str = "system") -> None:
+        raise OSError("no terminal")
+
+    monkeypatch.setattr(works_module, "open_in_terminal", raising)
+    _store_run(works, "run-a", "WRK-001", minutes=1, workspace=str(tmp_path))
+
+    response = works.post("/api/works/WRK-001/runs/run-a/open-in-console")
+
+    assert response.status_code == 500
+    assert "open in console failed" in response.json()["detail"]

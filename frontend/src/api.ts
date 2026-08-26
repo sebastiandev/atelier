@@ -2328,6 +2328,31 @@ export function revealAgent(
  * ``GET /api/settings``; unknown values fall back to ``system``
  * server-side.
  */
+/**
+ * Open a terminal in the directory a loop run's work happened in.
+ *
+ * Run-scoped rather than agent-scoped so it lands where the editor
+ * opens — a run seeded from another keeps the source run's workspace,
+ * which is no single agent's worktree — and so stages that never had an
+ * agent of their own (a check, an approval) are reachable too.
+ */
+export function openRunInConsole(
+  workSlug: string,
+  runId: string,
+  kind?: string,
+): Promise<void> {
+  const qs = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+  return fetch(
+    `/api/works/${workSlug}/runs/${encodeURIComponent(runId)}/open-in-console${qs}`,
+    { method: "POST" },
+  ).then(async (r) => {
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`${r.status} ${r.statusText}: ${body}`);
+    }
+  });
+}
+
 export function openAgentInConsole(
   agentSlug: string,
   kind?: string,

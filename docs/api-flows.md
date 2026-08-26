@@ -465,6 +465,10 @@ Browser ──► Router (works.py)
 
 Slug → path is server-computed (defends against path injection); the work must exist before we'll pop a Finder window. `mkdir(exist_ok=True)` makes reveal usable even on freshly-created works whose folder hasn't been written by anything yet. OS-level errors map to 500.
 
+**Launchers share one shape.** Reveal, open-in-console and (once Emacs lands) open-in-editor all answer *which directory?* first and then differ only in what they start. That first answer lives in `infrastructure/filesystem/workspace_targets.py` — `agent_workspace` (per-agent worktree, else the source folder) and `run_workspace` — and the error contract lives in `application/http/launchers.py`: an unresolvable entity is a 404, a launcher that will not start is a 500 naming the reason. Routes are left with "resolve, launch". **The client never names a path a launcher will act on**; it names an entity and the server resolves it. `GET /fs/list?path=` is the one path-taking endpoint and it only reads.
+
+`POST /api/works/{slug}/runs/{run_id}/open-in-console` is run-scoped on purpose. A Loop-mode run records its own `workspace_path`, and it is authoritative — a run seeded from another keeps the source run's workspace, which is no single agent's worktree, so opening the agent's would land somewhere other than the editor does. A planning run records no workspace (its stages execute in the worktree of the agent that owns the run) and so resolves through `agent_workspace`; the frontend picks the matching call the same way. Either way the target is *run*-level, never the selected stage — a check or an approval has no agent of its own but shares the workspace, and keying off the selected stage is what used to hide the button there.
+
 ---
 
 ## `POST /api/works/{slug}/project`

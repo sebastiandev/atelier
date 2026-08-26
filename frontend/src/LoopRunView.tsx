@@ -20,6 +20,7 @@ import {
   createChat,
   listAgents,
   openAgentInConsole,
+  openRunInConsole,
   LoopFeedbackRecord,
 } from "./api";
 import { ChatTile } from "./Chat";
@@ -356,6 +357,17 @@ function RunSurfaceContent({
   const inspectorStage = data.stages.find((item) => item.id === selectedInspectorStage) ?? null;
   const inspectorAgent = agents.find((item) => item.slug === inspectorStage?.agent_slug) ?? null;
   const workspacePath = data.workspacePath || agent?.worktree_path || "";
+  // Console opens where the editor opens. A Loop-mode run owns its
+  // workspace, so it is addressed by run; a planning run records none
+  // and runs in its agent's worktree, so it is addressed by agent. Both
+  // are run-level, never the selected stage: a check or an approval has
+  // no agent of its own but sits on the same workspace.
+  const consoleAgentSlug = agent?.slug ?? selectedOccurrence?.agent_slug ?? null;
+  const consoleTarget = data.workspacePath
+    ? () => openRunInConsole(workSlug, data.id, terminal)
+    : consoleAgentSlug
+      ? () => openAgentInConsole(consoleAgentSlug, terminal)
+      : null;
   // Seeds the retry model/effort picker from the agent that actually ran the
   // failed stage — more accurate than the run-level provider/model, and it
   // works the same for standalone Loop and Planning runs.
@@ -605,8 +617,8 @@ function RunSurfaceContent({
           onOpenEditor={!readOnly && workspacePath ? () => {
             window.location.href = editorUrl(editor, workspacePath);
           } : undefined}
-          onOpenConsole={!readOnly && selectedOccurrence?.agent_slug ? () => {
-            void openAgentInConsole(selectedOccurrence.agent_slug!, terminal).catch((reason) => {
+          onOpenConsole={!readOnly && consoleTarget ? () => {
+            void consoleTarget().catch((reason) => {
               setDiscussionError(reason instanceof Error ? reason.message : String(reason));
             });
           } : undefined}
