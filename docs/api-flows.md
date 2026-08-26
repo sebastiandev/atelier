@@ -78,17 +78,20 @@ Browser ──► Router (settings.py)
 
 ---
 
-## `POST /api/agents/{agent_slug}/open-in-editor`
+## `POST /api/agents/{agent_slug}/open-in-editor?editor=…` · `POST /api/works/{slug}/runs/{run_id}/open-in-editor?editor=…`
 
 ```
-Browser ──► Router (agents.py)
-                ├─► resolve registered agent from agent_slug
-                ├─► select provisioned worktree or stored source-folder fallback
-                └─► editor.open_in_emacs(path)
+Browser ──► Router (agents.py / works.py)
+                ├─► launcher_for(editor)          ← 400 if the browser opens it
+                ├─► resolved(agent_workspace | run_workspace)   ← 404
+                └─► launch(target, launcher, label="open in editor")
                     └─► emacsclient -n -c <path>
+                204 No Content
 ```
 
-The request accepts only an agent slug; no client-provided path reaches the subprocess. The fixed, shell-free argv is supported on macOS and Linux and requires `emacsclient` on the backend PATH plus an already-running default Emacs server. `-n` makes the client return immediately after requesting the frame, so the HTTP response does not remain open until that frame closes. The child inherits a copy of the backend environment except for `ALTERNATE_EDITOR`, preventing `emacsclient` from starting a fallback editor, and the launch is capped at 10 seconds. Unknown agents return 404. Unsupported platforms, missing clients, unreachable servers, timeouts, and subprocess failures return an actionable 500; Atelier does not start or discover a daemon.
+Only editors with **no** `url_template` reach the backend; everything else is opened by the browser from its descriptor and never touches these routes. The `editor` param names which launcher to use, and one Atelier does not launch is a 400 rather than a fallback — there is no sane default to exec on someone's behalf. The two shapes exist for the same reason console has them: a Loop-mode run owns its workspace, a planning run resolves through the agent that owns it, and both share the resolve/launch seam described under `POST /api/works/{slug}/reveal`.
+
+No client-provided path reaches a subprocess: the client names an entity and the server resolves it. The argv is fixed and shell-free, supported on macOS and Linux, and needs `emacsclient` on the backend PATH plus an already-running Emacs server. `-n` returns as soon as the frame is requested, so the response does not stay open until the frame closes. The child inherits the backend environment minus `ALTERNATE_EDITOR` — set, `emacsclient` would silently start a *new* Emacs instead of using the running one, which looks like success — and the launch is capped at 10 seconds. Missing client, unreachable server, timeout and unsupported platform each return a 500 whose detail names that specific cause; Atelier never starts or discovers a daemon.
 
 ---
 

@@ -182,12 +182,32 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
  * Build the OS-handler URL for the chosen editor from the backend-owned
  * descriptor. The frontend only knows how to interpolate path tokens.
  */
-export function editorUrl(editor: EditorChoice, path: string): string {
-  const option =
+/**
+ * The descriptor for one editor, from the backend when it has loaded and
+ * the built-in fallback list otherwise.
+ */
+export function editorOption(editor: EditorChoice): ToolOption {
+  return (
     useSettingsStore.getState().editorOptions.find((opt) => opt.value === editor) ??
     FALLBACK_EDITOR_OPTIONS.find((opt) => opt.value === editor) ??
-    FALLBACK_EDITOR_OPTIONS[0];
-  return renderUrlTemplate(option.url_template, path);
+    FALLBACK_EDITOR_OPTIONS[0]
+  );
+}
+
+/**
+ * True when the OS opens this editor from a URL, false when Atelier has
+ * to start it as a command.
+ *
+ * Read off the descriptor rather than a list of names: the backend
+ * already says which editors have a handler, so a new command-only
+ * editor is a descriptor entry and no frontend change at all.
+ */
+export function opensFromUrl(editor: EditorChoice): boolean {
+  return Boolean(editorOption(editor).url_template);
+}
+
+export function editorUrl(editor: EditorChoice, path: string): string {
+  return renderUrlTemplate(editorOption(editor).url_template, path);
 }
 
 function encodeFilePath(path: string): string {

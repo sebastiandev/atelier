@@ -93,7 +93,7 @@ import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { DeleteWorkDialog } from "./DeleteWorkDialog";
 import { relativeToRoot } from "./editedPaths";
-import { openAgentEditor } from "./emacsEditor";
+import { openEditor } from "./openEditor";
 import { HandoffDialog } from "./HandoffDialog";
 import {
   anchoredMenuPosition,
@@ -2586,7 +2586,11 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                           } : undefined}
                           onHandoff={work.status === "active" ? () => setHandoffSource(a) : undefined}
                           onOpenInIde={() => {
-                            void openAgentEditor(editor, a.slug, a.worktree_path).catch((err) => {
+                            void openEditor(editor, {
+                              kind: "agent",
+                              agentSlug: a.slug,
+                              path: a.worktree_path,
+                            }).catch((err: unknown) => {
                               const message = err instanceof Error ? err.message : String(err);
                               showToast(`Couldn't open editor: ${message}`);
                             });

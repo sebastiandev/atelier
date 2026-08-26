@@ -2369,11 +2369,41 @@ export function openAgentInConsole(
 }
 
 /** Ask the backend to open the registered agent workspace in Emacs. */
-export function openAgentInEditor(agentSlug: string): Promise<void> {
-  return fetch(`/api/agents/${agentSlug}/open-in-editor`, {
-    method: "POST",
-  }).then((response) => {
-    if (!response.ok) return jsonOrThrow<never>(response);
+/**
+ * Ask the backend to start an editor Atelier launches itself.
+ *
+ * Only editors without a URL handler come here; everything else is
+ * opened by the browser. The editor value names which launcher to use,
+ * so the backend never has to guess and an unknown one is refused
+ * rather than defaulted.
+ */
+export function openAgentInEditor(
+  agentSlug: string,
+  editor: string,
+): Promise<void> {
+  return postLauncher(
+    `/api/agents/${agentSlug}/open-in-editor?editor=${encodeURIComponent(editor)}`,
+  );
+}
+
+/** The run-scoped twin: opens where the run's work actually happened. */
+export function openRunInEditor(
+  workSlug: string,
+  runId: string,
+  editor: string,
+): Promise<void> {
+  return postLauncher(
+    `/api/works/${workSlug}/runs/${encodeURIComponent(runId)}` +
+      `/open-in-editor?editor=${encodeURIComponent(editor)}`,
+  );
+}
+
+function postLauncher(url: string): Promise<void> {
+  return fetch(url, { method: "POST" }).then(async (r) => {
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      throw new Error(`${r.status} ${r.statusText}: ${body}`);
+    }
   });
 }
 
