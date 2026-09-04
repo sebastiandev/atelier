@@ -47,6 +47,7 @@ from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import TranscriptLog, WorkStore
 from src.domain.worktrees import WorktreeManager, WorktreeProvisionFailed
+from src.infrastructure.filesystem.editor import launcher_for
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 from src.infrastructure.filesystem.terminal import open_in_terminal
@@ -422,6 +423,34 @@ def open_agent_in_console(
         lambda path: open_in_terminal(path, kind=kind),
         label="open in console",
     )
+
+
+@router.post(
+    "/agents/{agent_slug}/open-in-editor",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def open_agent_in_editor(
+    agent_slug: str,
+    workstore: WorkStoreDep,
+    settings: SettingsDep,
+    editor: str,
+) -> None:
+    """Open the agent's workspace in an editor Atelier starts itself.
+
+    Only editors without a URL handler come here — everything with a
+    ``url_template`` is opened by the browser and never reaches the
+    backend. An editor with neither is a 400 rather than a fallback:
+    there is no sane default to exec on a user's behalf.
+    """
+    launcher = launcher_for(editor)
+    if launcher is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"editor is not launched by Atelier: {editor}",
+        )
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    target = resolved(lambda: agent_workspace(workstore, paths, agent_slug))
+    launch(target, launcher, label="open in editor")
 
 
 @router.post(

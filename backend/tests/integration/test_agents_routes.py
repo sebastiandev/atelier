@@ -1117,6 +1117,119 @@ def test_open_in_console_500_when_helper_raises(
     assert "open in console failed" in response.json()["detail"]
 
 
+def _stub_editor(
+    monkeypatch: pytest.MonkeyPatch, launcher: object, name: str = "emacs"
+) -> None:
+    """Swap the command-editor registry entry the route resolves through.
+
+    The route looks the launcher up by descriptor value rather than
+    calling a module-level function, so that registry is the seam a test
+    replaces.
+    """
+    from src.infrastructure.filesystem import editor as editor_mod
+
+    monkeypatch.setitem(editor_mod.COMMAND_EDITORS, name, launcher)
+
+
+# ---------------------------------------------------------------------------
+# REST: open in editor — launch Emacs at the agent's registered workspace
+# ---------------------------------------------------------------------------
+
+
+def test_open_in_editor_uses_source_folder_when_no_worktree(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, str] = {}
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    _stub_editor(monkeypatch, lambda path: captured.update(path=path))
+
+    response = app_client.post(
+        f"/api/agents/{agent['slug']}/open-in-editor?editor=emacs",
+        json={"path": "/tmp/client-controlled"},
+    )
+    assert response.status_code == 204
+    assert captured["path"] == tmp_workdir
+
+
+def test_open_in_editor_targets_worktree_when_provisioned(
+    app_client: TestClient, tmp_workdir: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, str] = {}
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    _stub_editor(monkeypatch, lambda path: captured.update(path=path))
+    settings = app_client.app.state.settings
+    worktree = (
+        settings.workspace_root / "works" / work["slug"] / "worktrees" / agent["slug"]
+    )
+    worktree.mkdir(parents=True, exist_ok=True)
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/open-in-editor?editor=emacs")
+    assert response.status_code == 204
+    assert captured["path"] == str(worktree)
+
+
+def test_open_in_editor_404_for_unknown_slug(
+    app_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_editor(
+        monkeypatch, lambda path: pytest.fail(f"unexpected editor launch for {path}")
+    )
+    response = app_client.post("/api/agents/agt-404/open-in-editor?editor=emacs")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "agent not found: agt-404"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_detail"),
+    [
+        pytest.param(
+            FileNotFoundError("emacsclient not found"),
+            "emacsclient not found",
+            id="missing-client",
+        ),
+        pytest.param(
+            subprocess.CalledProcessError(1, ["emacsclient"]),
+            "returned non-zero exit status 1",
+            id="client-or-server-failure",
+        ),
+        pytest.param(
+            subprocess.TimeoutExpired(["emacsclient"], 10),
+            "timed out after 10 seconds",
+            id="client-timeout",
+        ),
+        pytest.param(
+            OSError("emacsclient could not reach a running Emacs server"),
+            "could not reach a running Emacs server",
+            id="no-server",
+        ),
+    ],
+)
+def test_open_in_editor_500_when_helper_raises(
+    app_client: TestClient,
+    tmp_workdir: str,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+    expected_detail: str,
+) -> None:
+    def raising(path: str) -> None:
+        raise failure
+
+    work = _create_work(app_client)
+    agent = _create_agent(app_client, work["slug"], tmp_workdir)
+    _stub_editor(monkeypatch, raising)
+
+    response = app_client.post(f"/api/agents/{agent['slug']}/open-in-editor?editor=emacs")
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    # The route names the action; the reason comes from the launcher, so
+    # "no server running" and "not on PATH" stay distinguishable instead
+    # of collapsing into one catch-all hint.
+    assert detail.startswith("open in editor failed: ")
+    assert expected_detail in detail
+
+
 def test_agent_summary_carries_worktree_path(
     app_client: TestClient, tmp_workdir: str
 ) -> None:
