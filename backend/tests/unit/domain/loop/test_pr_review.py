@@ -195,35 +195,39 @@ class _FlakyGateway:
         )
 
 
-def test_the_reply_says_what_the_pass_changed_rather_than_what_was_asked() -> None:
+def test_the_reply_says_what_the_push_did_about_this_particular_comment() -> None:
     """The reviewer already knows what they asked for; what they cannot see is
-    what was done about it. One sentence, from the report of the stage that did
-    the work."""
+    what was done about it. It has to be about *their* comment: the pass-level
+    report used to fill this slot, so every thread one push answered received
+    an identical paragraph and reviewers called it out on the pull request."""
     loop = {
         "pr": {
             "head_sha": "a1b2c3d4e5",
             "head_commit_url": "https://github.com/acme/repo/commit/a1b2c3d",
         },
-        "stages": [
-            {
-                "id": "implement",
-                "kind": "agent_task",
-                "reports": [
-                    {
-                        "pass_number": 3,
-                        "changes": "Guarded the empty branch. Also tidied the helper.",
-                    }
-                ],
-            }
-        ],
     }
 
-    body = pr_review._addressed_body(loop, 3, "Add a regression test.")
+    body = pr_review._addressed_body(
+        loop,
+        3,
+        "Add a regression test.",
+        "Guarded the empty branch and covered it in test_empty_union.",
+    )
 
     assert body == (
-        "Addressed in [`a1b2c3d`](https://github.com/acme/repo/commit/a1b2c3d)."
-        " Guarded the empty branch. Also tidied the helper."
+        "Guarded the empty branch and covered it in test_empty_union."
+        " ([`a1b2c3d`](https://github.com/acme/repo/commit/a1b2c3d))"
     )
+
+
+def test_no_per_comment_answer_makes_no_claim_about_the_comment() -> None:
+    """Better a bare commit citation than a borrowed paragraph that does not
+    answer what this reviewer asked."""
+    loop = {"pr": {"head_sha": "a1b2c3d4e5"}}
+
+    body = pr_review._addressed_body(loop, 3, "")
+
+    assert body == "Addressed in `a1b2c3d`."
 
 
 def test_the_reply_falls_back_to_the_instruction_when_the_pass_said_nothing() -> None:
@@ -235,16 +239,11 @@ def test_the_reply_falls_back_to_the_instruction_when_the_pass_said_nothing() ->
 
 
 def test_a_long_report_is_capped_rather_than_pasted_into_the_thread() -> None:
-    loop = {
-        "pr": {"head_sha": "a1b2c3d4e5"},
-        "stages": [
-            {"id": "i", "kind": "agent_task", "reports": [{"pass_number": 1, "changes": "x" * 400}]}
-        ],
-    }
+    loop = {"pr": {"head_sha": "a1b2c3d4e5"}}
 
-    body = pr_review._addressed_body(loop, 1, "")
+    body = pr_review._addressed_body(loop, 1, "", "x" * 400)
 
-    assert body.endswith("\u2026")
+    assert "\u2026" in body
     assert len(body) < 300
 
 
@@ -508,3 +507,21 @@ async def test_refresh_keeps_one_copy_of_the_lifecycle() -> None:
     assert "pr" not in stage["reports"][-1]
     # What a pass pushed is per-pass, and survives.
     assert stage["push_at"] == "2026-07-20T09:00:00Z"
+
+
+def test_a_reply_that_declined_the_change_does_not_claim_to_have_made_it() -> None:
+    """The stage is asked to say plainly when a comment was considered and
+    deliberately not acted on. Leading with "Addressed in <sha>." turned that
+    into a self-contradiction on a public thread."""
+    loop = {"pr": {"head_sha": "a1b2c3d4e5"}}
+
+    body = pr_review._addressed_body(
+        loop,
+        3,
+        "",
+        "Left as is; the cast is load-bearing for the legacy path.",
+    )
+
+    assert body.startswith("Left as is;")
+    assert "Addressed in" not in body
+    assert "`a1b2c3d`" in body

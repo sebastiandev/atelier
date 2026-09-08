@@ -8,6 +8,7 @@ from typing import Any
 
 from src.domain.loop.dtos import (
     LoopChangedFile,
+    LoopCommentReply,
     LoopCriterionCoverage,
     LoopFinding,
     LoopFindingSeverity,
@@ -77,7 +78,28 @@ def _parse_stage_report(text: str) -> LoopStageReport | None:
         finding_details=finding_details,
         criteria_coverage=_criteria(raw.get("criteria")),
         changed_files=_changed_files(raw.get("changed_files")),
+        comment_replies=_comment_replies(raw.get("comment_replies")),
     )
+
+
+def _comment_replies(value: object) -> tuple[LoopCommentReply, ...]:
+    """Read what the push did about each pull-request comment it answered.
+
+    Optional everywhere: only the PR stage is asked for it, and a stage that
+    omits it falls back to citing the commit alone rather than to the pass
+    summary, which is not an answer to any particular comment.
+    """
+    if not isinstance(value, list):
+        return ()
+    replies: list[LoopCommentReply] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        comment_id = _text(item.get("comment_id"))
+        reply = _text(item.get("reply"))
+        if comment_id and reply:
+            replies.append(LoopCommentReply(comment_id=comment_id, reply=reply))
+    return tuple(replies)
 
 
 def _text(value: object) -> str:

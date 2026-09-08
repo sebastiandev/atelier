@@ -142,6 +142,7 @@ type RunSurfaceProps = {
   onDock: (dock: RunDock) => void;
   onEditLoop?: () => void;
   onFollowUp?: (kind: Exclude<LoopRunKind, "initial">, note: string) => Promise<void>;
+  onDismissPrComments?: (commentIds: string[]) => Promise<void>;
   onRequestChanges?: (note: string) => Promise<void>;
   onRefreshPr?: (force?: boolean) => Promise<void>;
   onResolveBlocker?: (note: string, agentSlug: string | null) => Promise<void> | void;
@@ -215,6 +216,7 @@ function RunSurfaceContent({
   onCreatePr,
   onChangeLoop,
   onDock,
+  onDismissPrComments,
   onEditLoop,
   onFollowUp,
   onRequestChanges,
@@ -552,6 +554,7 @@ function RunSurfaceContent({
                     prComments={data.prComments}
                     runStatus={data.status}
                     stage={selectedOccurrence}
+                    onDismissPrComments={selectedOccurrence.occurrenceId === latestPrOccurrence?.occurrenceId ? onDismissPrComments : undefined}
                     onRefreshPr={selectedOccurrence.occurrenceId === latestPrOccurrence?.occurrenceId ? onRefreshPr : undefined}
                     onSendPrFeedback={selectedOccurrence.occurrenceId === latestPrOccurrence?.occurrenceId ? canSendPrFeedback : undefined}
                     onConfig={() => onDock({ kind: "loop", stageId: selectedOccurrence.sourceStageId })}
@@ -578,6 +581,7 @@ function RunSurfaceContent({
                 prComments={data.prComments}
                 runStatus={data.status}
                 stage={selectedOccurrence}
+                onDismissPrComments={selectedOccurrence.occurrenceId === latestPrOccurrence?.occurrenceId ? onDismissPrComments : undefined}
                 onRefreshPr={selectedOccurrence.occurrenceId === latestPrOccurrence?.occurrenceId ? onRefreshPr : undefined}
                 onSendPrFeedback={selectedOccurrence.occurrenceId === latestPrOccurrence?.occurrenceId ? canSendPrFeedback : undefined}
                 onConfig={() => onDock({ kind: "loop", stageId: selectedOccurrence.sourceStageId })}
@@ -800,6 +804,7 @@ type LoopRunViewProps = {
   onFollowUp?: RunSurfaceProps["onFollowUp"];
   onSendPrFeedback?: RunSurfaceProps["onSendPrFeedback"];
   onRefreshPr?: RunSurfaceProps["onRefreshPr"];
+  onDismissPrComments?: RunSurfaceProps["onDismissPrComments"];
   readOnly?: boolean;
   run: PlanArtifactRun;
   workSlug: string;
@@ -832,6 +837,7 @@ export function LoopRunView({ artifact, run, ...props }: LoopRunViewProps) {
       }}
       onResolveReviewGate={props.readOnly ? undefined : props.onResolveReviewGate}
       onRetry={props.readOnly ? undefined : async (override) => props.onRetry(override)}
+      onDismissPrComments={props.readOnly ? undefined : props.onDismissPrComments}
       onRefreshPr={props.readOnly ? undefined : props.onRefreshPr}
       onSendPrFeedback={props.readOnly ? undefined : props.onSendPrFeedback}
     />
@@ -1233,6 +1239,7 @@ function StageOutput({
   latestTaskOccurrenceId,
   waivedFindings,
   onConfig,
+  onDismissPrComments,
   onRefreshPr,
   onSendPrFeedback,
   pr,
@@ -1248,6 +1255,7 @@ function StageOutput({
   latestTaskOccurrenceId: string | null;
   waivedFindings: string[];
   onConfig: () => void;
+  onDismissPrComments?: (commentIds: string[]) => Promise<void>;
   onRefreshPr?: (force?: boolean) => Promise<void>;
   onSendPrFeedback?: RunSurfaceProps["onSendPrFeedback"];
   pr: PrLifecycle | null;
@@ -1296,10 +1304,10 @@ function StageOutput({
           pushInFlight={running}
           comments={prComments}
           feedbackInstruction={stage.feedback_instruction}
+          onDismiss={onDismissPrComments}
           onRefresh={onRefreshPr}
           onSendFeedback={onSendPrFeedback}
           pr={pr}
-          pushAt={stage.push_at ?? null}
         />
       )}
       {!running && stage.kind === "deterministic_check" && !stage.summary && (

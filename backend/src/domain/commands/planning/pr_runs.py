@@ -46,6 +46,16 @@ class SendPlanningPrFeedbackRequest:
 
 
 @dataclass(frozen=True)
+class DismissPlanningPrCommentsRequest:
+    """Command input for retiring PR comments on one Planning run."""
+
+    work_slug: str
+    artifact_id: str
+    run_id: str
+    comment_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class RefreshPlanningPrRequest:
     """Command input for synchronizing one Planning run's pull request."""
 
@@ -81,6 +91,19 @@ def send_feedback(
     return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
 
 
+def dismiss_comments(
+    workstore: WorkStore,
+    files: PlanningFiles,
+    loop_runs: LoopRunRepository,
+    req: DismissPlanningPrCommentsRequest,
+) -> PlanArtifactDetail:
+    """Mark selected PR comments as deliberately not acted on."""
+    target, store = _target(workstore, files, loop_runs, req)
+    pr_lifecycle.dismiss_comments(target, req.comment_ids)
+    store.save(target)
+    return actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
+
+
 async def refresh(
     workstore: WorkStore,
     files: PlanningFiles,
@@ -104,6 +127,7 @@ def _target(
     req: (
         CreatePlanningPrRequest
         | SendPlanningPrFeedbackRequest
+        | DismissPlanningPrCommentsRequest
         | RefreshPlanningPrRequest
     ),
 ) -> tuple[LoopRunTarget, PlanningLoopRunStore]:
@@ -121,6 +145,7 @@ def _target(
 
 __all__ = [
     "CreatePlanningPrRequest",
+    "DismissPlanningPrCommentsRequest",
     "PlanArtifactNotFound",
     "PlanArtifactRunNotFound",
     "PlanningNotStarted",
@@ -128,6 +153,7 @@ __all__ = [
     "SendPlanningPrFeedbackRequest",
     "WorkNotFound",
     "create_stage",
+    "dismiss_comments",
     "refresh",
     "send_feedback",
 ]

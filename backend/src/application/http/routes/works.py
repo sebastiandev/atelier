@@ -30,6 +30,7 @@ from src.application.http.schemas import (
     CreatePlanArtifactProposalRequest,
     CreatePlanBugRequest,
     CreatePrStageRequest,
+    DismissPrCommentsRequest,
     HandoffSummary,
     LinkPlanArtifactTrackingRequest,
     LoopBriefSchema,
@@ -986,6 +987,35 @@ async def send_work_loop_pr_feedback_endpoint(
         settings,
         loop_run_commands.LoopRunRequest(work_slug, run_id),
     )
+    return _to_work_loop_run(record)
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/pr-dismiss",
+    response_model=WorkLoopRunResponse,
+)
+def dismiss_work_loop_pr_comments_endpoint(
+    work_slug: str,
+    run_id: str,
+    payload: DismissPrCommentsRequest,
+    workstore: WorkStoreDep,
+    loop_runs: LoopRunRepositoryDep,
+) -> WorkLoopRunResponse:
+    """Retire PR comments on one Loop run without starting a pass."""
+    try:
+        record = loop_run_commands.dismiss_pr_comments(
+            workstore,
+            loop_runs,
+            loop_run_commands.DismissPrCommentsRequest(
+                work_slug=work_slug,
+                run_id=run_id,
+                comment_ids=tuple(payload.comment_ids),
+            ),
+        )
+    except (loop_run_commands.RunNotFound, loop_run_commands.WorkNotFound) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return _to_work_loop_run(record)
 
 
@@ -2570,6 +2600,44 @@ async def send_work_plan_pr_feedback_endpoint(
             run_id=run_id,
         ),
     )
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/runs/{run_id}/pr-dismiss",
+    response_model=PlanArtifactDetailResponse,
+)
+def dismiss_work_plan_pr_comments_endpoint(
+    work_slug: str,
+    artifact_id: str,
+    run_id: str,
+    payload: DismissPrCommentsRequest,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
+) -> PlanArtifactDetailResponse:
+    """Retire PR comments on one Planning run without starting a pass."""
+    try:
+        detail = planning_pr_runs.dismiss_comments(
+            workstore,
+            planningfiles,
+            loop_runs,
+            planning_pr_runs.DismissPlanningPrCommentsRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                run_id=run_id,
+                comment_ids=tuple(payload.comment_ids),
+            ),
+        )
+    except (
+        planning_pr_runs.WorkNotFound,
+        planning_pr_runs.PlanArtifactNotFound,
+        planning_pr_runs.PlanArtifactRunNotFound,
+        planning_pr_runs.PlanningNotStarted,
+    ) as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return _to_plan_detail_response(detail)
 
 

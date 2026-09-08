@@ -162,6 +162,15 @@ class SendPrFeedbackRequest:
 
 
 @dataclass(frozen=True)
+class DismissPrCommentsRequest:
+    """Command input for retiring PR comments without acting on them."""
+
+    work_slug: str
+    run_id: str
+    comment_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class RefreshPrRequest:
     """Command input for synchronizing one run's pull request."""
 
@@ -470,6 +479,23 @@ def send_pr_feedback(
     return get_run(loop_runs, key)
 
 
+def dismiss_pr_comments(
+    workstore: WorkStore,
+    loop_runs: LoopRunRepository,
+    req: DismissPrCommentsRequest,
+) -> LoopRunRecord:
+    """Mark selected PR comments as deliberately not acted on."""
+    if workstore.get_work(req.work_slug) is None:
+        raise WorkNotFound(f"work not found: {req.work_slug}")
+    key = LoopRunRequest(req.work_slug, req.run_id)
+    get_run(loop_runs, key)
+    store = LoopRunStore(loop_runs)
+    target = _target_or_raise(store, key)
+    pr_lifecycle.dismiss_comments(target, req.comment_ids)
+    store.save(target)
+    return get_run(loop_runs, key)
+
+
 async def refresh_pr(
     workstore: WorkStore,
     loop_runs: LoopRunRepository,
@@ -687,6 +713,7 @@ __all__ = [
     "DEFAULT_WORKTREE_SLUG",
     "AgentFolderMissing",
     "CreatePrRequest",
+    "DismissPrCommentsRequest",
     "InvalidProviderConfig",
     "LoopContextMissing",
     "LoopDefinitionConflict",
@@ -706,6 +733,7 @@ __all__ = [
     "cancel_run",
     "clean_run",
     "create_pr_stage",
+    "dismiss_pr_comments",
     "get_run",
     "list_runs",
     "monitor_run",

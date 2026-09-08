@@ -182,7 +182,7 @@ def build_follow_up_prompt(value: StagePromptInput) -> str:
         f"{waived}\n\n"
         "When this stage reaches a stopping point, respond with exactly one "
         "single-line JSON report and no Markdown fence:\n"
-        f"{_report_example()}\n\n"
+        f"{_report_example(value.stage)}\n\n"
         "Use outcome `blocked_user` only for a concrete decision or action that "
         f"only the user can provide. {_changes_guidance(value.stage)} Use explicit "
         "`None.` strings when a text field has no content."
@@ -241,7 +241,7 @@ def _shared_prompt(value: StagePromptInput, *, posture: str) -> str:
         f"{_open_requests(value)}\n\n"
         "When this stage reaches a stopping point, respond with exactly one "
         "single-line JSON report and no Markdown fence:\n"
-        f"{_report_example()}\n\n"
+        f"{_report_example(value.stage)}\n\n"
         "Use outcome `blocked_user` only for a concrete decision or action that "
         f"only the user can provide. {changes_guidance} Use explicit `None.` strings "
         "when a text field has no content.\n\n"
@@ -375,7 +375,20 @@ def _brief(value: StagePromptInput) -> str:
     return "\n\nFor this work:\n" + "\n".join(lines)
 
 
-def _report_example() -> str:
+def _report_example(stage: LoopStepDefinition | None = None) -> str:
+    """Render the exact report shape a stage is asked to return.
+
+    Stage-aware for one field. The example is rendered *after* every other
+    instruction under "respond with exactly one single-line JSON report using
+    this shape", so a field asked for only in prose upstream gets dropped --
+    which for `comment_replies` meant every PR comment fell back to a bare
+    commit citation with nothing said about it.
+    """
+    pr_fields: dict[str, Any] = (
+        {"comment_replies": [{"comment_id": "<id from the list above>", "reply": "..."}]}
+        if isinstance(stage, PrStage)
+        else {}
+    )
     return json.dumps(
         {
             "atelier_loop_step_report": {
@@ -390,6 +403,7 @@ def _report_example() -> str:
                 "skipped_scope": "None.",
                 "blocker": "None.",
                 "artifact_refs": [],
+                **pr_fields,
             }
         },
         separators=(",", ":"),
@@ -402,7 +416,7 @@ def stage_report_repair_prompt(stage: LoopStepDefinition) -> str:
         f"Your latest response did not include a valid report for stage "
         f"`{stage.step_id}`. Finish any remaining stage work, then respond with "
         "exactly one single-line JSON report using this shape and no Markdown "
-        f"fence:\n{_report_example()}"
+        f"fence:\n{_report_example(stage)}"
     )
 
 

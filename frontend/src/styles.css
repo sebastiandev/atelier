@@ -14315,8 +14315,11 @@ select:disabled {
 }
 .run-pr-comment.selected { border-color: var(--accent-line); background: var(--accent-soft); opacity: 1; }
 .run-pr-comment.acknowledged { background: var(--bg-2); }
+/* The row is a `16px 1fr` grid, so a third child would land back in the
+   marker column. Ignore belongs under the content, right-aligned. */
+.run-pr-comment-dismiss { grid-column: 2; justify-self: end; }
 /* Comments the panel keeps for history rather than action: addressed in an
-   earlier pass, or predating the latest push. Folded away by default. */
+   earlier pass, or dismissed by the user. Folded away by default. */
 .run-pr-history { display: grid; gap: 6px; margin-top: 4px; }
 .run-pr-history > button {
   justify-self: start;
