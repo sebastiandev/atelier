@@ -896,6 +896,7 @@ async def _apply_stage_report(
                 target,
                 stage_row,
                 report.artifact_refs,
+                report.comment_replies,
             )
         except pr_lifecycle.PrStageInvalid as exc:
             return await _repair_stage_report(

@@ -74,6 +74,7 @@ import {
   resumePlanArtifactRun,
   retryPlanArtifactRunStage,
   requestPlanArtifactRunChanges,
+  dismissPlanArtifactRunPrComments,
   sendPlanArtifactRunPrFeedback,
   startPlanningChat,
   startPlanningSetupChat,
@@ -1591,6 +1592,31 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     }
   }
 
+  async function handleDismissPlanRunPrComments(
+    artifact: PlanArtifact,
+    runId: string,
+    commentIds: string[],
+  ) {
+    setPlanSaving(true);
+    setPlanError(null);
+    try {
+      const saved = await dismissPlanArtifactRunPrComments(
+        workSlug,
+        artifact.id,
+        runId,
+        commentIds,
+      );
+      setPlanArtifactDetail(saved);
+      setPlanDraft(saved.content);
+      await refreshPlan(saved.artifact.id);
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+
   async function handleSendPlanRunPrFeedback(
     artifact: PlanArtifact,
     runId: string,
@@ -2051,6 +2077,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           }
           onCreateRunPr={handleCreatePlanRunPr}
           onFollowUpRun={handleFollowUpPlanRun}
+          onDismissRunPrComments={handleDismissPlanRunPrComments}
           onSendRunPrFeedback={handleSendPlanRunPrFeedback}
           onRefreshRunPr={handleRefreshPlanRunPr}
           onChatOpen={setPlanChatOpen}

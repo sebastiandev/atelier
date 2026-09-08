@@ -9,6 +9,7 @@ from src.domain.loop.dtos import (
     LoopContextReference,
     LoopReportReference,
     LoopStepDefinition,
+    PrStage,
     ReviewStage,
     TaskStage,
 )
@@ -18,6 +19,7 @@ from src.domain.loop.prompts import (
     TaskStagePrompt,
     build_follow_up_prompt,
     build_stage_prompt,
+    stage_report_repair_prompt,
 )
 from src.domain.worktrees import WorktreeState
 
@@ -361,3 +363,14 @@ def test_follow_up_omits_the_context_index_when_nothing_resolved() -> None:
     # had failed to resolve. A resumed session already has the real index.
     assert "Context references" not in prompt
     assert "backend-resolved" not in prompt
+
+
+def test_only_the_pr_stage_is_asked_for_per_comment_replies() -> None:
+    """The report example is rendered last, under "respond with exactly one
+    report using this shape", so a field asked for only in prose upstream gets
+    dropped -- which left every PR comment with a bare commit citation and
+    nothing said about it."""
+    pr_stage = PrStage(step_id="create-pr", name="Create PR")
+
+    assert "comment_replies" in stage_report_repair_prompt(pr_stage)
+    assert "comment_replies" not in stage_report_repair_prompt(_stage())

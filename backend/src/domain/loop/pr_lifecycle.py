@@ -17,6 +17,7 @@ from src.domain.loop.agent_policy import sanitize_agent_policy
 from src.domain.loop.dtos import (
     PREVIOUS_STAGE,
     LoopAgentPolicy,
+    LoopCommentReply,
     LoopRunStatus,
     LoopStatus,
     LoopStepStatus,
@@ -328,13 +329,23 @@ def prepare_feedback(
     for item in items:
         comment = by_id.get(item.comment_id)
         thread = _comment_thread(comment_rows, comment) if comment is not None else []
-        latest = thread[-1] if thread else None
+        # The newest comment somebody *else* wrote. Anchoring on the thread's
+        # very last row let one of our own "Addressed in <sha>" replies become
+        # the head of the thread, which made every thread Atelier had ever
+        # answered permanently unselectable -- including when the reviewer
+        # went on to say the fix was wrong.
+        latest = _latest_reviewer_comment(thread)
+        # Pushing is not an answer. The old rule also rejected any comment
+        # older than the last push, which quietly retired every comment the
+        # user had *not* selected -- the one thing the panel promises it
+        # won't do. Only two things take a comment off the table now:
+        # sending it through a pass, and dismissing it by hand.
         if (
             comment is None
             or latest is not comment
             or comment.get("is_viewer") is True
             or comment.get("addressed_in_pass") is not None
-            or not _created_after(comment.get("created_at"), pr_stage.get("push_at"))
+            or comment.get("dismissed_at") is not None
         ):
             raise PrStageInvalid(f"PR comment is unavailable: {item.comment_id}")
         root = thread[0]
@@ -393,11 +404,52 @@ def prepare_feedback(
     run["loop"] = loop
 
 
+def dismiss_comments(target: LoopRunTarget, comment_ids: tuple[str, ...]) -> None:
+    """Retire PR comments the user has decided not to act on.
+
+    The panel needs a way to shrink the open list that is not a side effect of
+    pushing: a dismissal is a decision the user made about a specific comment,
+    and unlike the old push-time rule it says nothing about whether the work
+    was done. Reversible by the same call with ``undo``-shaped input is not
+    offered yet; nothing is deleted, so a later refresh still shows the thread.
+
+    Preconditions: the run has PR comments. Postconditions: every named
+    comment that is not already addressed carries a dismissal timestamp.
+    """
+    loop = actions.dict_or_empty(target.run.get("loop"))
+    rows = loop.get("pr_comments")
+    if not isinstance(rows, list) or not comment_ids:
+        return
+    wanted = set(comment_ids)
+    # A comment already sent to Implement is answered by a push that has not
+    # landed yet, so it still reads as open and still offers Ignore. Marking
+    # it dismissed changed nothing about the pass, and `capture_completion`
+    # went on to post a public "Addressed in <sha>" reply to a comment the
+    # user had just said to leave alone.
+    in_flight = {
+        actions.str_or_empty(item.get("ref"))
+        for entry in _unpushed_feedback(loop)
+        for item in entry["items"]
+    }
+    now = actions.now_iso()
+    for row in rows:
+        if not isinstance(row, dict) or actions.str_or_empty(row.get("id")) not in wanted:
+            continue
+        if row.get("addressed_in_pass") is not None or row.get("dismissed_at"):
+            continue
+        if actions.str_or_empty(row.get("id")) in in_flight:
+            continue
+        row["dismissed_at"] = now
+    loop["pr_comments"] = rows
+    target.run["loop"] = loop
+
+
 def capture_completion(
     workstore: WorkStore,
     target: LoopRunTarget,
     stage_row: dict[str, Any],
     artifact_refs: tuple[str, ...],
+    comment_replies: tuple[LoopCommentReply, ...] = (),
 ) -> None:
     """Capture one successful PR push and seal its current pass.
 
@@ -455,11 +507,23 @@ def capture_completion(
     )
     if addressed_rows:
         addressed_ids = {item["comment_id"] for item in addressed_rows}
+        # What the push says it did about each individual comment. Stored on
+        # the comment so the reply is written from the answer to *that*
+        # thread; a comment the stage said nothing about keeps no text and
+        # gets the bare commit citation rather than a borrowed paragraph.
+        replies = {
+            item.comment_id: item.reply
+            for item in comment_replies
+            if item.comment_id in addressed_ids
+        }
         comments = loop.get("pr_comments")
         if isinstance(comments, list):
             for comment in comments:
                 if isinstance(comment, dict) and comment.get("id") in addressed_ids:
                     comment["addressed_in_pass"] = pass_number
+                    reply = replies.get(actions.str_or_empty(comment.get("id")), "")
+                    if reply:
+                        comment["addressed_note"] = reply
     for entry in carried:
         feedback.update(loop, entry["id"], pushed_in_pass=pass_number)
     loop["pr"] = pr
@@ -545,10 +609,22 @@ def prompt_context(run: dict[str, Any]) -> str:
         for comment in comments:
             instruction = actions.str_or_empty(comment.get("instruction"))
             lines.append(
-                "- "
+                f"- [{actions.str_or_empty(comment.get('ref'))}] "
                 + actions.str_or_empty(comment.get("body"))
                 + (f" User instruction: {instruction}" if instruction else "")
             )
+        # The reply posted to each thread is written from this. Without a
+        # per-comment line every thread received the pass summary verbatim,
+        # so a reviewer got the same paragraph three times and none of it
+        # answered what they asked.
+        lines.append(
+            "In your report, add `comment_replies`: one entry per bracketed id "
+            "above, `{\"comment_id\": \"<id>\", \"reply\": \"<one or two "
+            "sentences on what this push changed for THAT comment>\"}`. Write "
+            "each reply about its own comment, never a shared summary, and say "
+            "so plainly if a comment was considered and deliberately not acted "
+            "on."
+        )
     for entry in carried:
         if entry["note"]:
             lines.append(f"User instruction: {entry['note']}")
@@ -646,6 +722,22 @@ def _latest_pr_stage(loop: dict[str, Any]) -> dict[str, Any]:
     if stage is None:
         raise PrStageInvalid("run has no Create PR stage")
     return stage
+
+
+def _latest_reviewer_comment(thread: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the comment at the head of a thread, seeing past our own replies.
+
+    Only Atelier's machine replies are skipped, not every comment the token
+    authored: a reply the *user* typed on GitHub is a real answer and still
+    ends the thread, exactly as before. Rows written before ``atelier_reply``
+    existed carry no flag and keep that older behaviour; the next reply on the
+    thread marks itself and it self-corrects.
+    """
+    for row in reversed(thread):
+        if row.get("atelier_reply") is True:
+            continue
+        return row
+    return None
 
 
 def _unpushed_feedback(loop: dict[str, Any]) -> list[dict[str, Any]]:
@@ -769,21 +861,6 @@ def _reset_pass_occurrences(loop: dict[str, Any]) -> None:
             row.pop(key, None)
         actions.clear_stall_recovery(row)
     loop["attempt"] = 1
-
-
-def _created_after(created_at: object, pushed_at: object) -> bool:
-    if not isinstance(created_at, str) or not isinstance(pushed_at, str):
-        return True
-    try:
-        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        pushed = datetime.fromisoformat(pushed_at.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=UTC)
-    if pushed.tzinfo is None:
-        pushed = pushed.replace(tzinfo=UTC)
-    return created > pushed
 
 
 def _elapsed_seconds(started_at: str, sealed_at: str) -> int:

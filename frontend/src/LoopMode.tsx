@@ -25,6 +25,7 @@ import {
   retryWorkLoopRunStage,
   rerunWorkLoopRun,
   saveWorkLoopBrief,
+  dismissWorkLoopRunPrComments,
   sendWorkLoopRunPrFeedback,
   resumeWorkLoopRun,
   startWorkLoopRun,
@@ -239,7 +240,7 @@ export function LoopMode({
       getWorkLoopRun(work.slug, runId)
         .then((next) => {
           if (request !== requestSequence.current) return;
-          replaceRun(next);
+          mergeRun(next);
         })
         .catch((reason) => setError(errorMessage(reason)));
     }, 2500);
@@ -255,6 +256,15 @@ export function LoopMode({
     setRuns((current) => orderRuns([next, ...current.filter((run) => run.id !== next.id)]));
     setSelectedRunId(next.id);
     setPreparingRun(false);
+  }
+
+  function mergeRun(next: WorkLoopRun) {
+    // The polling peer of `replaceRun`: same data write, no selection change.
+    // Selecting is something the user does. When the poll did it too, a
+    // response still in flight for the run you had just navigated away from
+    // landed and dragged the view back to it — with a PR stage pushing on one
+    // run and a second run open, the two took turns stealing the screen.
+    setRuns((current) => orderRuns([next, ...current.filter((run) => run.id !== next.id)]));
   }
 
   async function start() {
@@ -307,7 +317,10 @@ export function LoopMode({
       return;
     }
     try {
-      replaceRun(await refreshWorkLoopRunPr(work.slug, activeRun.id));
+      // Background refresh, not a user action: the 60s PR poll must not move
+      // the selection either. `force` goes through `act` because the user
+      // pressed "Check for comments" on the run they are looking at.
+      mergeRun(await refreshWorkLoopRunPr(work.slug, activeRun.id));
     } catch {
       // Background polling is best-effort; the explicit refresh surfaces errors.
     }
@@ -387,6 +400,9 @@ export function LoopMode({
           selectedRunId={activeRun?.id ?? null}
           pullRequests={pullRequests}
           onRun={(runId) => {
+            // Retire the in-flight poll for the run being left. It was issued
+            // against the old selection and has nothing to say about this one.
+            requestSequence.current += 1;
             setPreparingRun(false);
             setSelectedRunId(runId);
           }}
@@ -433,6 +449,7 @@ export function LoopMode({
               onRerun={canActOnRun ? () => prepareNewRun(activeRun) : undefined}
               onRetry={canActOnRun && activeRun.status === "failed" ? (override) => act(() => retryWorkLoopRunStage(work.slug, activeRun.id, override)) : undefined}
               onSendPrFeedback={canActOnRun ? (comments, instruction) => act(() => sendWorkLoopRunPrFeedback(work.slug, activeRun.id, { comments, instruction })) : undefined}
+              onDismissPrComments={canActOnRun ? (commentIds) => act(() => dismissWorkLoopRunPrComments(work.slug, activeRun.id, commentIds)) : undefined}
               onEditLoop={canActOnRun ? () => {
                 const snapshot = activeRun.loop_definition;
                 setFolder(activeRun.root_path);

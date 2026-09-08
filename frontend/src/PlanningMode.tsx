@@ -171,6 +171,11 @@ type PlanningModeProps = {
     runId: string,
     payload: PrFeedbackPayload,
   ) => Promise<void>;
+  onDismissRunPrComments: (
+    artifact: PlanArtifact,
+    runId: string,
+    commentIds: string[],
+  ) => Promise<void>;
   onRefreshRunPr: (
     artifact: PlanArtifact,
     runId: string,
@@ -244,6 +249,7 @@ export function PlanningMode({
   onCreateRunPr,
   onFollowUpRun,
   onSendRunPrFeedback,
+  onDismissRunPrComments,
   onRefreshRunPr,
   onChatOpen,
   onPlanningChatUpdated,
@@ -656,6 +662,11 @@ export function PlanningMode({
                   { comments, instruction },
                 )
               }
+              onDismissPrComments={(commentIds) => onDismissRunPrComments(
+                selectedDetail.artifact,
+                selectedRun.id,
+                commentIds,
+              )}
               onRefreshPr={(force) => onRefreshRunPr(
                 selectedDetail.artifact,
                 selectedRun.id,
@@ -2191,7 +2202,15 @@ function ArtifactDetail({
   if (!artifact) return <div className="pm-loading">Artifact not found.</div>;
   if (!detail) return <div className="pm-loading">Loading source…</div>;
   const status = uiStatus(detail.artifact);
-  const editable = !readOnly && (status === "draft" || status === "ready" || status === "blocked");
+  // The source is always editable while the Work is active. Gating it by
+  // status made the lock self-sealing: a `gated` artifact is gated *because*
+  // its markdown is missing a heading, and locking the editor left the
+  // filesystem as the only way to add one. The backend never gated the save
+  // (it re-approves the edited path in step), so the restriction bought
+  // nothing. Statuses where an edit has consequences say so in a note below
+  // instead of taking the keyboard away.
+  const editable = !readOnly;
+  const editWarning = editSideEffect(status);
   const dirty = draft !== detail.content;
   const latestRun = detail.artifact.runs.at(-1) ?? null;
   const latestPrRun = [...detail.artifact.runs].reverse().find((run) => run.pr) ?? null;
@@ -2230,7 +2249,12 @@ function ArtifactDetail({
           </div>
           {!editable && (
             <div className="pm-gate-note">
-              <CheckIcon size={12} /> This item is locked because it is {status}.
+              <CheckIcon size={12} /> This item is read-only because the Work is not active.
+            </div>
+          )}
+          {editable && editWarning && (
+            <div className="pm-gate-note">
+              <CheckIcon size={12} /> {editWarning}
             </div>
           )}
           {detail.artifact.readiness === "needs_detail" && (
@@ -2648,6 +2672,22 @@ function planCounts(items: PlanArtifact[]): PlanCounts {
     total: items.length,
   };
 }
+
+function editSideEffect(status: PlanUiStatus): string {
+  // Editing is allowed everywhere; these are the two states where saving
+  // does something the user should see coming.
+  if (status === "running") {
+    return "This item is running. The agent already has its own copy, so edits apply to the next run.";
+  }
+  if (status === "review") {
+    return "A run is awaiting review. Saving re-approves this source, so the run will not show it as changed.";
+  }
+  if (status === "done") {
+    return "This item is accepted. Editing the source will not reopen it.";
+  }
+  return "";
+}
+
 
 function uiStatus(artifact: PlanArtifact): PlanUiStatus {
   const latestRun = artifact.runs.at(-1);

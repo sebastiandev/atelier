@@ -8,6 +8,7 @@ import pytest
 from src.domain.artifacts.models import PrArtifact
 from src.domain.loop import actions, feedback, pr_lifecycle
 from src.domain.loop.dtos import (
+    LoopCommentReply,
     LoopPrConfig,
     PrStage,
 )
@@ -146,8 +147,8 @@ def test_feedback_opens_a_new_pass_with_selected_comment_context() -> None:
     assert target.run["status"] == "running"
 
 
-@pytest.mark.parametrize("comment_id", ["root", "reply"])
-def test_feedback_rejects_a_review_thread_last_answered_by_viewer(comment_id: str) -> None:
+def _thread_answered_by_viewer() -> LoopRunTarget:
+    """A review thread whose newest row is one of Atelier's own replies."""
     target = _accepted_target()
     pr_lifecycle.add_one_off_stage(
         target,
@@ -172,18 +173,43 @@ def test_feedback_rejects_a_review_thread_last_answered_by_viewer(comment_id: st
         {
             "id": "reply",
             "author": "seba",
-            "body": "This is intentional.",
+            "body": "Addressed in `a1b2c3d`.",
             "created_at": "2026-07-20T10:01:00Z",
             "kind": "review",
             "reply_target_id": "thread-1",
             "is_viewer": True,
+            "atelier_reply": True,
         },
     ]
+
+    return target
+
+
+def test_feedback_accepts_the_reviewer_comment_our_own_reply_sits_on_top_of() -> None:
+    """Our "Addressed in <sha>" reply is the thread's newest row, but it is
+    not an answer from the reviewer. Treating it as the head of the thread
+    retired every thread Atelier had ever replied to."""
+    target = _thread_answered_by_viewer()
+
+    pr_lifecycle.prepare_feedback(
+        target,
+        (pr_lifecycle.PrFeedbackItem("root", ""),),
+        "",
+    )
+
+    entry = target.run["loop"]["feedback"][-1]
+    assert entry["source"] == "pr_comment"
+    assert entry["items"][0]["ref"] == "root"
+
+
+def test_feedback_rejects_selecting_our_own_reply() -> None:
+    """Answering ourselves is never the request the user meant to send."""
+    target = _thread_answered_by_viewer()
 
     with pytest.raises(pr_lifecycle.PrStageInvalid, match="unavailable"):
         pr_lifecycle.prepare_feedback(
             target,
-            (pr_lifecycle.PrFeedbackItem(comment_id, ""),),
+            (pr_lifecycle.PrFeedbackItem("reply", ""),),
             "",
         )
 
@@ -752,3 +778,167 @@ def test_pr_feedback_without_a_review_is_answered_by_the_approval() -> None:
 
     assert [row["kind"] for row in loop["stages"]] == ["agent_task", "user_approval", "pr"]
     assert feedback.records(loop)[-1]["answered_by"] == "approve"
+
+
+def _target_with_one_old_comment() -> LoopRunTarget:
+    """An accepted PR run whose only comment predates the latest push."""
+    target = _accepted_target()
+    pr_lifecycle.add_one_off_stage(
+        target,
+        pr_lifecycle.PrSetup(name="feat: complete the goal"),
+    )
+    loop = target.run["loop"]
+    loop.pop("approval_decision")
+    target.run["status"] = "accepted"
+    loop["status"] = "accepted"
+    loop["stages"][-1]["status"] = "passed"
+    loop["stages"][-1]["push_at"] = "2026-07-20T12:00:00+00:00"
+    loop["pr"] = {"url": "https://github.com/acme/repo/pull/12"}
+    loop["pr_comments"] = [
+        {
+            "id": "comment-1",
+            "author": "reviewer",
+            "body": "Please handle this case.",
+            "created_at": "2026-07-20T10:00:00Z",
+            "kind": "review",
+            "reply_target_id": "thread-1",
+            "is_viewer": False,
+        }
+    ]
+    return target
+
+
+def test_feedback_accepts_a_comment_older_than_the_latest_push() -> None:
+    """A push is not an answer. The old rule retired every comment the user
+    had not selected, including ones written while the push was in flight."""
+    target = _target_with_one_old_comment()
+
+    pr_lifecycle.prepare_feedback(
+        target,
+        (pr_lifecycle.PrFeedbackItem("comment-1", ""),),
+        "",
+    )
+
+    assert target.run["loop"]["feedback"][-1]["items"][0]["ref"] == "comment-1"
+
+
+def test_feedback_rejects_a_dismissed_comment() -> None:
+    """Dismissal is the deliberate way to take a comment off the table."""
+    target = _target_with_one_old_comment()
+    pr_lifecycle.dismiss_comments(target, ("comment-1",))
+
+    with pytest.raises(pr_lifecycle.PrStageInvalid, match="unavailable"):
+        pr_lifecycle.prepare_feedback(
+            target,
+            (pr_lifecycle.PrFeedbackItem("comment-1", ""),),
+            "",
+        )
+
+
+def test_dismiss_leaves_an_addressed_comment_untouched() -> None:
+    """An addressed comment already has a state; dismissal must not relabel
+    it, or the history would claim the user ignored work that shipped."""
+    target = _target_with_one_old_comment()
+    target.run["loop"]["pr_comments"][0]["addressed_in_pass"] = 2
+
+    pr_lifecycle.dismiss_comments(target, ("comment-1",))
+
+    row = target.run["loop"]["pr_comments"][0]
+    assert row.get("dismissed_at") is None
+    assert row["addressed_in_pass"] == 2
+
+
+def test_the_pr_prompt_keys_each_addressed_comment_so_replies_can_be_written() -> None:
+    """The reply posted to a thread is written from this prompt. Without an id
+    per comment the stage had nothing to key its answers on and every thread
+    got the pass summary."""
+    target = _target_with_one_old_comment()
+    pr_lifecycle.prepare_feedback(
+        target,
+        (pr_lifecycle.PrFeedbackItem("comment-1", ""),),
+        "",
+    )
+
+    prompt = pr_lifecycle.prompt_context(target.run)
+
+    assert "[comment-1] Please handle this case." in prompt
+    assert "comment_replies" in prompt
+
+
+def test_completion_stores_each_reply_against_its_own_comment() -> None:
+    target = _target_with_one_old_comment()
+    pr_lifecycle.prepare_feedback(
+        target,
+        (pr_lifecycle.PrFeedbackItem("comment-1", ""),),
+        "",
+    )
+    stage_row = target.run["loop"]["stages"][-1]
+
+    pr_lifecycle.capture_completion(
+        _WorkStore(),  # type: ignore[arg-type]
+        target,
+        stage_row,
+        ("https://github.com/acme/repo/pull/12",),
+        (LoopCommentReply(comment_id="comment-1", reply="Guarded the empty branch."),),
+    )
+
+    row = target.run["loop"]["pr_comments"][0]
+    assert row["addressed_note"] == "Guarded the empty branch."
+    assert row["addressed_in_pass"] == 2
+
+
+def test_completion_stores_no_note_for_a_comment_the_push_did_not_answer() -> None:
+    """A reply keyed to a comment nobody selected must not leak onto it, and a
+    selected comment with no answer keeps no text rather than borrowing one."""
+    target = _target_with_one_old_comment()
+    pr_lifecycle.prepare_feedback(
+        target,
+        (pr_lifecycle.PrFeedbackItem("comment-1", ""),),
+        "",
+    )
+    stage_row = target.run["loop"]["stages"][-1]
+
+    pr_lifecycle.capture_completion(
+        _WorkStore(),  # type: ignore[arg-type]
+        target,
+        stage_row,
+        ("https://github.com/acme/repo/pull/12",),
+        (LoopCommentReply(comment_id="some-other-comment", reply="Unrelated."),),
+    )
+
+    row = target.run["loop"]["pr_comments"][0]
+    assert "addressed_note" not in row
+    assert row["addressed_in_pass"] == 2
+
+
+def test_a_users_own_reply_still_ends_the_thread() -> None:
+    """Only Atelier's machine replies are seen past. A reply the user typed on
+    GitHub is a real answer, and offering the comment underneath it for another
+    pass would send back work the user has already spoken about."""
+    target = _thread_answered_by_viewer()
+    reply = target.run["loop"]["pr_comments"][-1]
+    reply.pop("atelier_reply")
+    reply["body"] = "Good catch, handling that separately."
+
+    with pytest.raises(pr_lifecycle.PrStageInvalid, match="unavailable"):
+        pr_lifecycle.prepare_feedback(
+            target,
+            (pr_lifecycle.PrFeedbackItem("root", ""),),
+            "",
+        )
+
+
+def test_dismiss_skips_a_comment_a_pending_push_is_already_answering() -> None:
+    """Sent-to-Implement comments still read as open until the push lands, so
+    the panel offers Ignore on them. Honouring it would leave the pass running
+    and still post a public "Addressed in <sha>" reply on completion."""
+    target = _target_with_one_old_comment()
+    pr_lifecycle.prepare_feedback(
+        target,
+        (pr_lifecycle.PrFeedbackItem("comment-1", ""),),
+        "",
+    )
+
+    pr_lifecycle.dismiss_comments(target, ("comment-1",))
+
+    assert target.run["loop"]["pr_comments"][0].get("dismissed_at") is None

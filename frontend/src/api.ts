@@ -661,6 +661,12 @@ export type PrComment = {
   is_viewer?: boolean;
   addressed_in_pass?: number | null;
   reply_posted_at?: string | null;
+  /** Set when the user chose not to act on this comment. Optional so runs
+      written before the field round-trip unchanged. */
+  dismissed_at?: string | null;
+  /** Atelier posted this row itself. Distinguishes our machine reply from a
+      reply the user typed — both come back `is_viewer`. */
+  atelier_reply?: boolean;
 };
 
 export type LoopStepDefinition = {
@@ -1665,6 +1671,18 @@ export function sendWorkLoopRunPrFeedback(
   }).then((response) => jsonOrThrow<WorkLoopRun>(response));
 }
 
+export function dismissWorkLoopRunPrComments(
+  workSlug: string,
+  runId: string,
+  commentIds: string[],
+): Promise<WorkLoopRun> {
+  return fetch(`/api/works/${workSlug}/runs/${runId}/pr-dismiss`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ comment_ids: commentIds }),
+  }).then((response) => jsonOrThrow<WorkLoopRun>(response));
+}
+
 export function refreshWorkLoopRunPr(
   workSlug: string,
   runId: string,
@@ -1699,6 +1717,19 @@ export function sendPlanArtifactRunPrFeedback(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<PlanArtifactDetail>(response));
+}
+
+export function dismissPlanArtifactRunPrComments(
+  workSlug: string,
+  artifactId: string,
+  runId: string,
+  commentIds: string[],
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/runs/${runId}/pr-dismiss`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ comment_ids: commentIds }),
   }).then((response) => jsonOrThrow<PlanArtifactDetail>(response));
 }
 

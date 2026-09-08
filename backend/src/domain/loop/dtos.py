@@ -639,6 +639,21 @@ class LoopStageReport:
     finding_details: tuple[LoopFinding, ...] = ()
     criteria_coverage: tuple[LoopCriterionCoverage, ...] = ()
     changed_files: tuple[LoopChangedFile, ...] = ()
+    comment_replies: tuple[LoopCommentReply, ...] = ()
+
+
+@dataclass(frozen=True)
+class LoopCommentReply:
+    """What one push did about one specific pull-request comment.
+
+    A PR stage answers several comments in a single push. Without this the
+    reply posted to every one of them was the pass's own summary, so a
+    reviewer reading three different threads got three copies of the same
+    paragraph, none of which mentioned what they had asked.
+    """
+
+    comment_id: str
+    reply: str
 
 
 @dataclass(frozen=True)
@@ -700,6 +715,7 @@ __all__ = [
     "LoopChangedFile",
     "LoopCheckRequest",
     "LoopCheckResult",
+    "LoopCommentReply",
     "LoopContextKind",
     "LoopContextReference",
     "LoopContextResolution",

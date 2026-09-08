@@ -993,6 +993,12 @@ class SendPrFeedbackRequest(BaseModel):
     instruction: str = ""
 
 
+class DismissPrCommentsRequest(BaseModel):
+    """Comment ids the user has decided not to act on."""
+
+    comment_ids: list[str] = Field(default_factory=list)
+
+
 class RecentLoopRunResponse(BaseModel):
     """One row of the cross-work recent-runs listing.
 

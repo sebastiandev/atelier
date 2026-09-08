@@ -145,19 +145,30 @@ def _merge_comments(
                 "is_viewer": comment.is_viewer,
                 "addressed_in_pass": prior.get("addressed_in_pass"),
                 "reply_posted_at": prior.get("reply_posted_at"),
+                "dismissed_at": prior.get("dismissed_at"),
+                "addressed_note": prior.get("addressed_note"),
+                "atelier_reply": prior.get("atelier_reply"),
             }
         )
     remote_ids = {comment.id for comment in remote}
+    # A row the remote no longer returns is kept only when the run said
+    # something about it -- sent it through a pass, or dismissed it. Dropping
+    # a dismissed row would resurrect it as open on the next refresh.
     merged.extend(
         item
         for item in existing
         if actions.str_or_empty(item.get("id")) not in remote_ids
-        and item.get("addressed_in_pass") is not None
+        and (item.get("addressed_in_pass") is not None or item.get("dismissed_at"))
     )
     return merged
 
 
-def _addressed_body(loop: dict[str, Any], pass_number: int, note: str) -> str:
+def _addressed_body(
+    loop: dict[str, Any],
+    pass_number: int,
+    note: str,
+    addressed_note: str = "",
+) -> str:
     """Return the reply posted to a comment the loop has addressed.
 
     Points at the commit that carried the change rather than an Atelier pass
@@ -173,15 +184,25 @@ def _addressed_body(loop: dict[str, Any], pass_number: int, note: str) -> str:
     url = actions.str_or_empty(pr.get("head_commit_url"))
     sha = actions.str_or_empty(pr.get("head_sha"))
     if url and sha:
-        body = f"Addressed in [`{sha[:7]}`]({url})."
+        citation = f"[`{sha[:7]}`]({url})"
     elif sha:
-        body = f"Addressed in `{sha[:7]}`."
+        citation = f"`{sha[:7]}`"
     else:
-        body = f"Addressed in Atelier pass {pass_number}."
-    detail = _addressed_detail(loop, pass_number)
+        citation = f"Atelier pass {pass_number}"
+    # What the push said it did about *this* comment. The pass-level report
+    # used to fill this slot, which put one identical paragraph on every
+    # thread the push answered -- reviewers read it as a form letter and said
+    # so on the pull request. No per-comment answer now means no claim.
+    detail = _one_or_two_lines(addressed_note)
     if detail:
-        body += f" {detail}"
-    elif note:
+        # The stage's own sentence leads and carries whatever claim is true --
+        # it is asked to say so plainly when a comment was considered and
+        # deliberately not acted on, and "Addressed in <sha>. Left as is."
+        # contradicts itself on a public thread. The commit is a pointer
+        # after it, not an assertion about this comment.
+        return f"{detail} ({citation})"
+    body = f"Addressed in {citation}."
+    if note:
         # The user's instruction, kept labelled: it says what was asked for,
         # not what was done, and unlabelled it would read as the latter.
         body += f" Applied instruction: {note}"
@@ -189,31 +210,6 @@ def _addressed_body(loop: dict[str, Any], pass_number: int, note: str) -> str:
 
 
 _DETAIL_LIMIT = 240
-
-
-def _addressed_detail(loop: dict[str, Any], pass_number: int) -> str:
-    """One sentence on what the pass actually changed, if it said.
-
-    Read from the report of the stage that did the work rather than from the
-    instruction it was given: the reviewer already knows what they asked for,
-    and what they cannot see is what was done about it. Falls back to the
-    summary when a report carried no `changes`, and to nothing at all when the
-    pass said neither -- an empty line is better than a fabricated one.
-    """
-    stages = loop.get("stages")
-    if not isinstance(stages, list):
-        return ""
-    for stage in reversed(stages):
-        if not isinstance(stage, dict) or stage.get("kind") != "agent_task":
-            continue
-        for report in reversed(_comment_rows(stage.get("reports"))):
-            if report.get("pass_number") != pass_number:
-                continue
-            text = actions.str_or_empty(report.get("changes")) or actions.str_or_empty(
-                report.get("summary")
-            )
-            return _one_or_two_lines(text)
-    return ""
 
 
 def _one_or_two_lines(text: str) -> str:
@@ -276,7 +272,12 @@ async def _post_addressed_replies(
         if comment is None:
             continue
         note = _addressed_instruction(loop, comment.id)
-        body = _addressed_body(loop, pass_number, note)
+        body = _addressed_body(
+            loop,
+            pass_number,
+            note,
+            actions.str_or_empty(row.get("addressed_note")),
+        )
         try:
             reply = await reply_to_pr_comment(gateway, ref, comment, body)
         except Exception:
@@ -301,6 +302,10 @@ async def _post_addressed_replies(
                 "is_viewer": reply.is_viewer,
                 "addressed_in_pass": pass_number,
                 "reply_posted_at": posted_at,
+                # Ours, not the user's. Both are authored by the token so both
+                # come back `is_viewer`, but only a reply a person typed is an
+                # answer that should retire the thread.
+                "atelier_reply": True,
             }
         )
         try:

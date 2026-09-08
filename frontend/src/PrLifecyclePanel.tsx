@@ -7,11 +7,14 @@ import { prStatusTone } from "./LoopRunView";
 type FeedbackItem = { comment_id: string; instruction: string };
 /** `open` still needs a decision; the rest are kept for history.
  *
- *  `addressed` was sent back through the loop. `superseded` predates the
- *  latest push without having been sent, so the push probably covered it --
- *  we don't claim it did. Neither is selectable, and neither is dropped:
- *  a comment vanishing from the panel after a push reads as data loss. */
-type PrThreadState = "open" | "addressed" | "superseded";
+ *  `addressed` was sent back through the loop. `dismissed` is the user
+ *  saying they will not act on it. There used to be a third, `superseded`,
+ *  inferred from the comment predating the latest push -- it retired every
+ *  comment the user had *not* selected, which is the one thing the footer
+ *  promises will not happen, and it hid comments written while a push was
+ *  in flight. A push is no longer an input to this. Nothing is dropped:
+ *  a comment vanishing from the panel reads as data loss. */
+type PrThreadState = "open" | "addressed" | "dismissed";
 
 type PrCommentThread = {
   action: PrComment;
@@ -27,29 +30,26 @@ export function PrLifecyclePanel({
   busy,
   comments,
   feedbackInstruction = "",
+  onDismiss,
   onRefresh,
   onSendFeedback,
   pr,
-  pushAt,
   pushInFlight = false,
 }: {
   addressedComments?: Array<Record<string, unknown>>;
   busy: boolean;
   comments: PrComment[];
   feedbackInstruction?: string;
+  onDismiss?: (commentIds: string[]) => Promise<void>;
   onRefresh?: (force?: boolean) => Promise<void>;
   onSendFeedback?: (comments: FeedbackItem[], instruction: string) => Promise<void>;
   pr: PrLifecycle;
-  pushAt: string | null;
-  /** The PR stage is running: everything below the summary describes the PR
-      as it was *before* this push, so it is shown as superseded rather than
-      offered for reading. */
+  /** The PR stage is running: the comments below were fetched before this
+      push, so the panel says so. They stay readable and selectable -- a
+      comment written during a push is the most likely one to be missed. */
   pushInFlight?: boolean;
 }) {
-  const visible = useMemo(
-    () => prCommentThreads(comments, pushAt),
-    [comments, pushAt],
-  );
+  const visible = useMemo(() => prCommentThreads(comments), [comments]);
   const open_ = visible.filter((thread) => thread.state === "open");
   const actionable = open_.filter((thread) => thread.actionable);
   const history = visible.filter((thread) => thread.state !== "open");
@@ -152,8 +152,9 @@ export function PrLifecyclePanel({
               {pr.url ? `Updating PR #${pr.number ?? ""}` : "Opening the pull request"}
             </strong>
             <small>
-              Committing and pushing this pass. The comments below are from
-              before it — they refresh once the push lands.
+              Committing and pushing this pass. The comments below were read
+              before it — they refresh once the push lands, and stay open
+              until you send or dismiss them.
             </small>
           </span>
         </div>
@@ -163,7 +164,7 @@ export function PrLifecyclePanel({
         <em className={actionable.length > 0 && !terminal ? "tag warn" : "tag"}>{actionable.length} open</em>
         {open_.length > actionable.length && <em className="tag good">{open_.length - actionable.length} you replied</em>}
         {history.length > 0 && <em className="tag">{history.length} earlier</em>}
-        <span>since this push{pr.last_synced_at && <> · synced {relativeTime(pr.last_synced_at)}</>}</span>
+        <span>{pr.last_synced_at ? <>synced {relativeTime(pr.last_synced_at)}</> : "not synced yet"}</span>
         {terminal && <em className={`tag ${prStatusTone(pr.status)}`}>{pr.status} · read-only</em>}
         {!terminal && actionable.length > 0 && <label><input
           type="checkbox"
@@ -172,6 +173,11 @@ export function PrLifecyclePanel({
             event.target.checked ? new Set(actionable.map((thread) => thread.action.id)) : new Set(),
           )}
         /> select all</label>}
+        {!terminal && onDismiss && selectedCount > 0 && <button
+          className="btn ghost sm"
+          disabled={busy}
+          onClick={() => void onDismiss(actionable.filter((thread) => selected.has(thread.action.id)).map((thread) => thread.action.id))}
+        >Ignore {selectedCount}</button>}
         {onRefresh && <button className="btn sm" disabled={busy} onClick={() => void onRefresh(true)}><LoopIcon size={10} /> Check for comments</button>}
       </header>
 
@@ -217,10 +223,18 @@ export function PrLifecyclePanel({
                   placeholder="Optional instruction for the agent"
                   onChange={(event) => setInstructions((value) => ({ ...value, [comment.id]: event.target.value }))}
                 />}
+                {thread.actionable && !terminal && onDismiss && !checked && (
+                  <button
+                    className="btn ghost sm run-pr-comment-dismiss"
+                    disabled={busy}
+                    title="Keep it in history, stop offering it"
+                    onClick={() => void onDismiss([comment.id])}
+                  >Ignore</button>
+                )}
               </div>
             );
           })}
-          {open_.length === 0 && <p className="dim">No new comments since this push.</p>}
+          {open_.length === 0 && <p className="dim">No open comments.</p>}
           {history.length > 0 && (
             <div className="run-pr-history">
               <button type="button" onClick={() => setHistoryOpen((value) => !value)}>
@@ -235,7 +249,7 @@ export function PrLifecyclePanel({
                   <span className="run-pr-comment-content">
                     <span className="run-pr-history-meta">
                       <span className={thread.state === "addressed" ? "tag good" : "tag"}>
-                        {thread.state === "addressed" ? "sent to implement" : "before latest push"}
+                        {thread.state === "addressed" ? "sent to implement" : "dismissed"}
                       </span>
                       <strong>{thread.action.author}</strong>
                       {thread.action.location && <small>{thread.action.location}</small>}
@@ -270,17 +284,7 @@ export function PrLifecyclePanel({
   );
 }
 
-function createdAfter(createdAt: string, pushedAt: string | null): boolean {
-  if (!pushedAt) return true;
-  const created = Date.parse(createdAt);
-  const pushed = Date.parse(pushedAt);
-  return Number.isFinite(created) && Number.isFinite(pushed) && created > pushed;
-}
-
-function prCommentThreads(
-  comments: PrComment[],
-  pushedAt: string | null,
-): PrCommentThread[] {
+function prCommentThreads(comments: PrComment[]): PrCommentThread[] {
   const grouped = new Map<string, PrComment[]>();
   for (const comment of comments) {
     const id = comment.kind === "review" && comment.reply_target_id
@@ -290,12 +294,17 @@ function prCommentThreads(
   }
   return [...grouped.entries()].map(([id, rows]) => {
     const ordered = rows.sort((left, right) => left.created_at.localeCompare(right.created_at));
-    const latest = ordered.at(-1)!;
+    // The head of the thread, seeing past our own machine replies. Using the
+    // last row meant one of Atelier's "Addressed in <sha>" replies closed the
+    // thread for good, even when the reviewer answered it afterwards. Only
+    // `atelier_reply` rows are skipped, never every comment the token wrote:
+    // a reply the *user* typed is a real answer and still ends the thread.
+    const latest = [...ordered].reverse().find((row) => !row.atelier_reply) ?? ordered.at(-1)!;
     const state: PrThreadState = latest.addressed_in_pass != null
       ? "addressed"
-      : createdAfter(latest.created_at, pushedAt)
-        ? "open"
-        : "superseded";
+      : latest.dismissed_at
+        ? "dismissed"
+        : "open";
     return {
       id,
       root: ordered[0],
