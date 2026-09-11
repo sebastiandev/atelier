@@ -373,12 +373,19 @@ export function PlanningMode({
     ["--shell-left-width" as string]: `${planningRailWidth}px`,
   };
   const hasPlanningChat = planningChatSlug !== null;
+  // An agent-mode story owns the right dock (tracked PRs) and the canvas;
+  // the plan chat steps aside there and comes back on any other view.
+  const storyAgentMode =
+    view.kind === "artifact"
+    && artifact !== null
+    && (artifact.work_mode === "agents" || agents.some((a) => a.artifact_id === artifact.id));
   const showChatDock =
     !readOnly
     && chatOpen
     && hasPlanningChat
     && view.kind !== "run"
-    && view.kind !== "setup";
+    && view.kind !== "setup"
+    && !storyAgentMode;
   const planningReady = Boolean(planningChatSummary?.planning_readiness?.ready);
   // Stable across plan polls that return the same documents: a fresh array
   // each tick would rebuild `makePlanLinkTo`, defeat `MarkdownText`'s memo and
@@ -820,7 +827,7 @@ export function PlanningMode({
             onFilesEdited={onPlanningFilesEdited}
           />
         </aside>
-      ) : !readOnly && hasPlanningChat && view.kind !== "run" ? (
+      ) : !readOnly && hasPlanningChat && view.kind !== "run" && !storyAgentMode ? (
         <button className="pm-float-chat" onClick={() => onChatOpen(true)} title="Open plan chat" aria-label="Open plan chat">
           <ChatIcon size={18} />
         </button>
