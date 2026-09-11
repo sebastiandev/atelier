@@ -1690,14 +1690,6 @@ function PlanRail({
   const runningAgents = agents.filter((a) => a.status === "live" || a.status === "thinking").length;
   const setPlanningRailWidth = useLayoutStore((s) => s.setPlanningRailWidth);
   const activeProgress = counts.running + counts.review + counts.ready + counts.draft;
-  // One entry per story, from its latest run that opened a PR -- same rule as
-  // the story panel. Earlier runs' pull requests are history: their state is
-  // never refreshed again, so listing them shows stale "open" rows for work
-  // that has long since merged or been abandoned.
-  const pullRequests = plan.artifacts.flatMap((item) => {
-    const run = [...item.runs].reverse().find((entry) => entry.pr);
-    return run?.pr ? [{ artifactId: item.id, runId: run.id, pr: run.pr }] : [];
-  });
   return (
     <aside className="pm-rail">
       <div className="pm-mode-static">
@@ -1812,26 +1804,6 @@ function PlanRail({
                 );
               })}
             </div>
-          )}
-        </div>
-        <div className="pm-section-hd">
-          <span>Pull requests</span>
-          <span>{pullRequests.length}</span>
-        </div>
-        <div className="pm-rail-tracking">
-          {pullRequests.map(({ artifactId, runId, pr }) => (
-            <button
-              key={`${artifactId}:${runId}`}
-              className="pm-track-row rail"
-              onClick={() => onArtifact(artifactId)}
-            >
-              <span className={`pm-track-kind pr ${pr.status}`}>{pr.status}</span>
-              <strong>{pr.number ? `#${pr.number} ` : ""}{pr.title}</strong>
-              <small>{artifactId}</small>
-            </button>
-          ))}
-          {pullRequests.length === 0 && (
-            <div className="pm-empty-state">No pull requests.</div>
           )}
         </div>
       </div>
