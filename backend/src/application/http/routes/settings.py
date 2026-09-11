@@ -85,6 +85,12 @@ EDITOR_OPTIONS: tuple[ToolOptionRead, ...] = (
         command="mvim .",
         url_template="mvim://open?url={file_uri}",
     ),
+    ToolOptionRead(
+        value="emacs",
+        label="Emacs",
+        command="emacsclient -n -c .",
+        url_template=None,
+    ),
 )
 
 TERMINAL_OPTIONS: tuple[ToolOptionRead, ...] = (

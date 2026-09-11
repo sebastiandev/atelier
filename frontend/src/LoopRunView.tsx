@@ -25,6 +25,7 @@ import {
 } from "./api";
 import { ChatTile } from "./Chat";
 import { CreatePrDialog } from "./CreatePrDialog";
+import { openEditor, type EditorTarget } from "./openEditor";
 import {
   AlertIcon,
   BranchIcon,
@@ -57,7 +58,7 @@ import {
   LOOP_INSPECTOR_MIN,
   useLayoutStore,
 } from "./state/layout";
-import { editorUrl, useSettingsStore } from "./state/settings";
+import { useSettingsStore } from "./state/settings";
 import { type AgentEvent, useAgentStream } from "./useAgentStream";
 
 /** No `replay_limit` on the socket, which the supervisor reads as "replay the
@@ -365,6 +366,13 @@ function RunSurfaceContent({
   // are run-level, never the selected stage: a check or an approval has
   // no agent of its own but sits on the same workspace.
   const consoleAgentSlug = agent?.slug ?? selectedOccurrence?.agent_slug ?? null;
+  // Editor and console take the same target, so a command-launched
+  // editor lands where a URL-handler one does.
+  const editorTarget: EditorTarget | null = data.workspacePath
+    ? { kind: "run", workSlug, runId: data.id, path: workspacePath }
+    : consoleAgentSlug
+      ? { kind: "agent", agentSlug: consoleAgentSlug, path: workspacePath }
+      : null;
   const consoleTarget = data.workspacePath
     ? () => openRunInConsole(workSlug, data.id, terminal)
     : consoleAgentSlug
@@ -618,8 +626,10 @@ function RunSurfaceContent({
           discussionBusy={discussionBusy}
           onDiscuss={(stage, stageAgent) => void openDiscussion(stage, stageAgent)}
           onEditLoop={showingTerminalOccurrence ? onEditLoop : undefined}
-          onOpenEditor={!readOnly && workspacePath ? () => {
-            window.location.href = editorUrl(editor, workspacePath);
+          onOpenEditor={!readOnly && editorTarget ? () => {
+            void openEditor(editor, editorTarget).catch((reason: unknown) => {
+              setDiscussionError(reason instanceof Error ? reason.message : String(reason));
+            });
           } : undefined}
           onOpenConsole={!readOnly && consoleTarget ? () => {
             void consoleTarget().catch((reason) => {

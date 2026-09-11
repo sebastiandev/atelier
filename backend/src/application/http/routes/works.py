@@ -226,6 +226,7 @@ from src.domain.workstore.dtos import (
 )
 from src.domain.workstore.ports import TranscriptLog, WorkStore
 from src.domain.worktrees import WorktreeManager
+from src.infrastructure.filesystem.editor import launcher_for
 from src.infrastructure.filesystem.paths import WorkspacePaths
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 from src.infrastructure.filesystem.terminal import open_in_terminal
@@ -469,6 +470,41 @@ def open_run_in_console(
         lambda path: open_in_terminal(path, kind=kind),
         label="open in console",
     )
+
+
+@router.post(
+    "/works/{work_slug}/runs/{run_id}/open-in-editor",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def open_run_in_editor(
+    work_slug: str,
+    run_id: str,
+    loop_runs: LoopRunRepositoryDep,
+    workstore: WorkStoreDep,
+    settings: SettingsDep,
+    editor: str,
+) -> None:
+    """Open a run's workspace in an editor Atelier starts itself.
+
+    The twin of ``open-in-console``: same target, so a command-launched
+    editor lands exactly where a URL-handler one does.
+    """
+    launcher = launcher_for(editor)
+    if launcher is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"editor is not launched by Atelier: {editor}",
+        )
+    try:
+        record = loop_run_commands.get_run(
+            loop_runs,
+            loop_run_commands.LoopRunRequest(work_slug, run_id),
+        )
+    except loop_run_commands.RunNotFound as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    paths = WorkspacePaths(workspace_root=settings.workspace_root)
+    target = resolved(lambda: run_workspace(record, workstore, paths))
+    launch(target, launcher, label="open in editor")
 
 
 @router.post(

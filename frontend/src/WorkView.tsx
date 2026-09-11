@@ -95,6 +95,7 @@ import { CompleteWorkDialog } from "./CompleteWorkDialog";
 import { DeleteAgentDialog } from "./DeleteAgentDialog";
 import { DeleteWorkDialog } from "./DeleteWorkDialog";
 import { relativeToRoot } from "./editedPaths";
+import { openEditor } from "./openEditor";
 import { HandoffDialog } from "./HandoffDialog";
 import {
   anchoredMenuPosition,
@@ -156,7 +157,7 @@ import {
   WORK_RAIL_MAX,
   WORK_RAIL_MIN,
 } from "./state/layout";
-import { editorUrl, useSettingsStore } from "./state/settings";
+import { useSettingsStore } from "./state/settings";
 
 // Stable singleton so the selector below doesn't return a fresh ref on
 // every render — Zustand's default Object.is snapshot check would
@@ -1879,7 +1880,14 @@ export function WorkView({ workSlug }: { workSlug: string }) {
       } : undefined}
       onHandoff={work.status === "active" ? () => setHandoffSource(a) : undefined}
       onOpenInIde={() => {
-        window.location.href = editorUrl(editor, a.worktree_path);
+        void openEditor(editor, {
+          kind: "agent",
+          agentSlug: a.slug,
+          path: a.worktree_path,
+        }).catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          showToast(`Couldn't open editor: ${message}`);
+        });
       }}
       onOpenInConsole={() => {
         openAgentInConsole(a.slug, terminal)
