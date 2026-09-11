@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 ArtifactType = Literal["pr", "doc", "jira"]
 
@@ -68,6 +68,13 @@ class PrArtifact(BaseArtifact):
     url: str
     repo: str | None = None
     pr_etag: str | None = None
+    # Story-PR tracking state (``domain/artifacts/lifecycle.py``): the last
+    # fetched lifecycle, merged comment rows, feedback sent to the opening
+    # agent, and ``opener_spec`` -- a snapshot of that agent taken when the
+    # PR was recorded, so it can be relaunched after the row is deleted.
+    # ``None`` on rows that predate the column and on PRs never opened in
+    # the story view.
+    lifecycle: dict[str, Any] | None = None
 
 
 @dataclass(kw_only=True)
@@ -112,6 +119,7 @@ def make_artifact(
     doc_path: str | None = None,
     id: int | None = None,
     slug: str | None = None,
+    lifecycle: dict[str, Any] | None = None,
 ) -> Artifact:
     """Dispatcher that constructs the right concrete subclass.
 
@@ -135,6 +143,7 @@ def make_artifact(
             created_at=created_at,
             url=url,
             repo=repo,
+            lifecycle=lifecycle,
         )
     if type == "jira":
         if url is None:

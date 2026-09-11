@@ -1009,6 +1009,9 @@ export type PlanArtifact = {
   proposals: PlanArtifactProposal[];
   tracking: PlanTrackingLink[];
   accepted_summary_path: string | null;
+  // How the story is being worked. Missing/null until the first launch;
+  // "agents" is one-way — set by the first agent launched from the story.
+  work_mode?: "loop" | "agents" | null;
 };
 
 export type WorkPlan = {
@@ -1270,6 +1273,25 @@ export function requestPlanArtifactRunChanges(
       body: JSON.stringify({ note }),
     },
   ).then((r) => jsonOrThrow<PlanArtifactDetail>(r));
+}
+
+export type AcceptPlanArtifactPayload = {
+  summary: string;
+  changes?: string;
+  validation_evidence?: string;
+};
+
+/** Mark an agent-mode story done (no loop run). */
+export function acceptPlanArtifact(
+  workSlug: string,
+  artifactId: string,
+  payload: AcceptPlanArtifactPayload,
+): Promise<PlanArtifactDetail> {
+  return fetch(`/api/works/${workSlug}/plan/artifacts/${artifactId}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((response) => jsonOrThrow<PlanArtifactDetail>(response));
 }
 
 export type AcceptPlanArtifactRunPayload = {
@@ -1914,6 +1936,8 @@ export type AgentSummary = {
   // when provisioned, else the source folder. Surfaced on the tile so
   // the user can reveal it in their file browser.
   worktree_path: string;
+  // Planning story the agent was launched from, if any.
+  artifact_id?: string | null;
 };
 
 export function listAgents(workSlug: string): Promise<AgentSummary[]> {
@@ -2028,6 +2052,9 @@ export type CreateAgentPayload = {
   // HEAD (default); the agent picks a branch name via `git switch -c`
   // when it's ready.
   branch_name?: string | null;
+  // Scope the agent to a planning story. The backend attaches the story
+  // source + a plan index as context and flips the story into agent mode.
+  artifact_id?: string;
 };
 
 export function listProviders(): Promise<ProviderDescriptor[]> {
@@ -2639,7 +2666,81 @@ export type ArtifactSummary = {
   // Doc-only enrichment, computed on each list call. ``null`` for
   // PR/Jira and for stale doc rows whose path no longer resolves.
   location_kind: ArtifactLocation | null;
+  // Planning story the artifact belongs to (its opening agent's story).
+  artifact_id?: string | null;
 };
+
+export type PrOpener = {
+  slug: string | null;
+  name: string;
+  persona: Persona;
+  // False when the opener was removed or stopped; feedback then relaunches
+  // an agent with the same specs.
+  present: boolean;
+  status?: AgentStatus | null;
+};
+
+export type PrArtifactLifecycle = PrLifecycle & {
+  body?: string;
+  additions?: number;
+  deletions?: number;
+  changed_files?: number;
+};
+
+export type PrFeedbackBatch = {
+  sent_at: string;
+  sent_to: string;
+  mode: "implement" | "discuss";
+  note: string;
+  head_sha_at_send: string;
+  replied_at: string | null;
+  comments: Array<{ comment_id: string; instruction: string }>;
+};
+
+/** Story PR view: the tracked PR artifact with its threads and feedback. */
+export type PrArtifactView = {
+  slug: string;
+  url: string;
+  status: string;
+  title: string;
+  artifact_id: string | null;
+  pr: PrArtifactLifecycle | null;
+  comments: Array<PrComment & { feedback_mode?: "implement" | "discuss"; feedback_sent_at?: string }>;
+  feedback: PrFeedbackBatch[];
+  opened_by: PrOpener | null;
+};
+
+export function getPrArtifactView(
+  workSlug: string,
+  artifactSlug: string,
+  opts: { refresh?: boolean; force?: boolean } = {},
+): Promise<PrArtifactView> {
+  const params = new URLSearchParams();
+  if (opts.refresh === false) params.set("refresh", "false");
+  if (opts.force) params.set("force", "true");
+  const query = params.toString();
+  return fetch(`/api/works/${workSlug}/artifacts/${artifactSlug}/pr${query ? `?${query}` : ""}`).then(
+    (r) => jsonOrThrow<PrArtifactView>(r),
+  );
+}
+
+export type SendPrArtifactFeedbackPayload = {
+  comments: Array<{ comment_id: string; instruction: string }>;
+  note: string;
+  mode: "implement" | "discuss";
+};
+
+export function sendPrArtifactFeedback(
+  workSlug: string,
+  artifactSlug: string,
+  payload: SendPrArtifactFeedbackPayload,
+): Promise<{ view: PrArtifactView; target_slug: string; relaunched: boolean }> {
+  return fetch(`/api/works/${workSlug}/artifacts/${artifactSlug}/pr/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).then((r) => jsonOrThrow<{ view: PrArtifactView; target_slug: string; relaunched: boolean }>(r));
+}
 
 export function listArtifacts(workSlug: string): Promise<ArtifactSummary[]> {
   return fetch(`/api/works/${workSlug}/artifacts`).then((r) =>

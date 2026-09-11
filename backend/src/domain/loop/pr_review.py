@@ -356,4 +356,15 @@ def _addressed_instruction(loop: dict[str, Any], comment_id: str) -> str:
     return ""
 
 
-__all__ = ["PrReviewUnavailable", "post_addressed_replies", "refresh"]
+# Shared with the story-PR tracker (``commands/artifacts/pr_feedback.py``) so
+# both surfaces keep one comment-row shape.
+merge_comments = _merge_comments
+domain_comment = _domain_comment
+
+__all__ = [
+    "PrReviewUnavailable",
+    "domain_comment",
+    "merge_comments",
+    "post_addressed_replies",
+    "refresh",
+]

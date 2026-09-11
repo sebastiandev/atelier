@@ -21,6 +21,7 @@ from typing import Any
 
 from src.domain.agents.context_render import render_agent_contexts
 from src.domain.artifacts import Artifact, make_artifact, validate_status
+from src.domain.artifacts.lifecycle import opener_spec
 from src.domain.artifacts.models import PrArtifact
 from src.domain.loop.dtos import LoopBrief
 from src.domain.models import Agent, AgentStatus, Context, Handoff, Work
@@ -404,6 +405,7 @@ class WorkStoreService:
                 # NULL for "no options" — keeps the on-disk shape uniform
                 # with rows created before this column existed.
                 options=dict(req.options) if req.options else None,
+                artifact_id=req.artifact_id,
             )
             agent = self._repo.add_agent(agent)
             slug = _require_slug(agent)
@@ -682,6 +684,7 @@ class WorkStoreService:
             validate_status(req.type, req.status)
             parent = self._require_work(req.work_slug)
             agent_id: int | None = None
+            agent: Agent | None = None
             if req.agent_slug is not None:
                 agent = self._repo.get_agent_by_slug(req.agent_slug)
                 if agent is None:
@@ -700,6 +703,13 @@ class WorkStoreService:
                 repo=req.repo,
                 url=req.url,
                 doc_path=req.doc_path,
+                # ``agent_id`` is ON DELETE SET NULL; the snapshot is what lets
+                # a story PR relaunch its opener after the row is gone.
+                lifecycle=(
+                    {"opener_spec": opener_spec(agent)}
+                    if req.type == "pr" and agent is not None
+                    else None
+                ),
             )
             return self._repo.add_artifact(artifact)
 
@@ -756,6 +766,20 @@ class WorkStoreService:
     def update_pr_artifact_etag(self, slug: str, pr_etag: str) -> None:
         with self._lock:
             self._repo.update_pr_artifact_etag(slug, pr_etag)
+
+    def update_pr_artifact_lifecycle(self, slug: str, lifecycle: dict[str, Any]) -> None:
+        with self._lock:
+            self._repo.update_pr_artifact_lifecycle(slug, lifecycle)
+
+    def update_artifact_agent(self, slug: str, agent_slug: str | None) -> None:
+        with self._lock:
+            agent_id: int | None = None
+            if agent_slug is not None:
+                agent = self._repo.get_agent_by_slug(agent_slug)
+                if agent is None:
+                    raise ValueError(f"agent not found: {agent_slug}")
+                agent_id = agent.id
+            self._repo.update_artifact_agent(slug, agent_id)
 
     def record_handoff(self, req: RecordHandoffRequest) -> Handoff:
         with self._lock:

@@ -49,6 +49,7 @@ from src.domain.planning.dtos import (
     PlanReadiness,
     PlanRunStatus,
     PlanTrackingKind,
+    PlanWorkMode,
 )
 
 
@@ -158,6 +159,10 @@ class NewAgentRequest(BaseModel):
     # the branch name later via ``git switch -c``. Ignored when
     # ``fork_from_agent`` is set.
     branch_name: str | None = None
+    # Planning story to scope the agent to. When set the backend attaches
+    # the story's source file and a plan index as context and flips the
+    # story into agent mode.
+    artifact_id: str | None = None
 
 
 class PatchAgentRequest(BaseModel):
@@ -187,6 +192,7 @@ class AgentSummary(BaseModel):
     # For non-git sources it falls back to ``folder``. Surfaced on the
     # agent tile so the user can reveal it in their file browser.
     worktree_path: str
+    artifact_id: str | None = None
 
 
 class TranscriptChunkResponse(BaseModel):
@@ -436,6 +442,8 @@ class ArtifactSummary(BaseModel):
     # ``pending`` and ``committed`` are doc-only status values derived
     # from the file's relationship to its repo HEAD.
     location_kind: str | None = None
+    # Planning story the artifact belongs to (its opening agent's story).
+    artifact_id: str | None = None
 
 
 class NewHandoffRequest(BaseModel):
@@ -835,6 +843,7 @@ class PlanArtifactResponse(BaseModel):
     proposals: list[PlanArtifactProposalResponse] = Field(default_factory=list)
     tracking: list[PlanTrackingLinkResponse] = Field(default_factory=list)
     accepted_summary_path: str | None = None
+    work_mode: PlanWorkMode | None = None
 
 
 class WorkPlanResponse(BaseModel):
@@ -874,6 +883,14 @@ class AcceptPlanArtifactRequest(BaseModel):
     skipped_scope: str = ""
     blockers: str = ""
     decisions: str = ""
+    changes: str = ""
+    validation_evidence: str = ""
+
+
+class AcceptPlanArtifactDirectRequest(BaseModel):
+    """Mark an agent-mode story done: a user-written summary, no run."""
+
+    summary: str = ""
     changes: str = ""
     validation_evidence: str = ""
 
@@ -991,6 +1008,45 @@ class SendPrFeedbackRequest(BaseModel):
 
     comments: list[PrFeedbackCommentRequest] = Field(default_factory=list)
     instruction: str = ""
+
+
+class PrOpenerResponse(BaseModel):
+    """The agent that opened a story PR -- live row when present, else the
+    snapshot it was recorded with."""
+
+    slug: str | None = None
+    name: str
+    persona: Persona
+    present: bool
+    status: AgentStatus | None = None
+
+
+class PrArtifactViewResponse(BaseModel):
+    """Story PR view: lifecycle snapshot, threads, feedback, opener."""
+
+    slug: str
+    url: str
+    status: str
+    title: str
+    artifact_id: str | None = None
+    pr: dict[str, Any] | None = None
+    comments: list[dict[str, Any]] = Field(default_factory=list)
+    feedback: list[dict[str, Any]] = Field(default_factory=list)
+    opened_by: PrOpenerResponse | None = None
+
+
+class SendPrArtifactFeedbackRequest(BaseModel):
+    """Selected threads routed to the PR's opener as work or a question."""
+
+    comments: list[PrFeedbackCommentRequest] = Field(default_factory=list)
+    note: str = ""
+    mode: Literal["implement", "discuss"] = "implement"
+
+
+class SendPrArtifactFeedbackResponse(BaseModel):
+    view: PrArtifactViewResponse
+    target_slug: str
+    relaunched: bool
 
 
 class DismissPrCommentsRequest(BaseModel):

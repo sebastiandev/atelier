@@ -39,10 +39,18 @@ from src.domain.commands.agents import (
     reconnect,
     rename,
     start,
+    start_for_artifact,
     switch_thread,
 )
 from src.domain.connections import ConnectionStore, ContextFetchError
+from src.domain.loop.ports import LoopRunRepository
 from src.domain.models import Agent, Context
+from src.domain.planning.ports import PlanningFiles
+from src.domain.planning.service import (
+    PlanArtifactNotExecutable,
+    PlanArtifactNotFound,
+    PlanningNotStarted,
+)
 from src.domain.sharedfolders.ports import SharedFolderStore, ShareProvisioner
 from src.domain.supervisor import AgentSupervisorService
 from src.domain.workstore.ports import TranscriptLog, WorkStore
@@ -104,7 +112,17 @@ def get_transcript_log(request: Request) -> TranscriptLog:
     return request.app.state.transcript_log  # type: ignore[no-any-return]
 
 
+def get_planningfiles(request: Request) -> PlanningFiles:
+    return request.app.state.planningfiles  # type: ignore[no-any-return]
+
+
+def get_loop_run_repository(request: Request) -> LoopRunRepository:
+    return request.app.state.loop_runs  # type: ignore[no-any-return]
+
+
 WorkStoreDep = Annotated[WorkStore, Depends(get_workstore)]
+PlanningFilesDep = Annotated[PlanningFiles, Depends(get_planningfiles)]
+LoopRunRepositoryDep = Annotated[LoopRunRepository, Depends(get_loop_run_repository)]
 TranscriptLogDep = Annotated[TranscriptLog, Depends(get_transcript_log)]
 SupervisorDep = Annotated[AgentSupervisorService, Depends(get_supervisor)]
 WorktreeDep = Annotated[WorktreeManager, Depends(get_worktree_manager)]
@@ -194,6 +212,8 @@ async def create_agent(
     share_provisioner: ShareProvisionerDep,
     adapter_factory: AgentAdapterFactoryDep,
     settings: SettingsDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
 ) -> AgentSummary:
     req = start.StartAgentRequest(
         work_slug=work_slug,
@@ -213,18 +233,37 @@ async def create_agent(
         ),
         fork_from_agent=payload.fork_from_agent,
         branch_name=payload.branch_name,
+        artifact_id=payload.artifact_id,
     )
     try:
-        agent = await start.execute(
-            workstore,
-            supervisor,
-            worktree_manager,
-            connection_store,
-            sharestore,
-            share_provisioner,
-            adapter_factory,
-            req,
-        )
+        if req.artifact_id is not None:
+            agent = await start_for_artifact.execute(
+                workstore,
+                planningfiles,
+                loop_runs,
+                supervisor,
+                worktree_manager,
+                connection_store,
+                sharestore,
+                share_provisioner,
+                adapter_factory,
+                req,
+            )
+        else:
+            agent = await start.execute(
+                workstore,
+                supervisor,
+                worktree_manager,
+                connection_store,
+                sharestore,
+                share_provisioner,
+                adapter_factory,
+                req,
+            )
+    except (PlanningNotStarted, PlanArtifactNotFound) as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except PlanArtifactNotExecutable as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     except start.WorkNotFound as e:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except start.WorkNotActive as e:
@@ -556,6 +595,7 @@ def _to_summary(work_slug: str, agent: Agent, paths: WorkspacePaths) -> AgentSum
         status=agent.status,
         started_at=agent.started_at,
         stopped_at=agent.stopped_at,
+        artifact_id=agent.artifact_id,
         worktree_path=str(
             worktree_or_folder(
                 paths,

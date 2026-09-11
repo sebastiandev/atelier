@@ -153,6 +153,12 @@ class PrLifecycle:
     # which is what a reviewer wants to be pointed at.
     head_sha: str = ""
     head_commit_url: str = ""
+    # Description and diff stat, shown on the story PR view. Blank / zero
+    # when the provider did not return them.
+    body: str = ""
+    additions: int = 0
+    deletions: int = 0
+    changed_files: int = 0
 
 
 @dataclass(frozen=True)

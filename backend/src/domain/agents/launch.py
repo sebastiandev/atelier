@@ -51,6 +51,7 @@ class AgentLaunchRequest:
     branch_name: str | None = None
     worktree_slug: str | None = None
     approved_command_prefixes: tuple[str, ...] = ()
+    artifact_id: str | None = None
 
 
 class WorkNotFound(ValueError):
@@ -126,6 +127,7 @@ async def launch_agent(
                 contexts=req.contexts,
                 options=dict(req.options),
                 worktree_slug=req.worktree_slug,
+                artifact_id=req.artifact_id,
             )
         )
     except ValueError as exc:

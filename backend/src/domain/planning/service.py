@@ -43,6 +43,7 @@ from src.domain.planning.dtos import (
     PlanOverview,
     PlanRunStatus,
     PlanTrackingLink,
+    PlanWorkMode,
     WorkPlanView,
 )
 from src.domain.planning.loop import loop_status_for_run_status
@@ -366,6 +367,7 @@ class PlanningService:
             runs=_runs(manifest, artifact_id, self._files, work_slug, self._loop_runs),
             proposals=_proposals(manifest, artifact_id),
             tracking=_tracking(manifest, artifact_id),
+            work_mode=_work_mode(manifest, artifact_id),
             accepted_summary_path=(
                 self._files.absolute_path(work_slug, accepted_summary_path)
                 if accepted_summary_path
@@ -758,6 +760,11 @@ def _proposals(
             )
         )
     return out
+
+
+def _work_mode(manifest: dict[str, Any], artifact_id: str) -> PlanWorkMode | None:
+    raw = _dict(manifest.get("artifact_modes")).get(artifact_id)
+    return raw if raw in ("loop", "agents") else None
 
 
 def _tracking(manifest: dict[str, Any], artifact_id: str) -> list[PlanTrackingLink]:

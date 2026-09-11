@@ -72,6 +72,9 @@ class ArtifactView:
     repo: str | None
     doc_path: str | None
     location_kind: LocationKind | None
+    # Planning story the artifact belongs to: the opening agent's story, or
+    # (for a PR whose opener was removed) the story in its opener snapshot.
+    artifact_id: str | None = None
 
 
 def execute(
@@ -92,9 +95,13 @@ def execute(
     agent_id_to_slug: dict[int, str | None] = {
         a.id: a.slug for a in agents if a.id is not None
     }
+    agent_id_to_story: dict[int, str | None] = {
+        a.id: a.artifact_id for a in agents if a.id is not None
+    }
     context = _ViewContext(
         work_slug=work_slug,
         agent_id_to_slug=agent_id_to_slug,
+        agent_id_to_story=agent_id_to_story,
         share_roots=share_roots,
         resolve_worktree=resolve_worktree,
     )
@@ -109,6 +116,7 @@ class _ViewContext:
 
     work_slug: str
     agent_id_to_slug: dict[int, str | None]
+    agent_id_to_story: dict[int, str | None]
     share_roots: list[Path]
     resolve_worktree: WorktreeResolver
 
@@ -137,7 +145,16 @@ def _(artifact: PrArtifact, context: _ViewContext) -> ArtifactView:
         repo=artifact.repo,
         doc_path=None,
         location_kind=None,
+        artifact_id=_pr_story(artifact, context),
     )
+
+
+def _pr_story(artifact: PrArtifact, context: _ViewContext) -> str | None:
+    if artifact.agent_id is not None and artifact.agent_id in context.agent_id_to_story:
+        return context.agent_id_to_story[artifact.agent_id]
+    spec = (artifact.lifecycle or {}).get("opener_spec")
+    story = spec.get("artifact_id") if isinstance(spec, dict) else None
+    return story if isinstance(story, str) and story else None
 
 
 @_to_view.register

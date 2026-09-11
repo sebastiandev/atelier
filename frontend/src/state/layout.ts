@@ -7,6 +7,8 @@ export const HOME_RAIL_MIN = 360;
 export const HOME_RAIL_MAX = 560;
 export const PLANNING_RAIL_MIN = 248;
 export const PLANNING_RAIL_MAX = 420;
+export const PLANNING_DOC_MIN = 320;
+export const PLANNING_DOC_MAX = 900;
 export const PLANNING_DOCK_MIN = 340;
 export const PLANNING_DOCK_MAX = 620;
 export const LOOP_INSPECTOR_MIN = 340;
@@ -17,6 +19,12 @@ type LayoutState = {
   loopInspectorWidth: number;
   planningDockWidth: number;
   planningRailWidth: number;
+  /** Story doc column folded to a strip on the agent-mode canvas. */
+  planningDocCollapsed: boolean;
+  setPlanningDocCollapsed: (collapsed: boolean) => void;
+  /** Story doc column width on the agent-mode canvas. */
+  planningDocWidth: number;
+  setPlanningDocWidth: (width: number) => void;
   setPlanningDockWidth: (width: number) => void;
   setPlanningRailWidth: (width: number) => void;
   setHomeRailWidth: (width: number) => void;
@@ -36,6 +44,11 @@ export const useLayoutStore = create<LayoutState>()(
       loopInspectorWidth: 420,
       planningDockWidth: 420,
       planningRailWidth: 296,
+      planningDocCollapsed: false,
+      setPlanningDocCollapsed: (collapsed) => set({ planningDocCollapsed: collapsed }),
+      planningDocWidth: 404,
+      setPlanningDocWidth: (width) =>
+        set({ planningDocWidth: clamp(width, PLANNING_DOC_MIN, PLANNING_DOC_MAX) }),
       setPlanningDockWidth: (width) =>
         set({ planningDockWidth: clamp(width, PLANNING_DOCK_MIN, PLANNING_DOCK_MAX) }),
       setPlanningRailWidth: (width) =>

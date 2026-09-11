@@ -11,7 +11,30 @@ import subprocess
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
-from src.application.http.routes.works import WorkStoreDep
+from src.application.http.routes.works import (
+    AgentAdapterFactoryDep,
+    ConnectionStoreDep,
+    SettingsDep,
+    ShareProvisionerDep,
+    ShareStoreDep,
+    SupervisorDep,
+    WorkStoreDep,
+    WorktreeDep,
+)
+from src.application.http.schemas import (
+    PrArtifactViewResponse,
+    PrOpenerResponse,
+    SendPrArtifactFeedbackRequest,
+    SendPrArtifactFeedbackResponse,
+)
+from src.domain.agents.launch import (
+    AgentFolderMissing,
+    InvalidProviderConfig,
+    WorkNotActive,
+)
+from src.domain.commands.artifacts import pr_feedback
+from src.domain.supervisor import AgentTerminated
+from src.domain.worktrees import WorktreeProvisionFailed
 from src.infrastructure.filesystem.reveal import open_in_file_browser
 
 router = APIRouter()
@@ -92,3 +115,141 @@ def reveal_artifact_endpoint(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"reveal failed: {exc}",
         ) from exc
+
+
+@router.get(
+    "/works/{work_slug}/artifacts/{artifact_slug}/pr",
+    response_model=PrArtifactViewResponse,
+)
+async def get_pr_artifact_view(
+    work_slug: str,
+    artifact_slug: str,
+    request: Request,
+    workstore: WorkStoreDep,
+    refresh: bool = True,
+    force: bool = False,
+) -> PrArtifactViewResponse:
+    """Story PR view: fetch the PR's threads (unless ``refresh=false``), post
+    any replies owed for pushed feedback, and return the stored state."""
+    try:
+        if refresh:
+            poller = getattr(request.app.state, "pr_status_poller", None)
+            gateway = poller.lifecycle_gateway() if poller is not None else None
+            if gateway is not None:
+                try:
+                    view = await pr_feedback.refresh(
+                        workstore,
+                        gateway,
+                        pr_feedback.RefreshRequest(
+                            work_slug=work_slug, artifact_slug=artifact_slug, force=force
+                        ),
+                    )
+                    return _to_pr_view(view)
+                except pr_feedback.PrUnavailable:
+                    # Stale state beats an empty page: fall through to what
+                    # the row already holds.
+                    pass
+        view = pr_feedback.get_view(workstore, work_slug, artifact_slug)
+    except pr_feedback.PrArtifactNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    return _to_pr_view(view)
+
+
+@router.post(
+    "/works/{work_slug}/artifacts/{artifact_slug}/pr/feedback",
+    response_model=SendPrArtifactFeedbackResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def send_pr_artifact_feedback(
+    work_slug: str,
+    artifact_slug: str,
+    payload: SendPrArtifactFeedbackRequest,
+    workstore: WorkStoreDep,
+    supervisor: SupervisorDep,
+    worktree_manager: WorktreeDep,
+    connection_store: ConnectionStoreDep,
+    sharestore: ShareStoreDep,
+    share_provisioner: ShareProvisionerDep,
+    adapter_factory: AgentAdapterFactoryDep,
+    settings: SettingsDep,
+) -> SendPrArtifactFeedbackResponse:
+    """Send selected threads to the agent that opened the PR (relaunching it
+    from its snapshot when it was removed)."""
+    try:
+        result = await pr_feedback.send_feedback(
+            workstore,
+            supervisor,
+            pr_feedback.LaunchDeps(
+                worktree_manager=worktree_manager,
+                connection_store=connection_store,
+                sharestore=sharestore,
+                share_provisioner=share_provisioner,
+                adapter_factory=adapter_factory,
+                settings=settings,
+            ),
+            pr_feedback.SendFeedbackRequest(
+                work_slug=work_slug,
+                artifact_slug=artifact_slug,
+                mode=payload.mode,
+                comment_ids=tuple(item.comment_id for item in payload.comments),
+                instructions={
+                    item.comment_id: item.instruction
+                    for item in payload.comments
+                    if item.instruction
+                },
+                note=payload.note,
+            ),
+        )
+    except pr_feedback.PrArtifactNotFound as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except (pr_feedback.OpenerUnknown, WorkNotActive, AgentTerminated) as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except (
+        pr_feedback.FeedbackInvalid,
+        InvalidProviderConfig,
+        AgentFolderMissing,
+        WorktreeProvisionFailed,
+    ) as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
+    return SendPrArtifactFeedbackResponse(
+        view=_to_pr_view(result.view),
+        target_slug=result.target_slug,
+        relaunched=result.relaunched,
+    )
+
+
+def _to_pr_view(view: pr_feedback.PrView) -> PrArtifactViewResponse:
+    artifact = view.artifact
+    spec = view.lifecycle.get("opener_spec")
+    opened_by: PrOpenerResponse | None = None
+    if view.opener is not None:
+        opened_by = PrOpenerResponse(
+            slug=view.opener.slug,
+            name=view.opener.name,
+            persona=view.opener.persona,
+            present=view.opener.status not in ("stopped", "detached"),
+            status=view.opener.status,
+        )
+    elif isinstance(spec, dict) and spec.get("provider"):
+        opened_by = PrOpenerResponse(
+            slug=None,
+            name=str(spec.get("name") or "Agent"),
+            persona=spec.get("persona") or "developer",
+            present=False,
+        )
+    assert artifact.slug is not None
+    return PrArtifactViewResponse(
+        slug=artifact.slug,
+        url=artifact.url,
+        status=artifact.status,
+        title=artifact.title,
+        artifact_id=(
+            view.opener.artifact_id
+            if view.opener is not None
+            else (spec.get("artifact_id") if isinstance(spec, dict) else None)
+        ),
+        pr=view.lifecycle.get("pr"),
+        comments=[row for row in view.lifecycle.get("comments") or [] if isinstance(row, dict)],
+        feedback=[row for row in view.lifecycle.get("feedback") or [] if isinstance(row, dict)],
+        opened_by=opened_by,
+    )

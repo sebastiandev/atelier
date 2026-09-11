@@ -25,7 +25,7 @@ from src.infrastructure.database.tables import (
     works_table,
 )
 
-CURRENT_SCHEMA_VERSION = 25
+CURRENT_SCHEMA_VERSION = 27
 
 
 class SchemaMismatchError(RuntimeError):
@@ -302,6 +302,19 @@ def initialize_database(engine: Engine, workspace_root: Path | None = None) -> N
                     )
                 )
             existing = 25
+        if existing == 25:
+            # v25 -> v26: agents launched from a planning story remember
+            # the story. Nullable so canvas agents and older rows read as
+            # "not story-scoped".
+            if not _has_column(conn, "agents", "artifact_id"):
+                conn.execute(text("ALTER TABLE agents ADD COLUMN artifact_id TEXT"))
+            existing = 26
+        if existing == 26:
+            # v26 -> v27: story PRs keep their fetched lifecycle, comment
+            # threads and feedback on the artifact row.
+            if not _has_column(conn, "artifacts", "lifecycle"):
+                conn.execute(text("ALTER TABLE artifacts ADD COLUMN lifecycle TEXT"))
+            existing = 27
         if existing == CURRENT_SCHEMA_VERSION:
             conn.execute(
                 schema_version_table.update().values(version=CURRENT_SCHEMA_VERSION)

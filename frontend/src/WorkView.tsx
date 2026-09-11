@@ -14,6 +14,7 @@ import {
 
 import { AgentTile } from "./AgentTile";
 import {
+  acceptPlanArtifact,
   type AgentSummary,
   type ArtifactSummary,
   type ChatGrounding,
@@ -243,6 +244,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     forkFromAgent?: { slug: string; name: string; folder: string };
     initialGoal?: string;
     initialContexts?: ContextEntry[];
+    lockedContexts?: ContextEntry[];
+    artifactId?: string;
   } | null>(null);
   const [handoffSource, setHandoffSource] = useState<AgentSummary | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AgentSummary | null>(null);
@@ -1766,9 +1769,28 @@ export function WorkView({ workSlug }: { workSlug: string }) {
     openPlanningView({ kind: "setup", id: detail.artifact.id });
   }
 
+  /** New agent from a story: the story .md is locked in, the plan sources
+   *  ride along as removable chips, and the backend scopes the agent to the
+   *  story (``artifact_id``). */
+  function handleNewStoryAgent(artifact: PlanArtifact) {
+    const sources = (plan?.artifacts ?? []).filter((item) => !item.executable);
+    setAgentDialogPrefill({
+      artifactId: artifact.id,
+      lockedContexts: [{ type: "file", value: artifact.source_ref, conn_id: null }],
+      initialContexts: sources.map((item) => ({
+        type: "file",
+        value: item.source_ref,
+        conn_id: null,
+      })),
+    });
+    setAgentDialogOpen(true);
+  }
+
   async function handleCreateAgent(payload: CreateAgentPayload) {
     const created = await createAgent(workSlug, payload);
     const next = await refreshAgents();
+    // A story launch flips the story into agent mode server-side.
+    if (payload.artifact_id) await refreshPlan(payload.artifact_id);
     // If the new agent was forked from a source, position it
     // immediately after that source in the rail/canvas. Capture the
     // current rendered order so the override stores a complete order
@@ -1836,6 +1858,75 @@ export function WorkView({ workSlug }: { workSlug: string }) {
   if (!work) {
     return <div className="work-loading hint">Loading…</div>;
   }
+
+  const renderAgentTile = (a: AgentSummary) => (
+    <AgentTile
+      agentSlug={a.slug}
+      workSlug={workSlug}
+      mode="tile"
+      persona={a.persona}
+      agentName={a.name}
+      provider={a.provider}
+      model={a.model}
+      readOnly={work.status !== "active"}
+      worktreePath={a.worktree_path}
+      onClose={() => {
+        closeAgent(workSlug, a.slug);
+        if (focusedSlug === a.slug) setFocusedSlug(null);
+      }}
+      onDetach={work.status === "active" ? () => {
+        void handleDetach(a.slug);
+      } : undefined}
+      onHandoff={work.status === "active" ? () => setHandoffSource(a) : undefined}
+      onOpenInIde={() => {
+        window.location.href = editorUrl(editor, a.worktree_path);
+      }}
+      onOpenInConsole={() => {
+        openAgentInConsole(a.slug, terminal)
+          .then(() => {
+            showToast(
+              `Opened in ${terminal === "system" ? "your terminal" : terminal}`,
+            );
+          })
+          .catch(async (err) => {
+            const copied = await navigator.clipboard
+              ?.writeText(a.worktree_path)
+              .then(() => true)
+              .catch(() => false);
+            const message =
+              err instanceof Error ? err.message : String(err);
+            showToast(
+              copied
+                ? `Couldn't open terminal — path copied to clipboard. (${message})`
+                : `Couldn't open terminal: ${message}`,
+            );
+          });
+      }}
+      onRevealWorktree={() => {
+        revealAgent(a.slug).catch(() => {
+          navigator.clipboard
+            ?.writeText(a.worktree_path)
+            .catch(() => {});
+        });
+      }}
+      onRevealAtelierDir={() => {
+        revealAgent(a.slug, "atelier").catch((err) => {
+          showToast(
+            `Couldn't open Atelier folder: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        });
+      }}
+      onRename={work.status === "active" ? (name) =>
+        setAgents((curr) =>
+          curr.map((x) =>
+            x.slug === a.slug ? { ...x, name } : x,
+          ),
+        )
+      : undefined}
+    />
+  );
 
   const canvasAgents = orderedAgents.filter(
     (a) => !closedSlugs.includes(a.slug),
@@ -2051,6 +2142,37 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           onApprovePlan={handleApprovePlan}
           onCreateBug={handleCreatePlanBug}
           onLaunch={handleLaunchPlanArtifact}
+          agents={orderedAgents}
+          closedAgentSlugs={closedSlugs}
+          focusedAgentSlug={focusedSlug}
+          onFocusAgent={setFocusedSlug}
+          onOpenAgent={(slug) => {
+            restoreAgent(workSlug, slug);
+            setFocusedSlug(slug);
+            requestAnimationFrame(() => {
+              tileRefs.current.get(slug)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            });
+          }}
+          registerTileRef={(slug, el) => {
+            if (el) tileRefs.current.set(slug, el);
+            else tileRefs.current.delete(slug);
+          }}
+          renderAgentTile={renderAgentTile}
+          onNewStoryAgent={handleNewStoryAgent}
+          workArtifacts={artifacts}
+          onRefreshAgents={async () => {
+            await refreshAgents();
+          }}
+          onAcceptStory={async (artifact, payload, closeAgents) => {
+            await acceptPlanArtifact(workSlug, artifact.id, payload);
+            if (closeAgents) {
+              for (const a of agents) {
+                if (a.artifact_id === artifact.id) closeAgent(workSlug, a.slug);
+              }
+              setFocusedSlug(null);
+            }
+            await refreshPlan(artifact.id);
+          }}
           onStartRun={handleStartPlanRunFromSetup}
           onResolveLoopBlocker={(artifact, runId, agentSlug, resolutionNote, gateDecision, enforcedFindings) =>
             void handleResolvePlanLoopBlocker(
@@ -2105,6 +2227,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
             forkFromAgent={agentDialogPrefill?.forkFromAgent}
             initialGoal={agentDialogPrefill?.initialGoal}
             initialContexts={agentDialogPrefill?.initialContexts}
+            lockedContexts={agentDialogPrefill?.lockedContexts}
+            artifactId={agentDialogPrefill?.artifactId}
           />
         )}
         {planningSetupDialog}
@@ -2593,72 +2717,7 @@ export function WorkView({ workSlug }: { workSlug: string }) {
                           else tileRefs.current.delete(a.slug);
                         }}
                       >
-                        <AgentTile
-                          agentSlug={a.slug}
-                          workSlug={workSlug}
-                          mode="tile"
-                          persona={a.persona}
-                          agentName={a.name}
-                          provider={a.provider}
-                          model={a.model}
-                          readOnly={work.status !== "active"}
-                          worktreePath={a.worktree_path}
-                          onClose={() => {
-                            closeAgent(workSlug, a.slug);
-                            if (focusedSlug === a.slug) setFocusedSlug(null);
-                          }}
-                          onDetach={work.status === "active" ? () => {
-                            void handleDetach(a.slug);
-                          } : undefined}
-                          onHandoff={work.status === "active" ? () => setHandoffSource(a) : undefined}
-                          onOpenInIde={() => {
-                            window.location.href = editorUrl(editor, a.worktree_path);
-                          }}
-                          onOpenInConsole={() => {
-                            openAgentInConsole(a.slug, terminal)
-                              .then(() => {
-                                showToast(
-                                  `Opened in ${terminal === "system" ? "your terminal" : terminal}`,
-                                );
-                              })
-                              .catch(async (err) => {
-                                const copied = await navigator.clipboard
-                                  ?.writeText(a.worktree_path)
-                                  .then(() => true)
-                                  .catch(() => false);
-                                const message =
-                                  err instanceof Error ? err.message : String(err);
-                                showToast(
-                                  copied
-                                    ? `Couldn't open terminal — path copied to clipboard. (${message})`
-                                    : `Couldn't open terminal: ${message}`,
-                                );
-                              });
-                          }}
-                          onRevealWorktree={() => {
-                            revealAgent(a.slug).catch(() => {
-                              navigator.clipboard
-                                ?.writeText(a.worktree_path)
-                                .catch(() => {});
-                            });
-                          }}
-                          onRevealAtelierDir={() => {
-                            revealAgent(a.slug, "atelier").catch((err) => {
-                              showToast(
-                                `Couldn't open Atelier folder: ${
-                                  err instanceof Error ? err.message : String(err)
-                                }`,
-                              );
-                            });
-                          }}
-                          onRename={work.status === "active" ? (name) =>
-                            setAgents((curr) =>
-                              curr.map((x) =>
-                                x.slug === a.slug ? { ...x, name } : x,
-                              ),
-                            )
-                          : undefined}
-                        />
+                        {renderAgentTile(a)}
                       </SortableCanvasCell>
                     );
                   }
@@ -2709,6 +2768,8 @@ export function WorkView({ workSlug }: { workSlug: string }) {
           forkFromAgent={agentDialogPrefill?.forkFromAgent}
           initialGoal={agentDialogPrefill?.initialGoal}
           initialContexts={agentDialogPrefill?.initialContexts}
+          lockedContexts={agentDialogPrefill?.lockedContexts}
+          artifactId={agentDialogPrefill?.artifactId}
         />
       )}
       {deleteTarget && (

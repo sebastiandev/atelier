@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.application.http.launchers import launch, resolved
 from src.application.http.schemas import (
+    AcceptPlanArtifactDirectRequest,
     AcceptPlanArtifactRequest,
     ArtifactSummary,
     ChatDetail,
@@ -80,6 +81,9 @@ from src.domain.agents.handoffs import (
 from src.domain.agents.ports import AgentAdapterFactory
 from src.domain.chatstore import ChatRecord, ChatStore
 from src.domain.commands.loops import runs as loop_run_commands
+from src.domain.commands.planning import (
+    accept_artifact as planning_accept_artifact,
+)
 from src.domain.commands.planning import (
     accept_run as planning_accept_run,
 )
@@ -192,6 +196,7 @@ from src.domain.loop.ports import (
 )
 from src.domain.loop.snapshots import definition_snapshot
 from src.domain.models import Chat, ChatMessage, Context, Handoff, Work
+from src.domain.planning.actions import PlanArtifactWorkedByAgents
 from src.domain.planning.dtos import (
     PlanArtifactDetail,
     PlanArtifactProposal,
@@ -1913,6 +1918,8 @@ async def start_work_plan_artifact_run_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
     except planning_start_run.WorkNotActive as e:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except PlanArtifactWorkedByAgents as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
     except (
         planning_start_run.PlanArtifactNotExecutable,
         planning_start_run.LoopDefinitionConflict,
@@ -2342,6 +2349,45 @@ async def request_work_plan_run_changes_endpoint(
             run_id=run_id,
         ),
     )
+    return _to_plan_detail_response(detail)
+
+
+@router.post(
+    "/works/{work_slug}/plan/artifacts/{artifact_id}/accept",
+    response_model=PlanArtifactDetailResponse,
+)
+def accept_work_plan_artifact_endpoint(
+    work_slug: str,
+    artifact_id: str,
+    payload: AcceptPlanArtifactDirectRequest,
+    workstore: WorkStoreDep,
+    planningfiles: PlanningFilesDep,
+    loop_runs: LoopRunRepositoryDep,
+) -> PlanArtifactDetailResponse:
+    """Mark an agent-mode story done without a loop run."""
+    try:
+        detail = planning_accept_artifact.execute(
+            workstore,
+            planningfiles,
+            loop_runs,
+            planning_accept_artifact.AcceptArtifactRequest(
+                work_slug=work_slug,
+                artifact_id=artifact_id,
+                summary=payload.summary,
+                changes=payload.changes,
+                validation_evidence=payload.validation_evidence,
+            ),
+        )
+    except (
+        planning_accept_artifact.WorkNotFound,
+        planning_accept_artifact.PlanningNotStarted,
+        planning_accept_artifact.PlanArtifactNotFound,
+    ) as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=str(e)) from e
+    except planning_accept_artifact.PlanArtifactNotAgentMode as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except planning_accept_artifact.PlanArtifactNotExecutable as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)) from e
     return _to_plan_detail_response(detail)
 
 
@@ -3279,6 +3325,7 @@ def _view_to_summary(view: ArtifactView) -> ArtifactSummary:
         repo=view.repo,
         doc_path=view.doc_path,
         location_kind=view.location_kind,
+        artifact_id=view.artifact_id,
     )
 
 
@@ -3377,6 +3424,7 @@ def _to_plan_artifact(artifact: PlanArtifactSummary) -> PlanArtifactResponse:
         proposals=[_to_plan_proposal(proposal) for proposal in artifact.proposals],
         tracking=[_to_plan_tracking(link) for link in artifact.tracking],
         accepted_summary_path=artifact.accepted_summary_path,
+        work_mode=artifact.work_mode,
     )
 
 

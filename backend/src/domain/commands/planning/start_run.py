@@ -155,6 +155,7 @@ async def execute(
     manifest = actions.manifest_or_raise(files, req.work_slug)
     detail = actions.detail_or_raise(files, loop_runs, req.work_slug, req.artifact_id)
     actions.require_executable(detail.artifact)
+    actions.require_not_agent_mode(detail.artifact)
     definition = _resolve_definition(
         files,
         loop_definitions,

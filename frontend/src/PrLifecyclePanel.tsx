@@ -16,7 +16,7 @@ type FeedbackItem = { comment_id: string; instruction: string };
  *  a comment vanishing from the panel reads as data loss. */
 type PrThreadState = "open" | "addressed" | "dismissed";
 
-type PrCommentThread = {
+export type PrCommentThread = {
   action: PrComment;
   actionable: boolean;
   id: string;
@@ -284,7 +284,7 @@ export function PrLifecyclePanel({
   );
 }
 
-function prCommentThreads(comments: PrComment[]): PrCommentThread[] {
+export function prCommentThreads(comments: PrComment[]): PrCommentThread[] {
   const grouped = new Map<string, PrComment[]>();
   for (const comment of comments) {
     const id = comment.kind === "review" && comment.reply_target_id
@@ -316,7 +316,7 @@ function prCommentThreads(comments: PrComment[]): PrCommentThread[] {
   });
 }
 
-function relativeTime(value: string): string {
+export function relativeTime(value: string): string {
   const seconds = Math.max(0, Math.round((Date.now() - Date.parse(value)) / 1000));
   if (seconds < 60) return "just now";
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;

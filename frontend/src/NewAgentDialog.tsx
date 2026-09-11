@@ -7,7 +7,7 @@ import {
 } from "react";
 
 import { FolderPickerDialog } from "./FolderPickerDialog";
-import { PaperclipIcon } from "./Icons";
+import { LockIcon, PaperclipIcon } from "./Icons";
 import { ModelPicker } from "./ModelPicker";
 
 import {
@@ -65,6 +65,12 @@ type Props = {
    *  handoff so the chat summary/context.md enters the ordinary agent
    *  context pipeline. */
   initialContexts?: ContextEntry[];
+  /** Contexts the user cannot edit or remove — shown as locked chips.
+   *  Used when launching from a planning story: the story's source .md
+   *  always travels with the agent. */
+  lockedContexts?: ContextEntry[];
+  /** Planning story to scope the agent to; forwarded as ``artifact_id``. */
+  artifactId?: string;
 };
 
 const CUSTOM_PERSONA_PLACEHOLDER: Persona = "developer";
@@ -77,6 +83,8 @@ export function NewAgentDialog({
   forkFromAgent,
   initialGoal,
   initialContexts,
+  lockedContexts,
+  artifactId,
 }: Props) {
   const [providers, setProviders] = useState<ProviderDescriptor[] | null>(null);
   const [providersError, setProvidersError] = useState<string | null>(null);
@@ -308,6 +316,9 @@ export function NewAgentDialog({
     if (Object.keys(options).length > 0) {
       payload.options = options;
     }
+    if (artifactId) {
+      payload.artifact_id = artifactId;
+    }
     if (forkFromAgent && workdirMode === "fork" && workspaceMode === "isolated") {
       payload.fork_from_agent = forkFromAgent.slug;
     }
@@ -324,6 +335,7 @@ export function NewAgentDialog({
     if (trimmedGoal) {
       collected.push({ type: "text", value: trimmedGoal, conn_id: null });
     }
+    collected.push(...(lockedContexts ?? []));
     collected.push(...contexts.filter((c) => c.value.trim() || c.conn_id));
     if (collected.length > 0) {
       payload.contexts = collected;
@@ -735,6 +747,20 @@ export function NewAgentDialog({
             <span className="hint">
               References this agent starts with.
             </span>
+            {(lockedContexts ?? []).map((c) => (
+              <div key={`locked:${c.value}`} className="context-card locked" data-source={c.type}>
+                <div className="context-card-hd">
+                  <div className="ctx-type" data-source={c.type}>
+                    <span className="mono">{c.type === "file" ? "FL" : "TX"}</span>
+                    {c.type === "file" ? "Story" : "Context"}
+                  </div>
+                  <span className="ctx-locked" title="Always attached when launching from a story">
+                    <LockIcon size={11} /> locked
+                  </span>
+                </div>
+                <div className="ctx-locked-value mono" title={c.value}>{c.value}</div>
+              </div>
+            ))}
             {contexts.map((c, i) =>
               isSimpleContextType(c.type) ? (
                 <SimpleContextRow

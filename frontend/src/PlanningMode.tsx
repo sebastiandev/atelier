@@ -10,6 +10,9 @@ import {
 
 import {
   type ProviderField,
+  type AcceptPlanArtifactPayload,
+  type AgentSummary,
+  type ArtifactSummary,
   type ChatSummary,
   type LoopStatus,
   type PlanArtifact,
@@ -27,6 +30,7 @@ import {
   type WorkDetail,
   type WorkPlan,
   type WorkSummary,
+  PERSONA_GLYPH,
   resolveWorkPlanMaterializationPermission,
   listLoopDefinitions,
   revealWork,
@@ -68,8 +72,13 @@ import {
 } from "./providerDescriptors";
 import { resolvePlanLink } from "./editedPaths";
 import { RichMarkdownEditor } from "./RichMarkdownEditor";
+import { StoryAgentCanvas } from "./StoryAgentCanvas";
+import { StoryPrView } from "./StoryPrView";
+import { MarkStoryDoneDialog } from "./MarkStoryDoneDialog";
 import { ShellTopbar, type ShellTopbarCrumb } from "./ShellTopbar";
 import {
+  PLANNING_DOC_MAX,
+  PLANNING_DOC_MIN,
   PLANNING_DOCK_MAX,
   PLANNING_DOCK_MIN,
   PLANNING_RAIL_MAX,
@@ -129,6 +138,30 @@ type PlanningModeProps = {
   onApprovePlan: () => void;
   onCreateBug: (artifactId: string, title: string, description: string) => Promise<void>;
   onLaunch: (detail: PlanArtifactDetail) => void;
+  /** Every agent of the Work. Story agents carry ``artifact_id``; the rail
+   *  nests them under their story and the story view tiles them. */
+  agents: AgentSummary[];
+  /** Agents closed to the rail — they leave the story canvas but stay
+   *  listed under their story. */
+  closedAgentSlugs: readonly string[];
+  focusedAgentSlug: string | null;
+  onFocusAgent: (slug: string | null) => void;
+  /** Rail click on a story agent: reopen it on the canvas and focus it. */
+  onOpenAgent: (slug: string) => void;
+  registerTileRef: (slug: string, el: HTMLDivElement | null) => void;
+  /** WorkView owns every tile callback; it renders the tile for us. */
+  renderAgentTile: (agent: AgentSummary) => ReactNode;
+  onNewStoryAgent: (artifact: PlanArtifact) => void;
+  /** Every artifact of the Work; PRs carry the story of their opener. */
+  workArtifacts: ArtifactSummary[];
+  /** Re-read the agent list (a PR feedback send may relaunch an opener). */
+  onRefreshAgents: () => Promise<void>;
+  /** Accept an agent-mode story; ``closeAgents`` closes its tiles to the rail. */
+  onAcceptStory: (
+    artifact: PlanArtifact,
+    payload: AcceptPlanArtifactPayload,
+    closeAgents: boolean,
+  ) => Promise<void>;
   onStartRun: (
     detail: PlanArtifactDetail,
     definition: LoopDefinition,
@@ -239,6 +272,17 @@ export function PlanningMode({
   onApprovePlan,
   onCreateBug,
   onLaunch,
+  agents,
+  closedAgentSlugs,
+  focusedAgentSlug,
+  onFocusAgent,
+  onOpenAgent,
+  registerTileRef,
+  renderAgentTile,
+  onNewStoryAgent,
+  workArtifacts,
+  onRefreshAgents,
+  onAcceptStory,
   onStartRun,
   onResolveLoopBlocker,
   onRetryRunStage,
@@ -522,6 +566,12 @@ export function PlanningMode({
           onSource={(id) => onView({ kind: "source", id })}
           readOnly={readOnly}
           onCreateBug={() => setBugDialogOpen(true)}
+          agents={agents}
+          closedAgentSlugs={closedAgentSlugs}
+          onOpenAgent={(slug, artifactId) => {
+            if (activeId !== artifactId) onView({ kind: "artifact", id: artifactId });
+            onOpenAgent(slug);
+          }}
         />
       )}
       <main className={`pm-main${view.kind === "run" ? " run-host" : ""}`}>
@@ -566,6 +616,18 @@ export function PlanningMode({
             onLaunch={onLaunch}
             onEpic={() => onView({ kind: "epic", id: PRIMARY_EPIC_ID })}
             onApprovePlan={onApprovePlan}
+            workSlug={work.slug}
+            agents={agents}
+            closedAgentSlugs={closedAgentSlugs}
+            focusedAgentSlug={focusedAgentSlug}
+            onFocusAgent={onFocusAgent}
+            registerTileRef={registerTileRef}
+            renderAgentTile={renderAgentTile}
+            onNewAgent={onNewStoryAgent}
+            workArtifacts={workArtifacts}
+            onRefreshAgents={onRefreshAgents}
+            onAcceptStory={onAcceptStory}
+            chatDockOpen={showChatDock}
           />
         )}
         {view.kind === "run" && !selectedDetail && (
@@ -1604,6 +1666,9 @@ function PlanRail({
   onSource,
   readOnly,
   onCreateBug,
+  agents,
+  closedAgentSlugs,
+  onOpenAgent,
 }: {
   work: WorkDetail;
   plan: WorkPlan;
@@ -1616,8 +1681,13 @@ function PlanRail({
   onSource: (id: string) => void;
   readOnly: boolean;
   onCreateBug: () => void;
+  agents: AgentSummary[];
+  closedAgentSlugs: readonly string[];
+  onOpenAgent: (slug: string, artifactId: string) => void;
 }) {
   const [open, setOpen] = useState(true);
+  const agentsByStory = groupAgentsByStory(agents);
+  const runningAgents = agents.filter((a) => a.status === "live" || a.status === "thinking").length;
   const setPlanningRailWidth = useLayoutStore((s) => s.setPlanningRailWidth);
   const activeProgress = counts.running + counts.review + counts.ready + counts.draft;
   // One entry per story, from its latest run that opened a PR -- same rule as
@@ -1656,6 +1726,11 @@ function PlanRail({
       <div className="pm-rail-scroll themed-scrollbar">
         <div className="pm-section-hd">
           <span>Plan outline</span>
+          {runningAgents > 0 && (
+            <span className="pm-rail-agents-caption">
+              {runningAgents} agent{runningAgents === 1 ? "" : "s"} running
+            </span>
+          )}
         </div>
         <div className="pm-tree">
           {tree.sources.length > 0 && (
@@ -1698,19 +1773,44 @@ function PlanRail({
           </div>
           {open && (
             <div className="pm-tree-kids">
-              {tree.executable.map((item) => (
-                <button
-                  key={item.id}
-                  className={"pm-tree-item" + (activeId === item.id ? " selected" : "")}
-                  onClick={() => onArtifact(item.id)}
-                >
-                  <span>
-                    <em>{item.kind}</em>
-                    {item.path.split(/[\\/]/).pop() || item.title}
-                  </span>
-                  <TreeStatus status={uiStatus(item)} />
-                </button>
-              ))}
+              {tree.executable.map((item) => {
+                const storyAgents = agentsByStory.get(item.id) ?? [];
+                const focusedStory = activeId === item.id;
+                return (
+                  <Fragment key={item.id}>
+                    <button
+                      className={"pm-tree-item" + (focusedStory ? " selected" : "") + (storyAgents.length > 0 ? " has-agents" : "")}
+                      onClick={() => onArtifact(item.id)}
+                    >
+                      <span>
+                        <em>{item.kind}</em>
+                        {item.path.split(/[\\/]/).pop() || item.title}
+                      </span>
+                      {storyAgents.length > 0 && !focusedStory ? (
+                        <span className="pm-tree-agents-chip">
+                          {storyAgents.length} agent{storyAgents.length === 1 ? "" : "s"}
+                        </span>
+                      ) : (
+                        <TreeStatus status={uiStatus(item)} />
+                      )}
+                    </button>
+                    {focusedStory && storyAgents.map((agent) => (
+                      <button
+                        key={agent.slug}
+                        className={"pm-tree-agent" + (closedAgentSlugs.includes(agent.slug) ? " closed" : "")}
+                        onClick={() => onOpenAgent(agent.slug, item.id)}
+                        title={closedAgentSlugs.includes(agent.slug) ? "Closed to the rail — click to reopen" : agent.name}
+                        data-persona={agent.persona}
+                      >
+                        <span className="persona-pip">{PERSONA_GLYPH[agent.persona]}</span>
+                        <span className="pm-tree-agent-name">{agent.name}</span>
+                        <span className="mono">{agent.slug}</span>
+                        <span className="status-dot" data-status={agent.status} />
+                      </button>
+                    ))}
+                  </Fragment>
+                );
+              })}
             </div>
           )}
         </div>
@@ -2171,7 +2271,37 @@ function ArtifactDetail({
   onLaunch,
   onEpic,
   onApprovePlan,
+  workSlug,
+  agents,
+  closedAgentSlugs,
+  focusedAgentSlug,
+  onFocusAgent,
+  registerTileRef,
+  renderAgentTile,
+  onNewAgent,
+  workArtifacts,
+  onRefreshAgents,
+  onAcceptStory,
+  chatDockOpen,
 }: {
+  /** The planning chat holds the right dock: one dock, one thing. The
+   *  tracked-PR column comes back when the chat is minimised. */
+  chatDockOpen: boolean;
+  workSlug: string;
+  workArtifacts: ArtifactSummary[];
+  onRefreshAgents: () => Promise<void>;
+  onAcceptStory: (
+    artifact: PlanArtifact,
+    payload: AcceptPlanArtifactPayload,
+    closeAgents: boolean,
+  ) => Promise<void>;
+  agents: AgentSummary[];
+  closedAgentSlugs: readonly string[];
+  focusedAgentSlug: string | null;
+  onFocusAgent: (slug: string | null) => void;
+  registerTileRef: (slug: string, el: HTMLDivElement | null) => void;
+  renderAgentTile: (agent: AgentSummary) => ReactNode;
+  onNewAgent: (artifact: PlanArtifact) => void;
   artifact: PlanArtifact | null;
   detail: PlanArtifactDetail | null;
   draft: string;
@@ -2199,6 +2329,13 @@ function ArtifactDetail({
     () => makeLinkTo(detail?.artifact.path ?? artifact?.path ?? ""),
     [makeLinkTo, detail?.artifact.path, artifact?.path],
   );
+  const docCollapsed = useLayoutStore((s) => s.planningDocCollapsed);
+  const setDocCollapsed = useLayoutStore((s) => s.setPlanningDocCollapsed);
+  const docWidth = useLayoutStore((s) => s.planningDocWidth);
+  const setDocWidth = useLayoutStore((s) => s.setPlanningDocWidth);
+  // Slug of the tracked PR opened in place of the agent grid.
+  const [openPr, setOpenPr] = useState<string | null>(null);
+  const [markDoneOpen, setMarkDoneOpen] = useState(false);
   if (!artifact) return <div className="pm-loading">Artifact not found.</div>;
   if (!detail) return <div className="pm-loading">Loading source…</div>;
   const status = uiStatus(detail.artifact);
@@ -2229,9 +2366,33 @@ function ArtifactDetail({
   const approvalBlocker = detail.artifact.launch_blockers.find((blocker) =>
     blocker.toLowerCase().startsWith("approve "),
   );
-  return (
-    <div className="pm-art-body themed-scrollbar">
-      <div className="pm-art-wrap">
+  const storyAgents = agents.filter((agent) => agent.artifact_id === detail.artifact.id);
+  const openStoryAgents = storyAgents.filter((agent) => !closedAgentSlugs.includes(agent.slug));
+  // One-way: the first launched agent puts the story in agent mode and the
+  // backend remembers it, so closing every agent does not bring the loop
+  // aside back.
+  const agentMode = detail.artifact.work_mode === "agents" || storyAgents.length > 0;
+  // Every PR opened for this story: by an agent (artifact rows carrying the
+  // story) or by a loop run. Agent PRs open in the canvas; run PRs live on
+  // the run and open there.
+  const agentBySlug = new Map(agents.map((a) => [a.slug, a]));
+  const storyPrs = workArtifacts
+    .filter((item) => item.type === "pr" && item.artifact_id === detail.artifact.id)
+    .map((item) => ({ kind: "agent" as const, artifact: item, agent: item.agent_slug ? agentBySlug.get(item.agent_slug) ?? null : null }));
+  const runPrs = detail.artifact.runs
+    .filter((run) => run.pr)
+    .map((run) => ({ kind: "run" as const, run, number: planningRunData(detail.artifact, run)?.number ?? 1 }));
+  const trackedCount = storyPrs.length + runPrs.length;
+  const prStatuses = [
+    ...storyPrs.map((p) => p.artifact.status),
+    ...runPrs.map((p) => p.run.pr!.status),
+  ];
+  const allPrsMerged = prStatuses.length > 0 && prStatuses.every((s) => s === "merged");
+  const prLines = [
+    ...storyPrs.map((p) => `${p.artifact.url?.match(/\/pull\/(\d+)/)?.[1] ? `#${p.artifact.url!.match(/\/pull\/(\d+)/)![1]}` : p.artifact.slug} ${p.artifact.status} · ${p.artifact.title}`),
+    ...runPrs.map((p) => `${p.run.pr!.number ? `#${p.run.pr!.number}` : p.run.id} ${p.run.pr!.status} · ${p.run.pr!.title}`),
+  ];
+  const docColumn = (
         <article className="pm-art-doc">
           <div className="pm-kicker">
             <span>plan</span>
@@ -2289,16 +2450,186 @@ function ArtifactDetail({
             <button className="btn" onClick={onReset} disabled={!dirty || saving}>Reset</button>
           </div>
         </article>
+  );
+  if (agentMode) {
+    return (
+      <div
+        className={"pm-story-canvas" + (docCollapsed ? " doc-collapsed" : "") + (chatDockOpen ? " prs-hidden" : "")}
+        style={{ "--pm-doc-w": `${docWidth}px` } as CSSProperties}
+      >
+        {docCollapsed ? (
+          <button
+            type="button"
+            className="pm-doc-strip"
+            onClick={() => setDocCollapsed(false)}
+            title="Show the story doc"
+          >
+            <ChevronRightIcon size={12} />
+            <span>{detail.artifact.id}</span>
+          </button>
+        ) : (
+          <div className="pm-doc-col-wrap">
+          <div className="pm-doc-col">
+            <div className="pm-pane-kicker">
+              <span>story doc</span>
+              <button
+                type="button"
+                className="pm-doc-collapse"
+                onClick={() => setDocCollapsed(true)}
+                title="Collapse the doc"
+                aria-label="Collapse the story doc"
+              >
+                ‹
+              </button>
+            </div>
+            {docColumn}
+          </div>
+          <PaneResizeHandle
+            defaultValue={404}
+            edge="right"
+            label="Resize story doc"
+            max={PLANNING_DOC_MAX}
+            min={PLANNING_DOC_MIN}
+            value={docWidth}
+            onChange={setDocWidth}
+          />
+          </div>
+        )}
+        <div className="pm-story-field">
+          {openPr ? (
+            <StoryPrView
+              key={openPr}
+              workSlug={workSlug}
+              artifactSlug={openPr}
+              agents={agents}
+              readOnly={readOnly}
+              onBack={() => setOpenPr(null)}
+              onAgentsChanged={onRefreshAgents}
+              onFocusAgent={(slug) => {
+                setOpenPr(null);
+                onFocusAgent(slug);
+              }}
+            />
+          ) : (
+            <StoryAgentCanvas
+              workSlug={workSlug}
+              storyId={detail.artifact.id}
+              agents={openStoryAgents}
+              focusedSlug={focusedAgentSlug}
+              readOnly={readOnly}
+              onFocus={onFocusAgent}
+              onNewAgent={() => onNewAgent(detail.artifact)}
+              registerRef={registerTileRef}
+              renderTile={renderAgentTile}
+              done={status === "done"}
+              doneHint={allPrsMerged ? `all ${prStatuses.length} PR${prStatuses.length === 1 ? "" : "s"} merged` : null}
+              onMarkDone={() => setMarkDoneOpen(true)}
+            />
+          )}
+        </div>
+        {markDoneOpen && (
+          <MarkStoryDoneDialog
+            artifact={detail.artifact}
+            prLines={prLines}
+            agentCount={openStoryAgents.length}
+            onClose={() => setMarkDoneOpen(false)}
+            onAccept={async (payload, closeAgents) => {
+              await onAcceptStory(detail.artifact, payload, closeAgents);
+              setMarkDoneOpen(false);
+            }}
+          />
+        )}
+        {!chatDockOpen && <aside className="pm-story-prs">
+          <div className="pm-section-hd">
+            <span>Tracked PRs</span>
+            <span>{trackedCount}</span>
+          </div>
+          {storyPrs.map(({ artifact: item, agent }) => {
+            const viewing = openPr === item.slug;
+            const number = item.url?.match(/\/pull\/(\d+)/)?.[1];
+            return (
+              <button
+                key={item.slug}
+                type="button"
+                className={"story-pr-card" + (viewing ? " viewing" : "")}
+                onClick={() => setOpenPr(viewing ? null : item.slug)}
+              >
+                <span className="story-pr-card-top">
+                  <span className="mono dim">{number ? `#${number}` : item.slug}</span>
+                  <em className={`tag ${prStatusTone(item.status)}`}>{item.status}</em>
+                </span>
+                <span className="story-pr-card-title">{item.title}</span>
+                <span className="story-pr-card-by" data-persona={agent?.persona}>
+                  <span className="persona-pip">{agent ? PERSONA_GLYPH[agent.persona] : "··"}</span>
+                  <span className="mono dim">
+                    {agent ? `${agent.slug} · ${agent.name}` : item.agent_slug ? `${item.agent_slug} · removed` : "agent removed"}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+          {runPrs.map(({ run, number }) => (
+            <button
+              key={run.id}
+              type="button"
+              className="story-pr-card"
+              onClick={() => onOpenRun(run.id)}
+              title="Opened by a loop run — opens the run"
+            >
+              <span className="story-pr-card-top">
+                <span className="mono dim">{run.pr!.number ? `#${run.pr!.number}` : run.id}</span>
+                <em className={`tag ${prStatusTone(run.pr!.status)}`}>{run.pr!.status}</em>
+              </span>
+              <span className="story-pr-card-title">{run.pr!.title}</span>
+              <span className="story-pr-card-by">
+                <span className="persona-pip run">⟳</span>
+                <span className="mono dim">run {number} · {run.loop_definition_name || run.loop_definition_id || "loop"}</span>
+              </span>
+            </button>
+          ))}
+          {trackedCount === 0 && (
+            <div className="pm-empty-state">No pull requests yet. PRs the agents open show up here.</div>
+          )}
+        </aside>}
+      </div>
+    );
+  }
+  return (
+    <div className="pm-art-body themed-scrollbar">
+      <div className="pm-art-wrap">
+        {docColumn}
         <aside className="pm-art-aside">
           {detail.artifact.executable && (
-            <InspectorPanel title="Start work">
-              <button
-                className={`btn sm pm-start-work${latestRun ? ` status ${loopStatusTone(latestLoopStatus)}` : " primary"}`}
-                disabled={readOnly || !detail.artifact.launchable || latestRun !== null}
-                onClick={() => onLaunch(detail)}
-              >
-                <LoopIcon size={12} /> {latestRun ? loopStatusLabel(latestLoopStatus) : "Start work"}
-              </button>
+            <InspectorPanel title="Work this story">
+              <div className="pm-work-story-actions">
+                <button
+                  className={`btn sm pm-start-work${latestRun ? ` status ${loopStatusTone(latestLoopStatus)}` : " primary"}`}
+                  disabled={readOnly || !detail.artifact.launchable || latestRun !== null}
+                  onClick={() => onLaunch(detail)}
+                >
+                  <LoopIcon size={12} /> {latestRun ? loopStatusLabel(latestLoopStatus) : "Start loop"}
+                </button>
+                <button
+                  className="btn sm"
+                  disabled={readOnly || !detail.artifact.launchable}
+                  onClick={() => onNewAgent(detail.artifact)}
+                >
+                  <AgentIcon size={12} /> New agent
+                </button>
+              </div>
+              <div className="pm-panel-note">
+                A loop runs the staged stages end to end. Agents are yours to steer — launching one switches this story to the agent canvas and Start loop goes away.
+              </div>
+            </InspectorPanel>
+          )}
+          {detail.artifact.executable && (
+            <InspectorPanel title="Agents">
+              <div className="pm-panel-note pm-agents-note">
+                <span className="mono">no agents on {detail.artifact.id}</span>
+                <span>
+                  A new agent starts with <code>{detail.artifact.path.split(/[\\/]/).pop()}</code> locked in, plus the plan sources as removable context.
+                </span>
+              </div>
             </InspectorPanel>
           )}
           <InspectorPanel title="Readiness">
@@ -2651,6 +2982,17 @@ type PlanCounts = {
   draft: number;
   total: number;
 };
+
+function groupAgentsByStory(agents: AgentSummary[]): Map<string, AgentSummary[]> {
+  const out = new Map<string, AgentSummary[]>();
+  for (const agent of agents) {
+    if (!agent.artifact_id) continue;
+    const list = out.get(agent.artifact_id) ?? [];
+    list.push(agent);
+    out.set(agent.artifact_id, list);
+  }
+  return out;
+}
 
 function splitPlan(plan: WorkPlan | null): PlanTree {
   if (!plan) return { sources: [], executable: [] };

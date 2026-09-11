@@ -111,6 +111,7 @@ class AddAgentRequest:
     # dict means "use provider defaults" — same as ``None`` post-load.
     options: dict[str, Any] = field(default_factory=dict)
     worktree_slug: str | None = None
+    artifact_id: str | None = None
 
 
 @dataclass(frozen=True)

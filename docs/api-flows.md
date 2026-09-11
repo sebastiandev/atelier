@@ -50,6 +50,14 @@ Fired from `WorkView` on mount when at least one tracked PR is non-terminal (`op
 
 ---
 
+## `POST /api/works/{work}/plan/artifacts/{id}/accept`
+
+Marks an agent-mode story done without a loop run (`backend/src/domain/commands/planning/accept_artifact.py`). Body `{summary, changes?, validation_evidence?}`. Writes `summaries/<id>-agents.md` and the same `accepted_artifacts` manifest entry the loop's run acceptance writes, so the story reads `accepted` until its source changes. Agents are left running. 409 when the story is not in agent mode (accept its run instead), 422 when not executable.
+
+## `GET /api/works/{work}/artifacts/{slug}/pr` / `POST …/pr/feedback`
+
+The story PR view (`backend/src/domain/commands/artifacts/pr_feedback.py`). `GET` fetches the PR's lifecycle and comment threads through the poller's GitHub gateway (`?refresh=false` skips the fetch, `?force=true` bypasses the ETag), persists them on the artifact row (`artifacts.lifecycle`, schema v27), posts one "Addressed in `<sha>`" reply per comment of every *implement* batch whose push has landed, and returns `{pr, comments, feedback, opened_by}`. `opened_by` is the live opener when present, else the `opener_spec` snapshot taken when the PR was recorded. `POST …/pr/feedback` takes `{comments: [{comment_id, instruction}], note, mode: implement|discuss}` and sends one message to **the opener only**: resumed if it is idle, relaunched from the snapshot on the PR's branch (and the artifact re-pointed) if it was removed or stopped. Responds `202 {view, target_slug, relaunched}`. 404 unknown PR, 409 no opener snapshot / work not active, 422 no known comment selected.
+
 ## `GET /api/update-status`
 
 ```
@@ -534,7 +542,7 @@ The fattest endpoint. Creates an agent row, provisions a worktree, renders conte
 ```
 Browser
    │  payload = {name, persona, role, provider, model, options, contexts,
-   │             fork_from_agent?, branch_name?}
+   │             fork_from_agent?, branch_name?, artifact_id?}
    ▼
 Router (agents.py)
    │
@@ -587,6 +595,8 @@ After the response: events stream from the adapter into the transcript and any s
 Edge cases: missing `work_slug` → 404; bad model / unknown options → 422 (`InvalidProviderConfig`); folder `mkdir` failure → 422 (`WorkFolderMissing`).
 
 ---
+
+**Story-scoped launch.** When `artifact_id` names an executable plan artifact, the router calls `commands.agents.start_for_artifact` instead (`backend/src/domain/commands/agents/start_for_artifact.py`). It prepends the story source (`type: file`) and a generated plan index (`type: text`, `domain/planning/plan_index.py`) ahead of the client's contexts, launches through the same `launch_agent`, then marks the story `artifact_modes[id] = "agents"` in the planning manifest. 404 when planning is not started or the id is unknown, 422 when the artifact is not executable. `GET .../plan` then reports `work_mode: "agents"` on the story and `POST .../plan/artifacts/{id}/runs` answers 409 for it. `AgentSummary.artifact_id` carries the story on every agent read.
 
 ## WS `/api/agents/{slug}/stream`
 

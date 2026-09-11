@@ -372,6 +372,10 @@ agents_table = Table(
     # column existed — those agents continue to resume/detach with the
     # provider's default options.
     Column("options", JsonDict, nullable=True),
+    # Plan artifact (story) the agent was launched from. No FK: artifact
+    # ids are filename stems in the user's repo, not rows. Nullable for
+    # rows created before v26 and for plain canvas agents.
+    Column("artifact_id", String, nullable=True),
 )
 
 
@@ -407,6 +411,10 @@ artifacts_table = Table(
     # backend doesn't spend its rate-limit budget re-confirming
     # statuses the last process already confirmed.
     Column("pr_etag", String, nullable=True),
+    # PR-only tracking state for the story PR view (lifecycle snapshot,
+    # comment rows, feedback sent to the opener, opener snapshot). NULL on
+    # every other type and on PRs recorded before v27.
+    Column("lifecycle", JsonDict, nullable=True),
 )
 
 

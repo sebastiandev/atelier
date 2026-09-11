@@ -41,6 +41,9 @@ PlanArtifactKind = Literal[
     "note",
 ]
 PlanArtifactStatus = Literal["draft", "approved", "changed", "accepted"]
+# How a story is being worked. ``None`` until the first launch; ``agents``
+# is one-way -- a story once worked by hand-launched agents stays that way.
+PlanWorkMode = Literal["loop", "agents"]
 PlanReadiness = Literal["ready", "needs_detail"]
 
 PlanRunStatus = LoopRunStatus
@@ -308,6 +311,7 @@ class PlanArtifactSummary:
     proposals: list[PlanArtifactProposal] = field(default_factory=list)
     tracking: list[PlanTrackingLink] = field(default_factory=list)
     accepted_summary_path: str | None = None
+    work_mode: PlanWorkMode | None = None
 
 
 @dataclass(frozen=True)

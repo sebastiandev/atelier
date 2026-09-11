@@ -17154,3 +17154,1044 @@ select:disabled {
   font-size: 12px;
   color: var(--fg-2);
 }
+
+/* ---------------------------------------------------------------------
+   Story agents (Screen Specs §12) — agents launched from a planning story.
+   The story view in agent mode: doc column | agent tiles | tracked PRs.
+   --------------------------------------------------------------------- */
+.pm-work-story-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 8px 0;
+}
+.pm-work-story-actions .btn {
+  flex: 1;
+  justify-content: center;
+}
+.pm-panel-note code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-2);
+}
+
+.pm-story-canvas {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* The doc keeps its chosen width until the agent field would drop under
+     360px; then the doc and the PR column give way before the tiles do. */
+  grid-template-columns: minmax(240px, var(--pm-doc-w, 404px)) minmax(360px, 1fr) minmax(170px, 238px);
+}
+.pm-story-canvas.doc-collapsed {
+  grid-template-columns: 34px minmax(0, 1fr) minmax(170px, 238px);
+}
+/* The planning chat owns the right dock; the PR column steps aside. */
+.pm-story-canvas.prs-hidden {
+  grid-template-columns: minmax(240px, var(--pm-doc-w, 404px)) minmax(360px, 1fr);
+}
+.pm-story-canvas.prs-hidden.doc-collapsed {
+  grid-template-columns: 34px minmax(0, 1fr);
+}
+.pm-doc-col-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.pm-doc-col {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: var(--bg-1);
+  padding: 0 16px 24px;
+}
+.pm-doc-col .pm-art-doc {
+  width: auto;
+}
+.pm-doc-col-hd {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0 6px;
+  background: var(--bg-1);
+  color: var(--fg-3);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.pm-doc-col-hd .btn.icon {
+  font-size: 15px;
+  line-height: 1;
+}
+.pm-doc-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.pm-doc-strip span {
+  writing-mode: vertical-rl;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+.pm-doc-strip:hover {
+  color: var(--fg);
+}
+.pm-story-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.story-agent-canvas {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.story-agent-canvas-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--fg-3);
+  font-size: 10.5px;
+}
+.story-agent-canvas .work-right-canvas.story-tiles {
+  gap: 10px;
+}
+.story-agent-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 180px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-tile);
+  background: transparent;
+  color: var(--fg-3);
+  font: inherit;
+  cursor: pointer;
+}
+.story-agent-empty strong {
+  color: var(--fg-2);
+  font-size: 12.5px;
+}
+.story-agent-empty span {
+  font-size: 11.5px;
+}
+.story-agent-empty:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+.pm-story-prs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 12px 14px;
+  border-left: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.pm-story-prs .pm-track-row {
+  flex-wrap: wrap;
+  padding: 9px 11px;
+  border-radius: var(--radius-tile);
+  background: var(--bg-2);
+  color: inherit;
+  text-decoration: none;
+}
+.pm-story-prs .pm-track-row small {
+  flex-basis: 100%;
+  margin-left: 0;
+}
+
+/* Plan rail: agents nest under their story. */
+.pm-rail-agents-caption {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.pm-tree-agents-chip {
+  padding: 1px 6px;
+  border-radius: var(--radius-ctl);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+.pm-tree-agent {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 6px 3px 12px;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg-1);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.pm-tree-agent::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--accent);
+}
+.pm-tree-agent:hover {
+  background: var(--bg-2);
+}
+.pm-tree-agent.closed {
+  opacity: 0.55;
+}
+.pm-tree-agent .persona-pip {
+  width: 17px;
+  height: 17px;
+  font-size: 7.5px;
+}
+.pm-tree-agent-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-tree-agent .mono {
+  color: var(--fg-4);
+  font-size: 9.5px;
+}
+
+/* New agent dialog: a locked context chip (story .md). */
+.context-card.locked {
+  opacity: 0.92;
+}
+.ctx-locked {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+.ctx-locked-value {
+  padding: 6px 10px 8px;
+  overflow: hidden;
+  color: var(--fg-2);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pm-agents-note {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pm-agents-note .mono {
+  color: var(--fg-3);
+  font-size: 10.5px;
+}
+
+/* Story PRs (§12): tracked-PR column cards + the PR view in the canvas. */
+.story-pr-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: var(--radius-tile);
+  background: var(--bg-2);
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.story-pr-card:hover {
+  background: var(--bg-3);
+}
+.story-pr-card.viewing {
+  background: var(--bg-3);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.story-pr-card-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.story-pr-card-viewing {
+  margin-left: auto;
+  font-size: 9.5px;
+}
+.story-pr-card-title {
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.story-pr-card-by {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.story-pr-card-by .persona-pip {
+  width: 14px;
+  height: 14px;
+  font-size: 7px;
+}
+.story-pr-card-by .persona-pip.run {
+  background: var(--bg-3);
+  color: var(--fg-3);
+  border-color: transparent;
+}
+.story-pr-card-by .mono {
+  font-size: 9.5px;
+}
+
+.story-pr-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+.story-pr-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.story-pr-crumbs,
+.story-pr-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.story-pr-spacer {
+  flex: 1;
+}
+.story-pr-back {
+  border: 0;
+  background: transparent;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.story-pr-back:hover {
+  color: var(--fg);
+}
+.story-pr-title {
+  margin: 0;
+  color: var(--fg);
+  font-size: 16.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.story-pr-meta .mono {
+  font-size: 10.5px;
+}
+.story-pr-opener {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.story-pr-opener:disabled {
+  cursor: default;
+}
+.story-pr-opener.gone {
+  opacity: 0.7;
+}
+.story-pr-opener .persona-pip {
+  width: 15px;
+  height: 15px;
+  font-size: 7.5px;
+}
+.story-pr-opener .mono {
+  font-size: 10px;
+}
+.story-pr-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.story-pr-card.description,
+.story-pr-inner > .story-pr-card {
+  cursor: default;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  padding: 12px 14px;
+  gap: 5px;
+}
+.story-pr-inner > .story-pr-card:hover {
+  background: var(--bg-1);
+}
+.story-pr-card-kicker {
+  color: var(--fg-3);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.story-pr-inner > .story-pr-card p {
+  margin: 0;
+  color: var(--fg-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+.story-pr-inner > .story-pr-card p.lead {
+  color: var(--fg-2);
+}
+.story-pr-threads-hd {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.story-pr-threads-hd .pm-section-hd {
+  flex: 1;
+  padding-left: 0;
+}
+.story-pr-link {
+  border: 0;
+  background: transparent;
+  color: var(--info);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+}
+.story-pr-link.dim {
+  color: var(--fg-3);
+}
+.story-pr-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.story-pr-thread {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tile);
+  background: var(--bg-1);
+  overflow: hidden;
+}
+.story-pr-thread.selected {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.story-pr-thread.resolved {
+  opacity: 0.6;
+}
+.story-pr-thread-hd {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 9px 12px 0;
+}
+.story-pr-thread-hd .mono {
+  font-size: 10.5px;
+}
+.story-pr-thread-state {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
+  color: var(--good);
+}
+.story-pr-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: var(--radius-ctl);
+  background: var(--bg-3);
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.story-pr-thread-body {
+  margin: 0;
+  padding: 6px 12px 10px 35px;
+  color: var(--fg-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.story-pr-replies {
+  margin-left: 35px;
+  border-left: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+}
+.story-pr-reply {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 12px 8px;
+}
+.story-pr-reply.agent .story-pr-avatar {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.story-pr-reply-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.story-pr-reply-meta .mono {
+  font-size: 10px;
+}
+.story-pr-reply.agent .story-pr-reply-meta > .mono:first-child {
+  color: var(--accent);
+}
+.story-pr-reply p {
+  margin: 2px 0 0;
+  color: var(--fg-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.story-pr-instruction,
+.story-pr-note {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+}
+.story-pr-instruction {
+  margin: 0 12px 10px 35px;
+  width: calc(100% - 47px);
+}
+.story-pr-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 20px 13px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.story-pr-footer-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.story-pr-footer .mono {
+  font-size: 10.5px;
+}
+.story-pr-footer .accent,
+.mono.accent {
+  color: var(--accent);
+}
+.story-pr-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.story-pr-opener.static {
+  cursor: default;
+}
+.story-pr-mode {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-ctl);
+  background: var(--bg-2);
+}
+.story-pr-mode .btn.on {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+.story-pr-note {
+  flex: 1;
+  min-width: 160px;
+}
+.story-pr-hint {
+  font-size: 9.5px;
+  line-height: 1.5;
+}
+.tag.accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.story-agent-canvas-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.story-agent-canvas-actions .mono {
+  font-size: 10px;
+}
+.mark-done-modal {
+  width: min(520px, calc(100vw - 32px));
+}
+.mark-done-close {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  color: var(--fg-2);
+  font-size: 12px;
+}
+.mark-done-modal .hint {
+  margin: 8px 0 0;
+  color: var(--fg-3);
+  font-size: 11.5px;
+}
+.story-pr-description,
+.story-pr-thread-body.md-body,
+.story-pr-reply-body {
+  color: var(--fg-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.story-pr-reply-body {
+  color: var(--fg-3);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.story-pr-description > :first-child,
+.story-pr-thread-body.md-body > :first-child,
+.story-pr-reply-body > :first-child {
+  margin-top: 0;
+}
+.story-pr-description > :last-child,
+.story-pr-thread-body.md-body > :last-child,
+.story-pr-reply-body > :last-child {
+  margin-bottom: 0;
+}
+.story-pr-url {
+  color: var(--fg-3);
+  text-decoration: none;
+}
+.story-pr-url:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+
+/* §12 fix: the PR is a child of the story. Same header rhythm as the doc
+   column (kicker row · breadcrumb · 24px title · meta row · rule), content
+   capped at a reading measure and centred, and the pane never shouts. */
+.story-pr-inner {
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+}
+.story-pr-head {
+  gap: 0;
+  padding: 0 16px 0;
+}
+.story-pr-head .pm-meta-row {
+  margin-bottom: 0;
+  padding-bottom: 14px;
+}
+.pm-doc-col .pm-meta-row {
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.story-pr-kicker {
+  position: static;
+  justify-content: flex-start;
+  gap: 12px;
+}
+.story-pr-crumbs {
+  align-items: center;
+  flex-wrap: wrap;
+  min-height: 24px;
+}
+.story-pr-title {
+  margin: 8px 0 8px;
+  color: var(--fg);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.18;
+}
+.story-pr-agent-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  padding: 2px 8px 2px 4px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.story-pr-agent-strip:hover {
+  background: var(--bg-3);
+  color: var(--fg);
+}
+.story-pr-agent-strip .persona-pip {
+  width: 17px;
+  height: 17px;
+  font-size: 7.5px;
+}
+.story-pr-agent-name {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+.story-pr-agent-status {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.story-pr-agent-back {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.story-pr-body {
+  padding: 14px 16px;
+}
+.story-pr-footer {
+  padding: 11px 16px 13px;
+}
+.story-pr-view .md-h {
+  color: var(--fg);
+}
+.story-pr-view .md-inline-code {
+  border: 0;
+  background: var(--bg-2);
+  color: var(--fg-2);
+}
+.story-pr-thread .md-h {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 12.5px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Match the §12 mock: 16px/600 titles in both panes, breadcrumb row on top,
+   collapse chevron at the row's end. */
+.pm-doc-col .pm-art-doc h1,
+.story-pr-title {
+  margin: 8px 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.story-pr-title {
+  font-size: 16.5px;
+}
+.pm-doc-col .pm-art-doc {
+  padding-top: 12px;
+}
+.pm-doc-collapse {
+  margin-left: auto;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pm-doc-collapse:hover {
+  color: var(--fg);
+}
+.story-pr-head {
+  padding-top: 12px;
+}
+.story-pr-crumbs .btn {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.story-pr-meta {
+  gap: 10px;
+}
+.story-pr-opener {
+  padding: 3px 8px;
+}
+
+/* Direction D is tonal, not outlined: surfaces step bg → bg-1 → bg-2 and the
+   only drawn edges are the pane handles. Cards drop their borders. */
+.story-pr-inner > .story-pr-card,
+.story-pr-thread,
+.story-pr-instruction,
+.story-pr-note {
+  border: 0;
+}
+.story-pr-thread {
+  background: var(--bg-1);
+}
+.story-pr-thread.selected {
+  background: var(--bg-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.story-pr-instruction {
+  background: var(--bg-2);
+}
+.story-pr-thread.selected .story-pr-instruction {
+  background: var(--bg-3);
+}
+.story-pr-replies {
+  border-left-color: var(--line-soft);
+}
+/* The doc is a reading column beside the PR, not a second page: cap it. */
+.pm-story-canvas {
+  grid-template-columns: minmax(240px, min(var(--pm-doc-w, 404px), 900px)) minmax(360px, 1fr) minmax(170px, 238px);
+}
+.pm-story-canvas.prs-hidden {
+  grid-template-columns: minmax(240px, min(var(--pm-doc-w, 404px), 900px)) minmax(360px, 1fr);
+}
+
+/* Header rhythm shared by the story doc and the PR view: 12px top pad ·
+   24px breadcrumb row · title (16/600, 8px above, 6px below) · 24px meta
+   row · 14px · rule. Buttons and tags in those rows are capped at 22px so
+   they can't stretch a row. */
+.pm-doc-col .pm-art-doc .pm-kicker,
+.story-pr-crumbs {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+}
+.story-pr-crumbs .btn,
+.story-pr-crumbs .tag {
+  height: 22px;
+  min-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 22px;
+}
+.pm-doc-col .pm-art-doc .pm-meta-row,
+.story-pr-meta {
+  min-height: 24px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.story-pr-meta > * {
+  flex-shrink: 0;
+}
+.story-pr-meta .story-pr-url {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.story-pr-meta .story-pr-opener {
+  height: 22px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.pm-doc-col .pm-art-doc .pm-meta-row .chip,
+.pm-doc-col .pm-art-doc .pm-meta-row .pm-edit-state {
+  max-height: 22px;
+}
+.story-pr-head {
+  border-bottom: 0;
+}
+.story-pr-head .pm-meta-row {
+  margin-bottom: 0;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.pm-doc-col .pm-art-doc .pm-meta-row,
+.story-pr-head .pm-meta-row {
+  box-sizing: content-box;
+  height: 24px;
+  margin: 0 0 14px;
+  padding: 0 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.pm-doc-col .pm-art-doc h1,
+.story-pr-title {
+  box-sizing: content-box;
+  height: 22px;
+  margin: 8px 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Story ⇄ PR seam (design/pr-seam, picks A3 · overlay · D2) ---- */
+/* A3: one hairline, no tone step. */
+.pm-doc-col,
+.pm-doc-strip,
+.story-pr-view,
+.story-pr-head,
+.pm-story-field {
+  background: var(--bg);
+}
+/* Overlay scrollbars: no gutter, transparent track, thumb floats in the
+   padding and only shows while the pointer is over the pane. */
+.pm-doc-col,
+.story-pr-body {
+  scrollbar-gutter: auto;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.pm-doc-col:hover,
+.story-pr-body:hover {
+  scrollbar-color: color-mix(in oklch, var(--fg-4) 58%, var(--line)) transparent;
+}
+.pm-doc-col::-webkit-scrollbar,
+.story-pr-body::-webkit-scrollbar {
+  width: 9px;
+}
+.pm-doc-col::-webkit-scrollbar-track,
+.story-pr-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pm-doc-col::-webkit-scrollbar-thumb,
+.story-pr-body::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--radius-tag);
+  background: transparent;
+  background-clip: padding-box;
+}
+.pm-doc-col:hover::-webkit-scrollbar-thumb,
+.story-pr-body:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--fg-4) 54%, var(--line));
+  background-clip: padding-box;
+}
+/* §8: no section rules in the doc beside the seam; spacing does the work. */
+.pm-doc-col .rich-md-section + .rich-md-section {
+  box-shadow: none;
+}
+/* §2 / §4: identical kicker rows on both panes (24px), above the breadcrumb. */
+.pm-pane-kicker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 24px;
+  padding-top: 12px;
+  color: var(--fg-3);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.pm-doc-col .pm-art-doc,
+.story-pr-head {
+  padding-top: 0;
+}
+.pm-pane-kicker .pm-doc-collapse,
+.pm-pane-kicker .story-pr-agent-strip {
+  margin-left: auto;
+}
+/* §9: the header rule runs edge to edge in both panes, at the same y. */
+.pm-doc-col .pm-art-doc .pm-meta-row {
+  margin: 0 -16px 14px;
+  padding: 0 16px 14px;
+}
+.story-pr-head {
+  border-bottom: 1px solid var(--line);
+}
+.story-pr-head .pm-meta-row {
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+/* D2: the send bar docks under the last thread in an accent-line card and
+   sticks to the pane bottom only once the list overflows. */
+.story-pr-footer {
+  position: sticky;
+  bottom: 0;
+  margin-top: 10px;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-pop);
+  background: var(--bg-1);
+}
+.story-pr-footer .story-pr-inner {
+  max-width: none;
+}
+.story-pr-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--fg-3);
+  cursor: pointer;
+}
+.story-pr-fold svg {
+  transform: rotate(90deg);
+  transition: transform 120ms ease;
+}
+.story-pr-fold.folded svg {
+  transform: none;
+}
+.story-pr-fold:hover {
+  color: var(--fg);
+  background: var(--bg-2);
+}
+.story-pr-fold .mono {
+  font-size: 9.5px;
+}
+.story-pr-thread-preview {
+  display: block;
+  width: 100%;
+  padding: 4px 12px 10px 35px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.story-pr-thread-preview:hover {
+  color: var(--fg-2);
+}

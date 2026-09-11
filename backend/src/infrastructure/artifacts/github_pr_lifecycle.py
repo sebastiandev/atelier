@@ -38,6 +38,7 @@ query PullRequestLifecycle($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       id title headRefName baseRefName state isDraft mergedAt reviewDecision
+      body additions deletions changedFiles
       comments(first: 100) {
         nodes { id author { login } body createdAt url }
       }
@@ -267,7 +268,15 @@ def _parse_lifecycle(pr: dict[str, Any], *, viewer_login: str | None = None) -> 
         base_branch=str(pr.get("baseRefName") or ""),
         head_sha=_head_commit(pr).get("oid", ""),
         head_commit_url=_head_commit(pr).get("url", ""),
+        body=str(pr.get("body") or ""),
+        additions=_int(pr.get("additions")),
+        deletions=_int(pr.get("deletions")),
+        changed_files=_int(pr.get("changedFiles")),
     )
+
+
+def _int(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def _head_commit(pr: dict[str, Any]) -> dict[str, str]:

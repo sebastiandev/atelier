@@ -159,9 +159,20 @@ function splitMarkdownSections(markdown: string): MarkdownSection[] {
     };
   });
 
-  return sections.filter(
+  const kept = sections.filter(
     (section) => section.text.length > 0 || markdown.length === bodyStart,
   );
+  // A document that opens with a bare H1 and nothing under it is announcing
+  // its own title -- which the view above already shows. Rendering it here
+  // put the title on screen twice with "No body content." between.
+  if (
+    kept.length > 1
+    && /^#\s+\S/.test(kept[0].text.trimStart())
+    && !sectionPreviewMarkdown(kept[0].text).trim()
+  ) {
+    return kept.slice(1);
+  }
+  return kept;
 }
 
 function frontMatterEnd(markdown: string): number {

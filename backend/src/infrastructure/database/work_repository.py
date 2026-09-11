@@ -16,7 +16,7 @@ Slug formats follow the architecture convention:
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -304,6 +304,23 @@ class SqlWorkRepository:
                 .where(artifacts_table.c.slug == slug)
                 .where(artifacts_table.c.type == "pr")
                 .values(pr_etag=pr_etag)
+            )
+
+    def update_pr_artifact_lifecycle(self, slug: str, lifecycle: dict[str, Any]) -> None:
+        with self._txn() as session:
+            session.execute(
+                update(artifacts_table)
+                .where(artifacts_table.c.slug == slug)
+                .where(artifacts_table.c.type == "pr")
+                .values(lifecycle=lifecycle)
+            )
+
+    def update_artifact_agent(self, slug: str, agent_id: int | None) -> None:
+        with self._txn() as session:
+            session.execute(
+                update(artifacts_table)
+                .where(artifacts_table.c.slug == slug)
+                .values(agent_id=agent_id)
             )
 
     def add_handoff(self, handoff: Handoff) -> Handoff:

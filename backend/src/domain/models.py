@@ -270,6 +270,10 @@ class Agent:
     # forward matching CLI flags. ``None`` on rows that predate this
     # field — callers must treat that as "use provider defaults".
     options: dict[str, Any] | None = None
+    # Planning story this agent works on (the plan artifact id, e.g.
+    # ``story-3``). Set when the agent is launched from a story view;
+    # ``None`` for canvas agents and rows that predate the column.
+    artifact_id: str | None = None
 
 
 @dataclass(kw_only=True)

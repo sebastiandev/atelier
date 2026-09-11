@@ -26,6 +26,11 @@ from src.domain.planning.service import (
     PlanningService,
 )
 
+
+class PlanArtifactWorkedByAgents(ValueError):
+    """The story switched to agent mode; loop runs are refused on it."""
+
+
 _TRACKING_KINDS: set[str] = {"jira", "pr", "blocker", "bug"}
 _RUN_STATUSES: set[PlanRunStatus] = {
     PlanRunStatus.RUNNING,
@@ -154,6 +159,32 @@ def artifact_tracking_for_update(
         links = []
         all_tracking[artifact_id] = links
     return links
+
+
+def mark_worked_by_agents(manifest: dict[str, Any], artifact_id: str) -> None:
+    """Flip a story into agent mode.
+
+    Preconditions: ``manifest`` is mutable; the caller writes it back.
+    Postconditions: ``artifact_modes[artifact_id] == "agents"``. One-way:
+    an existing value is never changed back.
+    """
+    modes = manifest.setdefault("artifact_modes", {})
+    if not isinstance(modes, dict):
+        modes = {}
+        manifest["artifact_modes"] = modes
+    modes[artifact_id] = "agents"
+
+
+def require_not_agent_mode(artifact: PlanArtifactSummary) -> None:
+    """Ensure a story is not already worked by hand-launched agents.
+
+    Preconditions: ``artifact`` is an indexed planning artifact.
+    Postconditions: raises when loop runs are no longer allowed on it.
+    """
+    if artifact.work_mode == "agents":
+        raise PlanArtifactWorkedByAgents(
+            f"plan artifact {artifact.id} is worked by agents; loops are disabled for it"
+        )
 
 
 def record_artifact_run_id(
@@ -482,6 +513,7 @@ def str_or_empty(value: object) -> str:
 
 
 __all__ = [
+    "PlanArtifactWorkedByAgents",
     "apply_report_fields",
     "artifact_proposals_for_update",
     "artifact_tracking_for_update",
@@ -497,6 +529,7 @@ __all__ = [
     "get_plan_or_raise",
     "loop_status",
     "manifest_or_raise",
+    "mark_worked_by_agents",
     "next_bug_path",
     "next_id",
     "next_run_id",
@@ -504,6 +537,7 @@ __all__ = [
     "proposal_for_update",
     "record_artifact_run_id",
     "require_executable",
+    "require_not_agent_mode",
     "run_status",
     "select_run",
     "str_or_empty",

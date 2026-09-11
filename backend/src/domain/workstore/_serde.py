@@ -122,6 +122,8 @@ def serialize_agent(agent: Agent, contexts: list[Context] | None = None) -> dict
         out["options"] = dict(agent.options)
     if agent.worktree_slug:
         out["worktree_slug"] = agent.worktree_slug
+    if agent.artifact_id:
+        out["artifact_id"] = agent.artifact_id
     return out
 
 
@@ -145,6 +147,7 @@ def deserialize_agent(data: dict[str, Any]) -> Agent:
         session_id=data.get("session_id"),
         parent_session_id=data.get("parent_session_id"),
         options=dict(options) if options else None,
+        artifact_id=data.get("artifact_id") or None,
     )
 
 
